@@ -17,9 +17,9 @@ use crate::core::compiler::compiler_ops::function_node_island::tests::link;
 fn a_running_pool_that_cannot_take_its_carries_is_put_back_as_it_was() {
     let (mut graph, lfo, _, _) = a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
     let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
-    let (ports_before, config_before) = {
+    let (ports_before, input_values_before) = {
         let pool = graph.traversal().v(&pool).first().unwrap();
-        (pool.ports.clone(), pool.config.clone())
+        (pool.ports.clone(), pool.input_values.clone())
     };
     let links_before = graph.traversal().e(()).iter().count();
     let late_reader = a_reader_in_the_app_process(&mut graph);
@@ -43,7 +43,10 @@ fn a_running_pool_that_cannot_take_its_carries_is_put_back_as_it_was() {
         pool_after.ports, ports_before,
         "the pool's ports are put back"
     );
-    assert_eq!(pool_after.config, config_before, "and so is its config");
+    assert_eq!(
+        pool_after.input_values, input_values_before,
+        "and so are the carries it names"
+    );
     assert_eq!(
         graph.traversal().e(()).iter().count(),
         links_before,

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import select
-import struct
 import sys
 import traceback
 from typing import Any, Optional
@@ -34,7 +33,6 @@ from tatolab.runtime._engine import (
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeIslandsFedToTheirPorts,
     feed_each_input_port_from_its_function_node_island,
-    the_value_a_config_field_takes,
 )
 from tatolab.runtime._function_node_pool import (
     FunctionNodePool,
@@ -49,10 +47,8 @@ from tatolab.runtime._not_ready_placeholder_frames import (
     PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE,
     TransparentFramesOnTheImageOutputsOfANodeNotReady,
 )
-from tatolab.runtime._node_hosting import (
-    apply_configuration,
-    the_slots_its_pin_groups_are_built_with,
-)
+from tatolab.runtime._node_hosting import the_slots_its_pin_groups_are_built_with
+from tatolab.runtime._node_the_wheel_hosts import NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
 from tatolab.runtime._node_class_description import load_node_class
 from tatolab.runtime._hosted_node import (
@@ -69,8 +65,6 @@ if sys.platform == "darwin":
         note_this_helper_processes_callbacks_returned_after_its_parent_went_away,
     )
 
-#: Wire contract: a control value is one little-endian f64 sample.
-_CONTROL_VALUE_SAMPLE_FORMAT = "<d"
 
 # How long `teardown` waits, before answering, for the releases already queued to
 # reach the parent. The parent gives a helper up the moment it answers, and a
@@ -105,10 +99,6 @@ class HelperProcessLifecycle:
         self._scheduling_loop_runs = False
         self._pause_hook_last_called: "Optional[str]" = None
         self._function_node_islands_it_reads: "Optional[FunctionNodeIslandsFedToTheirPorts]" = None
-        self._config_fields_its_node_exposes_as_inputs: "tuple[str, ...]" = ()
-        self._config_as_last_applied: "dict[str, Any]" = {}
-        self._config_its_node_was_last_handed: "dict[str, Any]" = {}
-        self._exposed_config_values_last_refused: "dict[str, Any]" = {}
         self._field_wire_values_last_refused: "Optional[str]" = None
         self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
         self._raises_the_parent_holds_by_function_node: "dict[str, str]" = {}
@@ -240,8 +230,8 @@ class HelperProcessLifecycle:
             self._teardown()
         elif verb in ("on_pause", "on_resume"):
             self._note_pause(verb)
-        elif verb == "update_config":
-            self._update_config(command)
+        elif verb == "carry_links":
+            self._carry_links(command)
         elif verb == "unwire_link":
             # Deliberately unanswered, like `run`: the parent sends this from
             # its compiler while it holds the graph write lock, so it cannot
@@ -265,31 +255,22 @@ class HelperProcessLifecycle:
             # Unanswered, like `unwire_link`. Taken here on the main thread,
             # between two `process` calls or at a manual node's steady tick.
             self._set_input_values(command)
-        elif verb == "set_exposed_config_fields":
-            # Unanswered, like `unwire_link`.
-            self._take_the_config_fields_its_node_exposes_as_inputs(
-                command.get("exposed_config_fields") or []
-            )
         else:
             log.warn("the parent sent an unknown lifecycle command", cmd=verb)
 
     def _setup(self, command: "dict[str, Any]") -> None:
         try:
-            configuration = command.get("config")
+            input_values = command.get("input_values") or {}
+            configuration = _the_settings_a_node_the_wheel_builds_takes(self._node_class, input_values)
             if self._node_class is FunctionNodePool:
                 self._runs_the_function_node_pool = True
                 self._node_class = the_node_class_the_function_node_pool_runs_as(
-                    configuration or {}, self._link_data_access
+                    {"carries": input_values.get("carries") or []}, self._link_data_access
                 )
                 configuration = None
             if command.get("function_node_evaluated_at_setup"):
                 evaluate_a_promoted_function_node_at_its_setup(self._node_class)
             port_wiring = command.get("ports") or {}
-            self._take_the_config_fields_its_node_exposes_as_inputs(
-                port_wiring.get("exposed_config_fields") or []
-            )
-            self._config_as_last_applied = dict(configuration or {})
-            self._config_its_node_was_last_handed = dict(configuration or {})
             slot_counts, slot_input_ports, slot_output_ports = the_slots_its_pin_groups_are_built_with(
                 self._node_class, port_wiring
             )
@@ -488,8 +469,6 @@ class HelperProcessLifecycle:
         if hook_name in ("on_pause", "on_resume"):
             self._call_the_pause_hook_once_per_transition(hook_name)
             return
-        if hook_name == "process" and self._config_fields_its_node_exposes_as_inputs:
-            self._take_each_new_value_a_link_gives_an_exposed_config_field()
         if hook_name == "process" and self._hosted.fields is not None:
             self._take_each_new_value_a_wire_gives_a_field()
         if hook_name == "process":
@@ -585,39 +564,6 @@ class HelperProcessLifecycle:
             else:
                 raises_the_parent_holds[function_node] = raising_because
 
-    def _take_the_config_fields_its_node_exposes_as_inputs(self, exposed_config_fields: "list[str]") -> None:
-        """Read each of `exposed_config_fields` from the input port of its name, in place of those read before."""
-        self._config_fields_its_node_exposes_as_inputs = tuple(exposed_config_fields)
-        self._link_data_access.declare_ports(list(exposed_config_fields), [])
-
-    def _take_each_new_value_a_link_gives_an_exposed_config_field(self) -> None:
-        assert self._hosted is not None
-        changed_values_by_field: "dict[str, Any]" = {}
-        for field in self._config_fields_its_node_exposes_as_inputs:
-            payload = self._link_data_access.read_from_input_port(field)
-            if payload is None:
-                continue
-            (input_value,) = struct.unpack_from(_CONTROL_VALUE_SAMPLE_FORMAT, bytes(payload))
-            value = the_value_a_config_field_takes(self._config_as_last_applied.get(field), input_value)
-            if self._config_as_last_applied.get(field) != value:
-                changed_values_by_field[field] = value
-        if not changed_values_by_field:
-            return
-        configuration = {**self._config_as_last_applied, **changed_values_by_field}
-        try:
-            apply_configuration(self._hosted.instance, configuration)
-        except Exception as configuration_refused:
-            if changed_values_by_field != self._exposed_config_values_last_refused:
-                self._exposed_config_values_last_refused = changed_values_by_field
-                log.error(
-                    "this node refused a value a link gave a config field it exposes as an input",
-                    fields=sorted(changed_values_by_field),
-                    error=str(configuration_refused),
-                )
-            return
-        self._exposed_config_values_last_refused = {}
-        self._config_as_last_applied = configuration
-
     def _take_each_new_value_a_wire_gives_a_field(self) -> None:
         assert self._hosted is not None and self._hosted.fields is not None
         try:
@@ -639,8 +585,7 @@ class HelperProcessLifecycle:
         return frozenset() if islands is None else islands.input_ports_fed
 
     def _hand_back_what_a_link_stopped_driving(self, input_port: str) -> None:
-        """Give the field or exposed config field of `input_port` its own value again, now a link stopped feeding it."""
-        self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(input_port)
+        """Give the field of `input_port` its own value again, now a link stopped feeding it."""
         if self._hosted is None or self._hosted.fields is None:
             return
         try:
@@ -655,29 +600,6 @@ class HelperProcessLifecycle:
                 input_port=input_port,
                 error=str(set_value_refused),
             )
-
-    def _hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(self, field: str) -> None:
-        if self._hosted is None or field not in self._config_fields_its_node_exposes_as_inputs:
-            return
-        configuration = {
-            config_field: value
-            for config_field, value in self._config_as_last_applied.items()
-            if config_field != field
-        }
-        if field in self._config_its_node_was_last_handed:
-            configuration[field] = self._config_its_node_was_last_handed[field]
-        if configuration == self._config_as_last_applied:
-            return
-        try:
-            apply_configuration(self._hosted.instance, configuration)
-        except Exception as configuration_refused:
-            log.error(
-                "this node refused the config value of a field its link stopped driving",
-                field=field,
-                error=str(configuration_refused),
-            )
-            return
-        self._config_as_last_applied = configuration
 
     def take_the_lifecycle_commands_that_woke_the_scheduling_loop(self) -> "tuple[bool, bool]":
         self._bridge.clear_lifecycle_command_arrivals()
@@ -895,36 +817,30 @@ class HelperProcessLifecycle:
                 {"rpc": "link_wire_failed", "link_id": link_id, "reason": refusal}
             )
 
-    def _update_config(self, command: "dict[str, Any]") -> None:
-        # Answered with the cause rather than logged: the parent keeps the
-        # graph's previous configuration only when it hears the refusal.
-        if self._hosted is None or not self._set_up_succeeded:
+    def _carry_links(self, command: "dict[str, Any]") -> None:
+        # Answered with the cause rather than logged: the parent puts the pool back as it was
+        # only when it hears the refusal.
+        if self._hosted is None or not self._set_up_succeeded or not self._runs_the_function_node_pool:
             self._bridge.send(
                 {
                     "rpc": "error",
-                    "error": "this node's setup did not succeed, so it takes no "
-                    "configuration",
+                    "error": "this helper runs no function node pool that is set up, so it "
+                    "carries no link",
                 }
             )
             return
         try:
-            if self._runs_the_function_node_pool:
-                take_the_carries_a_running_pool_is_handed(
-                    type(self._hosted.instance), command.get("config") or {}, self._link_data_access
-                )
-                self._link_data_access.keep_the_last_message_of_output_ports(
-                    command.get("output_ports_keeping_their_last_message") or []
-                )
-            else:
-                apply_configuration(self._hosted.instance, command.get("config"))
-        except Exception as configuration_failure:
-            self._bridge.send({"rpc": "error", "error": str(configuration_failure)})
+            take_the_carries_a_running_pool_is_handed(
+                type(self._hosted.instance), {"carries": command.get("carries") or []}, self._link_data_access
+            )
+            self._link_data_access.keep_the_last_message_of_output_ports(
+                command.get("output_ports_keeping_their_last_message") or []
+            )
+        except Exception as carries_refused:
+            self._bridge.send({"rpc": "error", "error": str(carries_refused)})
             return
-        self._config_as_last_applied = dict(command.get("config") or {})
-        self._config_its_node_was_last_handed = dict(command.get("config") or {})
         self._bridge.send({"rpc": "ok"})
         self._tell_the_parent_whether_the_node_is_ready()
-
 
 def _the_number_each_input_value_reads(input_values: "Optional[dict[str, Any]]") -> "dict[str, float]":
     """The number each input of `input_values` reads while no link feeds it:
@@ -935,3 +851,15 @@ def _the_number_each_input_value_reads(input_values: "Optional[dict[str, Any]]")
         for input_name, value in (input_values or {}).items()
         if isinstance(value, (bool, int, float))
     }
+
+
+def _the_settings_a_node_the_wheel_builds_takes(
+    node_class: Any, input_values: "dict[str, Any]"
+) -> "Optional[dict[str, Any]]":
+    """The settings a node the wheel builds from them, a function node run as a node of its own,
+    takes of `input_values`: each naming none of its input ports. `None` for an author's node,
+    which takes each value as the input of its name."""
+    if not getattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, False):
+        return None
+    input_ports = {port["name"] for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, [])}
+    return {name: value for name, value in input_values.items() if name not in input_ports}

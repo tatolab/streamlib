@@ -33,6 +33,18 @@ use crate::core::nodes::NodeSpec;
 pub(crate) const FUNCTION_NODE_POOL_NODE_TYPE: &str =
     "tatolab.runtime._function_node_pool:FunctionNodePool";
 
+/// The input value of the pool naming every link it carries.
+pub(crate) const FUNCTION_NODE_POOL_CARRIES_INPUT: &str = "carries";
+
+/// Every carry `pool` names under [`FUNCTION_NODE_POOL_CARRIES_INPUT`]; none when it names none.
+pub(crate) fn every_carry_of(pool: &crate::core::graph::GraphNode) -> Vec<JsonValue> {
+    pool.input_values
+        .get(FUNCTION_NODE_POOL_CARRIES_INPUT)
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// How often the pool evaluates every island it carries.
 pub(crate) const FUNCTION_NODE_POOL_INTERVAL_MS: u32 = 10;
 
@@ -191,11 +203,15 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
     let mut the_running_pool_before_the_carries = None;
     let pool_id = match the_function_node_pool_of(graph) {
         Some(running_pool) if !nodes_to_add.contains(&running_pool) => {
-            the_running_pool_before_the_carries = graph
-                .traversal()
-                .v(&running_pool)
-                .first()
-                .map(|pool| (pool.ports.clone(), pool.config.clone()));
+            the_running_pool_before_the_carries =
+                graph.traversal().v(&running_pool).first().map(|pool| {
+                    (
+                        pool.ports.clone(),
+                        pool.input_values
+                            .get(FUNCTION_NODE_POOL_CARRIES_INPUT)
+                            .cloned(),
+                    )
+                });
             running_pool
         }
         Some(pool_being_added) => pool_being_added,
@@ -204,7 +220,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
                 .traversal_mut()
                 .add_v(NodeSpec::new(
                     the_function_node_pool_type()?,
-                    serde_json::json!({ "carries": [] }),
+                    serde_json::json!({ FUNCTION_NODE_POOL_CARRIES_INPUT: [] }),
                 ))?
                 .first()
                 .ok_or_else(|| {
@@ -225,15 +241,14 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
         links_to_add.push(out_of_the_pool.clone());
         halves_through_the_pool.extend([into_the_pool, out_of_the_pool]);
     }
-    let Some((ports_before_the_carries, config_before_the_carries)) =
-        the_running_pool_before_the_carries
+    let Some((ports_before_the_carries, carries_held_before)) = the_running_pool_before_the_carries
     else {
         return Ok(None);
     };
     Ok(Some(CarriesHandedToTheRunningFunctionNodePool {
         pool: pool_id,
         ports_before_the_carries,
-        config_before_the_carries,
+        carries_held_before,
         halves_through_the_pool,
     }))
 }
@@ -305,25 +320,28 @@ fn carry_one_link_through_the_pool(
         PortDescriptor::new(&pool_output_port, &description, false, family.clone());
     pool.ports.inputs.push(PortInfo::from(&input_descriptor));
     pool.ports.outputs.push(PortInfo::from(&output_descriptor));
-    let mut config = pool
-        .config
-        .clone()
-        .unwrap_or_else(|| serde_json::json!({ "carries": [] }));
-    if let Some(carries) = config.get_mut("carries").and_then(JsonValue::as_array_mut) {
-        let mut carry = serde_json::json!({
-            "input_port": pool_input_port,
-            "output_port": pool_output_port,
-        });
-        if let (Some(carry), Some(carry_family)) = (carry.as_object_mut(), carry_family.as_object())
-        {
-            carry.extend(carry_family.clone());
-            if feeds_a_setting_read_at_setup {
-                carry.insert("written_at_setup".to_owned(), JsonValue::Bool(true));
-            }
-        }
-        carries.push(carry);
+    let mut carry = serde_json::Map::from_iter([
+        (
+            "input_port".to_owned(),
+            JsonValue::String(pool_input_port.clone()),
+        ),
+        (
+            "output_port".to_owned(),
+            JsonValue::String(pool_output_port.clone()),
+        ),
+    ]);
+    if let Some(carry_family) = carry_family.as_object() {
+        carry.extend(carry_family.clone());
     }
-    pool.set_config(config);
+    if feeds_a_setting_read_at_setup {
+        carry.insert("written_at_setup".to_owned(), JsonValue::Bool(true));
+    }
+    let mut every_carry = every_carry_of(pool);
+    every_carry.push(JsonValue::Object(carry));
+    pool.set_input_value(
+        FUNCTION_NODE_POOL_CARRIES_INPUT,
+        Some(JsonValue::Array(every_carry)),
+    );
 
     graph.traversal_mut().e(link_id).drop();
     let into_the_pool = add_a_link_carrying(

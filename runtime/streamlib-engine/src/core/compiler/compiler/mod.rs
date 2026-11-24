@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -12,7 +11,6 @@ use crate::core::compiler::compilation_plan::{
 };
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
-use crate::core::compiler::compiler_ops::NodeConfigUpdateOutcome;
 use crate::core::compiler::compiler_ops::function_node_island::{
     HowALinkIsWired, close_the_channels_no_island_reads_any_more,
     hand_each_reader_the_island_a_compile_changed, how_a_link_is_wired,
@@ -33,7 +31,6 @@ use crate::core::compiler::compiler_ops::function_node_promotion::{
     plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
     record_each_promotion_on_its_nodes_metrics,
 };
-use crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_config_fields_its_node_exposes_as_inputs;
 use crate::core::compiler::compiler_ops::running_node_restart::{
     RunningNodesALiveEditRestarts, forget_the_build_of_each_node_restarted,
     hold_each_link_to_wire_again_as_pending, the_running_nodes_a_rebuild_restarts,
@@ -44,7 +41,6 @@ use crate::core::compiler::compiler_ops::shader_node_island::{
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
-use crate::core::compiler::compiler_transaction::ConfigsACommitIsApplying;
 use crate::core::compiler::node_thread_shutdown::{
     AbandonedNodeThreadStillRunning, DescriptionOfTheAbandonedNodeThreads, NodeDisplayNameAndId,
     NodeThreadJoinBudgets, remove_nodes_signalling_every_thread_before_joining_any,
@@ -76,8 +72,6 @@ pub(crate) struct Compiler {
     graph: Arc<RwLock<Graph>>,
     // Transaction accumulates operations until commit
     transaction: Arc<Mutex<Vec<PendingOperation>>>,
-    /// The config each node holds once the commit in progress applies the update it took.
-    configs_a_commit_is_applying: ConfigsACommitIsApplying,
     /// Held for the whole of a commit: two batches compiling at once would
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
@@ -115,7 +109,6 @@ impl Compiler {
                 live_input_values,
             ))),
             transaction: Arc::new(Mutex::new(Vec::new())),
-            configs_a_commit_is_applying: Arc::new(Mutex::new(HashMap::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_node_threads: Mutex::new(Vec::new()),
             transaction_held_for_one_commit: Mutex::new(None),
@@ -138,10 +131,7 @@ impl Compiler {
         F: FnOnce(&mut Graph, &CompilerTransactionHandle) -> R,
     {
         let mut graph = self.graph.write();
-        let tx = CompilerTransactionHandle::new(
-            Arc::clone(&self.transaction),
-            Arc::clone(&self.configs_a_commit_is_applying),
-        );
+        let tx = CompilerTransactionHandle::new(Arc::clone(&self.transaction));
         f(&mut graph, &tx)
     }
 
@@ -167,22 +157,9 @@ impl Compiler {
         self.transaction.lock().clone()
     }
 
-    /// Take every operation logged, for a commit to compile, recording in the same step the
-    /// config each config update taken hands its node, which a config built before the commit
-    /// applies it builds on.
+    /// Take every operation logged, for a commit to compile.
     pub(super) fn take_the_logged_operations_to_compile(&self) -> Vec<PendingOperation> {
-        let mut transaction = self.transaction.lock();
-        let mut configs_a_commit_is_applying = self.configs_a_commit_is_applying.lock();
-        for operation in transaction.iter() {
-            if let PendingOperation::UpdateNodeConfig {
-                node_run_id,
-                config_to_apply,
-            } = operation
-            {
-                configs_a_commit_is_applying.insert(node_run_id.clone(), config_to_apply.clone());
-            }
-        }
-        std::mem::take(&mut *transaction)
+        std::mem::take(&mut *self.transaction.lock())
     }
 
     fn compile(
@@ -253,14 +230,12 @@ impl Compiler {
             let graph = graph_arc.read();
             plan.drop_link_adds_into_removed_nodes(&graph);
         }
-        plan.hand_config_updates_to_nodes_this_batch_constructs(&mut graph_arc.write());
         refuse_an_edit_an_island_cannot_take(
             &graph_arc.read(),
             &plan.nodes_to_add,
             &node_ids_to_remove,
             &plan.links_to_add,
             &plan.links_to_remove,
-            &plan.config_updates,
         )?;
         let links_changed = [
             plan.links_to_add.as_slice(),
@@ -311,12 +286,11 @@ impl Compiler {
         }
 
         tracing::info!(
-            "Compiling: +{} -{} nodes, +{} -{} links, {} config updates",
+            "Compiling: +{} -{} nodes, +{} -{} links",
             plan.nodes_to_add.len(),
             plan.nodes_to_remove.len(),
             plan.links_to_add.len(),
             plan.links_to_remove.len(),
-            plan.config_updates.len(),
         );
 
         // Publish compile start event
@@ -475,7 +449,6 @@ impl Compiler {
         note_where_each_function_node_runs(&mut graph_arc.write());
         build_each_with_what_the_wires_into_its_settings_carried(&graph_arc, &plan.nodes_to_add);
         deliver_the_unlinked_input_values_of_each_node(&graph_arc, &plan.nodes_to_add)?;
-        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph_arc.read())?;
 
         // A function node has no thread whose setup would settle its state: it
         // runs once it is wired into the read of each node it feeds. A shader
@@ -505,28 +478,6 @@ impl Compiler {
             &graph_arc,
             barrier_handles,
         )?;
-
-        // =====================================================================
-        // 8. Config updates - for each config_update
-        // =====================================================================
-        for (proc_id, config_to_apply) in plan.config_updates {
-            match super::compiler_ops::apply_node_config_update(
-                &graph_arc,
-                &proc_id,
-                config_to_apply,
-            )? {
-                NodeConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
-                    tracing::info!("[CONFIG] Updated config for {}", proc_id);
-                    result.configs_updated += 1;
-                    the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                        RuntimeEvent::NodeConfigDidChange {
-                            node_run_id: proc_id,
-                        },
-                    );
-                }
-                NodeConfigUpdateOutcome::NodeNoLongerInTheGraph => {}
-            }
-        }
 
         // Mark the graph as compiled
         graph_arc.write().mark_compiled();
@@ -864,12 +815,6 @@ fn the_plan_these_operations_make(
             }
             PendingOperation::RemoveLink(id) => {
                 plan.links_to_remove.push(id);
-            }
-            PendingOperation::UpdateNodeConfig {
-                node_run_id,
-                config_to_apply,
-            } => {
-                plan.config_updates.push((node_run_id, config_to_apply));
             }
             PendingOperation::RebuildNode(node_run_id) => {
                 if !plan.nodes_to_rebuild.contains(&node_run_id) {

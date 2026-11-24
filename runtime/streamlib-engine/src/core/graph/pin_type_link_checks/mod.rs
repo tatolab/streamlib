@@ -402,13 +402,8 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
         return Ok(());
     };
     let convert_node_name = conversion.node_type.to_string();
-    let held = crate::core::graph::the_values_port_facts_read(
-        Some(&serde_json::Value::Object(
-            convert_node.input_values.clone(),
-        )),
-        &ports.inputs,
-        &convert_node.input_values,
-    );
+    let held =
+        crate::core::graph::the_values_port_facts_read(&ports.inputs, &convert_node.input_values);
     let refusal = refusal_of_the_names_and_codec_a_link_carries(
         PortFamilyLinkEndpoint {
             node_name: &from_node.display_name,
@@ -416,7 +411,7 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
             declaration: &output_port.family,
         },
         output_port.family.family,
-        from_node.the_values_its_port_facts_read().as_ref(),
+        Some(&from_node.the_values_its_port_facts_read()),
         PortFamilyLinkEndpoint {
             node_name: &convert_node_name,
             port_name: &into_it.name,
@@ -431,7 +426,7 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
                 declaration: &out_of_it.family,
             },
             out_of_it.family.family,
-            held.as_ref(),
+            Some(&held),
             PortFamilyLinkEndpoint {
                 node_name: &to_node.display_name,
                 port_name: &input_port.name,
@@ -442,13 +437,14 @@ pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse
     refusal.map_or(Ok(()), |refusal| Err(Error::InvalidLink(refusal)))
 }
 
-/// Refuse `config_to_apply` for the node `node_run_id` names when it is a node of a conversion
-/// whose output follows a setting, and under it that output gives a type a wired link out of it
-/// refuses, or that a wired link past the input it feeds then refuses, naming that link.
-pub(crate) fn refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
+/// Refuse `input_values`, the values the node `node_run_id` names would hold after a set, when it
+/// is a node of a conversion whose output follows a setting, and under them that output gives a
+/// type a wired link out of it refuses, or that a wired link past the input it feeds then
+/// refuses, naming that link.
+pub(crate) fn refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
     graph: &Graph,
     node_run_id: &NodeRunId,
-    config_to_apply: &serde_json::Value,
+    input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
     let Some(node) = graph.traversal().v(node_run_id).first() else {
         return Ok(());
@@ -456,7 +452,7 @@ pub(crate) fn refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_re
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     for output in &node.ports.outputs {
         let Some(given) =
-            the_type_a_convert_node_gives_under(graph, node, output, Some(config_to_apply))
+            the_type_a_convert_node_gives_under(graph, node, output, Some(input_values))
         else {
             continue;
         };
@@ -687,7 +683,7 @@ fn the_link_its_pin_types_or_families_take(
                     declaration: &output_port.family,
                 },
                 output_port.family.family,
-                from_node.the_values_its_port_facts_read().as_ref(),
+                Some(&from_node.the_values_its_port_facts_read()),
                 PortFamilyLinkEndpoint {
                     node_name: &to_node.display_name,
                     port_name: &input_port.name,

@@ -19,7 +19,6 @@ use crate::core::descriptors::{NodeClassImportPath, NodeKind};
 use crate::core::output_port_stream_facts::{
     StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
-use crate::core::utils::compute_json_checksum;
 
 #[derive(Serialize, Deserialize)]
 pub struct GraphNode {
@@ -28,12 +27,10 @@ pub struct GraphNode {
     /// The node's UUID: its spec key in the graph document, kept across every run.
     #[serde(default = "uuid::Uuid::new_v4")]
     pub node_uuid: uuid::Uuid,
-    /// The values the graph document sets on the node's unlinked inputs, by input name.
+    /// Every value the graph document sets on the node, by input name: its settings and the
+    /// values on its unlinked inputs alike.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
-    pub pins: serde_json::Map<String, serde_json::Value>,
-    /// The config fields the node takes as inputs too, each an input port of the field's name.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exposed_config_fields: Vec<String>,
+    pub input_values: serde_json::Map<String, serde_json::Value>,
     /// What the studio draws the node with.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub studio: serde_json::Map<String, serde_json::Value>,
@@ -41,11 +38,6 @@ pub struct GraphNode {
     #[serde(rename = "type")]
     pub node_type: NodeClassImportPath,
     pub display_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<serde_json::Value>,
-    /// Checksum of config for change detection.
-    #[serde(default)]
-    pub config_checksum: u64,
     pub ports: GraphNodePorts,
     /// How the node's type runs, read off its registered descriptor; `None`
     /// on a node whose type nothing registers.
@@ -75,13 +67,10 @@ impl PartialEq for GraphNode {
         // Compare only static fields, not runtime components
         self.id == other.id
             && self.node_uuid == other.node_uuid
-            && self.pins == other.pins
-            && self.exposed_config_fields == other.exposed_config_fields
+            && self.input_values == other.input_values
             && self.studio == other.studio
             && self.node_type == other.node_type
             && self.display_name == other.display_name
-            && self.config == other.config
-            && self.config_checksum == other.config_checksum
             && self.ports == other.ports
     }
 }
@@ -95,8 +84,7 @@ impl std::fmt::Debug for GraphNode {
             .field("node_uuid", &self.node_uuid)
             .field("node_type", &self.node_type)
             .field("display_name", &self.display_name)
-            .field("config", &self.config)
-            .field("config_checksum", &self.config_checksum)
+            .field("input_values", &self.input_values)
             .field("ports", &self.ports)
             // Skip: components, component_renderers (runtime-only)
             .finish()
@@ -125,32 +113,26 @@ impl GraphNode {
         node_type: NodeClassImportPath,
         node_kind: Option<NodeKind>,
         display_name: impl Into<String>,
-        config: Option<serde_json::Value>,
+        input_values: serde_json::Map<String, serde_json::Value>,
         inputs: Vec<PortInfo>,
         outputs: Vec<PortInfo>,
     ) -> Self {
-        let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
         let stream_facts_of_output_ports = Arc::new(StreamFactsOfOutputPorts::as_declared_by(
             &outputs,
-            crate::core::graph::the_values_port_facts_read(
-                config.as_ref(),
+            Some(&crate::core::graph::the_values_port_facts_read(
                 &inputs,
-                &serde_json::Map::new(),
-            )
-            .as_ref(),
+                &input_values,
+            )),
         ));
         let ports = GraphNodePorts { inputs, outputs }
-            .resolved_against_the_config(&node_type, config.as_ref());
+            .resolved_against_the_input_values(&node_type, &input_values);
         Self {
             id: NodeRunId::new(),
             node_uuid: uuid::Uuid::new_v4(),
-            pins: serde_json::Map::new(),
-            exposed_config_fields: Vec::new(),
+            input_values,
             studio: serde_json::Map::new(),
             node_type,
             display_name: display_name.into(),
-            config,
-            config_checksum,
             ports,
             node_kind,
             components: ComponentMap::new(),
@@ -184,62 +166,50 @@ impl GraphNode {
         &self.upstream_stream_facts_by_inbound_link
     }
 
-    /// The values this node's port facts read: its config, each setting it reads at setup laid
-    /// over it holding the value set on it or else its default.
-    pub(crate) fn the_values_its_port_facts_read(&self) -> Option<serde_json::Value> {
-        crate::core::graph::the_values_port_facts_read(
-            self.config.as_ref(),
-            &self.ports.inputs,
-            &self.pins,
-        )
+    /// The values this node's port facts read: each it holds, each setting it reads at setup
+    /// holding the value set on it or else its default.
+    pub(crate) fn the_values_its_port_facts_read(&self) -> serde_json::Value {
+        crate::core::graph::the_values_port_facts_read(&self.ports.inputs, &self.input_values)
     }
 
-    /// Update config and recompute checksum.
-    pub fn set_config(&mut self, config: serde_json::Value) {
-        self.config_checksum = compute_json_checksum(&config);
-        self.config = Some(config);
-        self.resolve_the_ports_its_settings_declare();
-    }
-
-    /// Set the pin `input` to `value`, `None` taking it off; answers the pin it held. A
-    /// `GraphInput`'s `value` ports take what its settings declare of them again.
-    pub(crate) fn set_pin(
+    /// Set the input value `input` to `value`, `None` taking it off; answers the value it held.
+    /// A `GraphInput`'s `value` ports take what its settings declare of them again.
+    pub(crate) fn set_input_value(
         &mut self,
         input: &str,
         value: Option<serde_json::Value>,
     ) -> Option<serde_json::Value> {
         let held = match value {
-            Some(value) => self.pins.insert(input.to_string(), value),
-            None => self.pins.remove(input),
+            Some(value) => self.input_values.insert(input.to_string(), value),
+            None => self.input_values.remove(input),
         };
         self.resolve_the_ports_its_settings_declare();
         held
     }
 
-    /// The one map of input values this node holds: its config and its pins, a pin winning over
-    /// a config field of its name.
-    pub(crate) fn input_values(&self) -> serde_json::Map<String, serde_json::Value> {
-        crate::core::graph::legacy_config_of_a_node::input_values_of_a_config_and_pin_values(
-            self.config.as_ref(),
-            &self.pins,
-        )
+    /// Hold `input_values` in place of every input value this node holds.
+    pub(crate) fn hold_the_input_values(
+        &mut self,
+        input_values: serde_json::Map<String, serde_json::Value>,
+    ) {
+        self.input_values = input_values;
+        self.resolve_the_ports_its_settings_declare();
     }
 
-    /// Resolve this node's ports against what its config and pins declare of them: a
+    /// Resolve this node's ports against what its input values declare of them: a
     /// `GraphInput`'s `value` ports take the pin type, the family, the range and the lifetime
     /// its settings name, a `Constant`'s the pin type its `pin_type` chooses, and every output
     /// carries its stream facts on the family its settings read at setup choose. The ports of
     /// every other node type are as it declares them.
     pub(crate) fn resolve_the_ports_its_settings_declare(&mut self) {
         if self.node_type.carries_the_value_its_pin_type_chooses() {
-            let settings = serde_json::Value::Object(self.input_values());
             self.ports = std::mem::take(&mut self.ports)
-                .resolved_against_the_config(&self.node_type, Some(&settings));
+                .resolved_against_the_input_values(&self.node_type, &self.input_values);
         }
         self.stream_facts_of_output_ports
             .take_the_families_declared_by(
                 &self.ports.outputs,
-                self.the_values_its_port_facts_read().as_ref(),
+                Some(&self.the_values_its_port_facts_read()),
             );
     }
 
@@ -267,26 +237,6 @@ impl GraphNode {
     /// How the node's type runs; `None` when nothing registers its type.
     pub fn node_kind(&self) -> Option<NodeKind> {
         self.node_kind
-    }
-
-    /// Take `exposed_config_fields` as the config fields this node takes as inputs, each with
-    /// its port of `exposed_config_field_input_ports`, in place of those it took before.
-    pub(crate) fn replace_the_exposed_config_fields(
-        &mut self,
-        exposed_config_fields: Vec<String>,
-        exposed_config_field_input_ports: Vec<PortInfo>,
-    ) {
-        let exposed_before =
-            std::mem::replace(&mut self.exposed_config_fields, exposed_config_fields);
-        self.ports
-            .inputs
-            .retain(|port| !exposed_before.contains(&port.name));
-        self.ports.inputs.extend(exposed_config_field_input_ports);
-    }
-
-    /// Whether input `name` is a config field this node exposes as an input.
-    pub fn is_an_exposed_config_field_input(&self, name: &str) -> bool {
-        self.exposed_config_fields.iter().any(|field| field == name)
     }
 
     /// The input port `name` finds: the input so named, else the one that had that name.

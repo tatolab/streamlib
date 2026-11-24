@@ -283,13 +283,14 @@ pub trait RuntimeOperations: Send + Sync {
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<'_, Result<()>>;
 
-    /// The config a node of type `node_type` holding `input_values` takes whole, as this stream
-    /// resolves the type: the input values its config schema lists.
-    fn the_config_a_node_holding_the_input_values_takes(
+    /// Each of `input_values`, held by a node of type `node_type`, that a `set_node_config`
+    /// replaces, as this stream resolves the type: each naming a setting its config schema
+    /// lists, and every value a node of a type the stream does not describe holds.
+    fn the_settings_a_set_node_config_replaces(
         &self,
         node_type: &str,
         input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<serde_json::Value>;
+    ) -> Result<serde_json::Map<String, serde_json::Value>>;
 
     /// The ports a node of type `node_type` has, as this stream resolves the type: the way in,
     /// from outside the engine, to the one lookup of a port by its current name or a name it
@@ -332,18 +333,20 @@ pub trait RuntimeOperations: Send + Sync {
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
 
-    /// Whether a node of type `node_type` still takes a config, as this stream resolves the
-    /// type: its config schema lists a field, or the stream does not describe it.
-    fn node_type_takes_a_config(&self, node_type: &NodeClassImportPath) -> bool;
+    /// Whether a `set_node_config` on a node of type `node_type` replaces every setting it
+    /// holds, taking off each it does not name, as this stream resolves the type: its config
+    /// schema lists a setting, or the stream does not describe it.
+    fn a_set_node_config_replaces_every_setting_on(&self, node_type: &NodeClassImportPath) -> bool;
 
-    /// Whether an exposure of `exposed_config_fields` on a node of type `node_type` is recorded:
-    /// true for a type that still takes a config; false for one that takes none, on which each
-    /// name must be one of its inputs, refused by name otherwise.
-    fn an_exposure_of_config_fields_is_recorded_on(
+    /// Refuse an exposure of `exposed_config_fields` on the node named `node_name` of type
+    /// `node_type` when a name it lists is no input of the type that takes a wire, naming each;
+    /// an exposure checked records nothing.
+    fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
         &self,
+        node_name: &str,
         node_type: &NodeClassImportPath,
         exposed_config_fields: &[String],
-    ) -> Result<bool>;
+    ) -> Result<()>;
 
     /// Set each of `sets` live, apart from the graph, when each is on an input its node reads
     /// each run: every value checked before any is set, then each handed to the helper and the

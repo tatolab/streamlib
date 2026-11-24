@@ -381,8 +381,8 @@ pub(crate) fn the_settings_rendered_reading_the_values_held(
 }
 
 /// The value input `port` of `node` in `graph` reads, `fed` saying what the links into it feed:
-/// wire, while a link feeds the whole input; else its live value, its saved one, which is its config field's for a config field the node
-/// exposes as an input, or its declared default; else nothing. A bundle input reads each member
+/// wire, while a link feeds the whole input; else its live value, its saved one, or its declared
+/// default; else nothing. A bundle input reads each member
 /// so alone, as `member_values`, `wire` for a member a link ends at. `None` for an input that takes no stored value and no link
 /// feeds.
 pub(crate) fn the_value_an_input_reads(
@@ -391,10 +391,8 @@ pub(crate) fn the_value_an_input_reads(
     port: &PortInfo,
     fed: &WhatTheLinksIntoAnInputFeed,
 ) -> Option<InputValueReadOnTheWire> {
-    let port = &*port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
-    if let Some(members) = the_bundle_members_of(port)
-        && !node.is_an_exposed_config_field_input(&port.name)
-    {
+    let port = &*port.typed_by_its_setting_in(&node.ports.inputs, &node.input_values);
+    if let Some(members) = the_bundle_members_of(port) {
         if !fed.anything() && !the_input_port_takes_a_value(node.node_kind(), port) {
             return None;
         }
@@ -403,7 +401,7 @@ pub(crate) fn the_value_an_input_reads(
             .value_of(node.node_uuid, &port.name);
         let held = ValuesABundleInputHolds {
             live: live.as_ref(),
-            saved: node.pins.get(&port.name),
+            saved: node.input_values.get(&port.name),
             input_default: port.pin_default.as_ref(),
         };
         return Some(InputValueReadOnTheWire {
@@ -415,19 +413,10 @@ pub(crate) fn the_value_an_input_reads(
     if fed.the_whole_input() {
         return Some(the_read_of_an_input_a_link_feeds());
     }
-    let exposed_config_field = node.is_an_exposed_config_field_input(&port.name);
-    if !exposed_config_field && !the_input_port_takes_a_value(node.node_kind(), port) {
+    if !the_input_port_takes_a_value(node.node_kind(), port) {
         return None;
     }
-    let saved = if exposed_config_field {
-        node.config
-            .as_ref()
-            .and_then(|config| config.get(&port.name))
-            .filter(|value| !value.is_null())
-            .cloned()
-    } else {
-        node.pins.get(&port.name).cloned()
-    };
+    let saved = node.input_values.get(&port.name).cloned();
     let read = graph
         .live_input_values()
         .value_of(node.node_uuid, &port.name)
@@ -449,7 +438,7 @@ fn the_value_an_unlinked_input_is_handed(
     node: &GraphNode,
     port: &PortInfo,
 ) -> Option<Value> {
-    let port = &*port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
+    let port = &*port.typed_by_its_setting_in(&node.ports.inputs, &node.input_values);
     if let Some(members) = the_bundle_members_of(port) {
         if !the_input_port_takes_a_value(node.node_kind(), port) {
             return None;
@@ -459,7 +448,7 @@ fn the_value_an_unlinked_input_is_handed(
             .value_of(node.node_uuid, &port.name);
         return ValuesABundleInputHolds {
             live: live.as_ref(),
-            saved: node.pins.get(&port.name),
+            saved: node.input_values.get(&port.name),
             input_default: port.pin_default.as_ref(),
         }
         .the_bundle_read(members);
@@ -472,14 +461,12 @@ fn the_value_an_unlinked_input_is_handed(
 /// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
 /// value, else its saved one, else its declared default. A setting read at setup that a wire
 /// feeds reads instead the value its wire last carried, once it has carried one, and a
-/// connection input the node its wire brings. An input that takes no stored value, a config
-/// field the node exposes as an input, which reads the node's config, and an input with none
-/// of these are left out.
+/// connection input the node its wire brings. An input that takes no stored value, and an input
+/// with none of these, are left out.
 pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<String, Value> {
     node.ports
         .inputs
         .iter()
-        .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
         .filter_map(|port| {
             the_value_a_wire_into_the_setting_carried(graph, node, port)
                 .or_else(|| the_node_a_connection_wire_brings(node, port))
@@ -497,7 +484,7 @@ fn the_node_a_connection_wire_brings(node: &GraphNode, port: &PortInfo) -> Optio
     if !port.takes_a_connection() {
         return None;
     }
-    node.pins
+    node.input_values
         .get(&port.name)
         .filter(|reference| !reference.is_null())
         .cloned()
@@ -582,7 +569,7 @@ pub(crate) fn the_pin_values_with_the_live_ones_over_them(
     graph: &Graph,
     node: &GraphNode,
 ) -> Map<String, Value> {
-    let mut pin_values = node.pins.clone();
+    let mut pin_values = node.input_values.clone();
     for (input, live) in graph.live_input_values().values_of_the_node(node.node_uuid) {
         let is_a_bundle = node
             .input_port(&input)

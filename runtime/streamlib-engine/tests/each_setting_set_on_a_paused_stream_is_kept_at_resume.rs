@@ -44,7 +44,7 @@ fn a_running_stream_with_a_frame_size_taking_node() -> (
     Arc<LoadedStreamInThisRuntime>,
     Uuid,
 ) {
-    NODE_REGISTRY.register_taking_a_config_for_a_test::<FrameSizeTakingTestNode::Node, FrameSizeTakingTestNodeConfig>();
+    NODE_REGISTRY.register_with_a_config_schema_for_a_test::<FrameSizeTakingTestNode::Node, FrameSizeTakingTestNodeConfig>();
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner

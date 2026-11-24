@@ -20,21 +20,6 @@ pub trait GeneratedNode: Send + 'static {
 
     fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
 
-    /// Update configuration at runtime (hot-reload).
-    fn update_config(&mut self, _config: Self::Config) -> Result<()> {
-        Ok(())
-    }
-
-    /// Apply a JSON config update at runtime.
-    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()>
-    where
-        Self: Sized,
-    {
-        let config: Self::Config = serde_json::from_value(config_json.clone())
-            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
-        self.update_config(config)
-    }
-
     /// Take `input_values`, the value each input reads while no link feeds it, by input, in
     /// place of those it took before; by default the node takes the settings they hold, then
     /// each lands in its input mailboxes, which answer a read of the input with it while no link
@@ -97,14 +82,6 @@ pub trait GeneratedNode: Send + 'static {
     }
 
     fn to_runtime_json(&self) -> JsonValue {
-        JsonValue::Null
-    }
-
-    /// Get the current config as JSON.
-    fn config_json(&self) -> JsonValue
-    where
-        Self: Sized,
-    {
         JsonValue::Null
     }
 

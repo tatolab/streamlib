@@ -72,7 +72,7 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
                             __streamlib_sdk::serde_json::Map::new(),
                         ),
                     )
-                    .with_pins_and_studio_fields(
+                    .with_input_values_and_studio_fields(
                         input_values,
                         __streamlib_sdk::serde_json::Map::new(),
                     )

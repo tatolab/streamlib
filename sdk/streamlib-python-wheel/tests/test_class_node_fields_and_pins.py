@@ -321,7 +321,6 @@ def test_a_running_helpers_class_node_is_built_from_its_setup_values_and_takes_e
         {
             "cmd": "setup",
             "capability": "full",
-            "config": {},
             "ports": {"input_values": {"gain": 0.5, "tint": red, "width": 8}},
         }
     )

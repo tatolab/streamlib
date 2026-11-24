@@ -28,7 +28,7 @@ from tatolab.runtime._function_node_run_as_a_standalone_node import (
     ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs,
     the_node_class_a_promoted_function_node_runs_as,
 )
-from tatolab.runtime._node_hosting import apply_configuration, construct_node_instance
+from tatolab.runtime._node_hosting import construct_node_instance
 from tatolab.runtime._function_node_compilation import FunctionNodeDoesNotCompile
 from tatolab.stream import node
 from tatolab.stream._node_declaration import (
@@ -681,27 +681,6 @@ def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compile
     )
 
 
-def test_a_promoted_rust_function_node_reads_a_live_config_update_at_its_next_call():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    import_path = f"{__name__}:WeightedSumCountingItsCalls"
-    runner_class = the_node_class_a_promoted_function_node_runs_as(
-        WeightedSumCountingItsCalls, import_path, "weighted-1", data_plane
-    )
-    runner = _constructed_with_its_ports_declared(runner_class, {"weight": 3.0}, data_plane)
-    ctx = _ContextOfOneProcess()
-    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
-    control_values.write_control_value("x", 2.0)
-    runner.process(ctx)
-
-    apply_configuration(runner, {"weight": 5.0})
-    runner.process(ctx)
-
-    assert ctx._link_output_data_writer.blocks_written == [
-        ("result", [[6.25]], 0, 0),
-        ("result", [[10.25]], 1, 0),
-    ], "a Rust function node's config field reaches the call after the update"
-
-
 @pytest.mark.parametrize("function_node", [amplify, measure_its_own_spelling])
 def test_a_promoted_python_function_node_refuses_a_config_naming_the_inputs_that_replace_it(
     function_node: Any,
@@ -713,6 +692,4 @@ def test_a_promoted_python_function_node_refuses_a_config_naming_the_inputs_that
     )
     with pytest.raises(FunctionNodeDoesNotCompile, match="config sets gain, and it takes no config"):
         _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
-    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
-    with pytest.raises(FunctionNodeDoesNotCompile, match="config sets gain, and it takes no config"):
-        apply_configuration(runner, {"gain": 5.0})
+    _constructed_with_its_ports_declared(runner_class, None, data_plane)

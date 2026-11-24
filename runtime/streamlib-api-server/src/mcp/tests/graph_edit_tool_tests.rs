@@ -206,7 +206,7 @@ impl streamlib::sdk::nodes::ManualNode for AddNodeTestSourceTakingOneSetting::No
 /// the node, its type and the setting, and adds nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn tools_call_add_node_refuses_a_setting_the_nodes_type_does_not_take_naming_it() {
-    streamlib::sdk::nodes::NODE_REGISTRY.register_taking_a_config_for_a_test::<
+    streamlib::sdk::nodes::NODE_REGISTRY.register_with_a_config_schema_for_a_test::<
         AddNodeTestSourceTakingOneSetting::Node,
         AddNodeTestSourceTakingOneSettingConfig,
     >();
@@ -430,10 +430,6 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
             "set_studio_fields",
             json!({ "node": STUB_CAMERA_NODE_UUID, "studio": { "position": [4, 2] } }),
         ),
-        (
-            "set_exposed_config_fields",
-            json!({ "node": STUB_CAMERA_NODE_UUID, "exposed_config_fields": ["fps"] }),
-        ),
         ("remove_node", json!({ "node": STUB_EFFECT_NODE_UUID })),
     ] {
         let mut arguments = arguments;
@@ -482,15 +478,7 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
             to: Box::new(a_studio_at([4, 2])),
         }
     );
-    assert_eq!(
-        recorded[4],
-        StreamGraphOperation::SetExposedConfigFields {
-            node: camera,
-            from: Vec::new(),
-            to: vec!["fps".to_owned()],
-        }
-    );
-    let StreamGraphOperation::RemoveNode { node, links } = &recorded[5] else {
+    let StreamGraphOperation::RemoveNode { node, links } = &recorded[4] else {
         panic!("the last edit removes, recorded {recorded:?}");
     };
     assert_eq!(node.id, effect);

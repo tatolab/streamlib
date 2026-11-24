@@ -170,7 +170,7 @@ fn refusal_of_a_link_from_an_output(
             port_name: from_port_name,
             declaration: output_declaration,
         },
-        from_node.the_values_its_port_facts_read().as_ref(),
+        Some(&from_node.the_values_its_port_facts_read()),
         PortFamilyLinkEndpoint {
             node_name: &to_node.display_name,
             port_name: to_port_name,
@@ -373,17 +373,19 @@ pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
     Ok(())
 }
 
-/// Refuse a config update `config_to_apply` on node `node_run_id` under which a link out of
-/// it, or what a passer carries on from one, would be refused by its families, names or codec.
-/// Its Image formats are not judged again here: a wired link has passed them or, a saved
-/// graph's, been kept despite them, and the one node whose config sets them, a convert node
-/// whose output follows a setting, has its links judged under the new config by
-/// [`super::refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse`].
-pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
+/// Refuse `input_values`, the values node `node_run_id` would hold after a set of a setting it
+/// reads at setup, under which a link out of it, or what a passer carries on from one, would be
+/// refused by its families, names or codec. Its Image formats are not judged again here: a wired
+/// link has passed them or, a saved graph's, been kept despite them, and the one node whose
+/// settings set them, a convert node whose output follows a setting, has its links judged under
+/// the new values by
+/// [`super::refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse`].
+pub(crate) fn refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
     graph: &Graph,
     node_run_id: &NodeRunId,
-    config_to_apply: &serde_json::Value,
+    input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
+    let input_values = &serde_json::Value::Object(input_values.clone());
     let Some(from_node) = graph.traversal().v(node_run_id).first() else {
         return Ok(());
     };
@@ -430,7 +432,7 @@ pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_ref
                     port_name: link.source().port_name(),
                     declaration: output_declaration,
                 },
-                Some(config_to_apply),
+                Some(input_values),
                 PortFamilyLinkEndpoint {
                     node_name: &reached_node.display_name,
                     port_name: reached_input_port,

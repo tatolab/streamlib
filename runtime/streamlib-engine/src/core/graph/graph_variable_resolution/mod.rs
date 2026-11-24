@@ -23,9 +23,6 @@ use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, Graph
 use crate::core::graph::input_values::{
     TakesAWireRendered, the_settings_rendered_reading_the_values_held,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    LegacyConfigOfANodeType, config_of_a_node_as_drawn,
-};
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeComponentsOnTheWire, GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
@@ -200,9 +197,13 @@ impl GraphVariablesAsDrawn {
                 .config
                 .clone()
                 .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-            if config_of_a_node_as_drawn(&config_naming_a_get.as_resolved, &node.pins)
-                == running_config
-            {
+            let resolved_as_drawn: serde_json::Map<String, serde_json::Value> = config_naming_a_get
+                .as_resolved
+                .iter()
+                .filter(|(name, _)| !node.pins.contains_key(*name))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            if serde_json::Value::Object(resolved_as_drawn) == running_config {
                 redraw_a_node_over_its_pins(node, &config_naming_a_get.as_drawn);
             }
         }
@@ -633,10 +634,13 @@ impl GraphSnapshot {
                 named_a_get = true;
                 Ok(Some(referenced_node.clone()))
             };
-            let legacy_config = LegacyConfigOfANodeType::of(node_types, &node.node_type);
+            let older_keys = crate::core::json_schema::OlderGraphKeysOfANodeType::of(
+                node_types,
+                &node.node_type,
+            );
             for (input, value) in resolved_input_values
                 .iter_mut()
-                .filter(|(input, _)| legacy_config.is_a_config_field(input))
+                .filter(|(input, _)| older_keys.renders_under_config(input))
             {
                 resolve_each_config_value_naming_a_get(
                     value,

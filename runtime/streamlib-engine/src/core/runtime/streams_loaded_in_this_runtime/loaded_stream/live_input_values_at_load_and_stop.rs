@@ -17,7 +17,7 @@ use crate::core::graph::input_values::{
     the_input_value_change, the_input_values_a_live_set_is_checked_against,
     the_lifetime_of_the_input,
 };
-use crate::core::graph::{Graph, GraphNode, NodeRunId};
+use crate::core::graph::{Graph, GraphNode};
 
 impl LoadedStreamInThisRuntime {
     /// Hold as live each value the project's store keeps for an input of a node this stream's
@@ -89,27 +89,6 @@ impl LoadedStreamInThisRuntime {
         });
     }
 
-    /// Hold each value set live on an input of the node `node_run_id` whose lifetime a change of
-    /// its config changed, as a `GraphInput`'s `lifetime` does, under the one its input declares
-    /// now; every other live value is left as it is held.
-    pub(in crate::core::runtime) fn hold_each_live_value_whose_lifetime_the_config_changed(
-        &self,
-        node_run_id: &NodeRunId,
-    ) {
-        self.with_no_other_input_value_change(|| {
-            self.compiler.scope_reading(|graph| {
-                let Some(node) = graph.traversal().v(node_run_id).first() else {
-                    return;
-                };
-                graph
-                    .live_input_values()
-                    .hold_each_value_of_the_node_whose_lifetime_changed(node.node_uuid, |input| {
-                        the_lifetime_of_the_input(node, input)
-                    });
-            });
-        });
-    }
-
     /// Forget each value set live on a `reset` input of this stream, as it stops, answering
     /// each input forgotten as `(node, input)`.
     pub(super) fn forget_every_live_value_reset_at_the_stop(&self) -> Vec<(Uuid, String)> {
@@ -144,7 +123,7 @@ fn its_input_keeps_and_takes_the_live_value(
 ) -> bool {
     if !kept_for.has_input(input)
         || !the_lifetime_of_the_input(kept_for, input).is_kept()
-        || is_held_on_the_graph(graph, kept_for, input)
+        || is_held_on_the_graph(kept_for, input)
     {
         return false;
     }

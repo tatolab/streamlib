@@ -165,7 +165,7 @@ fn a_function_nodes_input_values_are_checked() {
         the_code_of(the_refusal_of(&node_types, SCALE, "z", Some(json!(1)))),
         InputValueRefusalCode::PortNotFound
     );
-    assert!(!node_type_takes_a_config(
+    assert!(!a_set_node_config_replaces_every_setting_on(
         &node_types,
         &NodeClassImportPath::new(SCALE).unwrap()
     ));

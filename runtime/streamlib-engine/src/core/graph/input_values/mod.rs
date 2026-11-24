@@ -3,17 +3,14 @@
 
 //! The one check of a value set on a node's input, in both modes and before any value of a
 //! transaction is applied. An input whose port names its pin type takes what the type takes; a
-//! port not yet typed, and a setting a node type not yet typed holds in its config, keep the
-//! checks they had before.
+//! port not yet typed keeps the checks it had before, and a setting its type's config schema
+//! lists takes what the schema states of it.
 
 use serde_json::{Map, Value};
 
 use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange};
 use crate::core::graph::PortInfo;
-use crate::core::graph::legacy_config_of_a_node::{
-    LegacyConfigOfANodeType, the_properties_of_a_config_schema,
-};
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{NodeTypesOneStreamResolves, the_config_fields_described_as_settings};
 
 mod bundle_input_read;
 mod live_input_values;
@@ -107,22 +104,17 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     {
         return Ok(());
     }
-    let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
-    let config = legacy_config.config_of(node.input_values_after_the_set);
     let Some(ports) = node_types.port_info(node_type).map(|ports| {
-        ports.resolved_against_the_config(
-            node_type,
-            Some(&Value::Object(node.input_values_after_the_set.clone())),
-        )
+        ports.resolved_against_the_input_values(node_type, node.input_values_after_the_set)
     }) else {
         return Ok(());
     };
-    let config_schema = node_types
+    let settings_its_config_schema_lists = node_types
         .descriptor(node_type)
-        .and_then(|descriptor| descriptor.config_schema);
+        .map(|descriptor| the_config_fields_described_as_settings(&descriptor))
+        .unwrap_or_default();
     let the_input_port = ports
         .the_input_of_the_type_a_name_finds(input)
-        .filter(|_| !legacy_config.is_a_config_field(input))
         .map(|port| port.typed_by_its_setting_in(&ports.inputs, node.input_values_after_the_set));
     let the_input_port = the_input_port.as_deref();
     if let Some(member) = member {
@@ -157,15 +149,20 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             None => Ok(()),
         };
     }
-    let config_fields = the_properties_of_a_config_schema(config_schema.as_ref());
-    if !config_fields.is_some_and(|properties| properties.contains_key(input)) {
-        let mut its_inputs: Vec<String> =
-            ports.inputs.iter().map(|port| port.name.clone()).collect();
-        its_inputs.extend(
-            config_fields
-                .into_iter()
-                .flat_map(|properties| properties.keys().cloned()),
-        );
+    let Some(setting) = settings_its_config_schema_lists
+        .iter()
+        .find(|setting| setting.name == input)
+    else {
+        let its_inputs: Vec<String> = ports
+            .inputs
+            .iter()
+            .map(|port| port.name.clone())
+            .chain(
+                settings_its_config_schema_lists
+                    .iter()
+                    .map(|setting| setting.name.clone()),
+            )
+            .collect();
         return Err(InputValueRefusal::of(
             InputValueRefusalCode::PortNotFound,
             format!(
@@ -175,20 +172,101 @@ pub fn refuse_an_input_value_its_input_does_not_take(
                 names_in_backticks(&its_inputs)
             ),
         ));
-    }
-    crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
-        node.name, node_type, node_types, &config,
+    };
+    let Some(value) = value else {
+        return Ok(());
+    };
+    refuse_a_value_the_schema_of_a_setting_refuses(&setting.field_value_json_schema, value).map_err(
+        |refusal| {
+            InputValueRefusal::of(
+                InputValueRefusalCode::InputValueNotValid,
+                format!(
+                    "the value of input `{input}` of `{}` is {value}, and its type refuses it: \
+                     node `{}`'s setting `{input}` is refused by what the config schema of its \
+                     type `{node_type}` states of it: {refusal}",
+                    node.name, node.name
+                ),
+            )
+        },
     )
-    .map_err(|refusal| {
-        InputValueRefusal::of(
-            InputValueRefusalCode::InputValueNotValid,
-            format!(
-                "the value of input `{input}` of `{}` is {}, and its type refuses it: {refusal}",
-                node.name,
-                value.map_or_else(|| "taken off".to_owned(), Value::to_string)
-            ),
-        )
-    })
+}
+
+/// Refuse the input values of node `node_name` of `node_type` when the config schema its type
+/// states refuses its settings, the values naming no input port of the type, read whole: a value
+/// a setting's schema refuses, a setting the schema requires and no value holds, or a name the
+/// schema is closed to, as a view's is. A value on an input port is left to the checks of that
+/// port, and a `null` value holds nothing.
+pub(crate) fn refuse_input_values_the_config_schema_of_its_type_refuses(
+    node_types: &NodeTypesOneStreamResolves,
+    node_name: &str,
+    node_type: &NodeClassImportPath,
+    input_values: &Map<String, Value>,
+) -> crate::core::error::Result<()> {
+    let (Some(config_schema), Some(ports)) = (
+        node_types
+            .descriptor(node_type)
+            .and_then(|descriptor| descriptor.config_schema),
+        node_types.port_info(node_type),
+    ) else {
+        return Ok(());
+    };
+    let settings: Map<String, Value> = input_values
+        .iter()
+        .filter(|(name, value)| {
+            !value.is_null() && ports.the_input_of_the_type_a_name_finds(name).is_none()
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let refused = |refusal: String| crate::core::error::Error::NodeConfigRefused {
+        node_name: node_name.to_owned(),
+        node_type: node_type.clone(),
+        refusal,
+    };
+    let validator = jsonschema::validator_for(&config_schema).map_err(|unreadable| {
+        refused(format!(
+            "its type publishes a config schema the runtime cannot read: {unreadable}"
+        ))
+    })?;
+    let settings = Value::Object(settings);
+    let what_the_schema_refuses: Vec<String> = validator
+        .iter_errors(&settings)
+        .map(|refusal| {
+            let setting = refusal.instance_path().to_string();
+            if setting.is_empty() {
+                refusal.to_string()
+            } else {
+                format!("`{}`: {refusal}", setting.trim_start_matches('/'))
+            }
+        })
+        .collect();
+    if what_the_schema_refuses.is_empty() {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "the config schema of its type refuses its settings: {}",
+        what_the_schema_refuses.join("; ")
+    )))
+}
+
+/// Refuse `value` when `setting_schema`, the schema a node type's config schema states of one
+/// of its settings, refuses it, saying what it refuses; a schema the runtime cannot read refuses
+/// nothing it could check.
+fn refuse_a_value_the_schema_of_a_setting_refuses(
+    setting_schema: &Value,
+    value: &Value,
+) -> Result<(), String> {
+    let Ok(validator) = jsonschema::validator_for(setting_schema) else {
+        return Ok(());
+    };
+    let what_the_schema_refuses: Vec<String> = validator
+        .iter_errors(value)
+        .map(|refusal| refusal.to_string())
+        .collect();
+    if what_the_schema_refuses.is_empty() {
+        Ok(())
+    } else {
+        Err(what_the_schema_refuses.join("; "))
+    }
 }
 
 /// Refuse `value`, set on member `member` of input `input` of `node`, `port` when the input is a
@@ -392,54 +470,80 @@ fn refuse_a_value_a_setting_of_a_family_does_not_carry(
         })
 }
 
-/// Whether a node of `node_type` still takes a config: its config schema lists a field, or
-/// `node_types` does not describe the type.
-pub fn node_type_takes_a_config(
+/// Whether a `set_node_config` on a node of `node_type` replaces every setting it holds, taking
+/// off each it does not name: true for a type whose config schema lists a setting, and for one
+/// `node_types` does not describe; false for a typed type, on which it sets only what it names.
+pub fn a_set_node_config_replaces_every_setting_on(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
 ) -> bool {
-    node_types
-        .placeholder_of_the_node_type_not_described(node_type)
-        .is_some()
-        || node_types.port_info(node_type).is_none()
-        || LegacyConfigOfANodeType::of(node_types, node_type).takes_a_config()
+    !node_types.describes(node_type)
+        || !node_types
+            .the_settings_its_config_schema_lists(node_type)
+            .is_empty()
 }
 
-/// Whether an exposure of `exposed_config_fields` on a node of `node_type` is recorded: true for
-/// a type that still takes a config; false for a type that takes none, on which each name must
-/// be one of its inputs.
-pub fn an_exposure_of_config_fields_is_recorded_on(
+/// Each of `input_values`, held by a node of `node_type`, that a `set_node_config` replacing
+/// every setting replaces: each naming a setting the type's config schema lists, and every value
+/// a node of a type `node_types` does not describe holds.
+pub fn the_settings_a_set_node_config_replaces(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
-    exposed_config_fields: &[String],
-) -> crate::core::Result<bool> {
-    if node_type_takes_a_config(node_types, node_type) {
-        return Ok(true);
+    input_values: &Map<String, Value>,
+) -> Map<String, Value> {
+    if !node_types.describes(node_type) {
+        return input_values.clone();
     }
-    let input_ports = node_types
-        .port_info(node_type)
-        .map(|ports| ports.inputs)
-        .unwrap_or_default();
-    let not_inputs: Vec<String> = exposed_config_fields
+    let settings = node_types.the_settings_its_config_schema_lists(node_type);
+    input_values
         .iter()
-        .filter(|name| !input_ports.iter().any(|port| &port.name == *name))
+        .filter(|(name, _)| settings.contains(name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+/// Refuse an exposure of `exposed_config_fields` on node `node_name` of `node_type` when a name
+/// it lists is no input of the type that takes a wire, naming each such name; no node type takes
+/// a config, so an exposure checked is recorded nowhere. A type `node_types` does not describe
+/// is checked by nothing.
+pub fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
+    node_types: &NodeTypesOneStreamResolves,
+    node_name: &str,
+    node_type: &NodeClassImportPath,
+    exposed_config_fields: &[String],
+) -> crate::core::Result<()> {
+    let Some(ports) = node_types
+        .port_info(node_type)
+        .filter(|_| node_types.describes(node_type))
+    else {
+        return Ok(());
+    };
+    let inputs_taking_a_wire: Vec<String> = ports
+        .inputs
+        .iter()
+        .filter(|port| port.takes_a_wire_on_a_node_of(node_type))
+        .map(|port| port.name.clone())
+        .collect();
+    let not_inputs_taking_a_wire: Vec<String> = exposed_config_fields
+        .iter()
+        .filter(|name| !inputs_taking_a_wire.contains(name))
         .cloned()
         .collect();
-    if !not_inputs.is_empty() {
-        return Err(crate::core::Error::Configuration(format!(
-            "`{node_type}` takes no config, so it has no config field to expose, and {} {} not \
-             one of its inputs, which are {}",
-            names_in_backticks(&not_inputs),
-            if not_inputs.len() == 1 { "is" } else { "are" },
-            names_in_backticks(
-                &input_ports
-                    .iter()
-                    .map(|port| port.name.clone())
-                    .collect::<Vec<_>>()
-            )
-        )));
+    if not_inputs_taking_a_wire.is_empty() {
+        return Ok(());
     }
-    Ok(false)
+    Err(crate::core::Error::Configuration(format!(
+        "node `{node_name}` exposes {} as inputs, and {} {} no input of its type `{node_type}` \
+         that takes a wire; its inputs that take one are {}",
+        names_in_backticks(exposed_config_fields),
+        names_in_backticks(&not_inputs_taking_a_wire),
+        if not_inputs_taking_a_wire.len() == 1 {
+            "is"
+        } else {
+            "are"
+        },
+        names_in_backticks(&inputs_taking_a_wire)
+    )))
 }
 
 /// Refuse `value` set on input `input` of `node_name` when a number it holds lies outside

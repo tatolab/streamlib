@@ -6,14 +6,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use serde::Serialize;
 use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheWire;
 
 use super::LoadedStreamInThisRuntime;
 use super::input_values_set_live::{
     hand_back_each, hand_each_island_again_or_put_the_values_back, is_held_on_the_graph,
 };
-use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compiler_ops::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
@@ -21,11 +19,9 @@ use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver
 use crate::core::descriptors::NodeValueLifetime;
 use crate::core::graph::graph_snapshot::{GraphSnapshot, LinkSetAside, NodeChangeADrawnLinkBlocks};
 use crate::core::graph::input_values::{the_input_value_change, the_lifetime_of_the_input};
-use crate::core::graph::legacy_config_of_a_node::{
-    input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
-};
 use crate::core::graph::{
-    ALinkConnected, Graph, GraphNode, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe,
+    ALinkConnected, Graph, GraphNode, LinkUniqueId, NodeRunId, PortInfo,
+    cast_exposed_name_to_url_safe,
 };
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
@@ -112,26 +108,92 @@ impl LoadedStreamInThisRuntime {
         Ok(renamed)
     }
 
-    /// Set the saved value `value` on input `input` of the node `node_run_id`, `None` taking it
-    /// off, in place of any value set live on the input; hand it to that node alone, wherever it
-    /// is hosted, and announce the input's new value. No node, link or port changes, so nothing
-    /// compiles; on an input held on the graph, a setting its type holds in its config, the graph
-    /// change is announced.
-    pub(crate) fn set_pin_value(
+    /// Set the saved value `value` on input `input` of the node `node_run_id`, or on its member
+    /// `member` when one is named, `None` taking it off, and hand the node what its inputs read
+    /// now, as [`Self::set_the_input_values_of_a_node`] sets one value.
+    pub fn set_pin_value(
         &self,
         node_run_id: &NodeRunId,
         input: &str,
         member: Option<&str>,
         value: Option<serde_json::Value>,
     ) -> Result<()> {
-        self.with_no_other_input_value_change(|| {
-            let changes_announced = set_the_saved_value_and_hand_it_over(
-                self.compiler.graph_lock(),
-                node_run_id,
-                input,
-                member,
+        self.set_the_input_values_of_a_node(
+            node_run_id,
+            vec![InputValueSetOnANode {
+                input: input.to_owned(),
+                member: member.map(str::to_owned),
                 value,
-            )?;
+            }],
+        )
+    }
+
+    /// Set each of `sets` on the node `node_run_id`, in order, and hand the node what its inputs
+    /// read now; whole or not at all. When a set is on a setting, its type's config schema lists
+    /// or a setting port, the values the node holds once every set is made are checked once: by
+    /// the schema the type states of each setting and of its settings whole, and by each port the
+    /// graph's interface declares, before any is made, and by each wired link out of the node and
+    /// each reference it makes once all are; a refusal puts back each value set, last first.
+    pub(crate) fn set_the_input_values_of_a_node(
+        &self,
+        node_run_id: &NodeRunId,
+        sets: Vec<InputValueSetOnANode>,
+    ) -> Result<()> {
+        self.with_no_other_input_value_change(|| {
+            let a_set_is_on_a_setting =
+                self.refuse_settings_the_sets_would_leave_refused(node_run_id, &sets)?;
+            let mut changes_announced = Vec::new();
+            let mut values_before = Vec::new();
+            let made = sets.iter().try_for_each(|set| {
+                let value_before = self.compiler.scope_reading(|graph| {
+                    graph.traversal().v(node_run_id).first().map(|node| {
+                        let input = node
+                            .input_port(&set.input)
+                            .map_or(set.input.as_str(), |port| port.name.as_str());
+                        (input.to_owned(), node.input_values.get(input).cloned())
+                    })
+                });
+                changes_announced.extend(set_the_saved_value_and_hand_it_over(
+                    self.compiler.graph_lock(),
+                    node_run_id,
+                    &set.input,
+                    set.member.as_deref(),
+                    set.value.clone(),
+                )?);
+                values_before.extend(value_before);
+                Ok::<_, Error>(())
+            });
+            let made = made.and_then(|()| {
+                if !a_set_is_on_a_setting {
+                    return Ok(());
+                }
+                self.compiler.scope_reading(|graph| {
+                    refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
+                        graph,
+                        &self.node_types_this_stream_resolves,
+                        node_run_id,
+                    )
+                })
+            });
+            if let Err(refused) = made {
+                for (input, value_before) in values_before.into_iter().rev() {
+                    if let Err(not_put_back) = set_the_saved_value_and_hand_it_over(
+                        self.compiler.graph_lock(),
+                        node_run_id,
+                        &input,
+                        None,
+                        value_before,
+                    ) {
+                        tracing::warn!(
+                            %node_run_id,
+                            %input,
+                            %not_put_back,
+                            "a value set before a refused set was not put back"
+                        );
+                    }
+                }
+                return Err(refused);
+            }
             for change in changes_announced {
                 self.publish_on_this_streams_topic(change);
             }
@@ -139,6 +201,80 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
+    /// Refuse `sets` on the node `node_run_id` when the values it would hold once all are made
+    /// break what its type's config schema states of a setting set or of its settings whole, or
+    /// a port the graph's interface declares, which would no longer meet the port of the node
+    /// linked to it; answers whether a set is on a setting. Sets on inputs that are no setting are
+    /// no refusal here.
+    fn refuse_settings_the_sets_would_leave_refused(
+        &self,
+        node_run_id: &NodeRunId,
+        sets: &[InputValueSetOnANode],
+    ) -> Result<bool> {
+        let node_types = &self.node_types_this_stream_resolves;
+        self.compiler.scope_reading(|graph| -> Result<bool> {
+            let Some(node) = graph.traversal().v(node_run_id).first() else {
+                return Ok(false);
+            };
+            let is_a_schema_setting = |input: &str| {
+                node.input_port(input).is_none()
+                    && node_types.its_config_schema_lists_the_setting(&node.node_type, input)
+            };
+            let is_a_setting = |input: &str| {
+                is_a_schema_setting(input)
+                    || node.input_port(input).is_some_and(PortInfo::is_a_setting)
+            };
+            if !sets.iter().any(|set| is_a_setting(&set.input)) {
+                return Ok(false);
+            }
+            let mut input_values_after_the_sets = node.input_values.clone();
+            for set in sets {
+                let input = node
+                    .input_port(&set.input)
+                    .map_or(set.input.as_str(), |port| port.name.as_str());
+                if let Some(after_the_set) = streamlib_project_repository::the_input_value_after_the_set(
+                    input_values_after_the_sets.remove(input),
+                    set.member.as_deref(),
+                    set.value.as_ref(),
+                ) {
+                    input_values_after_the_sets.insert(input.to_owned(), after_the_set);
+                }
+            }
+            for set in sets.iter().filter(|set| is_a_schema_setting(&set.input)) {
+                crate::core::graph::input_values::refuse_an_input_value_its_input_does_not_take(
+                    node_types,
+                    &crate::core::graph::input_values::NodeAnInputValueIsSetOn {
+                        name: &node.display_name,
+                        node_type: &node.node_type,
+                        input_values_after_the_set: &input_values_after_the_sets,
+                    },
+                    &set.input,
+                    set.member.as_deref(),
+                    set.value.as_ref(),
+                )
+                .map_err(|refusal| Error::Configuration(refusal.words))?;
+            }
+            crate::core::graph::input_values::refuse_input_values_the_config_schema_of_its_type_refuses(
+                node_types,
+                &node.display_name,
+                &node.node_type,
+                &input_values_after_the_sets,
+            )?;
+            self.graph_only_nodes_as_drawn
+                .lock()
+                .interface_as_drawn
+                .refuse_input_values_that_break_a_declared_port(
+                    node_types,
+                    &crate::core::graph::graph_snapshot::GraphSnapshotNode::of_a_running_node(node),
+                    &input_values_after_the_sets,
+                )?;
+            Ok(true)
+        })
+    }
+
+    /// Refuse an exposure of `exposed_config_fields` on the node `node_run_id` when a name it
+    /// lists is no input of its type that takes a wire; each such input takes a wire of its own,
+    /// so an exposure checked records nothing.
     pub(crate) fn set_exposed_config_fields(
         &self,
         node_run_id: &NodeRunId,
@@ -150,64 +286,13 @@ impl LoadedStreamInThisRuntime {
                 .v(node_run_id)
                 .first()
                 .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-            let declared_ports: Vec<crate::core::graph::PortInfo> = node
-                .ports
-                .inputs
-                .iter()
-                .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
-                .chain(&node.ports.outputs)
-                .cloned()
-                .collect();
-            let exposed_config_field_input_ports =
-                crate::core::graph::the_input_ports_of_the_exposed_config_fields(
-                    &node.display_name,
-                    &node.node_type,
-                    &self.node_types_this_stream_resolves,
-                    &declared_ports,
-                    &exposed_config_fields,
-                )?;
-            let fields_still_linked: Vec<String> = graph
-                .traversal()
-                .e(())
-                .iter()
-                .filter(|link| link.to_port().node_run_id() == node_run_id && graph.stands(link))
-                .map(|link| link.to_port().port_name().to_string())
-                .filter(|port| {
-                    node.is_an_exposed_config_field_input(port)
-                        && !exposed_config_fields.contains(port)
-                })
-                .collect();
-            if !fields_still_linked.is_empty() {
-                return Err(Error::Configuration(format!(
-                    "`{}` cannot stop exposing {} as inputs while a link feeds each. To fix: \
-                     disconnect it first",
-                    node.display_name,
-                    fields_still_linked
-                        .iter()
-                        .map(|field| format!("`{field}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )));
-            }
-            graph
-                .traversal_mut()
-                .v(node_run_id)
-                .first_mut()
-                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?
-                .replace_the_exposed_config_fields(
-                    exposed_config_fields,
-                    exposed_config_field_input_ports,
-                );
-            crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed(
-                graph,
-                &[],
-            )?;
-            crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
-                graph,
+            crate::core::graph::input_values::refuse_an_exposure_naming_no_input_that_takes_a_wire(
+                &self.node_types_this_stream_resolves,
+                &node.display_name,
+                &node.node_type,
+                &exposed_config_fields,
             )
-        })?;
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
+        })
     }
 
     pub(crate) fn set_studio_fields(
@@ -226,93 +311,6 @@ impl LoadedStreamInThisRuntime {
         })?;
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
-    }
-
-    pub fn update_node_config<C: Serialize>(
-        &self,
-        node_run_id: &NodeRunId,
-        config: C,
-    ) -> Result<()> {
-        self.log_a_node_config_update_for_the_next_commit(node_run_id, config)?;
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
-    }
-
-    pub(in crate::core::runtime) fn log_a_node_config_update_for_the_next_commit<C: Serialize>(
-        &self,
-        node_run_id: &NodeRunId,
-        config: C,
-    ) -> Result<()> {
-        let config_json =
-            serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
-        self.log_a_node_config_update_for_the_next_commit_built_from(node_run_id, |_| {
-            Ok(config_json)
-        })
-    }
-
-    /// Log, for the next commit, the config `build` makes of the config the node will hold once
-    /// the updates already logged, and any the commit in progress took, apply; `None` for a node
-    /// holding none. The build and the log are one step, so a config update logged beside it, or
-    /// taken by a commit not yet applying it, is never lost.
-    pub(in crate::core::runtime) fn log_a_node_config_update_for_the_next_commit_built_from(
-        &self,
-        node_run_id: &NodeRunId,
-        build: impl FnOnce(Option<serde_json::Value>) -> Result<serde_json::Value>,
-    ) -> Result<()> {
-        self.compiler.scope(|graph, tx| -> Result<()> {
-            let config_held = tx.the_config_the_node_will_hold(graph, node_run_id);
-            let config_json = build(config_held)?;
-            if let Some(node) = graph.traversal().v(node_run_id).first() {
-                crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
-                    &node.display_name,
-                    &node.node_type,
-                    &self.node_types_this_stream_resolves,
-                    &config_json,
-                )?;
-            }
-            crate::core::graph::refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
-                graph,
-                node_run_id,
-                &config_json,
-            )?;
-            crate::core::graph::refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
-                graph,
-                node_run_id,
-                &config_json,
-            )?;
-            crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
-                graph,
-                &self.node_types_this_stream_resolves,
-                node_run_id,
-                &config_json,
-            )?;
-            if let Some(node) = graph.traversal().v(node_run_id).first() {
-                self.graph_only_nodes_as_drawn
-                    .lock()
-                    .interface_as_drawn
-                    .refuse_a_config_update_that_breaks_a_declared_port(
-                        &self.node_types_this_stream_resolves,
-                        &crate::core::graph::graph_snapshot::GraphSnapshotNode {
-                            id: Some(node.node_uuid),
-                            name: node.display_name.clone(),
-                            node_type: node.node_type.clone(),
-                            input_values: input_values_of_a_config_and_pin_values(
-                                node.config.as_ref(),
-                                &node.pins,
-                            ),
-                            exposed_config_fields: node.exposed_config_fields.clone(),
-                            studio: node.studio.clone(),
-                            fragment: None,
-                        },
-                        &config_json,
-                    )?;
-            }
-            tx.log(PendingOperation::UpdateNodeConfig {
-                node_run_id: node_run_id.clone(),
-                config_to_apply: config_json,
-            });
-            Ok(())
-        })
     }
 
     /// Describe the types its installed modules and its project's own code declare, then every
@@ -475,14 +473,9 @@ impl LoadedStreamInThisRuntime {
 
         let mut node_run_id_by_node_name: HashMap<String, NodeRunId> = HashMap::new();
         for node in &graph.nodes {
-            let mut spec = node_spec_holding_the_input_values(
-                &self.node_types_this_stream_resolves,
-                node.node_type.clone(),
-                &node.input_values,
-                node.studio.clone(),
-            )
-            .with_display_name(node.name.clone())
-            .with_exposed_config_fields(node.exposed_config_fields.clone());
+            let mut spec = NodeSpec::of_the_type(node.node_type.clone())
+                .with_input_values_and_studio_fields(node.input_values.clone(), node.studio.clone())
+                .with_display_name(node.name.clone());
             if let Some(node_uuid) = node.id {
                 spec = spec.with_node_uuid(node_uuid);
             }
@@ -561,10 +554,19 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
+/// One value [`LoadedStreamInThisRuntime::set_the_input_values_of_a_node`] sets: on input
+/// `input`, or on its member `member` when one is named, `None` taking it off.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InputValueSetOnANode {
+    pub(crate) input: String,
+    pub(crate) member: Option<String>,
+    pub(crate) value: Option<serde_json::Value>,
+}
+
 /// Set the saved value `value` on input `input` of the node `node_run_id` in the graph `graph`
 /// locks, or on its member `member` when one is named, under the input's current name, `None`
-/// taking it off, dropping any value set live on the input, or on that member, first, then hand that node what the input reads now: its islands under the write
-/// lock, its helper or itself with the lock released. Answers the changes to announce: the
+/// taking it off, dropping any value set live on the input, or on that member, first, then
+/// hand that node what the input reads now: its islands under the write lock, its helper or itself with the lock released. Answers the changes to announce: the
 /// input's, and the graph's for an input held on the graph. Whole or not at all: a node or island
 /// not handed the value puts the saved and live values back.
 pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
@@ -594,7 +596,7 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
 /// built with may carry another type than its values now choose, and its rebuild reads them.
 pub(in crate::core::runtime) struct SavedValuesOfAKeptNode {
     pub(in crate::core::runtime) node_run_id: NodeRunId,
-    pub(in crate::core::runtime) pins: serde_json::Map<String, serde_json::Value>,
+    pub(in crate::core::runtime) input_values: serde_json::Map<String, serde_json::Value>,
     pub(in crate::core::runtime) studio: serde_json::Map<String, serde_json::Value>,
     pub(in crate::core::runtime) handed_over_now: bool,
 }
@@ -639,10 +641,10 @@ fn set_the_saved_values_of_a_kept_node_and_hand_them_over(
 ) -> Result<()> {
     let node_run_id = &kept_node.node_run_id;
     let mut graph_written = graph.write();
-    let Some((former_pins, former_studio)) = set_the_pins_and_studio_fields(
+    let Some((former_input_values, former_studio)) = set_the_input_values_and_studio_fields(
         &mut graph_written,
         node_run_id,
-        kept_node.pins,
+        kept_node.input_values,
         kept_node.studio,
     ) else {
         return Ok(());
@@ -651,10 +653,10 @@ fn set_the_saved_values_of_a_kept_node_and_hand_them_over(
         return Ok(());
     }
     let put_the_former_values_back = |graph: &mut Graph| {
-        set_the_pins_and_studio_fields(
+        set_the_input_values_and_studio_fields(
             graph,
             node_run_id,
-            former_pins.clone(),
+            former_input_values.clone(),
             former_studio.clone(),
         );
     };
@@ -685,12 +687,12 @@ fn set_the_saved_values_of_a_kept_node_and_hand_them_over(
     Err(not_handed_over)
 }
 
-/// Set the saved values `pins` and the studio fields `studio` on the node `node_run_id` of
-/// `graph`; answers those it held, none when the graph no longer holds the node.
-fn set_the_pins_and_studio_fields(
+/// Set the saved values `input_values` and the studio fields `studio` on the node `node_run_id`
+/// of `graph`; answers those it held, none when the graph no longer holds the node.
+fn set_the_input_values_and_studio_fields(
     graph: &mut Graph,
     node_run_id: &NodeRunId,
-    pins: serde_json::Map<String, serde_json::Value>,
+    input_values: serde_json::Map<String, serde_json::Value>,
     studio: serde_json::Map<String, serde_json::Value>,
 ) -> Option<(
     serde_json::Map<String, serde_json::Value>,
@@ -698,7 +700,7 @@ fn set_the_pins_and_studio_fields(
 )> {
     let node = graph.traversal_mut().v(node_run_id).first_mut()?;
     let former = (
-        std::mem::replace(&mut node.pins, pins),
+        std::mem::replace(&mut node.input_values, input_values),
         std::mem::replace(&mut node.studio, studio),
     );
     node.resolve_the_ports_its_settings_declare();
@@ -731,10 +733,7 @@ fn set_the_saved_value_and_hand_it_to_each_island(
     let delivery = UnlinkedInputValuesDelivery::of_the_node(graph, node);
     let changes_announced: Vec<RuntimeEvent> = the_input_value_change(graph, node, input, member)
         .into_iter()
-        .chain(
-            is_held_on_the_graph(graph, node, &put_back.input)
-                .then_some(RuntimeEvent::GraphDidChange),
-        )
+        .chain(is_held_on_the_graph(node, &put_back.input).then_some(RuntimeEvent::GraphDidChange))
         .collect();
     if let UnlinkedInputValuesDelivery::EachIslandEvaluatingIt(function_node) = &delivery {
         hand_each_island_again_or_put_the_values_back(
@@ -764,7 +763,7 @@ impl SavedSetToPutBack {
     /// nothing.
     fn put_back(&self, graph: &mut Graph) -> Option<UnlinkedInputValuesDelivery> {
         let node = graph.traversal_mut().v(&self.node_run_id).first_mut()?;
-        node.set_pin(&self.input, self.saved_value_before.clone());
+        node.set_input_value(&self.input, self.saved_value_before.clone());
         graph.reshape_the_pin_group_slots_of_the_node(&self.node_run_id);
         graph.live_input_values().set(
             self.node_uuid,
@@ -808,7 +807,13 @@ fn set_the_saved_value(
         .first_mut()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
     let node_uuid = node.node_uuid;
-    let Some(input) = node.input_port(input).map(|port| port.name.clone()) else {
+    let is_a_setting_its_config_schema_lists = node.input_port(input).is_none()
+        && node_types.its_config_schema_lists_the_setting(&node.node_type, input);
+    let Some(input) = node
+        .input_port(input)
+        .map(|port| port.name.clone())
+        .or_else(|| is_a_setting_its_config_schema_lists.then(|| input.to_owned()))
+    else {
         return Err(Error::NodePortNotFound {
             node_run_id: node.display_name.clone(),
             port_name: input.to_string(),
@@ -817,19 +822,11 @@ fn set_the_saved_value(
     };
     let input = input.as_str();
     let value = streamlib_project_repository::the_input_value_after_the_set(
-        node.pins.get(input).cloned(),
+        node.input_values.get(input).cloned(),
         member,
         value.as_ref(),
     );
     let lifetime = the_lifetime_of_the_input(node, input);
-    if value.is_some() && node.is_an_exposed_config_field_input(input) {
-        return Err(Error::Configuration(format!(
-            "input `{input}` of `{}` is a config field it exposes, which reads the \
-             node's config while no link feeds it, and takes no pin value. To fix: \
-             set `{input}` in its config",
-            node.display_name
-        )));
-    }
     if let Some(value) = &value {
         refuse_a_pin_value_a_process_node_cannot_read(&node_types, node, input, value)?;
     }
@@ -839,16 +836,15 @@ fn set_the_saved_value(
         .v(node_run_id)
         .first_mut()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-    let saved_value_before = node.set_pin(input, value);
-    if let Err(refused) =
-        crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
-            graph,
-            node_run_id,
-            input,
-        )
-    {
+    let saved_value_before = node.set_input_value(input, value);
+    let refused = crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
+        graph,
+        node_run_id,
+        input,
+    );
+    if let Err(refused) = refused {
         if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
-            node.set_pin(input, saved_value_before);
+            node.set_input_value(input, saved_value_before);
         }
         return Err(refused);
     }
@@ -867,4 +863,34 @@ fn set_the_saved_value(
         saved_value_before,
         live_value_before,
     })
+}
+
+/// Refuse the input values the node `node_run_id` of `graph` holds when a wired link out of it,
+/// or out of a convert node it is, would refuse them, or when one names a node the graph does
+/// not hold.
+fn refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
+    graph: &Graph,
+    node_types: &crate::core::nodes::NodeTypesOneStreamResolves,
+    node_run_id: &NodeRunId,
+) -> Result<()> {
+    let Some(node) = graph.traversal().v(node_run_id).first() else {
+        return Ok(());
+    };
+    let input_values = &node.input_values;
+    crate::core::graph::refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
+        graph,
+        node_run_id,
+        input_values,
+    )?;
+    crate::core::graph::refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
+        graph,
+        node_run_id,
+        input_values,
+    )?;
+    crate::core::graph::refuse_input_values_naming_a_node_the_graph_does_not_hold(
+        graph,
+        node_types,
+        node_run_id,
+        input_values,
+    )
 }

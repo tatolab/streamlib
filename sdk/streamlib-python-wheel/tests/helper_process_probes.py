@@ -244,32 +244,6 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 
 
-@built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
-    output_ports=("frames_to_downstream",)
-)
-class RefusesReconfigurationProbe:
-    """Defines `configure` and refuses every configuration handed to it."""
-
-    def __init__(self, config: ReconfigurableProbeConfig) -> None:
-        self.gain = config.get("gain", 1)
-
-    def configure(self, config: ReconfigurableProbeConfig) -> None:
-        raise ValueError(f"a gain of {config.get('gain')} is out of range")
-
-
-@built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
-    output_ports=("frames_to_downstream",)
-)
-class TakesReconfigurationProbe:
-    """Defines `configure` and takes whatever it is handed."""
-
-    def __init__(self, config: ReconfigurableProbeConfig) -> None:
-        self.gain = config.get("gain", 1)
-
-    def configure(self, config: ReconfigurableProbeConfig) -> None:
-        self.gain = config.get("gain", 1)
-
-
 @node(execution="manual")
 class ReleasesAStructureInTeardownProbe:
     """Builds an acceleration structure in `setup` and lets go of it in
@@ -311,44 +285,17 @@ class IslandReadingProbe:
         LEVELS_THE_ISLAND_READING_PROBE_READ.append(self.level.read())
 
 
-GAINS_THE_EXPOSED_GAIN_PROBE_TOOK: "list[float]" = []
-
-
-class ExposedGainProbeConfig(TypedDict, total=False):
-    gain: float
-
-
-@built_from_its_config_as_the_wheel_builds_a_promoted_function_node()
-class ExposedGainProbe:
-    """Records the `gain` of each config it is handed; the node exposes `gain` as an input."""
-
-    def __init__(self, config: ExposedGainProbeConfig) -> None:
-        GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.append(config.get("gain", 1.0))
-
-    def configure(self, config: ExposedGainProbeConfig) -> None:
-        GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.append(config.get("gain", 1.0))
-
-    def process(self, ctx) -> None:
-        pass
-
-
 @built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
     output_ports=("frames_to_downstream",)
 )
 class NotReadyInStartProbe:
-    """Reports itself not ready from `start()`, and ready on its next config
-    update, through the context it kept from `start()`."""
+    """Reports itself not ready from `start()`."""
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
-        self._context = None
+        pass
 
     def start(self, ctx) -> None:
-        self._context = ctx
         ctx.report_not_ready("`riv_path` is not set", image_width=64, image_height=32)
-
-    def configure(self, config: ReconfigurableProbeConfig) -> None:
-        assert self._context is not None
-        self._context.report_ready()
 
 
 CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT: "list[Any]" = []

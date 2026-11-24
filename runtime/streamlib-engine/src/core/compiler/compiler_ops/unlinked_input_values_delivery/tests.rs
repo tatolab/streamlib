@@ -53,7 +53,7 @@ fn a_helpers_setup_carries_each_input_value_and_a_change_after_it_is_handed_over
         .v(&level_meter)
         .first_mut()
         .unwrap()
-        .pins
+        .input_values
         .insert("gain".to_owned(), json!(2));
     hold_live_and_deliver(&graph, &level_meter, "level", json!(true));
     deliver_the_unlinked_input_values_of_each_node(&graph, std::slice::from_ref(&level_meter))

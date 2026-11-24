@@ -124,7 +124,9 @@ fn an_input_holding_a_reference_to(
     name: &str,
     referenced_node_type: &NodeClassImportPath,
 ) -> PortDescriptor {
-    use streamlib::sdk::descriptors::{PinDeclaration, PinType, PortFamily, PortFamilyDeclaration};
+    use streamlib::sdk::descriptors::{
+        NodeInputMode, PinDeclaration, PinType, PortFamily, PortFamilyDeclaration, SettingReadTime,
+    };
     PortDescriptor::new(
         name,
         "",
@@ -135,6 +137,9 @@ fn an_input_holding_a_reference_to(
         referenced_node_type: Some(referenced_node_type.clone()),
         one_referrer_per_referenced_node: false,
     }))
+    .with_input_mode(NodeInputMode::SettingOnly {
+        read: SettingReadTime::AtSetup,
+    })
 }
 
 /// Register a gateway type and a track type whose input `gateway` takes a

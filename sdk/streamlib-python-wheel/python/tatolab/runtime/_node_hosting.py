@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from tatolab.runtime._class_node_fields import ClassNodeFields
 
 __all__ = [
-    "apply_configuration",
     "class_node_members_of",
     "class_node_pin_groups_of",
     "construct_class_node_from_its_fields_and_pins",
@@ -166,17 +165,6 @@ def construct_node_instance(node_class: type, configuration: Optional[Any]) -> A
         node_class, _as_configuration_mapping(node_class, configuration)
     )
     return node_class()
-
-
-def apply_configuration(node_instance: Any, configuration: Optional[Any]) -> None:
-    """Hand a live node the wheel builds a configuration update; a node that takes no config
-    refuses one that sets anything."""
-    node_class = type(node_instance)
-    configuration = _as_configuration_mapping(node_class, configuration)
-    if getattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, False):
-        node_instance.configure(configuration)
-        return
-    _refuse_a_configuration_with_nowhere_to_go(node_class, configuration)
 
 
 def _refuse_a_configuration_with_nowhere_to_go(

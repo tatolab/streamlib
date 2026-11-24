@@ -166,7 +166,6 @@ fn the_refusal_of_a_commit(
     nodes_to_remove: &[NodeRunId],
     links_to_add: &[LinkUniqueId],
     links_to_remove: &[LinkUniqueId],
-    config_updates: &[(NodeRunId, JsonValue)],
 ) -> Option<String> {
     refuse_an_edit_an_island_cannot_take(
         graph,
@@ -174,7 +173,6 @@ fn the_refusal_of_a_commit(
         nodes_to_remove,
         links_to_add,
         links_to_remove,
-        config_updates,
     )
     .err()
     .map(|refusal| refusal.to_string())

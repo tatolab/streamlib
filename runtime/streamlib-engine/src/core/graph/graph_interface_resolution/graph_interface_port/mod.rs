@@ -36,7 +36,7 @@ impl GraphInterfacePort {
         node_types: &NodeTypesOneStreamResolves,
         linked_node: &GraphSnapshotNode,
         linked_port: &LinkPortRefOutput,
-        linked_node_config: &serde_json::Value,
+        linked_node_input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         refuse_a_port_the_node_does_not_have(
             node_types,
@@ -46,8 +46,7 @@ impl GraphInterfacePort {
             self.direction.into(),
         )?;
         let port_cast = cast_of(&linked_port.port)?;
-        let Some((inputs, outputs)) =
-            the_ports_of_a_graph_document_node(node_types, &linked_port.node, linked_node)?
+        let Some((inputs, outputs)) = the_ports_of_a_graph_document_node(node_types, linked_node)
         else {
             return Ok(());
         };
@@ -95,7 +94,7 @@ impl GraphInterfacePort {
         let refusal = match self.direction {
             GraphInterfacePortDirection::Output => refusal_of_a_link_between_port_families(
                 linked_end,
-                Some(linked_node_config),
+                Some(&serde_json::Value::Object(linked_node_input_values.clone())),
                 interface_end,
             ),
             GraphInterfacePortDirection::Input => {

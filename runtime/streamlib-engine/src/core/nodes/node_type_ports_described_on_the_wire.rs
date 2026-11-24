@@ -17,7 +17,7 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::input_values::the_input_port_takes_a_value;
-use crate::core::graph::legacy_config_of_a_node::{
+use crate::core::nodes::{
     ConfigFieldDescribedAsASetting, the_config_fields_a_node_of_the_type_can_expose,
     the_config_fields_described_as_settings,
 };

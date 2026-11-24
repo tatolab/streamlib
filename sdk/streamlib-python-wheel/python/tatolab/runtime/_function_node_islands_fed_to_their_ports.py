@@ -111,14 +111,12 @@ class FunctionNodeIslandsFedToTheirPorts:
         for island_node in island["nodes"]:
             node_id = island_node["node"]
             prepared = prepared_by_node_id[node_id]
-            linked_exposed_config_fields = _the_exposed_config_fields_a_link_drives(island_node)
             called_through, config_values, config_value_indices = (
                 self._how_one_function_node_is_called(
                     prepared,
                     input_port,
                     node_id,
                     island_node.get("config"),
-                    linked_exposed_config_fields,
                 )
             )
             if isinstance(called_through, FunctionNodeBodyRunAsPython):
@@ -128,7 +126,7 @@ class FunctionNodeIslandsFedToTheirPorts:
                     **prepared.how_its_values_are_carried,
                     "inputs_read_from_links_from_outside_the_island": (
                         _the_inputs_read_from_links_from_outside_the_island(
-                            prepared, island_node["links_into"], linked_exposed_config_fields
+                            prepared, island_node["links_into"]
                         )
                     ),
                 }
@@ -143,12 +141,6 @@ class FunctionNodeIslandsFedToTheirPorts:
                         node_id,
                         island_node["links_into"],
                         island_node.get("pins") or {},
-                        node_index_by_node_id,
-                        output_ports_by_node_id,
-                    )
-                    + _where_each_linked_exposed_config_field_takes_its_value(
-                        island_node["links_into"],
-                        linked_exposed_config_fields,
                         node_index_by_node_id,
                         output_ports_by_node_id,
                     ),
@@ -194,7 +186,6 @@ class FunctionNodeIslandsFedToTheirPorts:
         input_port: str,
         node_id: str,
         config: Any,
-        linked_exposed_config_fields: "tuple[str, ...]",
     ) -> "tuple[Any, list[float], list[int]]":
         body_run_as_python = self._body_run_as_python_by_input_port_and_node_id.get(
             (input_port, node_id)
@@ -202,13 +193,10 @@ class FunctionNodeIslandsFedToTheirPorts:
         if (
             body_run_as_python is not None
             and body_run_as_python.runs(prepared)
-            and not linked_exposed_config_fields
         ):
             body_run_as_python.take_the_config(config)
             return body_run_as_python, [], []
-        return how_one_function_node_is_called(
-            prepared, node_id, config, linked_exposed_config_fields
-        )
+        return how_one_function_node_is_called(prepared, node_id, config)
 
     def _refuse_a_stateful_node_another_port_holds(self, island: "dict[str, Any]") -> None:
         input_port_of_the_island_holding_each_stateful_node = {
@@ -233,40 +221,6 @@ class FunctionNodeIslandsFedToTheirPorts:
             del self._body_run_as_python_by_input_port_and_node_id[input_port_and_node_id]
 
 
-def _the_exposed_config_fields_a_link_drives(island_node: "dict[str, Any]") -> "tuple[str, ...]":
-    linked_input_ports = {link["port"] for link in island_node["links_into"]}
-    return tuple(
-        field
-        for field in island_node.get("exposed_config_fields") or ()
-        if field in linked_input_ports
-    )
-
-
-def _where_each_linked_exposed_config_field_takes_its_value(
-    links_into: "list[dict[str, Any]]",
-    linked_exposed_config_fields: "tuple[str, ...]",
-    node_index_by_node_id: "dict[str, int]",
-    output_ports_by_node_id: "dict[str, tuple[str, ...]]",
-) -> "list[tuple[Optional[tuple[int, int]], float]]":
-    linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
-    return [
-        (
-            None
-            if _is_read_through_the_reader(linked_from_by_input_port[field])
-            else (
-                node_index_by_node_id[linked_from_by_input_port[field]["node"]],
-                _output_index(
-                    output_ports_by_node_id,
-                    linked_from_by_input_port[field]["node"],
-                    linked_from_by_input_port[field]["port"],
-                ),
-            ),
-            0.0,
-        )
-        for field in linked_exposed_config_fields
-    ]
-
-
 def _is_read_through_the_reader(linked_from: "dict[str, Any]") -> bool:
     """Whether a link into an island node comes from a node outside the island, whose channel its reader reads."""
     return "reader_input_port" in linked_from
@@ -275,18 +229,12 @@ def _is_read_through_the_reader(linked_from: "dict[str, Any]") -> bool:
 def _the_inputs_read_from_links_from_outside_the_island(
     prepared: FunctionNodeReadyToEvaluate,
     links_into: "list[dict[str, Any]]",
-    linked_exposed_config_fields: "tuple[str, ...]",
 ) -> "list[tuple[int, str, str]]":
-    """Each input a link from outside the island feeds: its index, the reader input port it is read at, and its value type.
-
-    A linked exposed config field is an input past the node's own, read as a number.
-    """
+    """Each input a link from outside the island feeds: its index, the reader input port it is read at, and its value type."""
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
     inputs_read: "list[tuple[int, str, str]]" = []
-    for input_index, input_port in enumerate(
-        (*prepared.input_ports, *linked_exposed_config_fields)
-    ):
+    for input_index, input_port in enumerate(prepared.input_ports):
         linked_from = linked_from_by_input_port.get(input_port)
         if linked_from is not None and _is_read_through_the_reader(linked_from):
             inputs_read.append(

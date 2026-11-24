@@ -312,7 +312,7 @@ fn a_value_a_panel_writes_onto_a_typed_output_is_packed_as_its_pin_type() {
         descriptor.node_class_import_path.clone(),
         None,
         "monitor",
-        Some(json!({})),
+        json!({}).as_object().cloned().unwrap_or_default(),
         descriptor
             .inputs
             .iter()
@@ -357,7 +357,7 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
         descriptor.node_class_import_path.clone(),
         None,
         "board",
-        Some(json!({})),
+        json!({}).as_object().cloned().unwrap_or_default(),
         descriptor
             .inputs
             .iter()
@@ -420,7 +420,7 @@ fn a_record_a_panel_writes_onto_a_bundle_output_is_the_records_map_a_family_outp
         descriptor.node_class_import_path.clone(),
         None,
         "stage",
-        Some(json!({})),
+        json!({}).as_object().cloned().unwrap_or_default(),
         descriptor
             .inputs
             .iter()

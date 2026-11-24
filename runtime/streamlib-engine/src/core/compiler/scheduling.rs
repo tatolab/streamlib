@@ -62,7 +62,14 @@ mod tests {
             .register_descriptor_only(descriptor)
             .expect("fixture descriptor registers cleanly");
 
-        let node = GraphNode::new(path, None, "fixture-node", None, vec![], vec![]);
+        let node = GraphNode::new(
+            path,
+            None,
+            "fixture-node",
+            serde_json::Map::new(),
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_node(&NodeTypesOneStreamResolves::new(), &node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
@@ -91,7 +98,14 @@ mod tests {
             )
             .expect("fixture descriptor registers cleanly");
 
-        let node = GraphNode::new(path, None, "fixture-node", None, vec![], vec![]);
+        let node = GraphNode::new(
+            path,
+            None,
+            "fixture-node",
+            serde_json::Map::new(),
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_node(&node_types, &node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
@@ -105,7 +119,7 @@ mod tests {
             class_import_path("UnregisteredFixtureNode"),
             None,
             "ghost-node",
-            None,
+            serde_json::Map::new(),
             vec![],
             vec![],
         );

@@ -168,10 +168,6 @@ impl NodeInstance {
         }
     }
 
-    pub fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
-        self.0.apply_config_json(config_json)
-    }
-
     /// Hand the node `input_values`, the value each input reads while no link feeds it, where
     /// each input of `set_live` was just set live by a client.
     pub(crate) fn set_unlinked_input_values_naming_those_set_live(
@@ -187,10 +183,6 @@ impl NodeInstance {
         self.0.to_runtime_json()
     }
 
-    pub fn config_json(&self) -> serde_json::Value {
-        self.0.config_json()
-    }
-
     /// Downcast handle. Used by the host's compiler ops to reach
     /// host-only subprocess host wrappers.
     pub fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -201,16 +193,18 @@ impl NodeInstance {
 pub type DynamicNodeConstructorFn =
     Box<dyn Fn(&GraphNode) -> Result<Box<dyn DynGeneratedNode + Send>> + Send + Sync>;
 
-/// Refuse a config the type's own `Config` would not take, naming the node,
-/// its type and the setting.
-type NodeConfigTakenCheckFn =
-    Box<dyn Fn(&str, &NodeClassImportPath, &serde_json::Value) -> Result<()> + Send + Sync>;
+/// Refuse the settings a node holds, naming the node, its type and the setting.
+type NodeSettingsTakenCheckFn = Box<
+    dyn Fn(&str, &NodeClassImportPath, &serde_json::Map<String, serde_json::Value>) -> Result<()>
+        + Send
+        + Sync,
+>;
 
-/// What the factory stores for one host-compiled Rust type: its constructor,
-/// and the check that refuses a config its `Config` would not take.
+/// What the factory stores for one host-compiled Rust type: its constructor, and for a type a
+/// test registers with a config schema, the check its nodes' settings meet before any is added.
 struct HostCompiledRustTypeRegistration {
     constructor: DynamicNodeConstructorFn,
-    config_taken_check: NodeConfigTakenCheckFn,
+    settings_taken_check: Option<NodeSettingsTakenCheckFn>,
 }
 
 pub struct NodeInstanceFactory {
@@ -321,8 +315,7 @@ impl NodeInstanceFactory {
     }
 
     /// Register host-compiled Rust type `P` under its descriptor's import
-    /// path, returned, with a constructor and a check that refuses a config
-    /// `P::Config` would not take before any node of it is added.
+    /// path, returned, with a constructor.
     pub(crate) fn register_host_compiled_node_type<P>(&self) -> Result<NodeClassImportPath>
     where
         P: GeneratedNode + 'static,
@@ -342,76 +335,82 @@ impl NodeInstanceFactory {
         P: GeneratedNode + 'static,
         P::Config: Config,
     {
-        self.register_host_compiled_node_type_taking::<P, P::Config>(
-            descriptor_of::<P>()?,
-            |config| config,
-            supplied,
-        )
+        self.register_host_compiled_node_type_under::<P>(descriptor_of::<P>()?, supplied, None)
     }
 
-    /// Register `P` as [`Self::register`] does, its nodes taking a config of `C` whole as a
-    /// node type not yet typed does: its descriptor carries `C`'s schema, and a config `C`
-    /// would not take is refused before any node of it is added, and a live edit of a node's
-    /// config is taken when `C` takes it. A Rust node holds no config, so this is the node type
-    /// a test of the path a config takes registers.
+    /// Register `P` as [`Self::register`] does, its descriptor carrying `C`'s schema as its
+    /// config schema: each field it lists is a setting of the type, which `graph` renders under
+    /// a node's `config`, and a value set on one is checked by the field's schema. A node of it
+    /// is refused before any is added unless `C` takes the settings it holds over `C`'s default,
+    /// so a test can act on every load of a stream naming one. No node type declares a config
+    /// schema of its own, so this is the node type a test of what a client still reads of one
+    /// registers.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn register_taking_a_config_for_a_test<P, C>(&self)
+    pub fn register_with_a_config_schema_for_a_test<P, C>(&self)
     where
         P: GeneratedNode + 'static,
         P::Config: Config,
         C: Config + crate::core::descriptors::NodeConfigJsonSchema,
     {
-        warn_of_a_failed_registration_of::<P>(
-            descriptor_of::<P>()
-                .map(|descriptor| descriptor.with_config_schema(C::node_config_schema_document()))
-                .and_then(|descriptor| {
-                    self.register_host_compiled_node_type_taking::<
-                        node_taking_a_config_for_a_test::NodeTakingAConfigForATest<P, C>,
-                        C,
-                    >(
-                        descriptor,
-                        |_| P::Config::default(),
-                        WhatAConversionSupplies::default(),
-                    )
-                }),
-        );
+        let config_schema = C::node_config_schema_document();
+        let settings_the_schema_lists: Vec<String> = config_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .map(|properties| properties.keys().cloned().collect())
+            .unwrap_or_default();
+        let settings_taken_check: NodeSettingsTakenCheckFn =
+            Box::new(move |node_name, node_type, input_values| {
+                let mut settings = match serde_json::to_value(C::default()) {
+                    Ok(serde_json::Value::Object(defaults)) => defaults,
+                    _ => serde_json::Map::new(),
+                };
+                settings.extend(
+                    input_values
+                        .iter()
+                        .filter(|(name, _)| settings_the_schema_lists.contains(name))
+                        .map(|(name, value)| (name.clone(), value.clone())),
+                );
+                serde_path_to_error::deserialize::<_, C>(serde_json::Value::Object(settings))
+                    .map(drop)
+                    .map_err(|refusal| Error::NodeConfigRefused {
+                        node_name: node_name.to_string(),
+                        node_type: node_type.clone(),
+                        refusal: refusal.to_string(),
+                    })
+            });
+        warn_of_a_failed_registration_of::<P>(descriptor_of::<P>().and_then(|descriptor| {
+            self.register_host_compiled_node_type_under::<P>(
+                descriptor.with_config_schema(config_schema),
+                WhatAConversionSupplies::default(),
+                Some(settings_taken_check),
+            )
+        }));
     }
 
-    /// Register `P` under `descriptor`, its nodes taking a config of `C`: a constructor that
-    /// refuses a config `C` would not take and builds `P` from the one `config_of_the_node`
-    /// makes of it, and a check refusing that config before any node of it is added.
-    fn register_host_compiled_node_type_taking<P, C>(
+    /// Register `P` under `descriptor`, with a constructor building each node of it from the
+    /// default of its `Config`, which holds nothing: a node reads its settings off its input
+    /// values. A node's settings meet `settings_taken_check`, when given, before it is added.
+    fn register_host_compiled_node_type_under<P>(
         &self,
         descriptor: NodeDescriptor,
-        config_of_the_node: fn(C) -> P::Config,
         supplied: WhatAConversionSupplies,
+        settings_taken_check: Option<NodeSettingsTakenCheckFn>,
     ) -> Result<NodeClassImportPath>
     where
         P: GeneratedNode + 'static,
         P::Config: Config,
-        C: Config,
     {
         let constructor: DynamicNodeConstructorFn = Box::new(
-            move |node: &GraphNode| -> Result<Box<dyn DynGeneratedNode + Send>> {
-                let config: C = match &node.config {
-                    Some(config) => {
-                        config_the_node_type_takes(&node.display_name, &node.node_type, config)?
-                    }
-                    None => C::default(),
-                };
-                Ok(Box::new(P::from_config(config_of_the_node(config))?))
+            move |_node: &GraphNode| -> Result<Box<dyn DynGeneratedNode + Send>> {
+                Ok(Box::new(P::from_config(P::Config::default())?))
             },
         );
-        let config_taken_check: NodeConfigTakenCheckFn =
-            Box::new(|node_name, node_type, config| {
-                config_the_node_type_takes::<C>(node_name, node_type, config).map(drop)
-            });
         let node_class_import_path = descriptor.node_class_import_path.clone();
         self.register_with_constructor(
             descriptor,
             HostCompiledRustTypeRegistration {
                 constructor,
-                config_taken_check,
+                settings_taken_check,
             },
             supplied,
         )?;
@@ -504,7 +503,7 @@ impl NodeInstanceFactory {
         Ok(())
     }
 
-    /// Register `descriptor` with `constructor` and a config check that takes any config.
+    /// Register `descriptor` with `constructor`.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn register_with_a_constructor_for_a_test(
         &self,
@@ -515,14 +514,14 @@ impl NodeInstanceFactory {
             descriptor,
             HostCompiledRustTypeRegistration {
                 constructor,
-                config_taken_check: Box::new(|_, _, _| Ok(())),
+                settings_taken_check: None,
             },
             WhatAConversionSupplies::default(),
         )
     }
 
     /// Register `descriptor`, stating a conversion whose output follows a setting, with
-    /// `constructor`, `pick`, and a config check that takes any config.
+    /// `constructor` and `pick`.
     #[cfg(test)]
     pub(crate) fn register_a_conversion_picking_for_a_test(
         &self,
@@ -534,7 +533,7 @@ impl NodeInstanceFactory {
             descriptor,
             HostCompiledRustTypeRegistration {
                 constructor,
-                config_taken_check: Box::new(|_, _, _| Ok(())),
+                settings_taken_check: None,
             },
             WhatAConversionSupplies {
                 pick: Some(pick),
@@ -584,32 +583,63 @@ impl NodeInstanceFactory {
         }
     }
 
-    /// Refuse a node this runtime cannot add before anything is added: a
-    /// built-in this runtime lacks, or a config its type would not take.
+    /// Refuse a node this runtime cannot add before anything is added: a built-in this runtime
+    /// lacks, or, on a type registered with a constructor, settings its check refuses or a value
+    /// `input_values` sets on a name that is none of its inputs and no setting its config schema
+    /// lists, naming the node, its type and the name. A type registered by its descriptor alone, a Python class, is checked
+    /// where its node runs.
     pub fn refuse_a_node_this_runtime_cannot_add(
         &self,
         node_name: &str,
         node_type: &NodeClassImportPath,
-        config: &serde_json::Value,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         self.refuse_a_built_in_node_type_this_runtime_lacks(node_type)?;
-        self.refuse_a_config_the_node_type_does_not_take(node_name, node_type, config)
-    }
-
-    /// Refuse a config the node's type would not take — a setting it does not
-    /// know, a value of the wrong kind — naming the node, its type and the
-    /// setting. A type registered with no typed config (a Python class) takes
-    /// what reaches the interpreter its node runs in, whose config class checks it.
-    fn refuse_a_config_the_node_type_does_not_take(
-        &self,
-        node_name: &str,
-        node_type: &NodeClassImportPath,
-        config: &serde_json::Value,
-    ) -> Result<()> {
         match self.registrations.read().get(node_type) {
-            Some(registration) => (registration.config_taken_check)(node_name, node_type, config),
-            None => Ok(()),
+            None => return Ok(()),
+            Some(registration) => {
+                if let Some(settings_taken_check) = &registration.settings_taken_check {
+                    settings_taken_check(node_name, node_type, input_values)?;
+                }
+            }
         }
+        let (Some(ports), Some(descriptor)) =
+            (self.port_info(node_type), self.descriptor(node_type))
+        else {
+            return Ok(());
+        };
+        let settings_its_schema_lists = crate::core::nodes::the_settings_a_config_schema_lists(
+            descriptor.config_schema.as_ref(),
+        );
+        let Some(name_it_does_not_take) = input_values.keys().find(|name| {
+            ports.the_input_of_the_type_a_name_finds(name).is_none()
+                && !settings_its_schema_lists.contains(name.as_str())
+        }) else {
+            return Ok(());
+        };
+        let mut what_it_takes: Vec<String> = ports
+            .inputs
+            .iter()
+            .map(|input| format!("`{}`", input.name))
+            .chain(
+                settings_its_schema_lists
+                    .iter()
+                    .map(|name| format!("`{name}`")),
+            )
+            .collect();
+        what_it_takes.sort();
+        Err(Error::NodeConfigRefused {
+            node_name: node_name.to_string(),
+            node_type: node_type.clone(),
+            refusal: format!(
+                "unknown input `{name_it_does_not_take}`, expected {}",
+                if what_it_takes.is_empty() {
+                    "none".to_owned()
+                } else {
+                    what_it_takes.join(", ")
+                }
+            ),
+        })
     }
 
     pub fn can_create(&self, node_type: &NodeClassImportPath) -> bool {
@@ -704,20 +734,6 @@ pub(crate) fn in_node_type_order(mut conversions: Vec<PinConversion>) -> Arc<[Pi
     conversions.into()
 }
 
-/// `config` as the `C` a node of `node_type` takes, or the refusal naming
-/// the node, its type and the setting serde stopped at.
-fn config_the_node_type_takes<C: serde::de::DeserializeOwned>(
-    node_name: &str,
-    node_type: &NodeClassImportPath,
-    config: &serde_json::Value,
-) -> Result<C> {
-    serde_path_to_error::deserialize(config).map_err(|refusal| Error::NodeConfigRefused {
-        node_name: node_name.to_string(),
-        node_type: node_type.clone(),
-        refusal: refusal.to_string(),
-    })
-}
-
 fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> Error {
     Error::Configuration(format!(
         "two nodes both identify as `{node_class_import_path}`, and one import path \
@@ -747,9 +763,7 @@ pub(crate) fn the_node_type_as_registered(
     let conversion = descriptor
         .pin_conversion()
         .map_err(|refusal| Error::Configuration(refusal.to_string()))?;
-    crate::core::graph::legacy_config_of_a_node::refuse_a_config_field_named_as_an_input_port(
-        &descriptor,
-    )?;
+    crate::core::nodes::refuse_a_config_field_named_as_an_input_port(&descriptor)?;
     let descriptor = descriptor
         .with_input_deliveries_defaulted_by_pin()
         .map_err(Error::Configuration)?;
@@ -903,9 +917,6 @@ fn refuse_an_output_that_may_be_unset(descriptor: &NodeDescriptor) -> Result<()>
         None => Ok(()),
     }
 }
-
-#[cfg(any(test, feature = "test-support"))]
-mod node_taking_a_config_for_a_test;
 
 #[cfg(test)]
 mod tests;

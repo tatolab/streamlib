@@ -340,7 +340,9 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
 #[test]
 #[serial]
 fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port_is_refused() {
-    use streamlib::sdk::descriptors::{PortFamily, PortFamilyDeclaration};
+    use streamlib::sdk::descriptors::{
+        NodeInputMode, PinDeclaration, PinType, PortFamily, PortFamilyDeclaration, SettingReadTime,
+    };
     let import_path =
         NodeClassImportPath::new(format!("{}::InterfaceTrackReceive", module_path!())).unwrap();
     let _ = NODE_REGISTRY.register_descriptor_only(
@@ -357,7 +359,19 @@ fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port
                 family_from_config_key: Some("family".into()),
                 ..PortFamilyDeclaration::of_family(PortFamily::Packets)
             },
-        )),
+        ))
+        .with_input(
+            PortDescriptor::new(
+                "family",
+                "",
+                false,
+                PortFamilyDeclaration::of_family(PortFamily::Records),
+            )
+            .with_pin_declaration(PinDeclaration::exactly(PinType::String {}))
+            .with_input_mode(NodeInputMode::SettingOnly {
+                read: SettingReadTime::AtSetup,
+            }),
+        ),
     );
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
@@ -385,10 +399,20 @@ fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port
         .node_run_id;
 
     stream
-        .update_node_config(&receive_id, serde_json::json!({"family": "packets"}))
+        .set_pin_value(
+            &receive_id,
+            "family",
+            None,
+            Some(serde_json::json!("packets")),
+        )
         .expect("an update keeping the family is taken");
     let refusal = stream
-        .update_node_config(&receive_id, serde_json::json!({"family": "records"}))
+        .set_pin_value(
+            &receive_id,
+            "family",
+            None,
+            Some(serde_json::json!("records")),
+        )
         .expect_err("an update changing the family under the declared Output is refused")
         .to_string();
     assert!(

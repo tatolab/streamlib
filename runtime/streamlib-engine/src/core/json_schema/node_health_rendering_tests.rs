@@ -8,7 +8,7 @@ fn a_node_named(display_name: &str) -> crate::core::graph::GraphNode {
         streamlib_node_schema::NodeClassImportPath::new("tests:Blur").expect("a legal import path"),
         Some(crate::core::descriptors::NodeKind::Process),
         display_name,
-        None,
+        serde_json::Map::new(),
         Vec::new(),
         Vec::new(),
     )

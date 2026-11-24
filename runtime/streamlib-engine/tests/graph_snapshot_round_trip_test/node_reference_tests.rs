@@ -36,7 +36,12 @@ fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_
         ])
     );
     let refusal = stream
-        .update_node_config(&track, serde_json::json!({"gateway": {"node": "nowhere"}}))
+        .set_pin_value(
+            &track,
+            "gateway",
+            None,
+            Some(serde_json::json!({"node": "nowhere"})),
+        )
         .expect_err("a reference to a node the graph does not hold is refused")
         .to_string();
     assert!(

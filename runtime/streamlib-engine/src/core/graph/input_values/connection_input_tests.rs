@@ -56,7 +56,7 @@ fn the_values_handed_a_spoke_holding(pins: Map<String, Value>) -> Map<String, Va
             .traversal_mut()
             .add_v(
                 NodeSpec::new(the_spoke_type(), Value::Null)
-                    .with_pins_and_studio_fields(pins, Map::new()),
+                    .with_input_values_and_studio_fields(pins, Map::new()),
             )
             .expect("the node is named")
             .first()

@@ -246,15 +246,6 @@ def _the_field_values_of(state_record: Any) -> "list[Any]":
     return [getattr(state_record, field.name) for field in dataclasses.fields(state_record)]
 
 
-def the_value_a_config_field_takes(value_it_holds: Any, input_value: float) -> Any:
-    """`input_value` as the type of the value the config field holds: a bool, an int when it is whole, else a float."""
-    if isinstance(value_it_holds, bool):
-        return input_value != 0.0
-    if isinstance(value_it_holds, int) and input_value.is_integer():
-        return int(input_value)
-    return input_value
-
-
 def refuse_a_config_given_a_function_node_taking_none(node_id: str, config: Any) -> None:
     """Refuse a `config` that sets anything on a function node declaring no config field, a
     Python one among them, which takes each value as an input of its own."""

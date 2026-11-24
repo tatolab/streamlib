@@ -127,13 +127,7 @@ impl DynGeneratedNode for OutOfProcessSpawnHostStub {
     fn out_of_process_link_wiring(&self) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
         Some(Arc::clone(&self.link_wiring))
     }
-    fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
-        Ok(())
-    }
     fn to_runtime_json(&self) -> serde_json::Value {
-        serde_json::Value::Null
-    }
-    fn config_json(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

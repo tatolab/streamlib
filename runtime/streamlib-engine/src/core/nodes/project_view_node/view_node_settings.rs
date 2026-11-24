@@ -15,11 +15,11 @@ use crate::core::descriptors::{
 use crate::core::graph::input_values::{
     TakesAWireRendered, the_settings_rendered_reading_the_values_held,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings,
-};
 use crate::core::json_schema::GraphNodeOutput;
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{
+    ConfigFieldDescribedAsASetting, NodeTypesOneStreamResolves,
+    the_config_fields_described_as_settings,
+};
 
 /// Each setting `descriptor`, the node type of a view, declares in its manifest's `settings`, in
 /// the order the manifest lists them, as an input that takes no wire.

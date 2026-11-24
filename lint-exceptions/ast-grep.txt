@@ -146,12 +146,10 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/components/shader_node_fused_group_component.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/components/state_component.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/components/step_progress_of_one_node_component.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/graph/config_schema_value_checks.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/edges/input_link_port_ref.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/edges/link.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/edges/link_unique_id.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/edges/output_link_port_ref.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/graph/exposed_config_field_input_ports.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/graph_readiness.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/nodes/node_run_id.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/graph/traversal/mutation_ops/add_v_op.rs

@@ -94,7 +94,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
 
 fn a_node_whose_output_is(
     family: crate::core::descriptors::PortFamily,
-    config: Option<serde_json::Value>,
+    input_values: Option<serde_json::Value>,
     frame_rate: Option<crate::core::descriptors::ImageOutputPortFrameRate>,
 ) -> crate::core::graph::GraphNode {
     crate::core::graph::GraphNode::new(
@@ -102,7 +102,9 @@ fn a_node_whose_output_is(
             .expect("a legal import path"),
         Some(crate::core::descriptors::NodeKind::Process),
         "CameraSource",
-        config,
+        input_values
+            .and_then(|input_values| input_values.as_object().cloned())
+            .unwrap_or_default(),
         Vec::new(),
         vec![crate::core::graph::PortInfo {
             name: "video".to_string(),
@@ -133,7 +135,7 @@ fn a_node_of_kind(
         streamlib_node_schema::NodeClassImportPath::new("tests:Lfo").expect("a legal import path"),
         node_kind,
         "Lfo",
-        None,
+        serde_json::Map::new(),
         Vec::new(),
         Vec::new(),
     )
@@ -184,7 +186,7 @@ fn a_node_whose_one_setting_is_read(
         streamlib_node_schema::NodeClassImportPath::new(node_type).expect("a legal import path"),
         Some(crate::core::descriptors::NodeKind::Process),
         "Labeller",
-        None,
+        serde_json::Map::new(),
         vec![setting],
         Vec::new(),
     )
@@ -575,7 +577,7 @@ fn a_node_declaring_the_sentinel(
             .expect("a legal import path"),
         Some(crate::core::descriptors::NodeKind::Process),
         "SpeakerSink",
-        None,
+        serde_json::Map::new(),
         vec![crate::core::graph::PortInfo {
             name: "audio".to_string(),
             description: "Blocks to play".to_string(),

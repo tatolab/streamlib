@@ -16,7 +16,7 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
-    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
+    refuse_input_values_a_wired_link_out_of_the_node_would_refuse,
 };
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::pubsub::LoadedStreamIdentity;
@@ -317,16 +317,20 @@ fn names_from_config_satisfy_requires_and_a_live_update_dropping_one_is_refused(
     assert!(refusal.contains("channel_names"), "{refusal}");
 
     compiler.scope(|graph, _tx| {
-        refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
+        refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &engine,
-            &json!({ "channel_names": ["rpm"] }),
+            json!({ "channel_names": ["rpm"] })
+                .as_object()
+                .expect("an object of input values"),
         )
         .expect("an update keeping rpm is taken");
-        let refusal = refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
+        let refusal = refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &engine,
-            &json!({ "channel_names": ["torque"] }),
+            json!({ "channel_names": ["torque"] })
+                .as_object()
+                .expect("an object of input values"),
         )
         .expect_err("an update dropping rpm is refused")
         .to_string();
@@ -422,10 +426,12 @@ fn a_live_update_is_checked_against_the_inputs_a_passer_carries_it_on_to() {
     .expect("the engine's names include rpm");
 
     compiler.scope(|graph, _tx| {
-        let refusal = refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
+        let refusal = refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &engine,
-            &json!({ "channel_names": ["torque"] }),
+            json!({ "channel_names": ["torque"] })
+                .as_object()
+                .expect("an object of input values"),
         )
         .expect_err("the gauge behind the passer requires rpm")
         .to_string();

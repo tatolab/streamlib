@@ -171,8 +171,7 @@ fn test_new_inside_tokio_uses_external_handle() {
 
 #[test]
 #[serial]
-fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node() {
-    use crate::core::compiler::PendingOperation;
+fn a_setting_its_config_schema_lists_is_held_among_the_nodes_input_values() {
     use crate::core::nodes::NodeSpec;
     use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
@@ -188,33 +187,32 @@ fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_gra
         .expect("the mock is added");
 
     stream
-        .update_node_config(&node_run_id, serde_json::json!({"frame_width": 3}))
-        .expect("the update is queued");
+        .set_pin_value(
+            &node_run_id,
+            "frame_width",
+            None,
+            Some(serde_json::json!(3)),
+        )
+        .expect("the setting is set");
 
-    let config_on_the_node = stream.compiler.scope(|graph, _tx| {
+    let input_values_on_the_node = stream.compiler.scope(|graph, _tx| {
         graph
             .traversal()
             .v(&node_run_id)
             .first()
             .expect("the node is in the graph")
-            .config
+            .input_values
             .clone()
     });
-    assert_eq!(config_on_the_node, Some(serde_json::json!({})));
-    assert!(
-        stream.compiler.logged_pending_operations().iter().any(|op| matches!(
-            op,
-            PendingOperation::UpdateNodeConfig { node_run_id: queued_for, config_to_apply }
-                if *queued_for == node_run_id && *config_to_apply == serde_json::json!({"frame_width": 3})
-        )),
-        "the update carries its configuration to the commit"
+    assert_eq!(
+        serde_json::Value::Object(input_values_on_the_node),
+        serde_json::json!({"frame_width": 3})
     );
 }
 
 #[test]
 #[serial]
-fn a_configuration_its_node_types_config_schema_refuses_is_refused_and_never_queued() {
-    use crate::core::compiler::PendingOperation;
+fn a_setting_value_the_schema_its_type_states_refuses_is_refused_and_never_held() {
     use crate::core::nodes::NodeSpec;
     use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
@@ -230,19 +228,29 @@ fn a_configuration_its_node_types_config_schema_refuses_is_refused_and_never_que
         .expect("the mock is added");
 
     let refusal = stream
-        .update_node_config(&node_run_id, serde_json::json!({"frame_width": "wide"}))
+        .set_pin_value(
+            &node_run_id,
+            "frame_width",
+            None,
+            Some(serde_json::json!("wide")),
+        )
         .expect_err("a string where the schema states an integer is refused")
         .to_string();
 
     assert!(refusal.contains("`frame_width`"), "{refusal}");
     assert!(refusal.contains("\"wide\""), "{refusal}");
+    let input_values_on_the_node = stream.compiler.scope(|graph, _tx| {
+        graph
+            .traversal()
+            .v(&node_run_id)
+            .first()
+            .expect("the node is in the graph")
+            .input_values
+            .clone()
+    });
     assert!(
-        !stream
-            .compiler
-            .logged_pending_operations()
-            .iter()
-            .any(|op| matches!(op, PendingOperation::UpdateNodeConfig { .. })),
-        "a refused update reaches no commit"
+        input_values_on_the_node.is_empty(),
+        "a refused set holds nothing: {input_values_on_the_node:?}"
     );
 }
 

@@ -340,7 +340,7 @@ def test_a_helpers_own_engine_records_reach_its_parent_as_rust_records(
     )
     try:
         stand_in_parent.send(
-            {"cmd": "setup", "capability": "full", "config": {}, "ports": {}}
+            {"cmd": "setup", "capability": "full", "ports": {}}
         )
         stand_in_parent.send(
             {
@@ -407,7 +407,7 @@ def test_iceoryx2s_own_records_inside_a_helper_reach_the_parent_rather_than_stde
     )
     try:
         stand_in_parent.send(
-            {"cmd": "setup", "capability": "full", "config": {}, "ports": {}}
+            {"cmd": "setup", "capability": "full", "ports": {}}
         )
         unopenable = engine_shaped_link_wiring("input", "L-unopenable")
         unopenable["channel_service_creation_depth"] = 4
@@ -472,7 +472,7 @@ def test_a_helper_at_the_engines_default_level_sends_no_debug_records(
     )
     try:
         stand_in_parent.send(
-            {"cmd": "setup", "capability": "full", "config": {}, "ports": {}}
+            {"cmd": "setup", "capability": "full", "ports": {}}
         )
         stand_in_parent.send(
             {

@@ -746,13 +746,6 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
             .and_then(InputMailboxes::inner_arc)
     }
 
-    fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
-        Err(Error::Configuration(format!(
-            "shader node `{}` declares no configuration; its settings are its value inputs",
-            self.node_name
-        )))
-    }
-
     /// Read each input of numbers of the island no link feeds as its value in `input_values`,
     /// keyed by the input port it is read at, and one `input_values` holds no value of its type
     /// for as 0, as a freshly built island reads it; a linked input goes on reading its link.
@@ -776,10 +769,6 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
 
     fn to_runtime_json(&self) -> serde_json::Value {
         serde_json::Value::Null
-    }
-
-    fn config_json(&self) -> serde_json::Value {
-        serde_json::json!({})
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

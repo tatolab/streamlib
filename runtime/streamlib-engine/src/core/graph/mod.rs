@@ -4,19 +4,16 @@
 mod bundle_member_link_ends;
 mod components;
 mod config_node_reference_edges;
-mod config_schema_value_checks;
 pub mod connection_wire_lowering;
 mod data_structure;
 
 mod edges;
-mod exposed_config_field_input_ports;
 pub mod graph_fragment_flattening;
 pub mod graph_interface_resolution;
 mod graph_readiness;
 pub mod graph_snapshot;
 pub mod graph_variable_resolution;
 pub mod input_values;
-pub(crate) mod legacy_config_of_a_node;
 mod node_health_with_its_links;
 mod node_state_ecs_component;
 mod nodes;
@@ -40,31 +37,29 @@ pub(crate) use bundle_member_link_ends::{
 };
 pub(crate) use config_node_reference_edges::{
     config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
-    refuse_a_live_config_naming_a_node_the_graph_does_not_hold,
     refuse_a_reference_to_a_node_of_the_wrong_type,
     refuse_a_second_referrer_of_a_node_that_takes_one,
+    refuse_input_values_naming_a_node_the_graph_does_not_hold,
 };
-pub(crate) use config_schema_value_checks::refuse_a_config_its_node_types_config_schema_refuses;
 pub use data_structure::{Graph, GraphState, WhyTheNodeLeaves};
 pub(crate) use data_structure::{
     names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
-pub(crate) use exposed_config_field_input_ports::the_input_ports_of_the_exposed_config_fields;
 pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
     ALinkConnected, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
-    refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse,
     refuse_a_link_its_pin_types_or_families_refuse,
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
+    refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse,
     refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
     the_bundle_frame_type_an_output_may_carry, the_ends_a_link_is_judged_by,
     the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use pin_type_resolution::the_pin_a_port_resolves_to;
 pub(crate) use port_family_link_checks::{
-    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
+    refuse_input_values_a_wired_link_out_of_the_node_would_refuse,
     the_family_a_link_out_of_an_output_carries, the_outputs_a_link_carries_on,
 };
 pub(crate) use streamlib_node_schema::is_in_exposed_name_cast_form;

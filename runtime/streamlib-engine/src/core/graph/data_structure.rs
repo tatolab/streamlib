@@ -243,13 +243,42 @@ impl Graph {
         &self.values_wires_carry_into_settings
     }
 
-    /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup;
-    /// `false` when this graph holds no such node or input.
+    /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup:
+    /// one its port says is, or one its type's config schema lists of a function node that runs
+    /// as a node of its own, which is built with those settings and handed no other; `false`
+    /// when this graph holds no such node or input.
     pub(crate) fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
-        self.traversal().v(node_run_id).first().is_some_and(|node| {
-            node.input_port(input)
-                .is_some_and(super::PortInfo::is_a_setting_read_at_setup)
-        })
+        self.traversal()
+            .v(node_run_id)
+            .first()
+            .is_some_and(|node| match node.input_port(input) {
+                Some(port) => port.is_a_setting_read_at_setup(),
+                None => self.is_a_schema_setting_of_a_function_node_run_on_its_own(
+                    node,
+                    node_run_id,
+                    input,
+                ),
+            })
+    }
+
+    /// Whether `input` of `node`, the node `node_run_id`, is a setting its type's config schema
+    /// lists of a function node that runs as a node of its own, not inside the read of each node
+    /// it feeds.
+    fn is_a_schema_setting_of_a_function_node_run_on_its_own(
+        &self,
+        node: &GraphNode,
+        node_run_id: &NodeRunId,
+        input: &str,
+    ) -> bool {
+        matches!(
+            node.node_kind(),
+            Some(crate::core::descriptors::NodeKind::Function { .. })
+        ) && !crate::core::compiler::compiler_ops::function_node_island::runs_inside_the_read_of_each_node_it_feeds(
+            self,
+            node_run_id,
+        ) && self
+            .node_types_this_stream_resolves()
+            .its_config_schema_lists_the_setting(&node.node_type, input)
     }
 
     /// Each `GraphInput` of this graph, each at its stream's top level.
@@ -518,6 +547,24 @@ impl Graph {
                 inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
                 ..GraphNodeOutput::from(node)
             };
+            let node_types = self.node_types_this_stream_resolves();
+            if node_types
+                .placeholder_of_the_node_type_not_described(&node.node_type)
+                .is_some()
+            {
+                // A field it was saved exposing is an input of its placeholder, and renders under
+                // `config` as it did when the node held one.
+                let older_keys = crate::core::json_schema::InputValuesRendered::split_by(
+                    &crate::core::json_schema::OlderGraphKeysOfANodeType::of(
+                        node_types,
+                        &node.node_type,
+                    ),
+                    &node.input_values,
+                );
+                rendered.config = Some(older_keys.config);
+                rendered.config_checksum = older_keys.config_checksum;
+                rendered.pins = older_keys.pins;
+            }
             if let Some((health, diagnostics)) = self.the_health_and_diagnostics_of(node) {
                 rendered.components.health = Some(health);
                 rendered.components.diagnostics = diagnostics;

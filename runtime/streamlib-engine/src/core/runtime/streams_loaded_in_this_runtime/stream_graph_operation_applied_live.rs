@@ -13,9 +13,6 @@ use uuid::Uuid;
 
 use crate::core::descriptors::{NodeClassImportPath, PortDescriptor};
 use crate::core::graph::graph_interface_resolution::an_interface_node_states_what_its_value_port_carries;
-use crate::core::graph::legacy_config_of_a_node::{
-    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_of_a_document_node,
-};
 use crate::core::graph::{
     PortInfo,
     ALinkConnected, LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
@@ -23,11 +20,12 @@ use crate::core::graph::{
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
+use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::InputValueSetOnANode;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
     KeptNodesLeftToRebuild, LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
 };
 use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::runtime::operations::{
     ANodeTypesPort, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
@@ -109,11 +107,7 @@ impl LoadedStreamInThisRuntime {
                 .await?;
                 let (mut node, links) =
                     self.the_added_node_under_the_current_port_names(node, links);
-                let spec = node_spec_of_a_document_node(
-                    self.node_types_this_stream_resolves(),
-                    node_type,
-                    &node,
-                );
+                let spec = NodeSpec::of_a_graph_document_node(node_type, &node);
                 let a_node_held_the_uuid_before_the_add =
                     self.the_node_of_the_node(node.id).is_ok();
                 let added = match self.add_node_async(spec).await {
@@ -422,9 +416,10 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Set what a `set_node_config` from `from` to `to` sets on the running node `node`: the
-    /// config its type takes whole out of `to`, and the value on each of its inputs `to` names,
-    /// each input `from` names and `to` does not cleared. A `to` that is no object is the config.
+    /// Set what a `set_node_config` from `from` to `to` sets on the running node `node`, whole or
+    /// not at all: the value on each of its inputs `to` names, and each input `from` names and
+    /// `to` does not cleared. A `null` names no input, as a node holding no setting was recorded;
+    /// any other `to` that is no object is refused.
     async fn set_the_config_and_pin_values_of_the_node(
         &self,
         node: Uuid,
@@ -432,55 +427,48 @@ impl LoadedStreamInThisRuntime {
         to: &serde_json::Value,
     ) -> Result<()> {
         let node_run_id = self.the_node_of_the_node(node)?;
-        let serde_json::Value::Object(to_object) = to else {
-            return self
-                .update_node_config_compiled_right_away(&node_run_id, to)
-                .await;
+        let no_input_values = serde_json::Map::new();
+        let input_values = match to {
+            serde_json::Value::Object(input_values) => input_values,
+            serde_json::Value::Null => &no_input_values,
+            _ => {
+                return Err(Error::Configuration(format!(
+                    "node {node} is set {to}, which is no object of input values by input name"
+                )));
+            }
         };
-        let node_type = self.compiler.scope(|graph, _tx| {
-            graph
-                .traversal()
-                .v(&node_run_id)
-                .first()
-                .map(|running| running.node_type.clone())
-                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))
-        })?;
-        let legacy_config =
-            LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
-        let ConfigAndPinValues { config, pin_values } = legacy_config.split(to_object);
-        let pin_values_cleared: Vec<String> = from
+        let cleared = from
             .as_object()
-            .map(|from_object| legacy_config.split(from_object).pin_values)
-            .unwrap_or_default()
             .into_iter()
-            .map(|(input, _)| input)
-            .filter(|input| !pin_values.contains_key(input))
+            .flat_map(|from_object| from_object.keys())
+            .filter(|input| !input_values.contains_key(*input))
+            .map(|input| (input.clone(), None));
+        let sets: Vec<InputValueSetOnANode> = cleared
+            .chain(
+                input_values
+                    .iter()
+                    .map(|(input, value)| (input.clone(), Some(value.clone()))),
+            )
+            .map(|(input, value)| InputValueSetOnANode {
+                input,
+                member: None,
+                value,
+            })
             .collect();
-        self.update_node_config_compiled_right_away(&node_run_id, &config)
-            .await?;
-        let mut a_setting_read_at_setup_changed = false;
-        for input in pin_values_cleared {
-            self.set_pin_value(&node_run_id, &input, None, None)?;
-            a_setting_read_at_setup_changed |=
-                self.is_a_setting_the_node_reads_at_setup(&node_run_id, &input);
-        }
-        for (input, value) in pin_values {
-            self.set_pin_value(&node_run_id, &input, None, Some(value))?;
-            a_setting_read_at_setup_changed |=
-                self.is_a_setting_the_node_reads_at_setup(&node_run_id, &input);
-        }
-        if a_setting_read_at_setup_changed {
+        self.set_the_input_values_of_a_node(&node_run_id, sets.clone())?;
+        if sets
+            .iter()
+            .any(|set| self.is_a_setting_the_node_reads_at_setup(&node_run_id, &set.input))
+        {
             self.leave_the_node_to_rebuild(&node_run_id);
         }
         Ok(())
     }
 
     /// Set the input value `input` of `node`, or its member `member` when one is named, to
-    /// `value`, `None` taking it off: a setting its type holds in its config is set in the config
-    /// the node holds once each config update already logged for it is applied, any other on its
-    /// input. A setting the node reads at setup is saved and leaves the node to rebuild, which
-    /// [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does once for every such set
-    /// made before it.
+    /// `value`, `None` taking it off. A setting the node reads at setup is saved and leaves the
+    /// node to rebuild, which [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does
+    /// once for every such set made before it.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,
@@ -489,45 +477,11 @@ impl LoadedStreamInThisRuntime {
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         let node_run_id = self.the_node_of_the_node(node)?;
-        let node_type = self.compiler.scope(|graph, _tx| {
-            graph
-                .traversal()
-                .v(&node_run_id)
-                .first()
-                .map(|running| running.node_type.clone())
-                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))
-        })?;
-        let legacy_config =
-            LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
-        if !legacy_config.is_a_config_field(input) {
-            self.set_pin_value(&node_run_id, input, member, value)?;
-            if self.is_a_setting_the_node_reads_at_setup(&node_run_id, input) {
-                self.leave_the_node_to_rebuild(&node_run_id);
-            }
-            return Ok(());
+        self.set_pin_value(&node_run_id, input, member, value)?;
+        if self.is_a_setting_the_node_reads_at_setup(&node_run_id, input) {
+            self.leave_the_node_to_rebuild(&node_run_id);
         }
-        self.update_node_config_built_from_the_one_it_holds(&node_run_id, |config_held| {
-            let mut config = match config_held.unwrap_or_default() {
-                serde_json::Value::Object(config) => config,
-                serde_json::Value::Null => serde_json::Map::new(),
-                other => {
-                    return Err(Error::Configuration(format!(
-                        "node {node} holds the config {other}, which is no object, so its \
-                         setting `{input}` cannot be set"
-                    )));
-                }
-            };
-            let held = config.remove(input);
-            if let Some(after_the_set) = streamlib_project_repository::the_input_value_after_the_set(
-                held,
-                member,
-                value.as_ref(),
-            ) {
-                config.insert(input.to_owned(), after_the_set);
-            }
-            Ok(serde_json::Value::Object(config))
-        })
-        .await
+        Ok(())
     }
 
     /// Whether input `input` of the node `node` takes a `Connection`, whose wire the graph as
@@ -929,7 +883,6 @@ fn how_a_node_types_port_is_judged(
         }
     };
     HowANodeTypesPortIsJudged::OnAPlacedNode(Box::new(ANodeTypesPortToJudge::of(
-        node_types,
         node_type,
         ports_of_its_direction,
         port.port,

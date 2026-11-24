@@ -12,12 +12,13 @@ pytestmark = pytest.mark.usefixtures(
 )
 
 
-def test_a_running_function_node_pool_takes_a_late_carry_from_a_config_update(stand_in_parent):
-    """The engine hands a running pool every carry it names, its late ones among them, as a
-    config update; the pool takes them without a restart and answers `ok`.
+def test_a_running_function_node_pool_takes_a_late_carry_it_is_handed(stand_in_parent):
+    """The engine sets a pool up with the carries its input values name, and hands a running
+    pool every carry it names, its late ones among them; the pool takes them without a restart
+    and answers `ok`.
 
-    Fail-without-fix: the update reaches `apply_configuration` on the pool's instance, which
-    has no `carries` field to set, and the parent hears a refusal.
+    Fail-without-fix: the pool is set up with no carry, so the late ones are refused as ports it
+    does not hold.
     """
     from tatolab.runtime._function_node_pool import FunctionNodePool
 
@@ -35,14 +36,19 @@ def test_a_running_function_node_pool_takes_a_late_carry_from_a_config_update(st
     first_carry = {"input_port": "island_0", "output_port": "island_0_output", "family": "channels"}
     late_carry = {"input_port": "island_1", "output_port": "island_1_output", "family": "records"}
     stand_in_parent.send(
-        {"cmd": "setup", "capability": "full", "config": {"carries": [first_carry]}, "ports": {}}
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "input_values": {"carries": [first_carry]},
+            "ports": {},
+        }
     )
     assert the_next_frame_other_than_a_log() == {"rpc": "ready"}
 
     stand_in_parent.send(
         {
-            "cmd": "update_config",
-            "config": {"carries": [first_carry, late_carry]},
+            "cmd": "carry_links",
+            "carries": [first_carry, late_carry],
             "output_ports_keeping_their_last_message": ["island_1_output"],
         }
     )

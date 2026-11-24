@@ -114,7 +114,6 @@ fn the_port_to_judge(
         PortDirection::Output => descriptor.outputs,
     };
     ANodeTypesPortToJudge::of(
-        node_types,
         descriptor.node_class_import_path,
         ports_of_its_direction.into(),
         port,

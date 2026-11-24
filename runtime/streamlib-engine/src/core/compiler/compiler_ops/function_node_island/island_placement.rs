@@ -22,12 +22,12 @@ use super::{
 ///
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
 /// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
-/// "config", "pins": {input: value}, "links_into": [{"port", "from": {"node",
+/// "config": {setting: value}, "pins": {input: value}, "links_into": [{"port", "from": {"node",
 /// "port"} or {"reader_input_port"}}]}]}`, where `"reads_members_over_its_pin": true` beside
 /// `"reader_input_port"` marks a bundle input fed member by member, whose reader port carries the
 /// members its links have carried, each newest, to put over the input's pin; a stateful node's
-/// `"node_uuid"` and `"state_fields"` beside its `"node"`, and the `"exposed_config_fields"` of a
-/// node that takes config fields as inputs, each a port a link of `"links_into"` may name.
+/// `"node_uuid"` and `"state_fields"` beside its `"node"`. `"config"` holds the input values
+/// naming no input port of the node; `"pins"` holds those naming one.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -95,7 +95,13 @@ fn place_a_function_node_after_what_it_reads(
         .ok_or_else(|| Error::NodeNotFound(node_id.to_string()))?;
     let import_path = node.node_type.to_string();
     let node_name = node.display_name.clone();
-    let config = node.config.clone().unwrap_or(JsonValue::Null);
+    let config = JsonValue::Object(
+        node.input_values
+            .iter()
+            .filter(|(input, _)| node.input_port(input).is_none())
+            .map(|(input, value)| (input.clone(), value.clone()))
+            .collect(),
+    );
     let pins = JsonValue::Object(
         crate::core::graph::input_values::the_pin_values_with_the_live_ones_over_them(graph, node),
     );
@@ -166,9 +172,6 @@ fn place_a_function_node_after_what_it_reads(
     if !state_fields.is_empty() {
         island_node["node_uuid"] = serde_json::json!(node.node_uuid);
         island_node["state_fields"] = serde_json::json!(state_fields);
-    }
-    if !node.exposed_config_fields.is_empty() {
-        island_node["exposed_config_fields"] = serde_json::json!(node.exposed_config_fields);
     }
     nodes_each_after_what_it_reads.push(island_node);
     Ok(())

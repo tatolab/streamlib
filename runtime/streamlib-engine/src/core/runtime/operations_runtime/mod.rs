@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use super::LoadedStreamInThisRuntime;
@@ -248,12 +247,12 @@ pub(super) async fn add_node_impl(
         if config_references_of_the_added_node
             == ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins
         {
-            let Some((name_of_the_added_node, type_of_the_added_node, config_of_the_added_node)) =
+            let Some((name_of_the_added_node, type_of_the_added_node, input_values_of_the_added_node)) =
                 graph.traversal().v(&node_id).first().map(|node| {
                     (
                         node.display_name.clone(),
                         node.node_type.clone(),
-                        node.config.clone().unwrap_or_default(),
+                        node.input_values.clone(),
                     )
                 })
             else {
@@ -261,18 +260,18 @@ pub(super) async fn add_node_impl(
             };
             let node_types = node_interpreter_launch_record.node_types_this_stream_resolves();
             if let Err(refusal) =
-                crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
+                crate::core::graph::input_values::refuse_input_values_the_config_schema_of_its_type_refuses(
+                    node_types,
                     &name_of_the_added_node,
                     &type_of_the_added_node,
-                    node_types,
-                    &config_of_the_added_node,
+                    &input_values_of_the_added_node,
                 )
                 .and_then(|()| {
-                    crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
+                    crate::core::graph::refuse_input_values_naming_a_node_the_graph_does_not_hold(
                         graph,
                         node_types,
                         &node_id,
-                        &config_of_the_added_node,
+                        &input_values_of_the_added_node,
                     )
                 })
             {
@@ -420,32 +419,6 @@ impl LoadedStreamInThisRuntime {
                 Arc::clone(&self.one_input_value_change_at_a_time),
             ),
         }
-    }
-
-    pub(super) async fn update_node_config_compiled_right_away<C: Serialize>(
-        &self,
-        node_run_id: &NodeRunId,
-        config: C,
-    ) -> Result<()> {
-        self.log_a_node_config_update_for_the_next_commit(node_run_id, config)?;
-        commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
-        self.hold_each_live_value_whose_lifetime_the_config_changed(node_run_id);
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
-    }
-
-    /// Update the config of `node_run_id` to what `build` makes of the config it will hold once
-    /// the updates already logged apply, built and logged in one step, then commit it.
-    pub(super) async fn update_node_config_built_from_the_one_it_holds(
-        &self,
-        node_run_id: &NodeRunId,
-        build: impl FnOnce(Option<serde_json::Value>) -> Result<serde_json::Value>,
-    ) -> Result<()> {
-        self.log_a_node_config_update_for_the_next_commit_built_from(node_run_id, build)?;
-        commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
-        self.hold_each_live_value_whose_lifetime_the_config_changed(node_run_id);
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
     }
 
     fn tokio_runtime_variant(&self) -> &TokioRuntimeVariant {
@@ -689,15 +662,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             .the_pin_groups_of(node_type)
     }
 
-    fn the_config_a_node_holding_the_input_values_takes(
+    fn the_settings_a_set_node_config_replaces(
         &self,
         node_type: &str,
         input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
         let node_type = NodeClassImportPath::new(node_type)
             .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")))?;
         Ok(
-            crate::core::graph::legacy_config_of_a_node::config_of_a_node(
+            crate::core::graph::input_values::the_settings_a_set_node_config_replaces(
                 self.node_types_this_stream_resolves(),
                 &node_type,
                 input_values,
@@ -747,8 +720,8 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
-    fn node_type_takes_a_config(&self, node_type: &NodeClassImportPath) -> bool {
-        crate::core::graph::input_values::node_type_takes_a_config(
+    fn a_set_node_config_replaces_every_setting_on(&self, node_type: &NodeClassImportPath) -> bool {
+        crate::core::graph::input_values::a_set_node_config_replaces_every_setting_on(
             self.node_types_this_stream_resolves(),
             node_type,
         )
@@ -761,13 +734,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         LoadedStreamInThisRuntime::set_input_values_live(self, sets)
     }
 
-    fn an_exposure_of_config_fields_is_recorded_on(
+    fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
         &self,
+        node_name: &str,
         node_type: &NodeClassImportPath,
         exposed_config_fields: &[String],
-    ) -> Result<bool> {
-        crate::core::graph::input_values::an_exposure_of_config_fields_is_recorded_on(
+    ) -> Result<()> {
+        crate::core::graph::input_values::refuse_an_exposure_naming_no_input_that_takes_a_wire(
             self.node_types_this_stream_resolves(),
+            node_name,
             node_type,
             exposed_config_fields,
         )
@@ -809,15 +784,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             if node_types.port_info(&node_type).is_none() {
                 return Err(Error::UnknownNodeType { ident: node_type });
             }
-            let config = crate::core::graph::legacy_config_of_a_node::config_of_a_node(
-                node_types,
-                &node_type,
-                &input_values,
-            );
-            node_types.refuse_a_node_this_stream_cannot_add(&node_name, &node_type, &config)?;
-            crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
-                &node_name, &node_type, node_types, &config,
-            )
+            node_types.refuse_a_node_this_stream_cannot_add(&node_name, &node_type, &input_values)
         })
     }
 

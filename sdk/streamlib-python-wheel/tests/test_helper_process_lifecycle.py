@@ -41,7 +41,7 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     )
 
     ports = {"input_values": {"tag": "probe"}}
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": ports})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": ports})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
@@ -62,7 +62,7 @@ def test_a_node_that_cannot_set_itself_up_reports_the_failure(stand_in_parent):
         bridge, load_node_class(f"{PROBE_MODULE}:RefusesSetupProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
     assert "cannot set itself up" in refusal["error"]
@@ -84,7 +84,7 @@ def test_a_class_not_under_bare_node_is_refused_at_setup_naming_its_replacement(
         bridge, load_node_class(f"{PROBE_MODULE}:DeclaredByAnOlderTatolabStreamProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
     assert "is not a class under bare `@node`" in refusal["error"]
@@ -109,7 +109,7 @@ def test_a_manual_node_whose_start_raised_fails_its_node(
         bridge, load_node_class(f"{PROBE_MODULE}:RaisesInStartProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
@@ -132,12 +132,11 @@ def test_a_manual_node_whose_start_raised_fails_its_node(
     assert not lifecycle_thread.is_alive()
 
 
-def test_a_manual_node_not_ready_from_start_is_reported_and_its_config_update_reports_it_ready(
+def test_a_manual_node_not_ready_from_start_is_reported_and_keeps_running(
     stand_in_parent,
 ):
     """A `start()` that reports the node not ready sends the parent the reason
-    in place of failing the node, and the node keeps running; a config update
-    that reports it ready sends `null`.
+    in place of failing the node, and the node keeps running.
 
     Fail-without-fix: no `set_not_ready_because` arrives and the graph shows
     nothing on the node.
@@ -155,7 +154,7 @@ def test_a_manual_node_not_ready_from_start_is_reported_and_its_config_update_re
             if frame.get("op") != "log":
                 return frame
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert the_next_frame_other_than_a_log() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
 
@@ -165,15 +164,6 @@ def test_a_manual_node_not_ready_from_start_is_reported_and_its_config_update_re
     assert not_ready["not_ready_because"] == "`riv_path` is not set"
     stand_in_parent.send(
         {"rpc": "escalate_response", "request_id": not_ready["request_id"], "result": "ok"}
-    )
-
-    stand_in_parent.send({"cmd": "update_config", "config": {"gain": 2}})
-    assert the_next_frame_other_than_a_log() == {"rpc": "ok"}
-    ready = the_next_frame_other_than_a_log()
-    assert ready["op"] == "set_not_ready_because"
-    assert ready["not_ready_because"] is None
-    stand_in_parent.send(
-        {"rpc": "escalate_response", "request_id": ready["request_id"], "result": "ok"}
     )
 
     stand_in_parent.send({"cmd": "stop", "capability": "full"})
@@ -219,7 +209,7 @@ def test_a_running_manual_node_reported_from_another_thread_is_fed_transparent_f
             if frame.get("op") != "log":
                 return frame
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert the_next_frame_other_than_a_log() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
     deadline = time.monotonic() + 5.0
@@ -290,7 +280,7 @@ def test_a_continuous_node_not_ready_is_reported_once_and_still_processed_until_
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:NotReadyUntilToldOtherwiseProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
 
@@ -346,7 +336,7 @@ def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
 
@@ -421,7 +411,6 @@ def test_a_function_node_raising_in_the_read_of_a_node_is_reported_on_the_functi
         {
             "cmd": "setup",
             "capability": "full",
-            "config": {},
             "ports": {"islands": [an_island_feeding_the_level_its_pin_sets(-1.0)]},
         }
     )
@@ -505,7 +494,7 @@ def test_a_raise_report_the_parent_refused_is_sent_again_on_the_next_call(stand_
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
 
@@ -559,7 +548,7 @@ def test_a_clean_call_after_a_refused_raise_report_tells_the_parent_it_runs_clea
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
 
@@ -607,7 +596,7 @@ def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
         bridge, load_node_class(f"{PROBE_MODULE}:ImportsADmaBufOffLinuxProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
     assert "import_dma_buf is Linux-only" in refusal["error"]
@@ -627,7 +616,7 @@ def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_pa
         bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive()["rpc"] == "ready"
 
     stand_in_parent.send({"cmd": "on_pause", "capability": "limited"})
@@ -650,7 +639,6 @@ def test_an_idle_reactive_helper_answers_a_command_the_moment_it_arrives(stand_i
         {
             "cmd": "setup",
             "capability": "full",
-            "config": {},
             "ports": {"inputs": [engine_shaped_link_wiring("input", "L-idle-commands")]},
         }
     )
@@ -725,7 +713,6 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
             {
                 "cmd": "setup",
                 "capability": "full",
-                "config": {},
                 "ports": {
                     "inputs": [engine_shaped_link_wiring("input", inbound_link_id)],
                     "outputs": [engine_shaped_link_wiring("output", outbound_link_id)],
@@ -809,7 +796,7 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
     run_sent_ns = time.monotonic_ns()
@@ -853,7 +840,7 @@ def test_a_paused_continuous_node_is_not_called_until_it_resumes(
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
     time.sleep(0.2)
@@ -917,44 +904,29 @@ def test_a_continuous_node_with_no_interval_never_runs_faster_than_the_floor(
     )
 
 
-def reconfigure_a_set_up_probe(stand_in_parent, probe_name: str, configuration: dict) -> dict:
-    """Set `probe_name` up, hand it `configuration`, and return the answer."""
+def test_links_handed_to_a_helper_running_no_function_node_pool_are_refused_naming_the_cause(
+    stand_in_parent,
+):
+    """A `carry_links` reaches only the stream's function node pool: any other node is set up
+    with its input values alone and takes no change but through `set_input_values`.
+
+    Fail-without-fix: the carries are handed to a node that reads none of them, and the parent
+    is told it took them.
+    """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_node_class(f"{PROBE_MODULE}:{probe_name}")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     stand_in_parent.receive()
 
-    stand_in_parent.send({"cmd": "update_config", "config": configuration})
+    stand_in_parent.send({"cmd": "carry_links", "carries": []})
     answer = stand_in_parent.receive()
 
+    assert answer["rpc"] == "error"
+    assert "runs no function node pool" in answer["error"]
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
-    return answer
-
-
-def test_a_configuration_the_node_takes_is_answered_ok(stand_in_parent):
-    answer = reconfigure_a_set_up_probe(
-        stand_in_parent, "TakesReconfigurationProbe", {"gain": 3}
-    )
-    assert answer == {"rpc": "ok"}
-
-
-@pytest.mark.parametrize(
-    ("probe_name", "the_cause_named"),
-    [
-        ("PassThroughProbe", "takes no config, so `gain` has nowhere to go"),
-        ("RefusesReconfigurationProbe", "a gain of 3 is out of range"),
-        ("RefusesSetupProbe", "setup did not succeed"),
-    ],
-)
-def test_a_configuration_the_node_does_not_take_is_refused_naming_the_cause(
-    stand_in_parent, probe_name, the_cause_named
-):
-    answer = reconfigure_a_set_up_probe(stand_in_parent, probe_name, {"gain": 3})
-    assert answer["rpc"] == "error"
-    assert the_cause_named in answer["error"]

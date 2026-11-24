@@ -46,6 +46,6 @@ pub(super) fn register_the_input_value_test_node_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         NODE_REGISTRY
-            .register_taking_a_config_for_a_test::<InputValueTestNode::Node, InputValueTestNodeConfig>()
+            .register_with_a_config_schema_for_a_test::<InputValueTestNode::Node, InputValueTestNodeConfig>()
     });
 }

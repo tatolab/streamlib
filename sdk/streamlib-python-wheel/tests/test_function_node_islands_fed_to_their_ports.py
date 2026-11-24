@@ -591,43 +591,6 @@ def an_island_whose_gain_a_tally_drives(
     }
 
 
-_WEIGHTED_SUM_PATH = f"{__name__}:WeightedSumCountingItsCalls"
-
-
-def an_island_whose_rust_weight_a_tally_drives(input_port: str) -> "dict[str, Any]":
-    island = an_island_whose_gain_a_tally_drives(input_port, _WEIGHTED_SUM_PATH, "weight")
-    island["nodes"][1]["config"] = {"weight": 10.0}
-    island["nodes"][1]["exposed_config_fields"] = ["weight"]
-    return island
-
-
-def test_a_linked_exposed_config_field_drives_a_rust_function_node_in_place_of_its_config():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["weighted"], [])
-    fed = feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [an_island_whose_rust_weight_a_tally_drives("weighted")],
-        {f"{__name__}:tally": tally, _WEIGHTED_SUM_PATH: WeightedSumCountingItsCalls}.__getitem__,
-    )
-    assert fed.ran_compiled_by_node_id == {"tally-1": True, "scaled-1": True}
-    assert the_value_read_from(data_plane, "weighted") == 2.0 * 3.0 + 0.25, (
-        "the tally's 3 is the weight, not the config's 10"
-    )
-
-
-def test_an_exposed_config_field_no_link_drives_reads_the_nodes_config():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["weighted"], [])
-    island = an_island_whose_rust_weight_a_tally_drives("weighted")
-    island["nodes"][1]["links_into"] = []
-    feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [island],
-        {f"{__name__}:tally": tally, _WEIGHTED_SUM_PATH: WeightedSumCountingItsCalls}.__getitem__,
-    )
-    assert the_value_read_from(data_plane, "weighted") == 2.0 * 10.0 + 0.25
-
-
 def test_a_linked_input_drives_a_node_run_as_python_in_place_of_its_pin():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["spelled"], [])
@@ -641,19 +604,6 @@ def test_a_linked_input_drives_a_node_run_as_python_in_place_of_its_pin():
     assert the_value_read_from(data_plane, "spelled") == float(len("6.0")), (
         "2 scaled by the tally's 3 spells 6.0, not 20.0"
     )
-
-
-def test_a_node_run_as_python_exposing_a_config_field_is_refused_naming_it():
-    """Mental-revert: reading the exposed field into a config again builds the node."""
-    scaled_import_path = f"{__name__}:spell_the_scaled_value"
-    island = an_island_whose_gain_a_tally_drives("spelled", scaled_import_path, "gain")
-    island["nodes"][1]["exposed_config_fields"] = ["gain"]
-    with pytest.raises(FunctionNodeDoesNotCompile, match="exposes `gain` as an input, and a Python"):
-        feed_each_input_port_from_its_function_node_island(
-            _engine.open_node_link_data_access_for_helper_process(),
-            [island],
-            {f"{__name__}:tally": tally, scaled_import_path: spell_the_scaled_value}.__getitem__,
-        )
 
 
 @node

@@ -247,7 +247,7 @@ pub(crate) fn numbers_of_a_shader_node_input(
     port: &str,
     value_type: &ShaderNodeInputValueType,
 ) -> Vec<f32> {
-    value_type.numbers_a_stored_value_holds(node.pins.get(port).or_else(|| {
+    value_type.numbers_a_stored_value_holds(node.input_values.get(port).or_else(|| {
         node.ports
             .inputs
             .iter()

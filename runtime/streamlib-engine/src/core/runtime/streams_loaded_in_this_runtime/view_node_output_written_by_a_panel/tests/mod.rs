@@ -75,6 +75,18 @@ fn the_level_manifest() -> Value {
     })
 }
 
+const MIXER_VIEW_TYPE: &str = "acme-dj:mixer";
+
+fn the_mixer_manifest() -> Value {
+    json!({
+        "contract": "1.1", "title": "Mixer", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "mix", "pin_type": { "type": "tensor" } }],
+        "settings": { "type": "object", "required": ["gain"],
+                      "properties": { "gain": { "type": "number", "default": 1 },
+                                      "trim": { "type": "number", "default": 0 } } }
+    })
+}
+
 /// A stream `a` of the project `acme-dj`, whose `views/` holds `deck` and a `broken` view that
 /// does not open.
 struct AStreamOfAProjectBringingViews {
@@ -97,6 +109,7 @@ impl AStreamOfAProjectBringingViews {
         .unwrap();
         a_view_in(project_directory.path(), "deck", &the_deck_manifest());
         a_view_in(project_directory.path(), "level", &the_level_manifest());
+        a_view_in(project_directory.path(), "mixer", &the_mixer_manifest());
         a_view_in(project_directory.path(), "pulse", &the_pulse_manifest());
         a_view_in(project_directory.path(), "board", &the_board_manifest());
         a_view_in(
@@ -225,12 +238,12 @@ impl AStreamOfAProjectBringingViews {
         }
     }
 
-    /// What the stream's graph holds of `node_id`: its config, pins and `studio` fields, and
+    /// What the stream's graph holds of `node_id`: its input values and `studio` fields, and
     /// every link.
     fn what_the_graph_holds_of(&self, node_id: &NodeRunId) -> Value {
         let node = self.stream.compiler.scope(|graph, _tx| {
             let node = graph.traversal().v(node_id).first().unwrap();
-            json!({ "config": node.config, "pins": node.pins, "studio": node.studio })
+            json!({ "input_values": node.input_values, "studio": node.studio })
         });
         json!({ "node": node, "links": self.stream.to_json().unwrap()["links"] })
     }

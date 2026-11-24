@@ -22,7 +22,7 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::{
     InputLinkPortRef, NodeRunId, OutputLinkPortRef,
-    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
+    refuse_input_values_a_wired_link_out_of_the_node_would_refuse,
 };
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};

@@ -141,12 +141,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::vec::Vec<::streamlib::sdk::descriptors::PinGroupDescriptor> {
             ::std::vec::Vec::new()
         }
-        fn the_config_a_node_holding_the_input_values_takes(
+        fn the_settings_a_set_node_config_replaces(
             &self,
             _node_type: &str,
             input_values: &::serde_json::Map<String, ::serde_json::Value>,
-        ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
-            Ok(::serde_json::Value::Object(input_values.clone()))
+        ) -> ::streamlib::sdk::error::Result<::serde_json::Map<String, ::serde_json::Value>> {
+            Ok(input_values.clone())
         }
         fn refuse_an_input_value_its_input_does_not_take(
             &self,
@@ -177,18 +177,19 @@ macro_rules! graph_mutation_ops_record_the_call {
         > {
             Ok(::streamlib::sdk::graph::input_values::InputValuesSetLive::OnTheGraph)
         }
-        fn node_type_takes_a_config(
+        fn a_set_node_config_replaces_every_setting_on(
             &self,
             _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
         ) -> bool {
             true
         }
-        fn an_exposure_of_config_fields_is_recorded_on(
+        fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
             &self,
+            _node_name: &str,
             _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
             _exposed_config_fields: &[String],
-        ) -> ::streamlib::sdk::error::Result<bool> {
-            Ok(true)
+        ) -> ::streamlib::sdk::error::Result<()> {
+            Ok(())
         }
         fn open_a_graph_edit_batch(
             self: ::std::sync::Arc<Self>,

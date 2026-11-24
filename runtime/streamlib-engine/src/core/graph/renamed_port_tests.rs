@@ -61,7 +61,7 @@ fn add_a_node_holding(
         .add_v(
             NodeSpec::new(node_type, json!({}))
                 .with_display_name(name)
-                .with_pins_and_studio_fields(pins, Map::new()),
+                .with_input_values_and_studio_fields(pins, Map::new()),
         )
         .expect("the node is added")
         .first()
@@ -105,7 +105,7 @@ fn a_value_and_a_link_under_a_name_a_port_had_land_on_the_port_under_its_name() 
             .v(node)
             .first()
             .expect("the node is held")
-            .pins
+            .input_values
             .clone()
     };
     assert_eq!(

@@ -64,7 +64,7 @@ impl NodeInterpreterSpawnHost {
             // every window silently.
             "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
             "capability": "full",
-            "config": self.node_configuration.clone().unwrap_or(serde_json::Value::Null),
+            "input_values": self.node_input_values,
             "node_run_id": self.node_run_id,
             "ports": ports,
             "loss_count_board": loss_count_board,

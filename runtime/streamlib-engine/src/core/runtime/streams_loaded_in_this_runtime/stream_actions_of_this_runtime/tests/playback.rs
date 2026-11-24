@@ -738,7 +738,10 @@ fn a_reload_retyping_a_running_graph_input_leaves_no_node_waiting_on_a_rebuild()
         "the Input is left waiting on a rebuild nobody runs"
     );
     assert_eq!(
-        (level.pins.get("pin_type"), level.pins.get("value")),
+        (
+            level.input_values.get("pin_type"),
+            level.input_values.get("value")
+        ),
         (
             Some(&serde_json::json!({ "type": "string" })),
             Some(&serde_json::json!("x"))

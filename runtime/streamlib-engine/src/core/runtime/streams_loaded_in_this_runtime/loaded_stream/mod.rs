@@ -42,6 +42,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheW
 mod edits_its_document_holds_not_live;
 mod input_values_set_live;
 mod live_graph_edits;
+pub(crate) use live_graph_edits::InputValueSetOnANode;
 mod live_input_values_at_load_and_stop;
 mod shutdown_and_teardown;
 mod start_and_stop;
@@ -658,7 +659,6 @@ impl LoadedStreamInThisRuntime {
                             .map(|value| (key.config_key.clone(), value.clone()))
                     })
                     .collect();
-                let held_under_the_keys = serde_json::Value::Object(held_under_the_keys);
                 keys.into_iter()
                     .filter_map(|key| {
                         crate::core::graph::config_node_reference_edges_of_one_node(
@@ -721,7 +721,7 @@ fn the_value_of_each_graph_input(
                 node.node_uuid.to_string(),
                 ValueOfAGraphInputRendered {
                     current_value,
-                    saved_value: node.pins.get(&port.name).cloned(),
+                    saved_value: node.input_values.get(&port.name).cloned(),
                 },
             ))
         })

@@ -100,9 +100,6 @@ pub trait DynGeneratedNode: Send + 'static {
         None
     }
 
-    /// Apply a JSON config update at runtime.
-    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
-
     /// Take `input_values`, the value each input reads while no link feeds it, by input, in
     /// place of those it took before; by default each lands in its input mailboxes, which answer
     /// a read of the input with it while no link feeds it.
@@ -127,9 +124,6 @@ pub trait DynGeneratedNode: Send + 'static {
     }
 
     fn to_runtime_json(&self) -> serde_json::Value;
-
-    /// Get the current config as JSON.
-    fn config_json(&self) -> serde_json::Value;
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
@@ -206,10 +200,6 @@ where
         <Self as GeneratedNode>::iceoryx2_input_mailboxes_inner(self)
     }
 
-    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()> {
-        <Self as GeneratedNode>::apply_config_json(self, config_json)
-    }
-
     fn set_unlinked_input_values(
         &mut self,
         input_values: &serde_json::Map<String, serde_json::Value>,
@@ -219,10 +209,6 @@ where
 
     fn to_runtime_json(&self) -> serde_json::Value {
         <Self as GeneratedNode>::to_runtime_json(self)
-    }
-
-    fn config_json(&self) -> serde_json::Value {
-        <Self as GeneratedNode>::config_json(self)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

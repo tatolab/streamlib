@@ -7,9 +7,10 @@ use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
 
 use super::{NodeInterpreterSpawnHost, lifecycle_reply_tag, reported_reason};
+use crate::core::compiler::compiler_ops::function_node_pool::FUNCTION_NODE_POOL_CARRIES_INPUT;
 
 impl NodeInterpreterSpawnHost {
-    /// Hand the running pool's helper `config_naming_every_carry`, whose carries it does not
+    /// Hand the running pool's helper `carries`, every carry it names, those it does not
     /// hold yet it declares and reads from its next `process` on, and take `descriptor`, the
     /// pool's ports with those carries' added, so a restart of the helper sets it up with every
     /// carry. An output a late carry adds keeps its last message as one the helper started with
@@ -17,7 +18,7 @@ impl NodeInterpreterSpawnHost {
     pub(crate) fn hand_the_running_function_node_pool_its_carries(
         &mut self,
         descriptor: NodeDescriptor,
-        config_naming_every_carry: serde_json::Value,
+        carries: serde_json::Value,
     ) -> Result<()> {
         let output_ports_keeping_their_last_message: Vec<&str> = descriptor
             .outputs
@@ -35,12 +36,12 @@ impl NodeInterpreterSpawnHost {
         let reply = self
             .exchange_with_child(
                 &serde_json::json!({
-                    "cmd": "update_config",
-                    "config": config_naming_every_carry,
+                    "cmd": "carry_links",
+                    "carries": &carries,
                     "output_ports_keeping_their_last_message":
                         output_ports_keeping_their_last_message,
                 }),
-                "update_config",
+                "carry_links",
             )
             .ok_or_else(|| {
                 Error::Runtime(format!(
@@ -55,7 +56,8 @@ impl NodeInterpreterSpawnHost {
                 reported_reason(&reply)
             )));
         }
-        self.node_configuration = Some(config_naming_every_carry);
+        self.node_input_values
+            .insert(FUNCTION_NODE_POOL_CARRIES_INPUT.to_owned(), carries);
         self.descriptor = descriptor;
         Ok(())
     }

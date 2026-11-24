@@ -49,22 +49,24 @@ impl GraphNodePorts {
         }
     }
 
-    /// These ports, of a node of `node_type` whose config is `config`, with what that config
-    /// declares of them resolved: a `GraphInput`'s `value` input takes the family, the range and
-    /// the lifetime its config names, and a `Constant`'s `value` ports the type its `pin_type`
+    /// These ports, of a node of `node_type` holding `input_values`, with what its settings
+    /// declare of them resolved: a `GraphInput`'s `value` input takes the family, the range and
+    /// the lifetime its settings name, and a `Constant`'s `value` ports the type its `pin_type`
     /// chooses. The ports of every other node type are as it declares them.
-    pub fn resolved_against_the_config(
+    pub fn resolved_against_the_input_values(
         mut self,
         node_type: &crate::core::descriptors::NodeClassImportPath,
-        config: Option<&serde_json::Value>,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Self {
         if node_type.is_the_graph_input_type() {
             crate::core::graph::graph_interface_resolution::resolve_the_value_input_a_graph_input_config_declares(
-                &mut self, config,
+                &mut self,
+                Some(&serde_json::Value::Object(input_values.clone())),
             );
         } else if node_type.is_the_constant_type() {
             crate::core::graph::graph_interface_resolution::resolve_the_value_ports_a_constant_config_declares(
-                &mut self, config,
+                &mut self,
+                Some(&serde_json::Value::Object(input_values.clone())),
             );
         }
         self

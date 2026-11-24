@@ -593,9 +593,7 @@ impl NodeTypesOneStreamResolves {
                 }
             });
             let fields_its_config_schema_lists =
-                crate::core::graph::legacy_config_of_a_node::fields_the_config_schema_of_a_node_type_lists(
-                    self, node_type,
-                );
+                self.the_settings_its_config_schema_lists(node_type);
             let ports = &mut placeholder.input_and_output_port_info;
             // A name a held port had finds that port, so it adds no port of its own.
             let add_once =
@@ -744,15 +742,15 @@ impl NodeTypesOneStreamResolves {
             })
     }
 
-    /// Refuse a node this stream cannot add before anything is added: a
-    /// built-in that moved to a module, or a config a native type would not
-    /// take. A described type's config is checked by its own config class,
-    /// where the node runs.
+    /// Refuse a node this stream cannot add before anything is added: a built-in that moved to a
+    /// module, or a value `input_values` sets on a name a native type does not take or on a
+    /// setting of a native type whose config schema refuses it. A type its
+    /// node code describes is checked where the node runs.
     pub fn refuse_a_node_this_stream_cannot_add(
         &self,
         node_name: &str,
         node_type: &NodeClassImportPath,
-        config: &serde_json::Value,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         if self
             .placeholder_of_the_node_type_not_described(node_type)
@@ -760,7 +758,16 @@ impl NodeTypesOneStreamResolves {
         {
             return Ok(());
         }
-        NODE_REGISTRY.refuse_a_node_this_runtime_cannot_add(node_name, node_type, config)
+        NODE_REGISTRY.refuse_a_node_this_runtime_cannot_add(node_name, node_type, input_values)?;
+        if !NODE_REGISTRY.can_create(node_type) {
+            return Ok(());
+        }
+        crate::core::graph::input_values::refuse_input_values_the_config_schema_of_its_type_refuses(
+            self,
+            node_name,
+            node_type,
+            input_values,
+        )
     }
 
     pub fn create(&self, node: &GraphNode) -> Result<NodeInstance> {
@@ -975,6 +982,7 @@ impl NodeTypesOneStreamResolves {
 }
 
 mod bundles_its_node_types_declare;
+mod settings_its_node_types_state;
 
 pub(crate) use bundles_its_node_types_declare::chooses_among_the_bundles_its_stream_declares;
 

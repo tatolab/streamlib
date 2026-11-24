@@ -317,7 +317,7 @@ fn a_node_holding(
             .traversal_mut()
             .add_v(
                 NodeSpec::new(class_path(class_name), Value::Null)
-                    .with_pins_and_studio_fields(pins, serde_json::Map::new()),
+                    .with_input_values_and_studio_fields(pins, serde_json::Map::new()),
             )
             .expect("the node is named")
             .first()
@@ -511,7 +511,7 @@ fn choose_and_judge(compiler: &Compiler, chosen: &NodeRunId, pin_type: PinType) 
             .v(chosen)
             .first_mut()
             .expect("the node is held")
-            .pins
+            .input_values
             .insert("kind".to_owned(), json!(pin_type));
         refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(graph, chosen, "kind")
     })

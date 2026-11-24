@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A node that crashes the runtime on demand, for the tests of the failed
-//! state. Its config's check — which every load of a stream naming it runs,
-//! before any GPU exists — crashes the process while the file the config
-//! names exists. Compiled into a test build alone.
+//! state. Building a node of it, which every load of a stream naming it does,
+//! takes its settings as its config, and that crashes the process while the
+//! file the config names exists. Compiled into a test build alone.
 
 use std::path::PathBuf;
 
@@ -88,7 +88,7 @@ impl ManualNode for CrashOnDemandTestNode::Node {
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_crash_on_demand_test_node() {
-    NODE_REGISTRY.register_taking_a_config_for_a_test::<
+    NODE_REGISTRY.register_with_a_config_schema_for_a_test::<
         CrashOnDemandTestNode::Node,
         CrashOnDemandTestNodeConfig,
     >();

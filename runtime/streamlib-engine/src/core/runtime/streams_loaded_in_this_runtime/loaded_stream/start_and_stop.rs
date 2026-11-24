@@ -441,10 +441,9 @@ impl LoadedStreamInThisRuntime {
             let mut node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> =
                 HashMap::with_capacity(nodes_of_the_graph.len());
             for node in nodes_of_the_graph {
-                let spec = NodeSpec::new(node.node_type, node.config)
+                let spec = NodeSpec::of_the_type(node.node_type)
                     .with_display_name(node.display_name)
-                    .with_pins_and_studio_fields(node.pins, node.studio)
-                    .with_exposed_config_fields(node.exposed_config_fields)
+                    .with_input_values_and_studio_fields(node.input_values, node.studio)
                     .with_node_uuid(node.node_uuid);
                 let put_back = self.add_node_of_a_validated_graph_load(spec)?;
                 node_run_id_of_each_node_uuid.insert(node.node_uuid, put_back.node_run_id);

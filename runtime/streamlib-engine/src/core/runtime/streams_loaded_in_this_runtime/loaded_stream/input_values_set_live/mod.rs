@@ -30,7 +30,6 @@ use crate::core::graph::input_values::{
     the_input_values_a_live_set_is_checked_against, the_lifetime_of_the_input,
     the_words_of_an_input_set_twice_live,
 };
-use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{Graph, GraphNode, NodeRunId, PortInfo};
 use crate::core::nodes::{NodeTypesOneStreamResolves, is_the_input_of_an_output_a_panel_writes};
 use crate::core::pubsub::RuntimeEvent;
@@ -271,7 +270,7 @@ fn set_the_input_values_live(
             fires.push((set_index, set));
             continue;
         }
-        if is_held_on_the_graph(graph, set_on, &set.input) {
+        if is_held_on_the_graph(set_on, &set.input) {
             return Ok(None);
         }
         let live_after_the_set = live_after_the_sets
@@ -328,7 +327,7 @@ fn set_the_input_values_live(
                 set.value.clone(),
                 the_lifetime_of_the_input(set_on, &set.input),
             ),
-            saved_value: set_on.pins.get(&set.input).cloned(),
+            saved_value: set_on.input_values.get(&set.input).cloned(),
             linked_from: the_output_feeding_the_input(
                 graph,
                 set_on,
@@ -429,14 +428,11 @@ pub(crate) fn hand_back_each(handed_back: impl IntoIterator<Item = UnlinkedInput
 }
 
 /// Whether a value set on input `input` of `set_on` is held on `graph` rather than live: a
-/// setting its type holds in its config, a config field it exposes as an input, a setting it
-/// reads only when it is set up, an annotation of a `GraphInput`'s `value`, which the graph
-/// serves and checks that value by, or an input it does not have.
-pub(super) fn is_held_on_the_graph(graph: &Graph, set_on: &GraphNode, input: &str) -> bool {
-    LegacyConfigOfANodeType::of(graph.node_types_this_stream_resolves(), &set_on.node_type)
-        .is_a_config_field(input)
-        || set_on.is_an_exposed_config_field_input(input)
-        || (set_on.is_a_graph_input()
+/// setting its type's config schema lists, a setting it reads only when it is set up, an
+/// annotation of a `GraphInput`'s `value`, which the graph serves and checks that value by, or
+/// an input it does not have.
+pub(super) fn is_held_on_the_graph(set_on: &GraphNode, input: &str) -> bool {
+    (set_on.is_a_graph_input()
             && crate::core::graph::graph_interface_resolution::is_an_annotation_setting_of_a_graph_input(input))
         || set_on
             .input_port(input)

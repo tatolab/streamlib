@@ -214,7 +214,6 @@ fn an_island_reading_a_class_node_that_feeds_two_readers_is_read_at_each_of_them
             &[],
             std::slice::from_ref(&into_the_second_reader),
             &[],
-            &[],
         ),
         None
     );
@@ -294,7 +293,7 @@ fn an_island_reading_a_class_node_that_feeds_two_input_ports_of_one_reader_is_re
         a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
     let into_in2 = link(&mut graph, (&remap, "result"), (&reader, "in2"));
     assert_eq!(
-        the_refusal_of_a_commit(&graph, &[], &[], std::slice::from_ref(&into_in2), &[], &[]),
+        the_refusal_of_a_commit(&graph, &[], &[], std::slice::from_ref(&into_in2), &[]),
         None
     );
     let iceoryx2_node = Iceoryx2Node::for_this_test_process();
@@ -374,7 +373,6 @@ fn removing_the_one_class_node_link_into_an_island_is_refused_when_it_leaves_its
         &[],
         &[],
         std::slice::from_ref(&into_the_island),
-        &[],
     )
     .expect("the reader's only wake source is the class node link");
     assert!(refusal.contains(&format!("leaves `{reader}`")), "{refusal}");

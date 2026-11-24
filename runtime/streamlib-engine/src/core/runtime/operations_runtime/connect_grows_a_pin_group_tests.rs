@@ -113,7 +113,7 @@ fn a_node_with_values(
             .traversal_mut()
             .add_v(
                 NodeSpec::new(class_path(class_name), Value::Null)
-                    .with_pins_and_studio_fields(values, serde_json::Map::new()),
+                    .with_input_values_and_studio_fields(values, serde_json::Map::new()),
             )
             .expect("the node is named")
             .first()
@@ -515,19 +515,19 @@ fn clearing_a_count_whose_default_leaves_out_a_linked_slot_is_refused() {
 }
 
 #[test]
-fn a_later_slots_value_is_an_input_value_and_no_config_field() {
+fn a_later_slots_value_renders_under_pins_and_no_config_field() {
     register_the_pin_group_fixture_node_types();
     let compiler = Compiler::new();
-    let legacy = compiler.scope(|graph, _tx| {
-        crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType::of(
+    let older_keys = compiler.scope(|graph, _tx| {
+        crate::core::json_schema::OlderGraphKeysOfANodeType::of(
             graph.node_types_this_stream_resolves(),
             &class_path(LAYER_MIXER),
         )
     });
 
-    assert!(!legacy.is_a_config_field("layers.2.layer"));
+    assert!(!older_keys.renders_under_config("layers.2.layer"));
     assert!(
-        legacy.is_a_config_field("layers.2.gain"),
+        older_keys.renders_under_config("layers.2.gain"),
         "no pin of the slot is so named"
     );
 }
