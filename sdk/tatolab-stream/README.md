@@ -44,8 +44,8 @@ A generator may `add` another generator as it adds a node class, its keyword arg
 the inner generator promotes. The inner graph is stored as a fragment, whose `GraphInput` and
 `GraphOutput` nodes are its ports, and it runs flattened under its path of names (`look/soft/blur`).
 
-This package holds the authoring API (`@graph_generator`, `@node.process`, `StreamBuilder`), typed classes for
-every built-in node (the converters between the Image, Array, Channels and Records families), and
+This package holds the authoring API (`@graph_generator`, `@node`, `StreamBuilder`), typed classes for
+every built-in node (the conversions between one pin type and another among them), and
 the protocols your nodes are handed at run time. It installs and imports without the runtime,
 with complete type hints, so your editor, type checker and unit tests work on any machine.
 

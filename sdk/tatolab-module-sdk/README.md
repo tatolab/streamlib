@@ -136,7 +136,7 @@ routes the module's own `tracing` records into the node's log.
 
 With the `function-node` feature, `#[function_node]` writes a function node in
 Rust, for code outside Numba's subset that still needs native speed. Its grammar
-is `@node.function`'s: each plain parameter is an input pin, a `Time` parameter
+is a Python `@node` function's: each plain parameter is an input pin, a `Time` parameter
 takes the reader's stream time, a `State<Record>` one the state its last call
 returned, and a parameter named `config` the node's config record. A value is an
 `f64`, `i64` or `bool`; a record is a struct of them deriving

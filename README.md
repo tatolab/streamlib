@@ -17,7 +17,7 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 ---
 
 - **A stream is a graph document.** `streams/<name>.graph.json` wires nodes together, and a Python
-  node is a `@node.process` class in a module of its own. There is no registration file and no build step
+  node is a function or a class marked `@node`, each pin typed, in a module of its own. There is no registration file and no build step
   between an edit and a run.
 - **Every Python node runs in its own process**, with its own interpreter started from your stream's
   venv. A node that hangs or crashes is one node, named in the log; it cannot stall the others.
@@ -213,14 +213,14 @@ them, and nothing that runs. `tatolab new` writes `streams/main.graph.json`:
   "asset": "6f1c2e9a-3b4d-4c5e-8f60-71a2b3c4d5e6",
   "links": [],
   "nodes": [
-    {"config": {}, "id": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"}
+    {"id": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"}
   ]
 }
 ```
 
 `asset` is the stream's UUID and each node's `id` is its own, which the runtime generates when it
 places the node and never reuses; a link end names its node by that UUID. A node may also hold
-`pins`, the values on its unlinked inputs, and `studio`, how Tato Studio draws it. Reading the
+`input_values`, the value of each input no link feeds, and `studio`, how Tato Studio draws it. Reading the
 document runs no code, but a load imports each node's module in the project's interpreter to
 describe its ports, so a module's import-time code runs at every load.
 
@@ -274,18 +274,36 @@ gateway on the same relay; a link's two ends are always in one stream.
 
 What a node declares:
 
-- **Ports**, as `Input` and `Output` class attributes, each of one family: `Image`, `Array`,
-  `Channels`, `Packets` or `Records`. The attribute name is the port name, and a read through it
-  returns the family's type. Every input names its [delivery](#how-it-works), `newest` or
-  `ordered`.
-- **When it runs**, with `@node.process(execution=…)`: `reactive` (the default once it has an input),
-  `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source has nothing
-  to react to, so it must name one. `scheduling` asks for `realtime`, `high` or `normal` priority.
-- **What describes it**, with `@node.meta(category=…, description=…)` beside `@node.process`: the
+- **Pins**, each with its pin type. On a function node a parameter is an input and the return
+  annotation the output. On a class node an `InputPin[...]` or `OutputPin[...]` class attribute
+  is a pin, named by the attribute. A pin type is a picture (`Texture`), sound (`Audio`), a
+  `Tensor`, encoded media, a number, a string, a bool or a bundle of named members, and a read
+  returns that type. A class node's input names its [delivery](#how-it-works),
+  `StreamDelivery("newest")` or `StreamDelivery("ordered")`, inside its `Annotated[...]`.
+- **Its settings**, as inputs too: a plain annotated class attribute, or a parameter with a
+  default, is an input whose value the graph document's `input_values` holds. `NumberRange`,
+  `NumberStep` and `Description` in its `Annotated[...]` say what it takes.
+- **When a class node runs**, with `@node(execution=…)`: `reactive` (the default once it has an
+  input), `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source
+  has nothing to react to, so it must name one. `scheduling` asks for `realtime`, `high` or
+  `normal` priority.
+- **What describes it**, with `@node.meta(category=…, description=…)` above `@node`: the
   group an editor files it under, or a path into a group inside one such as `Effects/Stylize`,
   and its description. A node that declares no category has none.
-- **Its configuration**, as the annotation on `__init__`'s `config` parameter — a `TypedDict`, a
-  dataclass or a pydantic model — that the node's `config` in the graph document fills.
+
+```python
+@node.meta(description="Counts the pictures it sees")
+@node
+class FrameTally:
+    report_every_frames: Annotated[int, NumberRange(minimum=1)] = 30
+    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    tally: OutputPin[Tally]
+
+    def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
+        ...
+```
+
+`examples/every-pin-kind` declares one node of each kind of pin.
 
 A node class lives in a module of its own, which the graph document names as `module:ClassName`:
 its process imports the class by that name.
@@ -445,7 +463,7 @@ WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nod
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
-**It costs you** no media node in the runtime: its built-ins only reshape data between families
+**It costs you** no media node in the runtime: its built-ins only reshape data between pin types
 (`TextureToTensor`, `AudioToTensor` and the like). Every media node is a package, the MoQ gateway
 nodes (`tatolab-moq`) among them, and anything else is a package or a node you write.
 
@@ -497,24 +515,20 @@ newest frame want opposite things. Each input says which it is, and saying so is
 is no default to inherit by accident:
 
 ```python
-video = Input(Image, delivery="newest")       # drains to the most recent bag, older ones passed over
-events = Input(Records, delivery="ordered")   # bags in publication order, may fall behind
+video: InputPin[Annotated[Texture, StreamDelivery("newest")]]  # drains to the most recent bag, older ones passed over
+events: InputPin[Annotated[Cue, StreamDelivery("ordered")]]    # bags in publication order, may fall behind
 ```
 
 A profile names a read policy and nothing more. Neither promises delivery: both drop under
 sustained pressure, no link ever blocks a producer, and a dropped bag is counted on its link in
 `graph`. One output can feed a `newest` and an `ordered` reader at once.
 
-What crosses a link is a message of one family. `connect` refuses a link whose output family,
-names or codec the input does not accept, naming both ends. Past that there is no schema
-registry, no negotiation, no versions and no code-generation step. An Image, Array or Channels
-read is a fixed layout the runtime describes; a Packets read is the unit's bytes; a Records write
-takes a plain `dict` and a read returns one. An input pin's `read_message_as_sent()` hands you a
-message with the raw bytes it was sent as.
-
-**It costs you** checking inside a record. A Records port checks only that its declared names are
-present, so a value of the wrong type surfaces at the consumer while running, not when you wire
-the graph.
+What crosses a link is a message of one pin type. `connect` refuses a link whose output's pin
+type the input does not take, naming both ends and both types. Past that there is no schema
+registry, no negotiation, no versions and no code-generation step. A Texture, Tensor or Audio
+read is a fixed layout the runtime describes; an encoded read is the unit's bytes; a bundle is
+written and read as the class that declares its members. An input pin's `read_message_as_sent()`
+hands you a message with the raw bytes it was sent as.
 
 </details>
 
@@ -605,7 +619,7 @@ Not built yet: the macOS app and Windows.
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that
   `vulkaninfo` runs.
 - **No camera, or the wrong one** — the stream `tatolab new` writes starts from
-  `TestPatternSource` and needs none. `tatolab.camera.CameraSource` takes the first capture device unless its `device_id` config names one (a
+  `TestPatternSource` and needs none. `tatolab.camera.CameraSource` takes the first capture device unless its `device_id` setting names one (a
   V4L2 path such as `/dev/video2` on Linux, a camera's unique ID on macOS); a named device that
   cannot be opened is refused by name.
 - **No picture on macOS** — the first run asks for camera access without waiting: the stream starts,
