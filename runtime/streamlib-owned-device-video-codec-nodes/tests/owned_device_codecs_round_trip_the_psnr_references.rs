@@ -62,7 +62,11 @@ const FRAME_INTERVAL_NS: i64 = 1_000_000_000 / FRAMES_PER_SECOND as i64;
 /// The reference whose chroma carries the lowest clean figure in the set.
 const CHROMA_LOCK_REFERENCE: &str = "complex_pattern";
 
-/// `complex_pattern`'s chroma figure for `codec`, to two places.
+/// `complex_pattern`'s chroma figure for `codec`, to two places, measured on an RTX 3090 on
+/// NVIDIA driver 595.99.02 with the encoder's input rounded to the nearest 8-bit level (H.264
+/// 33.53, H.265 33.42). The 33.52 H.264 lock predates the Slang port and was met by the GLSL
+/// shader's `mediump`, whose fp16 arithmetic rounded luma up; the fp32 conversion is the exact
+/// one.
 fn complex_pattern_chroma_lock_db(codec: Codec) -> f64 {
     match codec {
         Codec::H264 => 33.52,
