@@ -85,14 +85,18 @@ NODE_TYPES_INSTALLED_MODULES_DECLARE = frozenset(
 
 def identities_the_engine_logged(stderr_text: str) -> "list[str]":
     """Every identity the engine derived for the stream's own Python node types, off
-    its own registration records, in order; installed modules' types are left out."""
-    return [
-        found.group(1)
-        for line in stderr_text.splitlines()
-        if NODE_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
-        and (found := DERIVED_IDENTITY_PATTERN.search(line))
-        and found.group(1) not in NODE_TYPES_INSTALLED_MODULES_DECLARE
-    ]
+    its own registration records, once each in the order first registered; installed
+    modules' types are left out. A project's own type is registered at load and again
+    when the graph places it, so each appears twice in the records."""
+    return list(
+        dict.fromkeys(
+            found.group(1)
+            for line in stderr_text.splitlines()
+            if NODE_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
+            and (found := DERIVED_IDENTITY_PATTERN.search(line))
+            and found.group(1) not in NODE_TYPES_INSTALLED_MODULES_DECLARE
+        )
+    )
 
 
 def run_the_stream_entry(
