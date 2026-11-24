@@ -15,6 +15,7 @@ __all__ = [
     "family_a_pin_travels_on",
     "family_a_pin_type_travels_on",
     "family_declaration_of_a_typed_output",
+    "family_declaration_of_an_input_of_several_types",
 ]
 
 
@@ -38,6 +39,16 @@ def family_a_pin_type_travels_on(pin_type: "Mapping[str, Any]") -> str:
 def family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
     """The port family whose message the value of a pin declaring exactly one type travels as."""
     return family_a_pin_type_travels_on(_the_one_pin_type_declared(declaration))
+
+
+def family_declaration_of_an_input_of_several_types(pin_types: "list[PinType]") -> dict[str, Any]:
+    """The family declaration of an input taking each of `pin_types`: the family of the first,
+    also taking each other family they travel on."""
+    families = list(dict.fromkeys(family_a_pin_type_travels_on(pin_type) for pin_type in pin_types))
+    declaration: dict[str, Any] = {"family": families[0]}
+    if len(families) > 1:
+        declaration["also_takes_families"] = families[1:]
+    return declaration
 
 
 def family_declaration_of_a_typed_output(

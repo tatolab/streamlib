@@ -46,10 +46,7 @@ from ._bundle_pin_type import (
 from ._description import Description
 from ._node_declaration_refusal import NodeDeclarationFindingCode, NodeDeclarationRefusal
 from ._formerly_named import FormerlyNamed
-from ._input_declaration_annotations import (
-    INPUT_DECLARATION_ANNOTATION_CLASSES,
-    StreamDelivery,
-)
+from ._input_declaration_annotations import INPUT_DECLARATION_ANNOTATION_CLASSES
 from ._module_declared_pin_type import the_pin_type_of_a_module_declared_type, the_spelling_of_a_module_declared_type
 from ._node_reference_class import is_the_node_reference_class
 from ._pin_annotations_on_the_wire import (
@@ -60,6 +57,7 @@ from ._pin_annotations_on_the_wire import (
 from ._pin_declaration_refusal_words import (
     TypeParameterLimit,
     words_refusing_a_function_pin_of,
+    words_refusing_an_input_declaration_annotation_on,
     words_refusing_a_type_parameter_limited_to,
 )
 from ._pin_default_refusal_words import fix_of_a_default_not_taken
@@ -276,7 +274,7 @@ class _PinReading:
             or isinstance(written_type, typing.TypeVar)
             or _is_a_union(written_type)
         ):
-            if self._form != "function":
+            if self._form != "function" and not self._a_union_input_pin(written_type):
                 raise self._refusal(
                     f"{self._pin_named} is typed {_name_of(written_type)}, which its link finds "
                     f"the type of, and a class node's field or pin states one pin type. To fix: "
@@ -436,6 +434,8 @@ class _PinReading:
         self._state_former_names(declaration, metadata)
         if optional:
             declaration["may_be_unset"] = True
+        if self._form == "pin":
+            return DeclaredPin(declaration, optional=optional, default_value=NO_DEFAULT)
         if optional and default is not None:
             raise self._refusal(
                 f"{self._pin_named} is typed `T | None`, so it reads `None` while unlinked, and "
@@ -542,9 +542,20 @@ class _PinReading:
                     "pin_annotation_repeated",
                 )
             pin_types.append(pin_type)
-        return {"kind": "one_of", "pin_types": pin_types}, the_flow_a_function_input_reads(
-            pin_types[0]
-        )
+        if self._form != "pin":
+            return {"kind": "one_of", "pin_types": pin_types}, the_flow_a_function_input_reads(pin_types[0])
+        flows: "set[PinFlow]" = {self._flow_of(_PIN_TYPE_DESCRIPTION_BY_NAME[each["type"]], each) for each in pin_types}
+        if len(flows) > 1:
+            raise self._refusal(
+                f"{self._pin_named} is an `InputPin` of a Trigger and of types that stream, and one "
+                f"pin either fires or streams. To fix: declare the Trigger as a pin of its own.",
+                "pin_flow_not_taken",
+            )
+        return {"kind": "one_of", "pin_types": pin_types}, flows.pop()
+
+    def _a_union_input_pin(self, written_type: object) -> bool:
+        """Whether the pin is a class node's `InputPin` of several types, each of which streams."""
+        return self._form == "pin" and self._direction == "input" and _is_a_union(written_type)
 
     def _a_member_pin_type(
         self, member: object, *, limit: Optional[TypeParameterLimit] = None
@@ -564,17 +575,17 @@ class _PinReading:
                 "pin_type_unknown",
             )
         for entry in metadata:
-            if not isinstance(entry, ExactNumberSize):
+            if not isinstance(entry, (ExactNumberSize, PinTypeNarrowing)):
                 raise self._refusal(
                     f"{self._pin_named} is typed one of several types, and {_name_of(member)} "
                     f"carries {entry!r}, which only a pin of one type takes. To fix: drop it.",
                     "pin_annotation_not_taken",
                 )
-        return self._pin_type_of(
-            member_type,
-            self._exact_size_among(metadata),
-            limit=limit,
-        )
+        pin_type = self._pin_type_of(member_type, self._exact_size_among(metadata), limit=limit)
+        try:
+            return pin_type_narrowed_by(metadata, pin_type, self._pin_named)
+        except PinAnnotationNotTaken as not_taken:
+            raise self._refusal(not_taken.words, not_taken.finding_code) from None
 
     def _written_type_metadata_and_optional(
         self, annotation: object
@@ -900,7 +911,7 @@ class _PinReading:
             if isinstance(entry, (ExactNumberSize, Description, FormerlyNamed)):
                 continue
             if isinstance(entry, INPUT_DECLARATION_ANNOTATION_CLASSES):
-                raise self._refusal_of_an_input_declaration_annotation(entry)
+                raise self._refusal(words_refusing_an_input_declaration_annotation_on(self._pin_named, entry), "pin_annotation_not_taken")
             annotation_name = ANNOTATION_NAME_OF_EACH_CLASS.get(type(entry))
             if annotation_name is None:
                 raise self._refusal(
@@ -924,19 +935,6 @@ class _PinReading:
                 )
             annotations[annotation_name] = annotation_on_the_wire(entry)
         return annotations
-
-    def _refusal_of_an_input_declaration_annotation(self, entry: object) -> NodeDeclarationRefusal:
-        """The refusal of `entry`, an annotation saying how a class node's input is served, on a
-        pin that does not take it."""
-        if isinstance(entry, StreamDelivery):
-            takes_it = "a class node's Stream input takes, inside `InputPin[Annotated[T, ...]]`"
-        else:
-            takes_it = "a class node's field takes"
-        return self._refusal(
-            f"{self._pin_named} carries `{entry!r}`, which only {takes_it}. To fix: drop it, or "
-            f"declare the input that way.",
-            "pin_annotation_not_taken",
-        )
 
     def _default_value(
         self,
