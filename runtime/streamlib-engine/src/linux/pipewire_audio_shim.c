@@ -42,15 +42,13 @@ struct StreamLibPipeWireAudioStream {
     struct pw_thread_loop *thread_loop;
     struct pw_stream *stream;
     enum StreamLibPipeWireStreamDirection direction;
-    /// Whether the stream was opened on a named device rather than the session default.
-    bool names_a_device;
 
     /// Filled by the format callback on the loop thread, read by `open` once
     /// negotiation has been signalled.
     struct StreamLibPipeWireNegotiatedAudioFormat negotiated_format;
     bool format_was_negotiated;
-    /// Set when the stream fails, so a caller waiting for a format stops
-    /// waiting rather than sitting out the timeout.
+    /// Set when the stream reaches `PW_STREAM_STATE_ERROR`, so a caller
+    /// waiting for a format stops waiting rather than sitting out the timeout.
     bool stream_failed;
     char stream_failure_text[256];
 
@@ -184,13 +182,7 @@ static void on_stream_state_changed(void *data, enum pw_stream_state old_state,
                                     enum pw_stream_state state, const char *error)
 {
     struct StreamLibPipeWireAudioStream *audio_stream = data;
-    if (state == PW_STREAM_STATE_UNCONNECTED && old_state != PW_STREAM_STATE_UNCONNECTED &&
-        audio_stream->names_a_device && audio_stream->format_was_negotiated) {
-        // A stream opened with `PW_STREAM_FLAG_DONT_RECONNECT` has its node destroyed by the
-        // session when its device goes away, rather than being moved to the default.
-        fail_the_stream(audio_stream, "the session removed the stream: its device went away");
-        return;
-    }
+    (void)old_state;
     if (state != PW_STREAM_STATE_ERROR)
         return;
     fail_the_stream(audio_stream, error != NULL ? error : "the stream entered its error state");
@@ -583,8 +575,8 @@ static struct spa_audio_info_raw spa_audio_info_raw_requested_by(
 }
 
 /// `PW_STREAM_FLAG_DONT_RECONNECT` keeps a named device's stream from being
-/// moved to the session default when that device goes away: the session
-/// destroys the stream's node instead. Nothing is set when no device was
+/// moved to the session default when that device goes away: the stream enters
+/// its error state instead. Nothing is set when no device was
 /// named — there the session default is what was asked for.
 static int connect_audio_stream(struct StreamLibPipeWireAudioStream *audio_stream,
                                 const char *device_id_or_null, const struct spa_pod **params,
@@ -643,7 +635,6 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     }
     streamlib_pipewire_copy_entry_points(&audio_stream->entry_points, entry_points);
     audio_stream->direction = direction;
-    audio_stream->names_a_device = device_id_or_null != NULL;
     resolved = &audio_stream->entry_points;
 
     audio_stream->thread_loop = resolved->pw_thread_loop_new(thread_loop_name, NULL);

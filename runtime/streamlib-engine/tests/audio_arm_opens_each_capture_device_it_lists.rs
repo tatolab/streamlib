@@ -221,9 +221,9 @@ const AFTER_REMOVAL_DELIVERY_WATCH: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const PIPEWIRE_STREAM_FAILURE_PREFIX: &str = "the PipeWire stream stopped serving its device";
 
-/// What the shim records when the session unlinks a named device's stream.
+/// What the shim's format path records; every other reason it records is the error state's.
 #[cfg(target_os = "linux")]
-const PIPEWIRE_DEVICE_WENT_AWAY_REASON: &str = "its device went away";
+const PIPEWIRE_FORMAT_PATH_REASONS: [&str; 2] = ["PipeWire negotiated", "PipeWire renegotiated"];
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -281,8 +281,11 @@ fn a_capture_stream_whose_device_goes_away_fails_rather_than_moving_to_the_defau
         .to_string();
     eprintln!(
         "'{monitor}' went away, recorded by the shim's {} path: {reason}",
-        if reason.contains(PIPEWIRE_DEVICE_WENT_AWAY_REASON) {
-            "unconnected-after-negotiation"
+        if PIPEWIRE_FORMAT_PATH_REASONS
+            .iter()
+            .any(|format_reason| reason.contains(format_reason))
+        {
+            "format"
         } else {
             "error-state"
         }
