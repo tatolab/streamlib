@@ -31,6 +31,7 @@ from tatolab.stream import (
     PacketsUnit,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
     StreamDelivery,
     log,
     node,
@@ -373,10 +374,14 @@ class WhipPublisher:
     """
 
     url: Annotated[
-        str, Description("The WHIP endpoint to publish to; the node fails, naming `url`, until it is set.")
+        str,
+        SettingOnly(),
+        Description("The WHIP endpoint to publish to; the node fails, naming `url`, until it is set."),
     ] = ""
     bearer_token: Annotated[
-        str | None, Description("Sent as `Authorization: Bearer` when the endpoint wants one.")
+        str | None,
+        SettingOnly(),
+        Description("Sent as `Authorization: Bearer` when the endpoint wants one."),
     ] = None
     tracks: PublishedTracks
 
@@ -418,10 +423,14 @@ class WhepPlayer:
     """
 
     url: Annotated[
-        str, Description("The WHEP endpoint to play from; the node fails, naming `url`, until it is set.")
+        str,
+        SettingOnly(),
+        Description("The WHEP endpoint to play from; the node fails, naming `url`, until it is set."),
     ] = ""
     bearer_token: Annotated[
-        str | None, Description("Sent as `Authorization: Bearer` when the endpoint wants one.")
+        str | None,
+        SettingOnly(),
+        Description("Sent as `Authorization: Bearer` when the endpoint wants one."),
     ] = None
     encoded_video: OutputPin[
         Annotated[

@@ -10,8 +10,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostInputPort, ModuleHostOutputPort, packets_unit_payload_descriptor,
-    records_message_payload_descriptor,
+    ModuleHost, ModuleHostInputPort, ModuleHostOutputPort, ModuleHostTablePayloadDescriptor,
+    packets_unit_payload_descriptor,
 };
 
 use crate::error::MoqModuleError;
@@ -99,7 +99,7 @@ impl MoqGatewayThread {
 }
 
 /// The settings a gateway dials: its config's first, then its config with the
-/// values of each Records message `settings` receives laid over it, a `null`
+/// values of each `MoqRelaySettings` message `settings` receives laid over it, a `null`
 /// unsetting its key. A config that does not read alone, such as one leaving
 /// its credential to `settings`, waits for the first message.
 fn the_settings_source_of(
@@ -128,7 +128,7 @@ fn the_settings_source_of(
             }
         }
         let message = newest_message?;
-        let overrides = match the_json_map_of_a_records_message(message.payload()) {
+        let overrides = match the_json_map_of_a_settings_message(message.payload()) {
             Ok(overrides) => overrides,
             Err(refusal) => {
                 tracing::warn!("MoqGateway: a `settings` message is refused: {refusal}");
@@ -153,58 +153,11 @@ fn the_settings_source_of(
     })
 }
 
-/// A Records message's msgpack map as JSON.
-fn the_json_map_of_a_records_message(
+/// The JSON map a `MoqRelaySettings` message packs.
+fn the_json_map_of_a_settings_message(
     payload: &[u8],
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let value = rmpv::decode::read_value(&mut &payload[..])
-        .map_err(|refusal| format!("it is not msgpack: {refusal}"))?;
-    match json_of_msgpack(value)? {
-        serde_json::Value::Object(map) => Ok(map),
-        _ => Err("it is not a map".into()),
-    }
-}
-
-fn json_of_msgpack(value: rmpv::Value) -> Result<serde_json::Value, String> {
-    use rmpv::Value as Msgpack;
-    use serde_json::Value as Json;
-    Ok(match value {
-        Msgpack::Nil => Json::Null,
-        Msgpack::Boolean(boolean) => Json::Bool(boolean),
-        Msgpack::Integer(integer) => match (integer.as_i64(), integer.as_u64()) {
-            (Some(signed), _) => Json::from(signed),
-            (None, Some(unsigned)) => Json::from(unsigned),
-            (None, None) => return Err("an integer does not fit 64 bits".into()),
-        },
-        Msgpack::F32(float) => Json::from(f64::from(float)),
-        Msgpack::F64(float) => Json::from(float),
-        Msgpack::String(text) => Json::String(
-            text.into_str()
-                .ok_or_else(|| "a string is not UTF-8".to_string())?,
-        ),
-        Msgpack::Binary(_) | Msgpack::Ext(..) => {
-            return Err("binary values have no place in settings".into());
-        }
-        Msgpack::Array(items) => Json::Array(
-            items
-                .into_iter()
-                .map(json_of_msgpack)
-                .collect::<Result<_, _>>()?,
-        ),
-        Msgpack::Map(entries) => {
-            let mut map = serde_json::Map::new();
-            for (key, value) in entries {
-                let Msgpack::String(key) = key else {
-                    return Err("a map key is not a string".into());
-                };
-                let key = key
-                    .into_str()
-                    .ok_or_else(|| "a map key is not UTF-8".to_string())?;
-                map.insert(key, json_of_msgpack(value)?);
-            }
-            Json::Object(map)
-        }
-    })
+    serde_json::from_slice(payload).map_err(|refusal| format!("it is not a JSON map: {refusal}"))
 }
 
 /// A track node's native half: its declaration on its gateway.
@@ -329,7 +282,7 @@ struct MoqReceivedTrackModuleHostOutput {
 impl MoqReceivedTrackOutput for MoqReceivedTrackModuleHostOutput {
     fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool {
         let payload_descriptor = match &self.family {
-            MoqReceivedTrackFamily::Records => Ok(records_message_payload_descriptor()),
+            MoqReceivedTrackFamily::Named => Ok(ModuleHostTablePayloadDescriptor::bytes()),
             MoqReceivedTrackFamily::Packets { codec } => {
                 packets_unit_payload_descriptor(codec).map_err(|refusal| format!("{refusal:?}"))
             }
@@ -415,11 +368,11 @@ impl MoqTrackReceiveThread {
             "packets" => MoqReceivedTrackFamily::Packets {
                 codec: codec.unwrap_or_default(),
             },
-            "records" => MoqReceivedTrackFamily::Records,
+            "named" => MoqReceivedTrackFamily::Named,
             other => {
                 return Err(MoqModuleError::Refused {
                     what: format!(
-                        "MoqTrackReceive carries Packets or Records, and `family` names {other:?}"
+                        "MoqTrackReceive carries Packets or a named type, and `family` names {other:?}"
                     ),
                 }
                 .into());
@@ -469,20 +422,12 @@ mod tests {
 
     #[test]
     fn a_settings_message_reads_as_its_json_map() {
-        let mut payload = Vec::new();
-        rmpv::encode::write_value(
-            &mut payload,
-            &rmpv::Value::Map(vec![
-                ("broadcast".into(), "studio".into()),
-                ("token".into(), rmpv::Value::Nil),
-                ("port".into(), 4443.into()),
-            ]),
-        )
-        .unwrap();
+        let payload = br#"{"broadcast": "studio", "token": null, "port": "4443"}"#;
         assert_eq!(
-            serde_json::Value::Object(the_json_map_of_a_records_message(&payload).unwrap()),
-            serde_json::json!({"broadcast": "studio", "token": null, "port": 4443})
+            serde_json::Value::Object(the_json_map_of_a_settings_message(payload).unwrap()),
+            serde_json::json!({"broadcast": "studio", "token": null, "port": "4443"})
         );
-        assert!(the_json_map_of_a_records_message(&[0x01]).is_err());
+        assert!(the_json_map_of_a_settings_message(b"[1]").is_err());
+        assert!(the_json_map_of_a_settings_message(&[0x81]).is_err());
     }
 }

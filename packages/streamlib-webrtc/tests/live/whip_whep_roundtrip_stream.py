@@ -137,17 +137,17 @@ def the_same_input_played_back_over_whep_through_the_decoders(
         raise SystemExit(f"{FIXTURE_RELAY_URL_VARIABLE} is unset, so the receiver names no relay")
     gateway = stream_builder.add(
         MoqGateway,
-        config={"kind": "moq-relay", "relay_url": relay_url, "broadcast": RECEIVER_BROADCAST},
+        input_values={"kind": "moq-relay", "relay_url": relay_url, "broadcast": RECEIVER_BROADCAST},
         name="gateway",
     )
     player_encoded_video_track = stream_builder.add(
         MoqTrack,
-        config={"gateway": gateway, "track": PLAYER_ENCODED_VIDEO_TRACK},
+        input_values={"track": PLAYER_ENCODED_VIDEO_TRACK},
         name="player_encoded_video_track",
     )
-    send = stream_builder.add(
-        MoqTrackSend, config={"track": player_encoded_video_track}, name="send"
-    )
+    stream_builder.connect(gateway.output("connection"), player_encoded_video_track.input("gateway"))
+    send = stream_builder.add(MoqTrackSend, name="send")
+    stream_builder.connect(player_encoded_video_track.output("connection"), send.input("track"))
     sink = stream_builder.add(DecodedVideoFrameSink, name="sink")
 
     stream_builder.connect(player.output("encoded_video"), send.input("content"))

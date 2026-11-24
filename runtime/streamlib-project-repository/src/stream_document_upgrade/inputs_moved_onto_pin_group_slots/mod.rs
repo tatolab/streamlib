@@ -8,7 +8,7 @@
 
 use serde_json::{Map, Value};
 
-use super::NODE_INPUT_VALUES_KEY;
+use super::{NODE_INPUT_VALUES_KEY, drop_the_input_values_when_empty};
 
 /// What separates a group's name, a slot's index and a member's name in a slot's port.
 const PIN_GROUP_SLOT_PORT_NAME_SEPARATOR: char = '.';
@@ -171,9 +171,7 @@ fn the_list_moved_onto_its_slots(
             }
         }
     }
-    if input_values.is_empty() {
-        node.remove(NODE_INPUT_VALUES_KEY);
-    }
+    drop_the_input_values_when_empty(node);
     true
 }
 

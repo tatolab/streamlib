@@ -19,12 +19,19 @@ fixture started.
 """
 
 import os
+from typing import Annotated
 
 from decoded_video_frame_sink import DecodedVideoFrameSink
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.moq import MoqGateway, MoqTrack, MoqTrackReceive, MoqTrackSend
-from tatolab.stream import StreamBuilder, graph_generator
+from tatolab.stream import (
+    EncodedCodecs,
+    EncodedVideo,
+    PinTypeChoice,
+    StreamBuilder,
+    graph_generator,
+)
 from tatolab.testpattern import TestPatternSource
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
@@ -81,12 +88,14 @@ def test_pattern_through_the_encoder_sent_to_the_relay(stream_builder: StreamBui
     gateway = stream_builder.add(
         MoqGateway,
         name="gateway",
-        config={"kind": "moq-relay", "relay_url": _fixture_relay_url(), "broadcast": SENDER_BROADCAST},
+        input_values={"kind": "moq-relay", "relay_url": _fixture_relay_url(), "broadcast": SENDER_BROADCAST},
     )
     encoded_track = stream_builder.add(
-        MoqTrack, name="encoded_track", config={"gateway": gateway, "track": SENDER_ENCODED_TRACK}
+        MoqTrack, name="encoded_track", input_values={"track": SENDER_ENCODED_TRACK}
     )
-    send = stream_builder.add(MoqTrackSend, name="send", config={"track": encoded_track})
+    stream_builder.connect(gateway.output("connection"), encoded_track.input("gateway"))
+    send = stream_builder.add(MoqTrackSend, name="send")
+    stream_builder.connect(encoded_track.output("connection"), send.input("track"))
 
     stream_builder.connect(test_pattern.output("video"), encoder.input("video"))
     stream_builder.connect(encoder.output("encoded_video"), send.input("content"))
@@ -100,20 +109,19 @@ def the_senders_encoded_track_through_the_decoder(stream_builder: StreamBuilder)
     gateway = stream_builder.add(
         MoqGateway,
         name="gateway",
-        config={"kind": "moq-relay", "relay_url": _fixture_relay_url(), "broadcast": RECEIVER_BROADCAST},
+        input_values={"kind": "moq-relay", "relay_url": _fixture_relay_url(), "broadcast": RECEIVER_BROADCAST},
     )
     receive = stream_builder.add(
         MoqTrackReceive,
         name="sender",
-        config={
-            "gateway": gateway,
+        input_values={
             "broadcast": f"{SENDER_BROADCAST}.hang",
             "track": SENDER_ENCODED_TRACK,
-            "family": "packets",
-            "codec": codec,
+            "content_type": PinTypeChoice(Annotated[EncodedVideo, EncodedCodecs(codec)]),
             "max_age": RECEIVER_MAX_AGE_MILLISECONDS,
         },
     )
+    stream_builder.connect(gateway.output("connection"), receive.input("gateway"))
     decoder = stream_builder.add(decoder_marker, name="decoder")
     sink = stream_builder.add(DecodedVideoFrameSink, name="sink")
 
