@@ -43,7 +43,11 @@ from ._pin_declaration import (
     read_pin_declaration,
 )
 from ._former_name_check import refuse_former_names_that_find_no_one_pin
-from ._pin_family import family_a_pin_travels_on, family_declaration_of_a_typed_output
+from ._pin_family import (
+    family_a_pin_travels_on,
+    family_declaration_of_a_typed_output,
+    family_declaration_of_an_input_of_several_types,
+)
 from ._port_family_declaration import Input, Output
 
 __all__ = [
@@ -516,7 +520,11 @@ class _ClassNodeReading:
         port: DeclaredPort = {
             "name": port_name,
             "description": description or "",
-            "family": {"family": _family_a_declared_pin_travels_on(declared.declaration)},
+            "family": (
+                family_declaration_of_an_input_of_several_types(declared_pin_type["pin_types"])
+                if (declared_pin_type := declared.declaration["pin_type"])["kind"] == "one_of"
+                else {"family": _family_a_declared_pin_travels_on(declared.declaration)}
+            ),
             "pin_declaration": declared.declaration,
         }
         delivery: Optional[StreamDelivery] = deliveries[0] if deliveries else None  # pyright: ignore[reportAssignmentType]

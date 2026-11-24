@@ -10,13 +10,17 @@ stream or an event not at all, since a function reads the newest message on each
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from ._contract_pin_types import PinTypeDescription
+from ._input_declaration_annotations import StreamDelivery
 
 __all__ = [
+    "PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES",
     "TypeParameterLimit",
     "words_refusing_a_function_pin_of",
+    "words_refusing_an_input_declaration_annotation_on",
+    "words_refusing_an_input_pin_of_several_types_taking",
     "words_refusing_a_type_parameter_limited_to",
 ]
 
@@ -71,6 +75,36 @@ def words_refusing_a_type_parameter_limited_to(
         f"{_with_its_article(row.label)}, which flows only as {flows}, and a function reads the "
         f"newest message on each input, so it would drop the rest. To fix: declare a class "
         f"node with `{pin_name}: InputPin[{written_form}]`."
+    )
+
+
+def words_refusing_an_input_declaration_annotation_on(pin_named: str, entry: object) -> str:
+    """The words refusing `entry`, an annotation saying how a class node's input is served, on
+    the pin `pin_named` names, which does not take it."""
+    if isinstance(entry, StreamDelivery):
+        takes_it = "a class node's Stream input takes, inside `InputPin[Annotated[T, ...]]`"
+    else:
+        takes_it = "a class node's field takes"
+    return (
+        f"{pin_named} carries `{entry!r}`, which only {takes_it}. To fix: drop it, or declare "
+        f"the input that way."
+    )
+
+
+PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES: Final = frozenset(
+    {"texture", "audio", "tensor", "encoded_video", "encoded_audio"}
+)
+"""The types a class node's `InputPin` of several types takes: each a stream its own family carries."""
+
+
+def words_refusing_an_input_pin_of_several_types_taking(pin_named: str, pin_type_name: str) -> str:
+    """The words refusing the pin `pin_named` names, an `InputPin` of several types, one of which
+    is `pin_type_name`, which is not a stream."""
+    return (
+        f"{pin_named} is an `InputPin` of several types, and one of them is a {pin_type_name}, "
+        f"which is no stream. An `InputPin` of several types takes Texture, Audio, Tensor, "
+        f"EncodedVideo and EncodedAudio. To fix: declare the {pin_type_name} as a pin or a field "
+        f"of its own."
     )
 
 

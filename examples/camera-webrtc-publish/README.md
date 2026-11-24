@@ -3,7 +3,7 @@
 Camera + microphone → H.264 and Opus → one WHIP session, two RTP tracks.
 
 The showcase of a **node package**: `WhipPublisher` is not a built-in. It ships
-in the `tatolab-webrtc` package — Rust inside, an ordinary `@node.process` class as the
+in the `tatolab-webrtc` package — Rust inside, an ordinary `@node` class as the
 binding — and this project reaches it the way it reaches any third-party node, by
 its import path.
 
@@ -13,7 +13,8 @@ its import path.
 no registry and no ABI: `tatolab-webrtc` is one more dependency in
 `pyproject.toml`, and a node's `type` names the class. This project's
 one node, `nodes/whip_publisher_to_the_runtime_environments_endpoint.py`,
-subclasses `WhipPublisher` only to read its endpoint from the environment, and
+runs the session `WhipPublisher` runs, `WhipSessionPublishing`, only to read its
+endpoint from the environment, and
 the graph links both encoders into its `tracks`:
 
 ```json

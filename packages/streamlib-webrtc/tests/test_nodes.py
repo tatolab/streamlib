@@ -3,449 +3,45 @@
 
 
 import dataclasses
-import json
 import os
-import re
-import shlex
-import signal
-import socket
-import subprocess
-import sys
-import tempfile
-import threading
 import time
-import uuid
-from collections.abc import Buffer, Callable, Iterator
-from pathlib import Path
+from collections.abc import Buffer, Callable
 from typing import Any, cast
 
 import pytest
-
-from tatolab.webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
+from helper_process_link_wiring import wire_one_link
+from parent_stream_facts_stand_in import ParentHoldingStreamFacts
+from played_media_stand_ins import (
+    ANNEX_B_ACCESS_UNIT,
+    MONO_OPUS_IDENTIFICATION_HEADER_HEX,
+    OPUS_PACKET,
+)
+from tatolab.runtime import _engine
+from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
+from tatolab.runtime._node_hosting import class_node_members_of
+from tatolab.stream import (
+    Message,
+    Output,
+    Packets,
+    log,
+)
+from tatolab.stream._class_node_construction import construct_class_node
+from tatolab.stream.stream_facts import PacketsStreamFacts
+from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.webrtc.nodes import (
     ENCODED_AUDIO_OUTPUT_PORT,
     ENCODED_VIDEO_OUTPUT_PORT,
-    PublishedTrack,
     READER_THREAD_JOIN_TIMEOUT_SECONDS,
-    VideoOrAudio,
     TRACKS_INPUT_PORT,
+    PublishedTrack,
+    VideoOrAudio,
     _native,
     published_track_from_upstream_stream_facts,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
-from helper_process_link_wiring import wire_one_link
-from parent_stream_facts_stand_in import ParentHoldingStreamFacts
-from played_media_stand_ins import (
-    ANNEX_B_ACCESS_UNIT,
-    OPUS_PACKET,
-    MONO_OPUS_IDENTIFICATION_HEADER_HEX,
-)
-from tatolab.opus import OpusDecoder, OpusEncoder
-from tatolab.runtime import _engine
-from tatolab.runtime._node_hosting import construct_node_instance
-from tatolab.h264 import H264Decoder, H264Encoder
-from tatolab.stream import (
-    Message,
-    StreamBuilder,
-    run_graph_generator,
-    log,
-    graph_generator,
-)
-from tatolab.stream.stream_facts import PacketsStreamFacts
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
-
-
-@graph_generator
-def the_whip_publisher_alone(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(WhipPublisher, config={"url": "https://example.invalid/x"})
-
-
-@graph_generator
-def the_whep_player_alone(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/x"})
-
-
-@graph_generator
-def the_publisher_fed_by_both_encoders(stream_builder: StreamBuilder) -> None:
-    video_encoder = stream_builder.add(H264Encoder)
-    audio_encoder = stream_builder.add(OpusEncoder)
-    publisher = stream_builder.add(
-        WhipPublisher, config={"url": "https://example.invalid/whip"}
-    )
-
-    stream_builder.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    stream_builder.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
-
-
-@graph_generator
-def the_player_feeding_both_decoders(stream_builder: StreamBuilder) -> None:
-    player = stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
-    video_decoder = stream_builder.add(H264Decoder)
-    audio_decoder = stream_builder.add(OpusDecoder)
-
-    stream_builder.connect(
-        player.output("encoded_video"), video_decoder.input("encoded_video")
-    )
-    stream_builder.connect(
-        player.output("encoded_audio"), audio_decoder.input("encoded_audio")
-    )
-
-
-@graph_generator
-def a_publish_and_play_round_trip(stream_builder: StreamBuilder) -> None:
-    encoder = stream_builder.add(H264Encoder)
-    publisher = stream_builder.add(
-        WhipPublisher, config={"url": "https://example.invalid/whip"}
-    )
-    player = stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
-    decoder = stream_builder.add(H264Decoder)
-
-    stream_builder.connect(encoder.output("encoded_video"), publisher.input("tracks"))
-    stream_builder.connect(player.output("encoded_video"), decoder.input("encoded_video"))
-
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-RUNTIME_UNIT_DIRECTORY = Path(
-    os.environ.get("STREAMLIB_RUNTIME_UNIT_DIRECTORY")
-    or REPOSITORY_ROOT / "target" / "tatolab-runtime"
-)
-TATOLABD_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolabd"
-TATOLAB_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolab"
-
-#: The line `tatolabd` logs as it begins starting a loaded stream.
-STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_id>[^`]+)`")
-
-STREAM_UNLOAD_REMOVED_NODES_LINE = re.compile(
-    r"\[stop\] Queued removal of (?P<node_count>\d+) node\(s\)"
-)
-
-#: The Vulkan loader's variables naming the driver files to load. Pointed at a
-#: path that does not exist they leave it none, so every stream's start is
-#: refused at the GPU, before any device opens, on a machine with a GPU too.
-VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_ADD_DRIVER_FILES")
-
-#: The engine's refusal when the Vulkan loader finds no driver, on every platform.
-NO_VULKAN_DRIVER_REFUSAL = "No usable Vulkan driver (ICD) was found"
-
-#: Engine variables of this process a runtime must not inherit.
-ENGINE_VARIABLES_THE_RUNTIME_DOES_NOT_INHERIT = (
-    "STREAMLIB_QUIET",
-    "STREAMLIB_HOME",
-    "STREAMLIB_ICEORYX2_DOMAIN_ROOT",
-)
-
-#: The variable a test build of the runtime and its CLI read their machine root from.
-TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_MACHINE_ROOT"
-
-#: Not `tempfile.gettempdir()`: the local API socket under a machine root has to
-#: fit `sun_path`, and macOS's per-user temporary directory is too long for it.
-SHORT_TEMPORARY_DIRECTORY = "/tmp"
-
-#: The variable a test build of the runtime reads its loopback HTTP port from;
-#: on macOS that port's bind is the machine runtime lock, so it must be set there.
-TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE = "TATOLAB_TEST_LOOPBACK_HTTP_PORT"
-
-#: Covers starting each Python node's interpreter to describe it, on a cold runner.
-LOAD_DEADLINE_SECONDS = 120.0
-SERVING_DEADLINE_SECONDS = 30.0
-LOCAL_API_PROBE_DEADLINE_SECONDS = 5.0
-STOP_DEADLINE_SECONDS = 30.0
-
-
-def _runtime_unit_executable(executable: Path) -> Path:
-    if not os.access(executable, os.X_OK):
-        pytest.fail(
-            f"no {executable.name} at {executable} — build the runtime unit with "
-            "`cargo xtask build-runtime`, or name one with STREAMLIB_RUNTIME_UNIT_DIRECTORY"
-        )
-    return executable
-
-
-def _a_runtime_answers_at_the_local_api_socket(
-    cli_environment: "dict[str, str]",
-) -> bool:
-    try:
-        streams_probe = subprocess.run(
-            [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "streams"],
-            env=cli_environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=LOCAL_API_PROBE_DEADLINE_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    return streams_probe.returncode == 0
-
-
-class TatolabdWithNoVulkanDriver:
-    """A `tatolabd` from the runtime unit whose every stream start is refused at the GPU."""
-
-    def __init__(
-        self, process: "subprocess.Popen[str]", cli_environment: "dict[str, str]"
-    ) -> None:
-        self.process = process
-        self.cli_environment = cli_environment
-        self.standard_error_lines: "list[str]" = []
-        self._standard_error_drain = threading.Thread(
-            target=self._drain_standard_error, daemon=True
-        )
-        self._standard_error_drain.start()
-
-    def _drain_standard_error(self) -> None:
-        assert self.process.stderr is not None
-        for standard_error_line in self.process.stderr:
-            self.standard_error_lines.append(standard_error_line)
-
-    def standard_error_text_since(self, line_count: int) -> str:
-        return "".join(self.standard_error_lines[line_count:])
-
-    def recent_standard_error(self) -> str:
-        return "".join(self.standard_error_lines[-40:])
-
-    def stop(self) -> None:
-        if self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT)
-            try:
-                self.process.wait(timeout=STOP_DEADLINE_SECONDS)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-        self._standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
-
-
-@pytest.fixture(scope="module")
-def short_machine_root() -> "Iterator[Path]":
-    """A fresh machine root a test build keeps its runtime and state under, and
-    on Linux its lock."""
-    with tempfile.TemporaryDirectory(
-        prefix="tl-", dir=SHORT_TEMPORARY_DIRECTORY
-    ) as machine_root_path:
-        yield Path(machine_root_path)
-
-
-def _a_tcp_port_free_on_loopback() -> int:
-    with socket.create_server(("127.0.0.1", 0)) as probe:
-        return probe.getsockname()[1]
-
-
-@pytest.fixture(scope="module")
-def tatolabd_with_no_vulkan_driver(
-    tmp_path_factory: pytest.TempPathFactory, short_machine_root: Path
-) -> "Iterator[TatolabdWithNoVulkanDriver]":
-    """The machine's runtime for this module, started here and stopped after it.
-
-    A test build of the runtime unit keeps its lock, local API socket and state
-    under a machine root of this module's own, so it runs beside the user's
-    runtime. A release build ignores that root: it takes the machine's runtime
-    lock and serves this user's local API socket, so it is refused while
-    another runtime holds the machine. Either way its state directory is its
-    own — `XDG_STATE_HOME`, and `HOME` on macOS — so it loads none of this
-    user's kept streams.
-    """
-    tatolabd_executable = _runtime_unit_executable(TATOLABD_EXECUTABLE)
-    cli_environment = {
-        **os.environ,
-        TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE: str(short_machine_root),
-    }
-    if _a_runtime_answers_at_the_local_api_socket(cli_environment):
-        pytest.fail(
-            "a runtime already answers at this user's local API socket; stop it and run "
-            "these again — they start the machine's runtime themselves"
-        )
-    runtime_directory = tmp_path_factory.mktemp("tatolabd")
-    state_home = runtime_directory / "state"
-    state_home.mkdir()
-    no_such_driver_file = str(runtime_directory / "no-vulkan-driver-here.json")
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if name not in ENGINE_VARIABLES_THE_RUNTIME_DOES_NOT_INHERIT
-    }
-    environment.update(
-        {variable: no_such_driver_file for variable in VULKAN_LOADER_DRIVER_FILE_VARIABLES}
-    )
-    environment["RUST_LOG"] = "info,rmcp=warn"
-    environment[TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE] = str(short_machine_root)
-    environment["XDG_STATE_HOME"] = str(state_home)
-    if sys.platform == "darwin":
-        environment["HOME"] = str(state_home)
-        environment[TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE] = str(
-            _a_tcp_port_free_on_loopback()
-        )
-    tatolabd = TatolabdWithNoVulkanDriver(
-        subprocess.Popen(
-            [str(tatolabd_executable)],
-            cwd=runtime_directory,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-        ),
-        cli_environment,
-    )
-    try:
-        serving_deadline = time.monotonic() + SERVING_DEADLINE_SECONDS
-        while not _a_runtime_answers_at_the_local_api_socket(cli_environment):
-            if tatolabd.process.poll() is not None:
-                tatolabd.stop()
-                pytest.fail(
-                    f"tatolabd exited {tatolabd.process.returncode} before it served its "
-                    f"local API:\n{tatolabd.recent_standard_error()}"
-                )
-            if time.monotonic() > serving_deadline:
-                pytest.fail(
-                    f"tatolabd did not serve its local API within {SERVING_DEADLINE_SECONDS} s:"
-                    f"\n{tatolabd.recent_standard_error()}"
-                )
-            time.sleep(0.05)
-        yield tatolabd
-    finally:
-        tatolabd.stop()
-
-
-def write_a_project_holding_the_graph(
-    project_directory: Path, stream_name: str, graph: "dict[str, Any]"
-) -> None:
-    """A project whose one graph document, `streams/<stream_name>.graph.json`, holds `graph`,
-    each node given a UUID as the runtime gives one, and whose `.venv/bin/python` execs this
-    test's interpreter, which holds the extension."""
-    streams_directory = project_directory / "streams"
-    streams_directory.mkdir(parents=True)
-    (project_directory / "tatolab-project.json").write_text(
-        json.dumps({"project": str(uuid.uuid4()), "name": "webrtc", "dependencies": []}),
-        encoding="utf-8",
-    )
-    graph_document = {
-        **graph,
-        "asset": str(uuid.uuid4()),
-        "nodes": [{"id": str(uuid.uuid4()), **node} for node in graph["nodes"]],
-    }
-    (streams_directory / f"{stream_name}.graph.json").write_text(
-        json.dumps(graph_document), encoding="utf-8"
-    )
-    venv_interpreter = project_directory / ".venv" / "bin" / "python"
-    venv_interpreter.parent.mkdir(parents=True)
-    venv_interpreter.write_text(
-        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8"
-    )
-    venv_interpreter.chmod(0o755)
-
-
-def node_names_loaded_by_tatolabd(
-    stream_function: "Callable[[StreamBuilder], None]",
-    working_directory: Path,
-    tatolabd: TatolabdWithNoVulkanDriver,
-) -> "list[str]":
-    graph = run_graph_generator(stream_function)
-    stream_name = stream_function.__name__
-    project_directory = working_directory / "project"
-    write_a_project_holding_the_graph(project_directory, stream_name, graph)
-
-    standard_error_mark = len(tatolabd.standard_error_lines)
-    tatolab_run = subprocess.run(
-        [
-            str(_runtime_unit_executable(TATOLAB_EXECUTABLE)),
-            "open",
-            "--dir",
-            str(project_directory),
-            "--play",
-        ],
-        cwd=working_directory,
-        env=tatolabd.cli_environment,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=LOAD_DEADLINE_SECONDS,
-    )
-
-    def what_the_run_and_the_runtime_said() -> str:
-        return (
-            f"`tatolab open --play` exited {tatolab_run.returncode}:\n{tatolab_run.stdout[-4000:]}"
-            f"{tatolab_run.stderr[-4000:]}\n"
-            f"tatolabd:\n{tatolabd.standard_error_text_since(standard_error_mark)[-8000:]}"
-        )
-
-    # The queued load runs after `tatolab open --play` exits, and its lines reach this
-    # process through the drain thread.
-    load_lines_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
-    while True:
-        standard_error_text = tatolabd.standard_error_text_since(standard_error_mark)
-        start_began = STREAM_START_BEGAN_LINE.search(standard_error_text)
-        refused_at_the_gpu = NO_VULKAN_DRIVER_REFUSAL in standard_error_text
-        if (start_began is not None and refused_at_the_gpu) or (
-            time.monotonic() > load_lines_deadline
-        ):
-            break
-        time.sleep(0.05)
-
-    if start_began is None:
-        pytest.fail("tatolabd did not load the stream:\n" + what_the_run_and_the_runtime_said())
-    assert f"-{stream_name}-" in start_began.group("stream_id"), what_the_run_and_the_runtime_said()
-    assert tatolab_run.returncode == 0 and refused_at_the_gpu, (
-        "the loaded stream was to be refused at its start for the missing Vulkan driver; "
-        + what_the_run_and_the_runtime_said()
-    )
-
-    standard_error_mark_before_the_removal = len(tatolabd.standard_error_lines)
-    removal_run = subprocess.run(
-        [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "rm", "--dir", str(project_directory)],
-        cwd=working_directory,
-        env=tatolabd.cli_environment,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=LOAD_DEADLINE_SECONDS,
-    )
-    assert removal_run.returncode == 0, (
-        f"`tatolab rm` exited {removal_run.returncode}:\n{removal_run.stdout}{removal_run.stderr}"
-    )
-    unload_line_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
-    while True:
-        unload = STREAM_UNLOAD_REMOVED_NODES_LINE.search(
-            tatolabd.standard_error_text_since(standard_error_mark_before_the_removal)
-        )
-        if unload is not None or time.monotonic() > unload_line_deadline:
-            break
-        time.sleep(0.05)
-    assert unload is not None, what_the_run_and_the_runtime_said()
-    assert int(unload.group("node_count")) == len(graph["nodes"])
-    return [loaded_node["name"] for loaded_node in graph["nodes"]]
-
-
-@pytest.mark.parametrize(
-    ("stream_function", "node_class"),
-    [(the_whip_publisher_alone, WhipPublisher), (the_whep_player_alone, WhepPlayer)],
-)
-def test_an_installed_extensions_node_is_added_like_any_other(
-    tmp_path, tatolabd_with_no_vulkan_driver, stream_function, node_class
-):
-    assert node_names_loaded_by_tatolabd(
-        stream_function, tmp_path, tatolabd_with_no_vulkan_driver
-    ) == [
-        node_class.__name__.lower()
-    ]
-
-
-def test_the_publisher_wires_to_both_encoders_without_an_adapter(tmp_path, tatolabd_with_no_vulkan_driver):
-    """One fan-in port takes both encoders, which is what makes a WHIP session
-    with video and audio a matter of wiring rather than of config."""
-    node_names_loaded_by_tatolabd(the_publisher_fed_by_both_encoders, tmp_path, tatolabd_with_no_vulkan_driver)
-
-
-def test_the_player_wires_to_both_decoders_without_an_adapter(tmp_path, tatolabd_with_no_vulkan_driver):
-    node_names_loaded_by_tatolabd(the_player_feeding_both_decoders, tmp_path, tatolabd_with_no_vulkan_driver)
-
-
-def test_a_publish_and_play_round_trip_composes_as_published(tmp_path, tatolabd_with_no_vulkan_driver):
-    """The shape the live proof drives: encode, publish, play back, decode."""
-    node_names_loaded_by_tatolabd(a_publish_and_play_round_trip, tmp_path, tatolabd_with_no_vulkan_driver)
 
 
 H264_VIDEO_STREAM_FACTS = PacketsStreamFacts(
@@ -566,6 +162,9 @@ class PublisherWiredToEncoders:
             self.inbound_link_by_encoder_output_port[encoder_output_port] = (
                 channel_service_name
             )
+        self.encoder_context = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, self.encoder_outputs, "runtime-under-test", "encoders-under-test"
+        )
         self.context = _engine.open_runtime_context_full_access_for_helper_process(
             {},
             tracks_input,
@@ -573,9 +172,18 @@ class PublisherWiredToEncoders:
             "node-under-test",
             self.parent.escalate_request_to_parent,
         )
-        # Constructed the way the helper constructs it: the mapping becomes
-        # the class's config object, not something read off the context.
-        self.publisher = construct_node_instance(WhipPublisher, config, tracks_input)
+        # Built the way the helper builds it: each value becomes the field of its
+        # name, and `tracks` reads through the port the links feed.
+        members = class_node_members_of(WhipPublisher)
+        assert members is not None
+        pins = bind_the_pins_of_a_class_node(
+            members,
+            link_data_access=tracks_input,
+            inputs=self.context.inputs,
+            outputs=self.context.outputs,
+            node_id="node-under-test",
+        )
+        self.publisher = construct_class_node(WhipPublisher, field_values=config, pins=pins)
         self.publisher.setup(self.context)
 
     def state_stream_facts(
@@ -592,9 +200,9 @@ class PublisherWiredToEncoders:
         timestamp_ns: int = 0,
         starts_group: bool = True,
     ) -> None:
-        self.encoder_outputs.write_to_output_port(
-            encoder_output_port, payload, timestamp_ns, starts_group
-        )
+        written_through = Output(Packets)
+        written_through.__set_name__(type(self), encoder_output_port)
+        self.encoder_context.outputs.write(written_through, payload, timestamp_ns, starts_group)
         self.publisher.process(
             _engine.limited_access_view_of_runtime_context_for_helper_process(
                 self.context
@@ -638,45 +246,76 @@ def test_a_publisher_whose_endpoint_is_not_an_address_is_refused_by_name(
         PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), config)
 
 
-def test_a_publisher_added_with_no_config_takes_its_defaults_and_names_the_unset_url(request):
+def test_a_publisher_added_with_no_values_takes_its_defaults_and_names_the_unset_url(request):
     with pytest.raises(ValueError, match="`url` is not set"):
         PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), {})
 
 
-@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_config_reaches_a_node_as_its_own_config_object(node_class):
-    """The shape `stream_builder.add(cls, config={...})` actually delivers.
-
-    The graph records the config and the helper constructs the class's config
-    class from it, so a class whose settings are not on that config class
-    passes every graph-building test and then fails in the child on the first
-    run. This is the engine's own mapping, called directly.
-    """
-    constructed = construct_node_instance(
+def a_node_built_with(node_class: type, field_values: "dict[str, Any]") -> Any:
+    """`node_class` built as its helper builds it, each pin bound to a stand-in."""
+    members = class_node_members_of(node_class)
+    assert members is not None
+    return construct_class_node(
         node_class,
-        {"url": "https://example.invalid/x", "bearer_token": "a-token"},
-        None,
+        field_values=field_values,
+        pins={member.port: object() for member in members if member.form in ("input_pin", "output_pin")},
     )
 
-    assert isinstance(constructed, node_class)
+
+@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
+def test_each_setting_reaches_a_node_as_its_field(node_class):
+    """The shape `stream_builder.add(cls, input_values={...})` delivers: each value is the field
+    of its name before `__init__()` reads it."""
+    built = a_node_built_with(
+        node_class, {"url": "https://example.invalid/x", "bearer_token": "a-token"}
+    )
+
+    assert (built.url, built.bearer_token) == ("https://example.invalid/x", "a-token")
 
 
 @pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
 def test_the_bearer_token_is_optional(node_class):
-    assert isinstance(
-        construct_node_instance(
-            node_class, {"url": "https://example.invalid/x"}, None
-        ),
-        node_class,
-    )
+    assert a_node_built_with(node_class, {"url": "https://example.invalid/x"}).bearer_token is None
 
 
 @pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_a_node_added_without_an_endpoint_is_refused_at_construction(
-    node_class,
-):
-    with pytest.raises((TypeError, ValueError)):
-        construct_node_instance(node_class, {}, None)
+def test_a_node_added_without_an_endpoint_is_refused_at_construction(node_class):
+    with pytest.raises(ValueError, match="`url` is not set"):
+        a_node_built_with(node_class, {})
+
+
+@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
+def test_each_setting_is_an_input_that_takes_a_wire(node_class):
+    """Every setting has a socket: none is declared only as a setting."""
+    from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
+
+    modes = {
+        port["name"]: port["input_mode"]
+        for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
+        if port["name"] in ("url", "bearer_token")
+    }
+    assert modes == {"url": {"mode": "wire_or_value"}, "bearer_token": {"mode": "wire_or_value"}}
+
+
+def test_the_publishers_tracks_take_h264_video_and_opus_audio_on_one_pin():
+    from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
+
+    (tracks,) = [
+        port
+        for port in getattr(WhipPublisher, NODE_DECLARATION_INPUT_PORTS_STAMP)
+        if port["name"] == TRACKS_INPUT_PORT
+    ]
+    assert tracks["pin_declaration"] == {
+        "pin_type": {
+            "kind": "one_of",
+            "pin_types": [
+                {"type": "encoded_video", "codecs": ["h264"]},
+                {"type": "encoded_audio", "codecs": ["opus"]},
+            ],
+        },
+        "flow": "stream",
+    }
+    assert tracks["delivery_profile"] == "ordered"
 
 
 class RecordingWhipSession:
@@ -822,46 +461,44 @@ def test_a_video_link_is_entered_at_its_first_group_start(
     assert session.video_access_units == [(b"\x02keyframe", 2), (b"\x03delta", 3)]
 
 
-class TracksInputReplayingMessages:
-    """`ctx.inputs` for a publisher, handing back scripted messages and one set of stream facts."""
+@dataclasses.dataclass(frozen=True)
+class PacketsUnitHeld:
+    """A read Packets unit, holding its bytes."""
+
+    payload: bytes
+
+
+class TracksPinReplayingMessages:
+    """A publisher's `tracks` pin, handing back scripted messages and one set of stream facts."""
 
     def __init__(
         self,
         inbound_links: "list[str]",
         upstream_stream_facts: PacketsStreamFacts,
-        messages: "list[Message[bytes]]",
+        messages: "list[Message[PacketsUnitHeld]]",
     ) -> None:
         self.inbound_links = inbound_links
         self.upstream_stream_facts_handed_back = upstream_stream_facts
         self.messages_still_to_hand_back = list(messages)
 
-    def inbound_link_names(self, port_name: str) -> "list[str]":
-        del port_name
+    def inbound_link_names(self) -> "list[str]":
         return self.inbound_links
 
-    def read_message(self, port_name: str) -> "Message[bytes] | None":
-        del port_name
+    def read_message(self) -> "Message[PacketsUnitHeld] | None":
         if self.messages_still_to_hand_back:
             return self.messages_still_to_hand_back.pop(0)
         return None
 
-    def upstream_stream_facts(
-        self, port_name: str, *, inbound_link: "str | None" = None
-    ) -> PacketsStreamFacts:
-        del port_name, inbound_link
+    def upstream_stream_facts(self, *, inbound_link: "str | None" = None) -> PacketsStreamFacts:
+        del inbound_link
         return self.upstream_stream_facts_handed_back
-
-
-class ContextWithTracksInput:
-    def __init__(self, inputs: TracksInputReplayingMessages) -> None:
-        self.inputs = inputs
 
 
 def video_message(
     payload: bytes, *, starts_group: bool, lost_since_last_read: int = 0
-) -> "Message[bytes]":
+) -> "Message[PacketsUnitHeld]":
     return Message(
-        payload=payload,
+        payload=PacketsUnitHeld(payload),
         timestamp_ns=0,
         starts_group=starts_group,
         lost_since_last_read=lost_since_last_read,
@@ -872,7 +509,7 @@ def video_message(
 def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session):
     """After a loss the next delta frame references a picture the far end never
     received; the group start reporting a loss is itself sent."""
-    inputs = TracksInputReplayingMessages(
+    tracks = TracksPinReplayingMessages(
         ["encoder/encoded_video"],
         H264_VIDEO_STREAM_FACTS,
         [
@@ -884,8 +521,10 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
             video_message(b"delta after it", starts_group=False),
         ],
     )
-    context = cast(Any, ContextWithTracksInput(inputs))
-    publisher = construct_node_instance(WhipPublisher, AN_ENDPOINT, None)
+    context = cast(Any, None)
+    publisher = construct_class_node(
+        WhipPublisher, field_values=AN_ENDPOINT, pins={TRACKS_INPUT_PORT: tracks}
+    )
     publisher.setup(context)
 
     for _ in range(6):
@@ -944,7 +583,7 @@ def test_a_started_player_lends_both_outputs_so_python_cannot_write_them(
 ):
     """The reading thread writes both ports through the module host table with
     no Python attached, so a Python write to either is refused naming it."""
-    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+    player = a_node_built_with(WhepPlayer, {"url": "https://example.invalid/whep"})
     context = player_wired_to_both_decoders.player_context
     player.start(context)
     try:
@@ -960,7 +599,7 @@ def test_a_player_whose_endpoint_never_answers_stops_inside_its_join_budget(
 ):
     """The thread reconnects with backoff against an endpoint that never
     answers, and a stop wakes it out of the backoff rather than waiting it out."""
-    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+    player = a_node_built_with(WhepPlayer, {"url": "https://example.invalid/whep"})
     context = player_wired_to_both_decoders.player_context
     player.start(context)
     time.sleep(0.2)
@@ -973,7 +612,7 @@ def test_a_player_whose_endpoint_never_answers_stops_inside_its_join_budget(
 def test_a_player_never_started_stops_and_tears_down_cleanly(
     player_wired_to_both_decoders,
 ):
-    player = WhepPlayer(WhepPlayerConfig(url="https://example.invalid/whep"))
+    player = a_node_built_with(WhepPlayer, {"url": "https://example.invalid/whep"})
     context = player_wired_to_both_decoders.player_context
     player.stop(context)
     player.teardown(context)

@@ -83,7 +83,7 @@ def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilde
 
     publisher = stream_builder.add(
         WhipPublisher,
-        config=_session_configuration(
+        input_values=_session_configuration(
             PUBLISH_URL_VARIABLE, "STREAMLIB_WHIP_BEARER_TOKEN"
         ),
         name="publisher",
@@ -115,7 +115,7 @@ def the_same_input_played_back_over_whep_through_the_decoders(
 ) -> None:
     player = stream_builder.add(
         WhepPlayer,
-        config=_session_configuration(
+        input_values=_session_configuration(
             PLAYBACK_URL_VARIABLE, "STREAMLIB_WHEP_BEARER_TOKEN"
         ),
         name="player",
