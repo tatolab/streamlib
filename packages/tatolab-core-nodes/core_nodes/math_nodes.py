@@ -140,13 +140,6 @@ def Step(x: float = 0.0, edge: float = 0.0) -> float:  # noqa: N802
     return 0.0 if x < edge else 1.0
 
 
-@node.meta(category="Math", description="A number you set once and wire to many inputs.")
-@node
-def Constant(value: float = 0.0) -> float:  # noqa: N802
-    """`value`, unchanged: a number set once on its pin and read by many."""
-    return value
-
-
 @node.meta(category="Math", description="A new random number every frame, between low and high.")
 @node
 def Random(  # noqa: N802

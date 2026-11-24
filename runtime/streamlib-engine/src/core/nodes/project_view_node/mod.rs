@@ -4,8 +4,9 @@
 //! The value source: a node that publishes the value each of its settings is set to on its output
 //! of the same name. A node of a project view's type, the plug a Tato Studio view takes in a
 //! stream, whose linked inputs a panel reads through a viewer and whose outputs carry what a
-//! panel sets their same-named inputs to; and a stream's top-level `GraphInput`, whose `value`
-//! output carries the value its `value` input is set to.
+//! panel sets their same-named inputs to; a stream's top-level `GraphInput`, whose `value`
+//! output carries the value its `value` input is set to; and a `Constant`, which does the same
+//! without declaring an Input of its stream.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,11 +27,12 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::graph_interface_resolution::{
     carry_on_every_value_port, what_the_value_port_of_an_interface_node_carries,
+    what_the_value_ports_of_a_constant_carry,
 };
 use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
 use crate::core::graph::{GraphNode, GraphNodePorts};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
-use crate::core::nodes::the_node_type_of_a_graph_input;
+use crate::core::nodes::{THE_DESCRIPTOR_OF_A_CONSTANT, the_node_type_of_a_graph_input};
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
 pub use crate::core::pin_value_packing::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
 use crate::core::pin_value_packing::{
@@ -300,6 +302,23 @@ impl ValueSourceNode {
             descriptor.inputs.iter_mut().chain(&mut descriptor.outputs),
             family,
             chosen.as_ref(),
+        );
+        Ok(Self::for_the_node(node, descriptor))
+    }
+
+    /// The value source a `Constant` runs as: both its `value` ports of the pin type its
+    /// `pin_type` setting chooses, else a Float, and the family that type travels on.
+    pub(crate) fn for_a_constant(node: &GraphNode) -> Result<Self> {
+        let settings = JsonValue::Object(node.input_values());
+        let mut descriptor = THE_DESCRIPTOR_OF_A_CONSTANT.clone();
+        let (chosen, family) =
+            what_the_value_ports_of_a_constant_carry(Some(&settings)).map_err(|why| {
+                Error::Configuration(format!("`Constant` node `{}`: {why}", node.display_name))
+            })?;
+        carry_on_every_value_port(
+            descriptor.inputs.iter_mut().chain(&mut descriptor.outputs),
+            family,
+            Some(&chosen),
         );
         Ok(Self::for_the_node(node, descriptor))
     }

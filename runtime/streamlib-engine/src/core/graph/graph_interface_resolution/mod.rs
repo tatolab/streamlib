@@ -42,7 +42,7 @@ use streamlib_node_schema::output_port_family_resolved_against_config;
 
 pub(crate) use what_a_value_port_carries::{
     an_interface_node_states_what_its_value_port_carries, carry_on_every_value_port,
-    what_the_value_port_of_an_interface_node_carries,
+    what_the_value_port_of_an_interface_node_carries, what_the_value_ports_of_a_constant_carry,
 };
 
 pub(crate) use graph_input_annotations::is_an_annotation_setting_of_a_graph_input;
@@ -378,6 +378,22 @@ pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
         value.annotations = PortAnnotations(the_annotations_a_graph_input_config_states(settings));
         value.lifetime =
             the_value_lifetime_a_graph_input_config_declares(settings).unwrap_or_default();
+    }
+}
+
+/// Write what the `value` ports of a `Constant` holding `settings` carry onto `ports`, as
+/// [`what_the_value_ports_of_a_constant_carry`] reads it; a `pin_type` a Constant does not
+/// carry leaves them as its type declares them.
+pub(crate) fn resolve_the_value_ports_a_constant_config_declares(
+    ports: &mut GraphNodePorts,
+    settings: Option<&serde_json::Value>,
+) {
+    if let Ok((chosen, family)) = what_the_value_ports_of_a_constant_carry(settings) {
+        carry_on_every_value_port(
+            ports.inputs.iter_mut().chain(&mut ports.outputs),
+            family,
+            Some(&chosen),
+        );
     }
 }
 

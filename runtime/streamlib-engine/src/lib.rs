@@ -254,7 +254,8 @@ pub mod sdk {
             NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
             OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
             OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ReactiveNode,
-            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, the_node_types_of_the_graph_itself, traits,
+            VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, the_descriptor_of_a_constant,
+            the_node_types_of_the_graph_itself, the_pin_type_a_constant_holds_by_default, traits,
         };
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};

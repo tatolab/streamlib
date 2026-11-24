@@ -52,6 +52,7 @@ mod bundle_type_offered_by_its_stream_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
 mod connection_wire_tests;
+mod constant_typed_by_its_pin_type_tests;
 mod convert_node_inserted_on_a_link_tests;
 mod convert_node_inside_a_placed_stream_tests;
 mod graph_action_feed_and_subscription_tests;

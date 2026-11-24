@@ -165,6 +165,7 @@ pub use stream_graph_default_port_and_variable_names::{
     GET_VARIABLE_NODE_TYPE, GRAPH_VARIABLE_NAME_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
     config_holding_the_default_name_of_a_graph_port_or_variable,
 };
+pub use streamlib_node_schema::CONSTANT_NODE_TYPE;
 pub use stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, NodeNotRead,

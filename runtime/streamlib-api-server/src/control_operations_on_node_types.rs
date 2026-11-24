@@ -15,7 +15,8 @@ use streamlib::sdk::descriptors::{
     FunctionNodeLanguage, NodeDescriptor, NodeKind, PinConversion, PinType,
 };
 use streamlib::sdk::nodes::{
-    NODE_REGISTRY, NodeTypePortsDescribedOnTheWire, the_node_types_of_the_graph_itself,
+    NODE_REGISTRY, NodeTypePortsDescribedOnTheWire, the_descriptor_of_a_constant,
+    the_node_types_of_the_graph_itself,
 };
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
@@ -443,8 +444,8 @@ pub(crate) struct BuiltInNodeType {
 }
 
 /// Every node type the runtime brings itself: those its registry builds, by import path, then
-/// those the graph resolves itself, `GraphInput`, `GraphOutput`, `SetVariable` and
-/// `GetVariable`.
+/// `Constant`, which runs as the value source a top-level `GraphInput` runs as, then those the
+/// graph resolves itself, `GraphInput`, `GraphOutput`, `SetVariable` and `GetVariable`.
 fn every_built_in_node_type() -> Vec<BuiltInNodeType> {
     let mut registered = NODE_REGISTRY.list_registered();
     registered.sort_by(|one, other| {
@@ -458,6 +459,10 @@ fn every_built_in_node_type() -> Vec<BuiltInNodeType> {
             kind: Some(the_kind_of(descriptor.node_kind)),
             descriptor,
         })
+        .chain(std::iter::once(BuiltInNodeType {
+            descriptor: the_descriptor_of_a_constant(),
+            kind: Some(NodeTypeKind::Process),
+        }))
         .chain(
             the_node_types_of_the_graph_itself()
                 .into_iter()

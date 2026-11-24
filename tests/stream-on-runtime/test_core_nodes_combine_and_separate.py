@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Core Nodes' combine and separate nodes on `tatolabd`: three number wires through
+"""Core Nodes' combine and separate nodes on `tatolabd`: three Constants' wires through
 `CombineColor` drive a Color input, whose components `SeparateColor` hands out as Floats, and
 two through `CombineVector` drive a Vector input of two components.
 
@@ -26,6 +26,8 @@ from stream_runs_on_tatolabd import (
 pytestmark = pytest.mark.requires_gpu
 
 CORE_NODES_IMPORT_FOLDER = "imports/core-nodes"
+
+CONSTANT_NODE_TYPE = "tatolab.stream:Constant"
 
 #: The project's first load makes its venv.
 PROJECT_LOAD_TIMEOUT_SECONDS = 900.0
@@ -86,15 +88,19 @@ def a_core_node(name: str, module_and_name: str, **input_values: float) -> "dict
     return a_node(name, f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.{module_and_name}", input_values or None)
 
 
+def a_constant(name: str, value: float) -> "dict[str, Any]":
+    return a_node(name, CONSTANT_NODE_TYPE, {"pin_type": {"type": "float"}, "value": value})
+
+
 def a_stream_of_numbers_through_the_combine_nodes() -> "dict[str, Any]":
     nodes = [
-        a_core_node("red", "math_nodes:Constant", value=0.2),
-        a_core_node("green", "math_nodes:Constant", value=0.4),
-        a_core_node("blue", "math_nodes:Constant", value=0.6),
+        a_constant("red", 0.2),
+        a_constant("green", 0.4),
+        a_constant("blue", 0.6),
         a_core_node("combine_color", "combine_and_separate:CombineColor"),
         a_core_node("separate_color", "combine_and_separate:SeparateColor"),
-        a_core_node("x", "math_nodes:Constant", value=0.25),
-        a_core_node("y", "math_nodes:Constant", value=0.5),
+        a_constant("x", 0.25),
+        a_constant("y", 0.5),
         a_core_node("combine_vector", "combine_and_separate:CombineVector", z=9.0, w=9.0),
         a_node("spot", "nodes.levels:SpotAsOneNumber"),
         a_node("report", "nodes.levels:ReportsTheLevelsItReads"),
@@ -112,13 +118,13 @@ def a_stream_of_numbers_through_the_combine_nodes() -> "dict[str, Any]":
         "display_name": "Main",
         "nodes": nodes,
         "links": [
-            link("red", "result", "combine_color", "red"),
-            link("green", "result", "combine_color", "green"),
-            link("blue", "result", "combine_color", "blue"),
+            link("red", "value", "combine_color", "red"),
+            link("green", "value", "combine_color", "green"),
+            link("blue", "value", "combine_color", "blue"),
             link("combine_color", "result", "separate_color", "color"),
             link("separate_color", "green", "report", "green"),
-            link("x", "result", "combine_vector", "x"),
-            link("y", "result", "combine_vector", "y"),
+            link("x", "value", "combine_vector", "x"),
+            link("y", "value", "combine_vector", "y"),
             link("combine_vector", "result", "spot", "spot"),
             link("spot", "result", "report", "spot"),
         ],

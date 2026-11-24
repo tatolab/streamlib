@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A `set_node_input_value` that chooses another `pin_type` for a top-level `GraphInput` saving a
-//! value carries that value into the new type in the same transaction, as three value sets it
-//! records: the saved value taken off, the type set, and the value the one conversion fitting
-//! the two types casts, held within the Input's `range`, set again. With no such cast the value
+//! A `set_node_input_value` that chooses another `pin_type` for a top-level `GraphInput` or a
+//! `Constant` saving a value carries that value into the new type in the same transaction, as
+//! three value sets it records: the saved value taken off, the type set, and the value the one
+//! conversion fitting the two types casts, held within the Input's `range`, set again. With no such cast the value
 //! gives way to the new type's default, which is no saved value, and the answer says why. One
 //! undo puts back both the type and the value.
 //!
@@ -23,8 +23,9 @@ use streamlib::sdk::graph::graph_interface_resolution::{
     GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_PIN_TYPE_SETTING,
     the_range_a_graph_input_config_declares,
 };
+use streamlib::sdk::nodes::the_pin_type_a_constant_holds_by_default;
 use streamlib_project_repository::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME, StreamGraphDocument,
+    CONSTANT_NODE_TYPE, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME, StreamGraphDocument,
     StreamGraphDocumentNode,
 };
 
@@ -118,12 +119,14 @@ fn what_a_retype_names(request: &StreamGraphAction) -> Option<(Uuid, &str, &Valu
 }
 
 /// The retype of the value `retyped` saves into `chosen`: `None` unless `retyped` is a
-/// `GraphInput` saving a value of another type than `chosen`.
+/// `GraphInput` or a `Constant` saving a value of another type than `chosen`. A `Constant`
+/// choosing no type holds a Float, and has no range.
 fn the_retype_of_what_a_node_saves(
     retyped: &StreamGraphDocumentNode,
     chosen: &Value,
 ) -> Option<RetypeOfASavedValue> {
-    if retyped.node_type != GRAPH_INPUT_NODE_TYPE {
+    let a_constant = retyped.node_type == CONSTANT_NODE_TYPE;
+    if retyped.node_type != GRAPH_INPUT_NODE_TYPE && !a_constant {
         return None;
     }
     let (held_under, saved) = [
@@ -139,13 +142,22 @@ fn the_retype_of_what_a_node_saves(
             .map(|saved| (key, saved.clone()))
     })?;
     let pin_type_of = |value: &Value| PinType::deserialize(value).ok();
-    let from = pin_type_of(retyped.input_values.get(GRAPH_INTERFACE_PIN_TYPE_SETTING)?)?;
+    let from = match retyped.input_values.get(GRAPH_INTERFACE_PIN_TYPE_SETTING) {
+        Some(held) => pin_type_of(held)?,
+        None if a_constant => the_pin_type_a_constant_holds_by_default(),
+        None => return None,
+    };
     let into = pin_type_of(chosen)?;
     if from == into {
         return None;
     }
-    let range =
-        the_range_a_graph_input_config_declares(Some(&Value::Object(retyped.input_values.clone())));
+    let range = (!a_constant)
+        .then(|| {
+            the_range_a_graph_input_config_declares(Some(&Value::Object(
+                retyped.input_values.clone(),
+            )))
+        })
+        .flatten();
     Some(RetypeOfASavedValue {
         held_under,
         carried: WhatARetypeCarries {
