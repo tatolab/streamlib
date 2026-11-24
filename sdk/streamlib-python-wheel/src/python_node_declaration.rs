@@ -459,7 +459,7 @@ class AudioConsumer:
         );
 
         assert!(
-            refusal.contains("audio_window")
+            refusal.contains("AudioWindowContract")
                 && refusal.contains("newest")
                 && refusal.contains("ordered"),
             "the refusal must name both knobs; got {refusal}"

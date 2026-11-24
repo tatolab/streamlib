@@ -40,8 +40,8 @@ def test_a_filter_declares_its_pins_and_nothing_else():
 
         frames_to_downstream: OutputPin[Texture]
 
-    assert BrightnessFilter.__tatolab_node_declared__ is True
-    assert BrightnessFilter.__tatolab_node_execution__ == {"mode": "reactive", "interval_ms": 0}
+    assert getattr(BrightnessFilter, "__tatolab_node_declared__") is True
+    assert getattr(BrightnessFilter, "__tatolab_node_execution__") == {"mode": "reactive", "interval_ms": 0}
 
 
 @pytest.mark.parametrize("retired_port_decorator_name", ["input", "output"])
@@ -140,7 +140,7 @@ def test_a_source_that_declares_a_mode_is_accepted():
     class TestPatternSource:
         frames_to_downstream: OutputPin[Texture]
 
-    assert TestPatternSource.__tatolab_node_execution__ == {"mode": "continuous", "interval_ms": 33}
+    assert getattr(TestPatternSource, "__tatolab_node_execution__") == {"mode": "continuous", "interval_ms": 33}
 
 
 def test_a_scheduling_priority_is_stamped():
@@ -148,7 +148,7 @@ def test_a_scheduling_priority_is_stamped():
     class Camera:
         frames_to_downstream: OutputPin[Texture]
 
-    assert Camera.__tatolab_node_scheduling_priority__ == "realtime"
+    assert getattr(Camera, "__tatolab_node_scheduling_priority__") == "realtime"
 
 
 @pytest.mark.parametrize(
@@ -325,7 +325,7 @@ def test_a_docstring_never_stands_in_for_a_description():
     class DescribedByItsDocstringAlone:
         """Read by whoever reads the code, never by the catalog."""
 
-    assert DescribedByItsDocstringAlone.__tatolab_node_description__ == ""
+    assert getattr(DescribedByItsDocstringAlone, "__tatolab_node_description__") == ""
 
 
 def test_the_description_keyword_is_served_exactly_as_written():
@@ -336,7 +336,7 @@ def test_the_description_keyword_is_served_exactly_as_written():
     class DescribedInMarkdown:
         """The docstring, which the catalog never reads."""
 
-    assert DescribedInMarkdown.__tatolab_node_description__ == markdown
+    assert getattr(DescribedInMarkdown, "__tatolab_node_description__") == markdown
 
 
 def test_a_description_that_is_not_a_string_is_refused():
@@ -358,5 +358,5 @@ def test_a_class_node_has_the_category_it_declares_and_none_when_it_declares_non
     class Categorized:
         frames_from_upstream: InputPin[Texture]
 
-    assert Uncategorized.__tatolab_node_category__ is None
-    assert Categorized.__tatolab_node_category__ == "Image effects"
+    assert getattr(Uncategorized, "__tatolab_node_category__") is None
+    assert getattr(Categorized, "__tatolab_node_category__") == "Image effects"

@@ -260,18 +260,27 @@ fn a_built_in_that_takes_a_config_is_refused_by_name() {
     let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
         .unwrap_err()
         .to_string();
-    assert!(refusal.contains("built-in `TextureTinter` takes a config"), "{refusal}");
+    assert!(
+        refusal.contains("built-in `TextureTinter` takes a config"),
+        "{refusal}"
+    );
 }
 
 /// A built-in with a port that states no pin type is refused by name.
 #[test]
 fn a_built_in_with_a_port_of_no_pin_type_is_refused_by_name() {
     let mut descriptor = texture_tinter_descriptor_with_settings();
-    descriptor["outputs"][0].as_object_mut().unwrap().remove("pin_type");
+    descriptor["outputs"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("pin_type");
     let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
         .unwrap_err()
         .to_string();
-    assert!(refusal.contains("a port that states no one pin type"), "{refusal}");
+    assert!(
+        refusal.contains("a port that states no one pin type"),
+        "{refusal}"
+    );
 }
 
 #[test]
@@ -279,7 +288,10 @@ fn a_test_named_class_opts_out_of_pytest() {
     let mut descriptor = texture_tinter_descriptor_with_settings();
     descriptor["type"] = json!("tatolab.stream:TestTinter");
     let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
-    assert!(rendered.contains("class TestTinter(BuiltInNode):"), "{rendered}");
+    assert!(
+        rendered.contains("class TestTinter(BuiltInNode):"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("    __test__: ClassVar[bool] = False\n"),
         "{rendered}"

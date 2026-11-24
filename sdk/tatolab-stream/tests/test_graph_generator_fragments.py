@@ -198,7 +198,7 @@ def test_a_node_class_given_promoted_settings_is_refused_naming_input_values() -
 
 def test_a_generator_given_input_values_is_refused_naming_keyword_settings() -> None:
     with pytest.raises(TypeError, match="takes its promoted settings as keyword arguments"):
-        StreamBuilder("rig").add(invert_twice, input_values={"strength": 3})
+        StreamBuilder("rig").add(invert_twice, input_values={"strength": 3})  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 def test_a_fragment_nested_deeper_than_a_graph_document_reads_is_refused_naming_it() -> None:

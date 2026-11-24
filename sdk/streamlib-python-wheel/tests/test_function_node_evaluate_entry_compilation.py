@@ -12,7 +12,7 @@ from __future__ import annotations
 import ctypes
 import math
 from dataclasses import dataclass, field
-from typing import Annotated, Any, NamedTuple
+from typing import Annotated, Any, NamedTuple, cast
 
 import pytest
 
@@ -25,7 +25,7 @@ from tatolab.runtime._function_node_compilation import (
     compile_function_node_to_its_evaluate_entry,
     prepare_function_node_to_evaluate,
 )
-from tatolab.stream import NumberRange, NumberUnit, PinMeaning, State, Stateful, UnreadMessage, node
+from tatolab.stream import NumberRange, NumberUnit, PinMeaning, State, Stateful, node
 from tatolab.stream import _function_node_declaration
 
 from function_node_test_nodes import (
@@ -330,7 +330,7 @@ def test_the_runtime_spells_the_unread_message_value_type_as_tatolab_stream_does
 
 @dataclass(frozen=True)
 class FirstMessageHeld:
-    message: UnreadMessage | None = None
+    message: object = None
 
 
 @node
@@ -339,7 +339,7 @@ def hold_the_first_message_handed[PinValue](
 ) -> Stateful[PinValue | None, FirstMessageHeld]:
     if previous.message is None and value is not None:
         return value, FirstMessageHeld(value)
-    return previous.message, previous
+    return cast("PinValue | None", previous.message), FirstMessageHeld(previous.message)
 
 
 def test_a_body_run_as_python_hands_on_a_message_its_state_held_from_an_earlier_call():

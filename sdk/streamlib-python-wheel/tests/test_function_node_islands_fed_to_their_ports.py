@@ -657,7 +657,7 @@ def test_a_node_run_as_python_exposing_a_config_field_is_refused_naming_it():
 
 
 @node
-def one_without_a_frame_and_two_with_one[PinValue](frame: PinValue | None = None) -> float:
+def one_without_a_frame_and_two_with_one[PinValue](frame: PinValue | None = None) -> float:  # pyright: ignore[reportInvalidTypeVarUse]
     return 1.0 if frame is None else 2.0
 
 

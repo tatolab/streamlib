@@ -693,10 +693,7 @@ fn an_unknown_execution_mode_is_refused_naming_it() {
 #[test]
 fn a_node_describing_no_config_schema_is_served_the_empty_configs() {
     let mut described = described_node_type_with_input_ports(serde_json::json!([]));
-    described
-        .as_object_mut()
-        .unwrap()
-        .remove("config_schema");
+    described.as_object_mut().unwrap().remove("config_schema");
 
     let declaration = read(&described).unwrap();
 
