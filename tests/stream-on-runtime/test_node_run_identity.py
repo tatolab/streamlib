@@ -152,14 +152,18 @@ def test_two_classes_in_one_graph_register_under_two_distinct_paths(
 
     The registry key used to be a synthesized org/package/type triple, which
     two classes could share; it is now each class's own module path, which they
-    cannot. Asserted as an ordered pair of literals: comparing the two to each
-    other would pass on any pair of distinct strings, including two the engine
-    derived the same wrong way.
+    cannot. Asserted as two literals: comparing the two to each other would pass
+    on any pair of distinct strings, including two the engine derived the same
+    wrong way.
     """
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(two_identity_stable_nodes)
     assert run_outcome.loaded, run_outcome.tatolabd_stderr_text_during_the_run
-    assert identities_the_engine_logged(run_outcome.tatolabd_stderr_text_during_the_run) == [
+    identities = identities_the_engine_logged(run_outcome.tatolabd_stderr_text_during_the_run)
+    # The stream describes every class of the suite project when it loads, and the graph's
+    # own two again as it places them, so the test looks for these two among the rest.
+    for identity in (
         "identity_stable_node:IdentityStableNode",
         "second_identity_stable_node:SecondIdentityStableNode",
-    ]
+    ):
+        assert identity in identities, (identity, identities)
 
