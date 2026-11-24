@@ -38,6 +38,9 @@ CHURN_VALUE = 200
 #: made again each tick while its picture link stays quiet.
 LEVEL_WRITTEN = 0.5
 
+#: How many acquires the source attempts between two reports of its ring, refused or not.
+ACQUIRES_PER_RING_REPORT = 50
+
 #: How many bundles the reporter reads off the held picture before it reports.
 BUNDLES_TO_READ = 150
 
@@ -66,9 +69,26 @@ class PublishesOnePictureThenRefillsItsRing:
         self._churn_surface_ids: set[str] = set()
         self._churn_frames_written = 0
         self._acquires_refused = 0
-        self._reported_at = 0
+        self._acquires_attempted = 0
 
     def process(self, ctx) -> None:
+        self._write_the_next_frame(ctx)
+        self._acquires_attempted += 1
+        if self._acquires_attempted % ACQUIRES_PER_RING_REPORT == 0:
+            log.info(
+                "MARKER:RING_TURNED_OVER "
+                + json.dumps(
+                    {
+                        "held_picture_surface_id": self._held_picture_surface_id,
+                        "acquires_attempted": self._acquires_attempted,
+                        "churn_frames_written": self._churn_frames_written,
+                        "churn_slots": sorted(self._churn_surface_ids),
+                        "acquires_refused": self._acquires_refused,
+                    }
+                )
+            )
+
+    def _write_the_next_frame(self, ctx) -> None:
         try:
             slot = self._ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, PICTURE_WIDTH, PICTURE_HEIGHT
@@ -93,19 +113,6 @@ class PublishesOnePictureThenRefillsItsRing:
         self.churn.write(frame)
         self._churn_frames_written += 1
         self._churn_surface_ids.add(slot.surface_id.split("#")[0])
-        if self._churn_frames_written - self._reported_at >= 50:
-            self._reported_at = self._churn_frames_written
-            log.info(
-                "MARKER:RING_TURNED_OVER "
-                + json.dumps(
-                    {
-                        "held_picture_surface_id": self._held_picture_surface_id,
-                        "churn_frames_written": self._churn_frames_written,
-                        "churn_slots": sorted(self._churn_surface_ids),
-                        "acquires_refused": self._acquires_refused,
-                    }
-                )
-            )
 
 
 @node(execution="continuous", interval_ms=20)

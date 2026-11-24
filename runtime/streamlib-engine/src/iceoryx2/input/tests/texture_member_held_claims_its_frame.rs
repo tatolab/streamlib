@@ -19,6 +19,9 @@ use super::*;
 /// The frames claimed and not yet let go, by slot and generation.
 type FramesClaimed = Arc<Mutex<Vec<(u32, u64)>>>;
 
+/// Each frame as it was claimed, beside the frames still claimed at that moment.
+type ClaimsTaken = Arc<Mutex<Vec<((u32, u64), Vec<(u32, u64)>)>>>;
+
 /// A claim on one frame, let go of as it drops.
 struct ClaimOnOneFrame {
     frame: (u32, u64),
@@ -33,30 +36,37 @@ impl Drop for ClaimOnOneFrame {
     }
 }
 
-/// Mailboxes claiming each frame they hold through a claim recording it in the list it answers.
-fn mailboxes_recording_each_frame_they_claim() -> (InputMailboxesInner, FramesClaimed) {
+/// Mailboxes claiming each frame they hold through a claim recording it in the lists they
+/// answer: the frames claimed now, and each claim as it was taken.
+fn mailboxes_recording_each_frame_they_claim() -> (InputMailboxesInner, FramesClaimed, ClaimsTaken)
+{
     let mailboxes = InputMailboxesInner::new();
     let frames_claimed = FramesClaimed::default();
+    let claims_taken = ClaimsTaken::default();
     let recorded_in = Arc::clone(&frames_claimed);
+    let taken_in = Arc::clone(&claims_taken);
     mailboxes.reach_the_claim_of_the_pooled_gpu_frames_its_bundles_hold(Box::new(move |frame| {
         let claimed = (frame.slot, frame.generation);
-        recorded_in.lock().push(claimed);
+        let mut held = recorded_in.lock();
+        taken_in.lock().push((claimed, held.clone()));
+        held.push(claimed);
+        drop(held);
         Ok(Some(Box::new(ClaimOnOneFrame {
             frame: claimed,
             frames_claimed: Arc::clone(&recorded_in),
         }) as PooledGpuFrameClaimAMessageHolds))
     }));
-    (mailboxes, frames_claimed)
+    (mailboxes, frames_claimed, claims_taken)
 }
 
 /// A held picture keeps one claim on its frame however many bundles the level makes with it,
-/// a newer picture's claim replaces it, and the claim is let go of when its link is removed.
+/// a newer picture's claim, taken while the older one is still held, replaces it, and the claim is let go of when its link is removed.
 ///
 /// Mental-revert: holding the picture's descriptor alone claims nothing, so a quiet picture link
 /// leaves every re-sent bundle naming a slot its producer may hand out again.
 #[test]
 fn a_held_picture_keeps_one_claim_on_its_frame_until_it_is_replaced_or_its_link_removed() {
-    let (mailboxes, frames_claimed) = mailboxes_recording_each_frame_they_claim();
+    let (mailboxes, frames_claimed, claims_taken) = mailboxes_recording_each_frame_they_claim();
     let into_picture = a_link_into_a_member_of(
         &mailboxes,
         &a_metered_picture(),
@@ -80,6 +90,11 @@ fn a_held_picture_keeps_one_claim_on_its_frame_until_it_is_replaced_or_its_link_
     publish_a_message(&into_picture, an_image_frame(5, 20), &[], 11);
     the_bundle_frames_read(&mailboxes, &a_metered_picture());
     assert_eq!(*frames_claimed.lock(), vec![(5, 20)]);
+    assert_eq!(
+        *claims_taken.lock(),
+        vec![((4, 19), Vec::new()), ((5, 20), vec![(4, 19)])],
+        "the newer picture is claimed while the older one is still held"
+    );
 
     mailboxes.remove_channel_link("L-picture");
     assert_eq!(*frames_claimed.lock(), Vec::new());
