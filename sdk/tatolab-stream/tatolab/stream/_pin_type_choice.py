@@ -15,11 +15,12 @@ __all__ = ["PinTypeChoice", "PinTypeFromSetting"]
 _WHAT_A_CHOICE_IS_READ_AS: Final = "PinTypeChoice"
 
 _TYPES_NO_FAMILY_CARRIES: Final[frozenset[str]] = frozenset(
-    {"list_of", "named", "node_reference", "pin_type_choice"}
+    {"list_of", "node_reference", "pin_type_choice"}
 )
 """The types whose values no family's message carries, as the runtime's `PortFamily::carrying`
-reads them: a List, a named type and the types that take no wire. A bundle travels as one
-message of its own, so `MakeBundle` and `BreakBundle` choose one."""
+reads them: a List and the types that take no wire. A bundle travels as one message of its own,
+so `MakeBundle` and `BreakBundle` choose one, and a named type as the bytes its class packs, so a
+module's output its setting types chooses one."""
 
 
 def pin_type_in_words(pin_type: "PinType") -> str:
@@ -104,9 +105,9 @@ class PinTypeChoice:
 
 @final
 class PinTypeFromSetting:
-    """Types a pin written `object` by the `PinTypeChoice` setting `setting` names:
-    `Annotated[object, PinTypeFromSetting("pin_type")]`, which only the runtime's own nodes
-    declare yet."""
+    """Types a pin by the `PinTypeChoice` setting `setting` names: a module's output of several
+    types, `OutputPin[Annotated[EncodedVideo | EncodedAudio, PinTypeFromSetting("content_type")]]`,
+    of the one the setting chooses, or a pin of the runtime's own node written `object`."""
 
     __slots__ = ("_setting",)
 

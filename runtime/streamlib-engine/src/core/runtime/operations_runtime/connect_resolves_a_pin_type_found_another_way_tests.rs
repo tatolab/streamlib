@@ -40,6 +40,10 @@ const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
 const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
 const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
 const CHANNELS_FLOAT_SINK: &str = "FoundAnotherWayChannelsFloatSink";
+/// A node whose output `value`, typed by its setting `kind`, travels on the family and codec of
+/// the type `kind` holds, as a module's output its setting types declares.
+const FAMILY_CHOSEN_SOURCE: &str = "FoundAnotherWayFamilyChosenSource";
+const H264_SINK: &str = "FoundAnotherWayH264Sink";
 /// A node whose input `value`, typed by its setting `kind`, takes a wire or a value.
 const CHOSEN_SINK_TAKING_A_VALUE: &str = "FoundAnotherWayChosenSinkTakingAValue";
 /// The output of a `PASS_ON` node, which takes the type of its input `value`.
@@ -51,6 +55,12 @@ fn class_path(class_name: &str) -> NodeClassImportPath {
 
 fn float() -> PinType {
     PinType::Float { exact_size: None }
+}
+
+fn h264() -> PinType {
+    PinType::EncodedVideo {
+        codecs: vec!["h264".to_owned()],
+    }
 }
 
 /// A port declaring `pin_type`, of a family no test here judges a link by.
@@ -201,6 +211,44 @@ fn register_the_fixture_node_types() {
                         PortFamilyDeclaration::of_family(PortFamily::Channels),
                     )
                     .with_pin_declaration(PinDeclaration::exactly(float())),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                FAMILY_CHOSEN_SOURCE,
+                vec![a_type_choice()],
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration {
+                            family_from_config_key: Some("kind".to_owned()),
+                            codec_from_config_key: Some("kind".to_owned()),
+                            ..PortFamilyDeclaration::of_family(PortFamily::Records)
+                        },
+                    )
+                    .with_pin_declaration(PinDeclaration {
+                        pin_type: DeclaredPinType::SetByInput {
+                            input_name: "kind".to_owned(),
+                        },
+                        ..PinDeclaration::exactly(PinType::String {})
+                    }),
+                ],
+            ),
+            a_node_type(
+                H264_SINK,
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration {
+                            requires_codec: vec!["h264".to_owned()],
+                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                        },
+                    )
+                    .with_pin_declaration(PinDeclaration::exactly(h264())),
                 ],
                 Vec::new(),
             ),
@@ -694,6 +742,31 @@ fn a_port_whose_type_is_found_another_way_is_judged_by_its_family_though_it_reso
     assert!(
         matches!(refused, Error::InvalidLink(_)),
         "refused by the families, not {refused:?}"
+    );
+}
+
+#[test]
+fn an_output_whose_family_its_choice_sets_travels_on_the_family_and_codec_of_the_type_chosen() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let h264_sink = a_node_of(&compiler, H264_SINK);
+
+    let chose_h264 = a_node_holding(&compiler, FAMILY_CHOSEN_SOURCE, choosing(h264()));
+    connect(&compiler, &chose_h264, &h264_sink)
+        .expect("a choice of H.264 carries Packets of H.264, though the port declares Records");
+
+    let chose_h265 = a_node_holding(
+        &compiler,
+        FAMILY_CHOSEN_SOURCE,
+        choosing(PinType::EncodedVideo {
+            codecs: vec!["h265".to_owned()],
+        }),
+    );
+    let refused = connect(&compiler, &chose_h265, &a_node_of(&compiler, H264_SINK))
+        .expect_err("a choice of another codec does not feed an H.264 input");
+    assert!(
+        matches!(&refused, Error::InvalidLink(words) if words.contains("h265")),
+        "refused naming the codec chosen, not {refused:?}"
     );
 }
 

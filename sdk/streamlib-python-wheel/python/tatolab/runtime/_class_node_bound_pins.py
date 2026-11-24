@@ -298,6 +298,22 @@ class BoundOutputPin:
         self._outputs = outputs
         self._port = member.port
         self._node_id = node_id
+        declared_pin_type: Any = member.pin_declaration["pin_type"]
+        if declared_pin_type["kind"] == "set_by_input":
+            setting = declared_pin_type["input_name"]
+
+            def refuse_a_write(value: Any, timestamp_ns: Optional[int]) -> None:
+                del value, timestamp_ns
+                raise TypeError(
+                    f"`{node_id}`'s output `{member.port}` is of the type its setting `{setting}` "
+                    f"chooses, which a Python body does not write yet; the node's native half "
+                    f"writes it through its module host"
+                )
+
+            self._write_a_value = refuse_a_write
+            self._write_through = None
+            self._writes = "set_by_input"
+            return
         if len(pin_types) != 1:
             raise TypeError(
                 f"`{node_id}`'s output `{member.port}` declares no one type, and an output writes "

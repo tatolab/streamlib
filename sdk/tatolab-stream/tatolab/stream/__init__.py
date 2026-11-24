@@ -43,6 +43,7 @@ from ._pin_annotations import NumberUnit as NumberUnit
 from ._pin_annotations import PinControl as PinControl
 from ._pin_annotations import PinMeaning as PinMeaning
 from ._pin_type_choice import PinTypeChoice as PinTypeChoice
+from ._pin_type_choice import PinTypeFromSetting as PinTypeFromSetting
 from ._pin_declaration import NodeDeclarationRefusal as NodeDeclarationRefusal
 from ._class_node_pins import InputPin as InputPin
 from ._class_node_pins import OutputPin as OutputPin
@@ -264,6 +265,7 @@ __all__ = [
     "PinControl",
     "PinMeaning",
     "PinTypeChoice",
+    "PinTypeFromSetting",
     "NodeDeclarationRefusal",
     "Float32",
     "Float64",

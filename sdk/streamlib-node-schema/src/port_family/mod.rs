@@ -8,7 +8,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::pin_type::TexturePixelFormat;
+use crate::pin_type::{PinType, TexturePixelFormat};
 use crate::stated_lists::{the_ones_not_held, the_ones_not_taken};
 
 /// The memory layout a port carries; a link joins two ports of one family.
@@ -413,10 +413,30 @@ pub fn output_port_family_resolved_against_config(
                     PortFamily::ALL.map(|family| family.wire_name()).join(", ")
                 )
             }),
+        Some(held @ serde_json::Value::Object(_)) => {
+            let chosen = the_pin_type_a_config_key_chooses(config_key, held)?;
+            PortFamily::a_chosen_pin_type_travels_on(&chosen).ok_or_else(|| {
+                format!(
+                    "config key {config_key:?} chooses {chosen}, which no stream's port carries"
+                )
+            })
+        }
         Some(other) => Err(format!(
-            "config key {config_key:?} names the output's family as a string, and holds {other}"
+            "config key {config_key:?} names the output's family as a string, or chooses its \
+             pin type, and holds {other}"
         )),
     }
+}
+
+/// The pin type `held`, the value of the pin type choice `config_key`, chooses, or why it holds
+/// none.
+fn the_pin_type_a_config_key_chooses(
+    config_key: &str,
+    held: &serde_json::Value,
+) -> Result<PinType, String> {
+    serde_json::from_value(held.clone()).map_err(|refusal| {
+        format!("config key {config_key:?} holds {held}, which chooses no pin type: {refusal}")
+    })
 }
 
 /// The frame rate an Image output's declaration resolves to against its node's
@@ -471,9 +491,19 @@ pub fn output_port_codec_resolved_against_config(
     match node_config.and_then(|config| config.get(config_key)) {
         None | Some(serde_json::Value::Null) => Ok(declaration.codec.clone()),
         Some(serde_json::Value::String(codec)) if !codec.is_empty() => Ok(Some(codec.clone())),
+        Some(held @ serde_json::Value::Object(_)) => {
+            match the_pin_type_a_config_key_chooses(config_key, held)? {
+                PinType::EncodedVideo { codecs } | PinType::EncodedAudio { codecs }
+                    if codecs.len() == 1 =>
+                {
+                    Ok(codecs.into_iter().next())
+                }
+                _ => Ok(declaration.codec.clone()),
+            }
+        }
         Some(other) => Err(format!(
-            "config key {config_key:?} names the output's codec as a non-empty string, and \
-             holds {other}"
+            "config key {config_key:?} names the output's codec as a non-empty string, or \
+             chooses its pin type, and holds {other}"
         )),
     }
 }

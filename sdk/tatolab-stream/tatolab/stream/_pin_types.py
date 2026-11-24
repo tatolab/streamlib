@@ -509,9 +509,7 @@ class PinTypeSpelling:
 
 
 _SETTING_TYPE_NOT_TAKEN = "a function node takes no setting yet"
-_A_CHOICE_ONLY_THE_RUNTIME_DECLARES = (
-    "only the runtime's own nodes declare a setting that chooses a pin's type yet"
-)
+_A_CHOICE_ONLY_A_CLASS_FIELD_DECLARES = "only a class node's field chooses a pin's type"
 
 PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("bool", "boolean"),
@@ -551,7 +549,7 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling(
         "SoleReferrerNodeReferenceToNodeType", "node_reference", _SETTING_TYPE_NOT_TAKEN
     ),
-    PinTypeSpelling("PinTypeChoice", "pin_type_choice", _A_CHOICE_ONLY_THE_RUNTIME_DECLARES),
+    PinTypeSpelling("PinTypeChoice", "pin_type_choice", _A_CHOICE_ONLY_A_CLASS_FIELD_DECLARES),
 )
 
 _SPELLING_BY_WRITTEN_FORM: Final[dict[str, PinTypeSpelling]] = {
