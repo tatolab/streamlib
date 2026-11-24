@@ -35,7 +35,8 @@ DECLARED_RENDERING = {
     "family": "image",
     "frame_rate": {"numerator": DECLARED_FRAMES_PER_SECOND, "denominator": 1},
 }
-REPLACEMENT_RENDERING = REPLACEMENT_STREAM_FACTS.to_wire()
+REPLACEMENT_READ_DOWNSTREAM = REPLACEMENT_STREAM_FACTS.to_wire()
+REPLACEMENT_RENDERING = {"type": "encoded_video", **REPLACEMENT_READ_DOWNSTREAM}
 
 
 def output_port_rendered_under(
@@ -63,7 +64,7 @@ def test_declared_replaced_refused_and_read_downstream(
 
     read_downstream: "list[Any]" = []
     occurrence = 0
-    while REPLACEMENT_RENDERING not in read_downstream:
+    while REPLACEMENT_READ_DOWNSTREAM not in read_downstream:
         occurrence += 1
         read_downstream.append(
             tatolabd.await_marker(
@@ -96,5 +97,5 @@ def test_declared_replaced_refused_and_read_downstream(
         f"refused facts name the port and both families: {refusal!r}"
     )
     assert all(
-        facts is None or facts == REPLACEMENT_RENDERING for facts in read_downstream
+        facts is None or facts == REPLACEMENT_READ_DOWNSTREAM for facts in read_downstream
     ), f"the reader only ever reads facts its upstream carried: {read_downstream}"
