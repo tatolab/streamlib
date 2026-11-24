@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::node_interpreter_describe::{
-    INSTALLED_MODULES_DESCRIBE_BOUND, NodeInterpreterRunOutOfStream,
+    LAUNCH_DESCRIBE_BOUND, NodeInterpreterRunOutOfStream,
     node_interpreter_out_of_stream_command_with_arguments,
     run_the_node_interpreter_out_of_stream_reading_its_document,
 };
@@ -31,7 +31,7 @@ const CAST_A_SAVED_VALUE_ARGUMENT: &str = "--cast-a-saved-value";
 /// How long one cast may run before its process group is killed and the cast refused: the
 /// edit retyping the Graph Input waits on it, so it is the bound of the describe the stream
 /// starts with, long enough for a cold import of a module's numeric libraries.
-pub(crate) const SAVED_VALUE_CAST_BOUND: Duration = INSTALLED_MODULES_DESCRIBE_BOUND;
+pub(crate) const SAVED_VALUE_CAST_BOUND: Duration = LAUNCH_DESCRIBE_BOUND;
 
 /// A cast, in the words its refusals name it by.
 const A_SAVED_VALUE_CAST: NodeInterpreterRunOutOfStream = NodeInterpreterRunOutOfStream {

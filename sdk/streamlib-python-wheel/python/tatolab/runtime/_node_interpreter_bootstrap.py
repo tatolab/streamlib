@@ -286,15 +286,35 @@ def node_classes_installed_distributions_declare() -> "list[dict[str, str]]":
     return installed_modules
 
 
+def node_classes_the_projects_own_code_declares() -> "list[str]":
+    """The import path of each node type the project's own code outside `imports/` declares,
+    read from source as its node type listing reads it, the project being the working
+    directory the bootstrap runs in."""
+    from pathlib import Path
+
+    from tatolab.stream._node_type_source_reader import (
+        read_node_types_and_graph_generators_from_module_sources,
+    )
+    from tatolab.stream._project_node_type_listing_entry import project_module_sources
+
+    read_from_source = read_node_types_and_graph_generators_from_module_sources(
+        project_module_sources(Path.cwd())
+    )
+    return [node_type["type"] for node_type in read_from_source["node_types"]]
+
+
 def describe_installed_modules_onto_stdout() -> int:
     """Print one JSON document describing every class installed distributions
-    declare in `tatolab.nodes`; always 0, since an installed module that cannot
-    be described is reported in the document and never fails the stream.
+    declare in `tatolab.nodes`, then every class the project's own code declares
+    that none of them does; always 0, since a class that cannot be described is
+    reported in the document and never fails the stream.
 
     Wire contract with the engine: the `--describe` document, plus
     `"installed_modules": [{"import_path": ..., "entry_point": ...,
     "distribution": ..., "distribution_version": ...}]` naming where each
-    described or refused class came from.
+    described or refused installed class came from, and `"project_node_types":
+    [import_path, ...]` naming each described or refused class of the project's
+    own code.
     """
     described_document_fd = _reserve_stdout_for_the_described_document()
     described_node_types: "list[dict[str, Any]]" = []
@@ -317,12 +337,34 @@ def describe_installed_modules_onto_stdout() -> int:
                 f"cannot describe {import_path}, which {installed_module['distribution']} "
                 f"declares in `{INSTALLED_MODULE_NODES_ENTRY_POINT_GROUP}`: {refusal}\n"
             )
+    installed_import_paths = {module["import_path"] for module in installed_modules}
+    try:
+        project_node_types = [
+            import_path
+            for import_path in node_classes_the_projects_own_code_declares()
+            if import_path not in installed_import_paths
+        ]
+    except Exception:
+        project_node_types = []
+        sys.stderr.write(
+            f"cannot list the node types of the project's own code:\n{traceback.format_exc()}"
+        )
+    for import_path in project_node_types:
+        try:
+            described_node_types.append(describe_one_node_class(import_path))
+        except NodeClassNotDescribable as refusal:
+            refused_node_types.append({"import_path": import_path, "refusal": str(refusal)})
+            sys.stderr.write(
+                f"cannot describe {import_path}, which the project's own code declares: "
+                f"{refusal}\n"
+            )
     sys.stderr.flush()
     described_document = json.dumps(
         {
             "described_node_types": described_node_types,
             "refused_node_types": refused_node_types,
             "installed_modules": installed_modules,
+            "project_node_types": project_node_types,
         },
         allow_nan=False,
     )

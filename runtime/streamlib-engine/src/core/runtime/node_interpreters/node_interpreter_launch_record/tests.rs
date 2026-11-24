@@ -724,6 +724,58 @@ fn a_load_lists_the_node_types_installed_modules_declare_before_a_graph_names_on
     assert!(NODE_REGISTRY.descriptor(&installed_type).is_none());
 }
 
+/// A class of the project's own code reaches the stream's catalog at load, before a graph
+/// names one, as a type its interpreter described and no installed module declares; one it
+/// refused is left out and the load stands.
+///
+/// Mental-revert: the launch describe reads only `installed_modules`, so the project's class is
+/// described only once a graph names it, and the catalog holds no descriptor of it at load.
+#[test]
+#[serial]
+fn a_load_lists_the_node_types_the_projects_own_code_declares_before_a_graph_names_one() {
+    let rust_type = a_rust_type_registered_as("BesideTheProjectsOwnCode");
+    let project_type = import_path("nodes.meter:Thermometer");
+    let refused_type = import_path("nodes.broken:Broken");
+    let (_project_directory, stream_environment) =
+        a_project_whose_installed_modules_describe_as(serde_json::json!({
+            "described_node_types": [a_described_type(&project_type, "reading")],
+            "refused_node_types": [{
+                "import_path": refused_type.as_str(),
+                "refusal": "its module `nodes.broken` did not import",
+            }],
+            "installed_modules": [],
+            "project_node_types": [project_type.as_str(), refused_type.as_str()],
+        }));
+    let runner = Runner::new().unwrap();
+    runner
+        .set_node_interpreter_lend_directory(LEND_DIRECTORY_FOR_TEST.into())
+        .expect("the runner's first lend directory");
+
+    let stream = runner
+        .load_stream_from_graph_snapshot(
+            &a_graph_of(&[&rust_type]),
+            options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
+        )
+        .expect("a graph of a Rust type loads beside the project's own code");
+
+    let node_types = stream.node_types_this_stream_resolves();
+    assert!(node_types.node_types_installed_modules_declare().is_empty());
+    assert_eq!(
+        node_types
+            .descriptors_described_in_this_streams_node_interpreter_no_installed_module_declares()
+            .into_iter()
+            .map(|descriptor| descriptor.node_class_import_path)
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&project_type)
+    );
+    assert_eq!(
+        input_port_names_the_stream_resolves_for(&stream, &project_type),
+        ["reading"]
+    );
+    assert!(node_types.descriptor(&refused_type).is_none());
+    assert!(NODE_REGISTRY.descriptor(&project_type).is_none());
+}
+
 /// An installed module that cannot be described, or an installed-modules
 /// describe that prints nothing, never fails a load no graph node needs it for.
 #[test]

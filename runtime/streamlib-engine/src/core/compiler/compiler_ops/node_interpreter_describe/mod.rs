@@ -45,9 +45,9 @@ use crate::iceoryx2::{
 /// type it was asked for is refused.
 pub(crate) const NODE_INTERPRETER_DESCRIBE_BOUND: Duration = Duration::from_secs(60);
 
-/// How long a describe of the installed modules may run. Shorter than a named
+/// How long the describe run at a stream's launch may run. Shorter than a named
 /// type's bound: no graph node waits on it, yet every load does.
-pub(crate) const INSTALLED_MODULES_DESCRIBE_BOUND: Duration = Duration::from_secs(15);
+pub(crate) const LAUNCH_DESCRIBE_BOUND: Duration = Duration::from_secs(15);
 
 const DESCRIBE_ARGUMENT: &str = "--describe";
 
@@ -86,6 +86,8 @@ struct NodeInterpreterDescribeDocument {
     refused_node_types: Vec<NodeTypeTheDescribeRefused>,
     #[serde(default)]
     installed_modules: Vec<NodeClassAnInstalledDistributionDeclares>,
+    #[serde(default)]
+    project_node_types: Vec<String>,
 }
 
 /// One `tatolab.nodes` entry point an installed-modules describe found.
@@ -97,11 +99,14 @@ struct NodeClassAnInstalledDistributionDeclares {
     distribution_version: String,
 }
 
-/// What a describe of the installed modules found: each class it described
-/// with the distribution declaring it, and each it refused with the reason.
-pub(crate) struct NodeTypesTheInstalledModulesDeclare {
+/// What the describe run at a stream's launch found: each installed class it described
+/// with the distribution declaring it, and each it refused with the reason; and
+/// beside them each class of the project's own code it described or refused.
+pub(crate) struct NodeTypesDescribedAtTheStreamsLaunch {
     pub(crate) described: Vec<(PythonNodeDeclaration, InstalledModuleOfANodeType)>,
     pub(crate) refused: Vec<(String, InstalledModuleOfANodeType, String)>,
+    pub(crate) described_of_the_projects_own_code: Vec<PythonNodeDeclaration>,
+    pub(crate) refused_of_the_projects_own_code: Vec<(String, String)>,
 }
 
 /// One type a describe refused, with the reason the bootstrap gave for it.
@@ -598,13 +603,13 @@ pub(crate) fn run_the_node_interpreter_out_of_stream_reading_its_document<
     Ok((document, quoted_standard_error))
 }
 
-pub(crate) fn describe_the_node_types_installed_modules_declare_within(
+pub(crate) fn describe_the_node_types_of_the_streams_launch_within(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
     describe_bound: Duration,
     the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
-) -> Result<NodeTypesTheInstalledModulesDeclare> {
+) -> Result<NodeTypesDescribedAtTheStreamsLaunch> {
     let refuse_the_installed_modules = |refusal: String| Error::Runtime(refusal);
     let (describe_document, _): (NodeInterpreterDescribeDocument, String) =
         run_the_node_interpreter_out_of_stream_reading_its_document(
@@ -621,71 +626,94 @@ pub(crate) fn describe_the_node_types_installed_modules_declare_within(
             &refuse_the_installed_modules,
             &A_DESCRIBE,
         )?;
-    let mut node_types_the_installed_modules_declare = NodeTypesTheInstalledModulesDeclare {
+    let mut described_at_launch = NodeTypesDescribedAtTheStreamsLaunch {
         described: Vec::new(),
         refused: Vec::new(),
+        described_of_the_projects_own_code: Vec::new(),
+        refused_of_the_projects_own_code: Vec::new(),
     };
-    for declared in describe_document.installed_modules {
+    let NodeInterpreterDescribeDocument {
+        described_node_types,
+        refused_node_types,
+        installed_modules,
+        project_node_types,
+    } = describe_document;
+    let the_declaration_described_of = |import_path: &str| {
+        the_declaration_a_describe_document_reads_of(
+            &described_node_types,
+            &refused_node_types,
+            import_path,
+        )
+    };
+    for declared in installed_modules {
         let installed_module = InstalledModuleOfANodeType {
             distribution: declared.distribution,
             distribution_version: declared.distribution_version,
             entry_point: declared.entry_point,
         };
-        let refused = describe_document
-            .refused_node_types
-            .iter()
-            .find(|refused| refused.import_path == declared.import_path);
-        if let Some(refused) = refused {
-            node_types_the_installed_modules_declare.refused.push((
-                declared.import_path,
-                installed_module,
-                refused.refusal.trim_end().to_string(),
-            ));
-            continue;
-        }
-        let read_declaration = NodeClassImportPath::new(&declared.import_path)
-            .map_err(|not_an_import_path| not_an_import_path.to_string())
-            .and_then(|import_path| {
-                let described_node_type = describe_document
-                    .described_node_types
-                    .iter()
-                    .find(|described| {
-                        described.get("import_path").and_then(|path| path.as_str())
-                            == Some(import_path.as_str())
-                    })
-                    .ok_or_else(|| "the describe neither described nor refused it".to_string())?;
-                PythonNodeDeclaration::read_from_described_node_type(
-                    described_node_type,
-                    &import_path,
-                )
-            });
-        match read_declaration {
-            Ok(declaration) => node_types_the_installed_modules_declare
+        match the_declaration_described_of(&declared.import_path) {
+            Ok(declaration) => described_at_launch
                 .described
                 .push((declaration, installed_module)),
-            Err(refusal) => node_types_the_installed_modules_declare.refused.push((
-                declared.import_path,
-                installed_module,
-                refusal,
-            )),
+            Err(refusal) => {
+                described_at_launch
+                    .refused
+                    .push((declared.import_path, installed_module, refusal))
+            }
         }
     }
-    Ok(node_types_the_installed_modules_declare)
+    for import_path in project_node_types {
+        match the_declaration_described_of(&import_path) {
+            Ok(declaration) => described_at_launch
+                .described_of_the_projects_own_code
+                .push(declaration),
+            Err(refusal) => described_at_launch
+                .refused_of_the_projects_own_code
+                .push((import_path, refusal)),
+        }
+    }
+    Ok(described_at_launch)
+}
+
+/// The declaration a describe document's `described_node_types` hold of the class at
+/// `import_path`, or why they hold none: the refusal its `refused_node_types` gave, or why
+/// its description does not read.
+fn the_declaration_a_describe_document_reads_of(
+    described_node_types: &[serde_json::Value],
+    refused_node_types: &[NodeTypeTheDescribeRefused],
+    import_path: &str,
+) -> std::result::Result<PythonNodeDeclaration, String> {
+    if let Some(refused) = refused_node_types
+        .iter()
+        .find(|refused| refused.import_path == import_path)
+    {
+        return Err(refused.refusal.trim_end().to_string());
+    }
+    let import_path = NodeClassImportPath::new(import_path)
+        .map_err(|not_an_import_path| not_an_import_path.to_string())?;
+    let described_node_type = described_node_types
+        .iter()
+        .find(|described| {
+            described.get("import_path").and_then(|path| path.as_str())
+                == Some(import_path.as_str())
+        })
+        .ok_or_else(|| "the describe neither described nor refused it".to_string())?;
+    PythonNodeDeclaration::read_from_described_node_type(described_node_type, &import_path)
 }
 
 /// Register every class installed distributions declare into
 /// `node_types_of_the_stream`, each recorded under the distribution declaring
-/// it. A class a natively compiled type already holds is skipped, and one the
-/// stream already described keeps its registration and gains the record.
-pub(crate) fn register_the_node_types_installed_modules_declare(
+/// it, then every class of the project's own code the stream has not described.
+/// A class a natively compiled type already holds is skipped, and an installed
+/// one the stream already described keeps its registration and gains the record.
+pub(crate) fn register_the_node_types_described_at_the_streams_launch(
     node_types_of_the_stream: &NodeTypesOneStreamResolves,
-    node_types_the_installed_modules_declare: NodeTypesTheInstalledModulesDeclare,
+    described_at_launch: NodeTypesDescribedAtTheStreamsLaunch,
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
     the_stream_its_helpers_belong_to: &LoadedStreamAHelperProcessBelongsTo,
 ) -> Vec<NodeClassImportPath> {
-    for (import_path, installed_module, refusal) in node_types_the_installed_modules_declare.refused
-    {
+    for (import_path, installed_module, refusal) in described_at_launch.refused {
         tracing::warn!(
             node_class_import_path = import_path.as_str(),
             distribution = installed_module.distribution.as_str(),
@@ -694,7 +722,7 @@ pub(crate) fn register_the_node_types_installed_modules_declare(
         );
     }
     let mut registered = Vec::new();
-    for (declaration, installed_module) in node_types_the_installed_modules_declare.described {
+    for (declaration, installed_module) in described_at_launch.described {
         let node_type = declaration.descriptor.node_class_import_path.clone();
         if node_types_of_the_stream.is_a_natively_compiled_node_type(&node_type) {
             tracing::warn!(
@@ -710,25 +738,80 @@ pub(crate) fn register_the_node_types_installed_modules_declare(
                 .record_the_installed_module_declaring(node_type, installed_module);
             continue;
         }
-        let distribution = installed_module.distribution.clone();
-        if let Err(refusal) = register_the_described_node_type(
+        registered.extend(register_one_described_node_type_at_launch(
             node_types_of_the_stream,
             declaration,
             Some(installed_module),
             stream_environment,
             lend_directory,
             the_stream_its_helpers_belong_to,
-        ) {
+        ));
+    }
+    for (import_path, refusal) in described_at_launch.refused_of_the_projects_own_code {
+        tracing::warn!(
+            node_class_import_path = import_path.as_str(),
+            "a node type of the project's own code was not described, so the stream lists it \
+             only once a graph names it: {refusal}"
+        );
+    }
+    for declaration in described_at_launch.described_of_the_projects_own_code {
+        let node_type = &declaration.descriptor.node_class_import_path;
+        if node_types_of_the_stream.is_a_natively_compiled_node_type(node_type) {
             tracing::warn!(
                 node_class_import_path = node_type.as_str(),
-                distribution = distribution.as_str(),
-                "an installed module's node type was refused: {refusal}"
+                "the project's own code declares a node type a natively compiled one already \
+                 holds, so it is left out"
             );
             continue;
         }
-        registered.push(node_type);
+        if node_types_of_the_stream.was_described_in_this_streams_node_interpreter(node_type) {
+            continue;
+        }
+        registered.extend(register_one_described_node_type_at_launch(
+            node_types_of_the_stream,
+            declaration,
+            None,
+            stream_environment,
+            lend_directory,
+            the_stream_its_helpers_belong_to,
+        ));
     }
     registered
+}
+
+/// Register `declaration`, described when the stream launched, into `node_types_of_the_stream`
+/// under the installed module declaring it, if one does; its node type, or `None` with a
+/// warning when the registration is refused.
+fn register_one_described_node_type_at_launch(
+    node_types_of_the_stream: &NodeTypesOneStreamResolves,
+    declaration: PythonNodeDeclaration,
+    installed_module: Option<InstalledModuleOfANodeType>,
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Path,
+    the_stream_its_helpers_belong_to: &LoadedStreamAHelperProcessBelongsTo,
+) -> Option<NodeClassImportPath> {
+    let node_type = declaration.descriptor.node_class_import_path.clone();
+    let distribution = installed_module
+        .as_ref()
+        .map(|installed_module| installed_module.distribution.clone());
+    match register_the_described_node_type(
+        node_types_of_the_stream,
+        declaration,
+        installed_module,
+        stream_environment,
+        lend_directory,
+        the_stream_its_helpers_belong_to,
+    ) {
+        Ok(()) => Some(node_type),
+        Err(refusal) => {
+            tracing::warn!(
+                node_class_import_path = node_type.as_str(),
+                distribution = distribution.as_deref(),
+                "a node type described when the stream launched was refused: {refusal}"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
