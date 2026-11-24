@@ -107,7 +107,7 @@ self.halftone_kernel.dispatch(
   writes are visible. This effect is one pass, so it needs no
   `kernel_dispatch_batch()` scope.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  node writes it with `ImageFrameToWrite.of_texture(texture, frame.colour)`, so
+  node writes it with `TextureToWrite.of_texture(texture, frame.colour)`, so
   the frame downstream carries that id, an extent, the camera's colour and its
   timestamp. Pixels never ride a link.
 
@@ -158,7 +158,7 @@ ctx.gpu_limited_access.copy_surface_to_surface(
 )
 ```
 
-`frame` — the object `self.camera_frame_from_upstream.read()` handed back, an `ImageFrame`, —
+`frame` — the object `self.camera_frame_from_upstream.read()` handed back, a `Texture`, —
 holds a claim on the camera's surface, and that claim is what keeps the
 camera's pixels still for the length of the copy. The engine picks the copy a
 buffer-to-texture pair needs, converts nothing, and returns once the kernel's

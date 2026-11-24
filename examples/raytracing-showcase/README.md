@@ -139,7 +139,7 @@ workarounds hidden in a helper:
 
 ### And the parts that are just the engine
 
-Both renderers publish an Image frame with `ImageFrameToWrite.of_texture` — a
+Both renderers publish an Image frame with `TextureToWrite.of_texture` — a
 **surface id, an extent, a colour description and a timestamp**; no pixels ride
 a link. The compositor binds both upstream ids
 straight into its dispatch, with **no landing copy**: a kernel binding resolves
@@ -151,7 +151,7 @@ not.)
 The compositor is also a fan-in: two producers, each in its own child
 interpreter, one consumer. The two run at their own cadences, so a wake rarely
 carries both ports at once — the compositor holds the newest rasterized frame,
-held as the `ImageFrame` the read returned so its surface stays claimed
+held as the `Texture` the read returned so its surface stays claimed
 against reuse, and
 composites when the traced one lands. What keeps the halves the same picture
 despite that is the section below: one clock, not one cadence.

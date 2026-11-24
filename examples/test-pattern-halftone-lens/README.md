@@ -13,7 +13,7 @@ It needs no camera and no display.
 - `HalftoneLensEffect`, in `nodes/halftone_lens_effect.py`, is one Slang compute kernel: a lens
   drifts around the frame and turns what it covers into dots. A frame arrives as a pixel buffer,
   which a kernel cannot sample, so each one is copied into a texture first; the kernel writes a
-  second texture, which the node publishes with `ImageFrameToWrite.of_texture`. The pixels never
+  second texture, which the node publishes with `TextureToWrite.of_texture`. The pixels never
   reach the host.
 - `BrightnessMeter`, in `nodes/brightness_meter.py`, reads each frame back through an explicit
   `frame.cpu()` view and logs its mean brightness once a second. It sits on its own process, so
