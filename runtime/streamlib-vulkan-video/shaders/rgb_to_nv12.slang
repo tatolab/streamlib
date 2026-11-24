@@ -29,6 +29,13 @@ float3 rgb_at(int x, int y) {
     return uImage.Load(int3(x, y, 0)).rgb;
 }
 
+// Rounded here to the nearest of the 256 levels an 8-bit plane holds, so every
+// GPU writes the same level whatever its float-to-UNORM conversion does.
+__generic<let N : int>
+vector<float, N> to_the_nearest_8_bit_level(vector<float, N> value) {
+    return floor(value * 255.0 + 0.5) / 255.0;
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 invocation : SV_DispatchThreadID)
 {
@@ -59,6 +66,7 @@ void main(uint3 invocation : SV_DispatchThreadID)
 
     // Scale to TV range (16-235).
     luma = luma * (219.0 / 255.0) + (16.0 / 255.0);
+    luma = to_the_nearest_8_bit_level(luma);
 
     uint2 luma_coord = uint2(coord);
     uLuma.Store(luma_coord, luma.x);
@@ -76,6 +84,7 @@ void main(uint3 invocation : SV_DispatchThreadID)
     float2 cbcr = float2(dot(rgb, RGB_TO_CB), dot(rgb, RGB_TO_CR));
     // Scale to TV range (16-240).
     cbcr = cbcr * (224.0 / 255.0) + (128.0 / 255.0);
+    cbcr = to_the_nearest_8_bit_level(cbcr);
 
     uChroma.Store(invocation.xy, cbcr);
 }
