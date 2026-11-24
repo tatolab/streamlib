@@ -285,8 +285,9 @@ def test_a_node_added_without_an_endpoint_is_refused_at_construction(node_class)
 
 
 @pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_each_setting_is_an_input_that_takes_a_wire(node_class):
-    """Every setting has a socket: none is declared only as a setting."""
+def test_each_setting_is_read_at_setup_so_a_change_rebuilds_the_node(node_class):
+    """The endpoint and its token are read when the session opens, so each is a setting read at
+    setup: a value or a wire changing it builds the node again on the new endpoint."""
     from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
 
     modes = {
@@ -294,7 +295,8 @@ def test_each_setting_is_an_input_that_takes_a_wire(node_class):
         for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
         if port["name"] in ("url", "bearer_token")
     }
-    assert modes == {"url": {"mode": "wire_or_value"}, "bearer_token": {"mode": "wire_or_value"}}
+    read_at_setup = {"mode": "setting_only", "read": "at_setup"}
+    assert modes == {"url": read_at_setup, "bearer_token": read_at_setup}
 
 
 def test_the_publishers_tracks_take_h264_video_and_opus_audio_on_one_pin():

@@ -126,6 +126,7 @@ class ReportsTheFramedPicture:
 
 FRAMED_BUNDLE = {
     "type": "bundle",
+    "name": "Framed",
     "members": [
         {"name": "picture", "member_type": {"type": "texture"}},
         {

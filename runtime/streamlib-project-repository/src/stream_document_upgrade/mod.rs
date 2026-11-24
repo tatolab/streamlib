@@ -15,9 +15,13 @@ use crate::stream_graph_document::GRAPH_INPUT_NODE_TYPE;
 
 use inputs_moved_onto_pin_group_slots::INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS;
 use merged_inputs::{MERGED_INPUTS, MergedInput};
+use node_references_that_became_wires::INPUTS_THAT_HELD_A_NODE_REFERENCE;
+use pin_type_chosen_from_a_family_and_codec::PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC;
 
 mod inputs_moved_onto_pin_group_slots;
 mod merged_inputs;
+mod node_references_that_became_wires;
+mod pin_type_chosen_from_a_family_and_codec;
 #[cfg(feature = "history")]
 pub(crate) mod recorded_transaction;
 
@@ -181,9 +185,10 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
 /// At every level of a fragment, each node of a renamed type takes its new type, and its
 /// `config` and `pins` fold into `input_values`: a name `input_values` already holds wins, then
 /// `pins`, then `config`. Then the old inputs that became one take it, the merged value or the
-/// combining node a wired part keeps, and the numbered inputs that became a pin group's slots
-/// move onto them, wires and values. It never refuses: a node it has nothing to do for is left
-/// as written.
+/// combining node a wired part keeps, the numbered inputs that became a pin group's slots
+/// move onto them, wires and values, each node reference that became a wire is wired, and the
+/// family and codec that became a pin type choice are chosen. It never refuses: a node it has
+/// nothing to do for is left as written.
 pub fn upgrade_stream_document_in_place(document: &mut Value) -> bool {
     upgrade_the_document_with(document, MERGED_INPUTS)
 }
@@ -212,6 +217,11 @@ fn upgrade_the_document_with(document: &mut Value, merged_inputs: &[MergedInput]
                 &mut links,
                 INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS,
             );
+        any_changed |= node_references_that_became_wires::the_references_of_the_level_wired(
+            nodes,
+            &mut links,
+            INPUTS_THAT_HELD_A_NODE_REFERENCE,
+        );
     }
     if had_links || !links.is_empty() {
         level.insert("links".to_owned(), Value::Array(links));
@@ -280,6 +290,32 @@ pub(crate) fn put_input_values(node: &mut Map<String, Value>, input_values: Map<
     }
 }
 
+/// Drop `node`'s [`NODE_INPUT_VALUES_KEY`] when it holds no value.
+pub(crate) fn drop_the_input_values_when_empty(node: &mut Map<String, Value>) {
+    if node
+        .get(NODE_INPUT_VALUES_KEY)
+        .and_then(Value::as_object)
+        .is_some_and(Map::is_empty)
+    {
+        node.remove(NODE_INPUT_VALUES_KEY);
+    }
+}
+
+/// The name a link gives `node` by: its id, else its name.
+fn the_name_a_link_gives(node: &Map<String, Value>) -> Option<&str> {
+    node.get("id")
+        .or_else(|| node.get("name"))
+        .and_then(Value::as_str)
+}
+
+/// A link of a level from `source`'s output `source_port` into `target`'s input `target_port`.
+fn a_link(source: &str, source_port: &str, target: &str, target_port: &str) -> Value {
+    serde_json::json!({
+        "source": {"node": source, "port": source_port},
+        "target": {"node": target, "port": target_port},
+    })
+}
+
 fn holds_an_object_or_nothing(recorded: Option<&Value>) -> bool {
     matches!(recorded, None | Some(Value::Null | Value::Object(_)))
 }
@@ -293,7 +329,7 @@ fn object_or_empty(recorded: Option<Value>) -> Map<String, Value> {
 
 /// Upgrade one node, and every node of a fragment it holds, in place; whether any changed. A
 /// node placed on its own carries no link, so its old inputs that became one take the merged
-/// value of what it saved.
+/// value of what it saved, and each node reference it held that became a wire is dropped.
 pub(crate) fn upgrade_a_node_in_place(node: &mut Value) -> bool {
     upgrade_a_node_with(node, MERGED_INPUTS)
 }
@@ -313,18 +349,26 @@ fn upgrade_a_node_with(node: &mut Value, merged_inputs: &[MergedInput]) -> bool 
                 &mut [],
                 INPUTS_MOVED_ONTO_PIN_GROUP_SLOTS,
             );
+        any_changed |= node_references_that_became_wires::the_references_of_a_node_dropped(
+            node,
+            INPUTS_THAT_HELD_A_NODE_REFERENCE,
+        );
     }
     any_changed
 }
 
-/// Rename one node's type and fold its retired fields, and upgrade every level of a fragment it
-/// holds; whether any changed. Its own old inputs are merged with the level's links after.
+/// Rename one node's type, fold its retired fields and choose the pin type its saved family and
+/// codec name, and upgrade every level of a fragment it holds; whether any changed. Its own old inputs are merged with the level's links after.
 fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
     let Some(node) = node.as_object_mut() else {
         return false;
     };
     let mut any_changed = the_node_type_renamed(node);
     any_changed |= the_nodes_retired_fields_folded(node);
+    any_changed |= pin_type_chosen_from_a_family_and_codec::the_family_and_codec_of_a_node_chosen(
+        node,
+        PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC,
+    );
     if let Some(fragment) = node.get_mut("fragment") {
         any_changed |= upgrade_the_document_with(fragment, merged_inputs);
     }

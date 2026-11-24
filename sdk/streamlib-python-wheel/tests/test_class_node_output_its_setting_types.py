@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A module's class node whose `PinTypeChoice` field types an output: the field holds the
-`PinTypeChoice` of the type the runtime stores, and the output binds, written by the node's
-native half and refused to a Python body."""
+"""A module's class node whose output a Python body does not write binds all the same: one its
+`PinTypeChoice` field types, written by the node's native half, and one giving the node out as a
+connection, which each wire from it brings."""
 
 from __future__ import annotations
 
@@ -11,16 +11,18 @@ from typing import Annotated, Any, cast
 
 import pytest
 
-from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
+from tatolab.runtime._class_node_bound_pins import BoundOutputPin, bind_the_pins_of_a_class_node
 from tatolab.runtime._class_node_fields import ClassNodeFields
 from tatolab.runtime._node_hosting import class_node_members_of
 from tatolab.stream import (
+    Connection,
     EncodedAudio,
     EncodedCodecs,
     EncodedVideo,
     OutputPin,
     PinTypeChoice,
     PinTypeFromSetting,
+    connection_type,
     node,
 )
 from tatolab.stream._class_node_construction import construct_class_node
@@ -68,3 +70,34 @@ def test_the_output_its_setting_types_binds_and_refuses_a_write_from_python():
     receive = a_receive_handed({})
     with pytest.raises(TypeError, match="of the type its setting `content_type` chooses"):
         receive.content.write(b"\x00")
+
+
+@connection_type
+class _HubConnection(Connection):
+    """A node a test gives out."""
+
+
+@node(execution="manual")
+class GivesItselfOut:
+    connection: OutputPin[_HubConnection]
+
+    def process(self, ctx: Any) -> None:
+        del ctx
+
+
+def test_a_connection_output_binds_and_refuses_a_write_since_each_wire_brings_the_node():
+    """Mental-revert: binding a connection output as a value it writes refuses the node at setup,
+    as the MoQ gateway and track were refused on a running stream."""
+    members = class_node_members_of(GivesItselfOut)
+    assert members is not None
+    pins = bind_the_pins_of_a_class_node(
+        members,
+        link_data_access=cast(Any, None),
+        inputs=cast(Any, None),
+        outputs=cast(Any, None),
+        node_id="hub-1",
+    )
+    connection = pins["connection"]
+    assert isinstance(connection, BoundOutputPin)
+    with pytest.raises(TypeError, match="gives its node out as a connection"):
+        connection.write(object())

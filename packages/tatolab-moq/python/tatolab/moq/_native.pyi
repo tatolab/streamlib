@@ -105,7 +105,7 @@ class MoqTrackReceiveThread:
         codec: str | None = None,
     ) -> MoqTrackReceiveThread:
         """Ask `gateway_node` for `track` of `broadcast`; a `family` other than
-        `packets` or `records` raises `ValueError`."""
+        `packets` or `named` raises `ValueError`."""
 
     def stop_and_join(self, timeout_seconds: float) -> bool:
         """Ask the thread to stop and wait up to `timeout_seconds`: `True` when it ended."""

@@ -1,39 +1,43 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A records source that counts, and a sink that reports what reached it."""
+"""A source that counts in `MoqRecord`s, and a sink that reports what reached it."""
 
 import json
+from typing import Annotated
 
-from tatolab.stream import Input, Output, Records, log, node
+from tatolab.moq import MoqRecord
+from tatolab.stream import InputPin, OutputPin, StreamDelivery, log, node
 
 #: The marker the sink logs each record it reads under, with the record's count.
 RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER = "RECORD_RECEIVED_THROUGH_THE_RELAY"
 
 
-@node.process(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class CountingRecordsSource:
-    """Writes `{"count": n}`, n rising from 0, every tick."""
+    """Writes `MoqRecord({"count": n})`, n rising from 0, every tick."""
+
+    records_to_downstream: OutputPin[MoqRecord]
 
     def __init__(self) -> None:
         self.count = 0
 
-    records_to_downstream = Output(Records)
-
     def process(self, ctx) -> None:
-        ctx.outputs.write(self.records_to_downstream, {"count": self.count})
+        del ctx
+        self.records_to_downstream.write(MoqRecord({"count": self.count}))
         self.count += 1
 
 
-@node.process
+@node
 class ReportsEachRecordReceivedSink:
     """Logs each record it reads under `RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER`."""
 
-    records_from_upstream = Input(Records, delivery="ordered")
+    records_from_upstream: InputPin[Annotated[MoqRecord, StreamDelivery("ordered")]]
 
     def process(self, ctx) -> None:
-        while (record := ctx.inputs.read(self.records_from_upstream)) is not None:
+        del ctx
+        while (record := self.records_from_upstream.read()) is not None:
             log.info(
                 f"MARKER:{RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER} "
-                + json.dumps({"count": record["count"]})
+                + json.dumps({"count": record.members["count"]})
             )

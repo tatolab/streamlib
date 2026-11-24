@@ -9,7 +9,7 @@
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use super::NODE_INPUT_VALUES_KEY;
+use super::{NODE_INPUT_VALUES_KEY, a_link};
 
 /// The core node type that makes a Color from its parts, as the Core Nodes project names it.
 const COMBINE_COLOR_NODE_TYPE: &str = "core_nodes.combine_and_separate:CombineColor";
@@ -231,10 +231,12 @@ fn the_input_merged(
                 }
             }
         }
-        links.push(json!({
-            "source": {"node": combining_node_id, "port": COMBINED_OUTPUT},
-            "target": {"node": node_id, "port": row.input},
-        }));
+        links.push(a_link(
+            &combining_node_id,
+            COMBINED_OUTPUT,
+            &node_id,
+            row.input,
+        ));
         Some(the_combining_node(
             node,
             row,

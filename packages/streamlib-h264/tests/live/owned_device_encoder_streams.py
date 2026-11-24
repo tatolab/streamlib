@@ -58,7 +58,7 @@ def test_pattern_through_an_owned_device_encoder(
     gateway = stream_builder.add(
         MoqGateway,
         name=f"gateway_{stream_number}",
-        config={
+        input_values={
             "kind": "moq-relay",
             "relay_url": relay_url,
             "broadcast": broadcast_of_owned_device_encoder_stream(stream_number),
@@ -67,10 +67,10 @@ def test_pattern_through_an_owned_device_encoder(
     encoded_video_track = stream_builder.add(
         MoqTrack,
         name=f"encoded_video_track_{stream_number}",
-        config={"gateway": gateway, "track": ENCODED_VIDEO_TRACK},
+        input_values={"track": ENCODED_VIDEO_TRACK},
     )
-    send = stream_builder.add(
-        MoqTrackSend, name=f"send_{stream_number}", config={"track": encoded_video_track}
-    )
+    stream_builder.connect(gateway.output("connection"), encoded_video_track.input("gateway"))
+    send = stream_builder.add(MoqTrackSend, name=f"send_{stream_number}")
+    stream_builder.connect(encoded_video_track.output("connection"), send.input("track"))
     stream_builder.connect(test_pattern.output("video"), encoder.input("video"))
     stream_builder.connect(encoder.output("encoded_video"), send.input("content"))

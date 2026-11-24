@@ -35,8 +35,8 @@ const CONTENT_SAMPLES_A_PASS_WRITES: usize = 64;
 pub enum MoqReceivedTrackFamily {
     /// Packets units coded as the codec named; empty for a plain byte stream.
     Packets { codec: String },
-    /// Records messages, each one msgpack map.
-    Records,
+    /// A module's named type, each object the bytes its class packs.
+    Named,
 }
 
 /// Where a receive node writes what its gateway reads.
