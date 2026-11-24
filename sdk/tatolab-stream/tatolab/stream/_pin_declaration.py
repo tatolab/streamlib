@@ -50,7 +50,7 @@ from ._input_declaration_annotations import (
     INPUT_DECLARATION_ANNOTATION_CLASSES,
     StreamDelivery,
 )
-from ._named_pin_type_declaration import named_pin_type_declared_by
+from ._module_declared_pin_type import the_pin_type_of_a_module_declared_type, the_spelling_of_a_module_declared_type
 from ._node_reference_class import is_the_node_reference_class
 from ._pin_annotations_on_the_wire import (
     ANNOTATION_NAME_OF_EACH_CLASS,
@@ -690,9 +690,9 @@ class _PinReading:
                     "field_typed_as_a_stream" if self._form == "field" else "pin_type_not_read_yet",
                 )
             return bundle
-        named = named_pin_type_declared_by(written_type)
-        if named is not None:
-            return {"type": "named", "named_pin_type": named.import_path}  # pyright: ignore[reportReturnType]
+        module_declared = the_pin_type_of_a_module_declared_type(written_type, pin_named=self._pin_named, read_where_a_connection_goes=not as_an_element and self._member_of is None and (self._form, self._direction) in (("field", "input"), ("pin", "output")), refusal=self._refusal)  # pyright: ignore[reportArgumentType]
+        if module_declared is not None:
+            return module_declared  # pyright: ignore[reportReturnType]
         if exact_size is None:
             pin_type: PinType = {"type": spelling.pin_type_name}  # pyright: ignore[reportAssignmentType]
             return pin_type
@@ -848,8 +848,8 @@ class _PinReading:
             or written_type in STREAM_PIN_TYPE_CLASSES
         ):
             return written_type.__name__  # pyright: ignore[reportAttributeAccessIssue]
-        if named_pin_type_declared_by(written_type) is not None:
-            return "named_pin_type"
+        if (module_declared_spelling := the_spelling_of_a_module_declared_type(written_type)) is not None:
+            return module_declared_spelling
         if written_type is PinTypeChoice:
             return "PinTypeChoice"
         if is_the_node_reference_class(written_type):

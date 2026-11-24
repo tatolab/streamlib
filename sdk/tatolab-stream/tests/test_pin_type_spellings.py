@@ -42,6 +42,11 @@ class ProbeReading:
         return bytes([self.level])
 
 
+@tatolab.stream.connection_type
+class ProbeConnection(tatolab.stream.Connection):
+    pass
+
+
 @dataclass(frozen=True)
 class ProbeSettings:
     level: float = 0.0
@@ -83,6 +88,7 @@ A_VALUE_OF_EACH_SPELLING: dict[str, object] = {
     "list": [0.25, 0.5],
     "dataclass": ProbeSettings(),
     "named_pin_type": NO_DEFAULT,
+    "connection_type": NO_DEFAULT,
 }
 
 # The type written for each spelling that names a family of types rather than one.
@@ -91,6 +97,7 @@ A_TYPE_OF_EACH_GENERIC_SPELLING: dict[str, object] = {
     "list": list[float],
     "dataclass": ProbeSettings,
     "named_pin_type": ProbeReading,
+    "connection_type": ProbeConnection,
 }
 
 # The exact sizes a single pin refuses: each types only a List or Tensor element.
@@ -119,12 +126,14 @@ def test_each_spelling_the_typed_grammar_reads_resolves_and_names_its_pin_type(
             )
         return
 
+    # A connection is taken only on a class node's field, the one input its lowered wire reaches.
     declared = read_pin_declaration(
         "Probe",
         "value",
         written_type,
         default=A_VALUE_OF_EACH_SPELLING[spelling.written_form],
         direction="input",
+        form="field" if spelling.written_form == "connection_type" else "function",
     )
 
     declared_pin_type = declared.declaration["pin_type"]

@@ -216,7 +216,7 @@ def refuse_a_member_type_a_bundle_does_not_hold(
         )
     if (
         (spelling.only_a_pin_carries and not carried_by_reference)
-        or spelling.written_form == "named_pin_type"
+        or spelling.written_form in ("named_pin_type", "connection_type")
     ) and not as_an_element:
         raise refusal(
             f"{member_named} is typed {name_of(written_type)}, a {row.label}, which a bundle does "
