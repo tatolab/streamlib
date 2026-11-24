@@ -10,10 +10,18 @@ intro, a build, a drop, a break and a second drop, so every part of the spectrum
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from typing import Annotated
 
 import numpy
-from tatolab.stream import Channels, Output, RuntimeContextLimitedAccess, log, node
+from tatolab.stream import (
+    Audio,
+    Description,
+    NumberRange,
+    OutputPin,
+    RuntimeContextLimitedAccess,
+    log,
+    node,
+)
 
 SAMPLE_RATE = 48_000
 CHANNELS = 2
@@ -185,35 +193,26 @@ def render_the_loop() -> numpy.ndarray:
     return numpy.ascontiguousarray(mixed.astype(numpy.float32))
 
 
-@dataclass
-class SynthSongConfig:
-    """How loud the loop plays."""
-
-    volume: float = 0.13
-
-
 @node.meta(
     category="Paint Pulse",
     description="An original 32-second dance loop with an intro, build, drop and break, played on repeat.",
 )
-@node.process(execution="continuous", interval_ms=5)
+@node(execution="continuous", interval_ms=5)
 class SynthSong:
     """The loop, streamed in real time and wrapped at its end."""
 
-    audio = Output(Channels, rate=SAMPLE_RATE, dtype="f32", description="The song, in stereo")
+    volume: Annotated[
+        float, NumberRange(minimum=0.0, maximum=1.0), Description("How loud the loop plays.")
+    ] = 0.13
+    audio: OutputPin[Annotated[Audio, Description("The song, in stereo")]]
 
-    def __init__(self, config: SynthSongConfig) -> None:
+    def __init__(self) -> None:
         self.loop = render_the_loop()
-        self.volume = 0.8
-        self.configure(config)
         self.run_anchor_timestamp_ns: int | None = None
         self.start_sample_of_this_run = 0
         self.samples_emitted_in_this_run = 0
         self.position_in_the_loop = 0
         log.info("rendered the loop", seconds=self.loop.shape[1] / SAMPLE_RATE)
-
-    def configure(self, config: SynthSongConfig) -> None:
-        self.volume = min(1.0, max(0.0, float(config.volume)))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         now_ns = ctx.time
@@ -226,7 +225,7 @@ class SynthSong:
             self.samples_emitted_in_this_run = 0
             samples_owed = 0
         while self.samples_emitted_in_this_run + BLOCK_SIZE <= samples_owed:
-            self._publish_one_block(ctx)
+            self._publish_one_block()
 
     def _next_block(self) -> numpy.ndarray:
         length = self.loop.shape[1]
@@ -234,16 +233,16 @@ class SynthSong:
         self.position_in_the_loop = (self.position_in_the_loop + BLOCK_SIZE) % length
         return numpy.ascontiguousarray(self.loop[:, indices] * numpy.float32(self.volume))
 
-    def _publish_one_block(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def _publish_one_block(self) -> None:
         assert self.run_anchor_timestamp_ns is not None
         timestamp_ns = (
             self.run_anchor_timestamp_ns
             + (self.samples_emitted_in_this_run * NANOSECONDS_PER_SECOND) // SAMPLE_RATE
         )
-        ctx.outputs.write(
-            self.audio,
+        self.audio.write(
             self._next_block(),
             start_sample=self.start_sample_of_this_run + self.samples_emitted_in_this_run,
             timestamp_ns=timestamp_ns,
+            sample_rate=SAMPLE_RATE,
         )
         self.samples_emitted_in_this_run += BLOCK_SIZE

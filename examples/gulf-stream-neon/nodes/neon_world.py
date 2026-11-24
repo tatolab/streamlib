@@ -267,16 +267,64 @@ STAGE_HOME = {
 }
 
 
-def stage_moment(stage: dict | None, time_of_day: float, morph: float) -> TakeMoment:
-    """The camera the stage view steers: an orbit around a point on the sea.
+@dataclass(frozen=True)
+class StageCamera:
+    """The stage view's camera: the point it orbits (`target_x`, `target_y`, in world units),
+    how far away (`distance`), the heading and tilt (`yaw_degrees` from north, `pitch_degrees`
+    down), and how many eddies it has dropped (`bursts`) and where the last one fell."""
 
-    `stage` is the view's camera record: the point it orbits (`target_x`,
-    `target_y`, in world units), how far away (`distance`), and the heading and
-    tilt (`yaw_degrees` from north, `pitch_degrees` down). Missing keys keep
-    their home values.
-    """
-    view = dict(STAGE_HOME)
-    view.update({key: float(value) for key, value in (stage or {}).items() if key in STAGE_HOME})
+    target_x: float = STAGE_HOME["target_x"]
+    target_y: float = STAGE_HOME["target_y"]
+    distance: float = STAGE_HOME["distance"]
+    yaw_degrees: float = STAGE_HOME["yaw_degrees"]
+    pitch_degrees: float = STAGE_HOME["pitch_degrees"]
+    bursts: int = 0
+    burst_x: float = 0.0
+    burst_y: float = 0.0
+
+
+@dataclass(frozen=True)
+class Look:
+    """The stage's look: the real map to neon morph, the time of day, the skyline, the neon and
+    the current's speed."""
+
+    morph: float = 0.0
+    time_of_day: float = 0.3
+    skyline_height: float = 0.055
+    neon: float = 1.0
+    current_speed: float = 1.0
+
+
+@dataclass(frozen=True)
+class SoundtrackPulseReading:
+    """The soundtrack at one step: the kick's envelope and the loudness, 0 to 1, and the glow
+    the loudness lends the contours."""
+
+    beat: float = 0.0
+    energy: float = 0.0
+    glow: float = 1.0
+
+
+@dataclass(frozen=True)
+class StationReading:
+    """One reading of a NOAA station, each value 0 where the station gave none, and `live` 1
+    when it came from the station's live feed rather than the replayed snapshot."""
+
+    station: float = 0.0
+    observed_at_unix: float = 0.0
+    water_level_m: float = 0.0
+    wind_speed_mps: float = 0.0
+    wind_from_degrees: float = 0.0
+    wind_gust_mps: float = 0.0
+    air_temperature_c: float = 0.0
+    water_temperature_c: float = 0.0
+    air_pressure_hpa: float = 0.0
+    live: float = 0.0
+
+
+def stage_moment(stage: StageCamera, time_of_day: float, morph: float) -> TakeMoment:
+    """The camera the stage view steers: an orbit around `stage`'s point on the sea."""
+    view = {key: getattr(stage, key) for key in STAGE_HOME}
     pitch = min(max(view["pitch_degrees"], 2.0), 89.9)
     distance = min(max(view["distance"], 0.02), 6.0)
     forward, _right, _up = camera_basis(view["yaw_degrees"], pitch)
