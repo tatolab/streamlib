@@ -224,6 +224,7 @@ pub fn pyproject_of_a_sample_standing_on_its_own(
         .as_table_mut()
         .context("pyproject.toml's [tool.uv] is not a table")?;
     uv.set_implicit(true);
+    let mut kept_workspace_packages = Vec::new();
     if let Some(sources) = uv
         .get_mut("sources")
         .and_then(toml_edit::Item::as_table_like_mut)
@@ -233,6 +234,7 @@ pub fn pyproject_of_a_sample_standing_on_its_own(
             .filter(|(_, source)| source.get("path").is_some())
             .map(|(distribution_name, _)| distribution_name.to_owned())
             .collect();
+        let mut workspace_path_sources_kept = Vec::new();
         for distribution_name in workspace_path_sources {
             match modules_from {
                 WhereASamplesFirstPartyModulesComeFrom::TatolabsIndex => {
@@ -261,12 +263,23 @@ pub fn pyproject_of_a_sample_standing_on_its_own(
                     if let (Some(decor), Some(value)) = (decor, path_item.as_value_mut()) {
                         *value.decor_mut() = decor;
                     }
+                    workspace_path_sources_kept.push(distribution_name);
                 }
             }
         }
         if sources.is_empty() {
             uv.remove("sources");
         }
+        kept_workspace_packages = workspace_path_sources_kept;
+    }
+    // uv rebuilds a directory source only when its `pyproject.toml` changes, so a native
+    // module's Rust changed since the last sync would run as it was built then: each kept
+    // package is reinstalled, and so rebuilt, at every sync.
+    if !kept_workspace_packages.is_empty() {
+        uv.insert(
+            "reinstall-package",
+            toml_edit::value(toml_edit::Array::from_iter(kept_workspace_packages)),
+        );
     }
     let indexes = uv
         .entry("index")
@@ -348,6 +361,7 @@ mod tests {
         assert!(staged.contains("# The camera."), "{staged}");
         let uv = &staged_pyproject["tool"]["uv"];
         assert!(uv.get("sources").is_none(), "{staged}");
+        assert!(uv.get("reinstall-package").is_none(), "{staged}");
         assert_eq!(
             uv["index"],
             toml::Value::try_from([toml::Table::from_iter([
@@ -387,6 +401,11 @@ mod tests {
         );
         assert_eq!(sources["tatolab-camera"]["editable"].as_bool(), Some(true));
         assert_eq!(sources["torch"]["index"].as_str(), Some("pytorch"));
+        assert_eq!(
+            staged_pyproject["tool"]["uv"]["reinstall-package"],
+            toml::Value::try_from(["tatolab-camera"]).unwrap(),
+            "a kept package is rebuilt at every sync, its Rust read afresh: {staged}"
+        );
     }
 
     #[test]
