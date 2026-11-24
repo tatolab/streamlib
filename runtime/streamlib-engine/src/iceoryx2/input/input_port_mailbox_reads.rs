@@ -126,6 +126,7 @@ impl InputMailboxesInner {
                         whole_payload,
                         &mut port_config.newest_of_each_member_put_at_the_read,
                         set_on_the_input.get(&bound.local_port),
+                        self.claim_of_the_pooled_gpu_frames_its_bundles_hold.get(),
                     ) {
                         Ok(Some((member_header, member_payload))) => {
                             channel_user_header = member_header;

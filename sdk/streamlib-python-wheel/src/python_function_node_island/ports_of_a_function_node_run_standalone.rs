@@ -23,7 +23,7 @@ pub(crate) fn read_the_message_at_an_input_port_unread(
             message: Arc::new(
                 MessageAFunctionNodeIslandHolds::hold_a_message_read_off_its_channel(
                     &message,
-                    &link_data_access.claim_of_the_pooled_gpu_frames_its_islands_hold(),
+                    &link_data_access.claim_of_the_pooled_gpu_frames_this_helper_holds(),
                     input_port,
                 ),
             ),

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib::sdk::iceoryx2::GpuPoolSlotFrameDescriptorBody;
 
 /// Hands its message input on while its second input is on, else nothing:
 /// a message travels as the token of the input holding it, and the slot
@@ -238,7 +239,7 @@ fn a_pooled_gpu_frame_a_message_names_is_claimed_while_the_island_holds_it_and_r
             claims_noted_by_the_island
                 .lock()
                 .push(Arc::downgrade(&claim));
-            Ok(Some(Box::new(claim) as PooledGpuFrameClaimAnIslandHolds))
+            Ok(Some(Box::new(claim) as PooledGpuFrameClaimAMessageHolds))
         }),
     );
     let pooled_gpu_frame = GpuPoolSlotFrameDescriptorBody {

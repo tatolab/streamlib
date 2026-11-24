@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use streamlib_ipc_types::DataChannelSampleUserHeader;
+use streamlib_ipc_types::{
+    DataChannelPayloadDescriptor, DataChannelSampleUserHeader, GpuPoolSlotFrameDescriptorBody,
+};
 
 use super::MemberTakenAtTheRead;
 use crate::core::descriptors::{BundleMember, PinType};
@@ -23,24 +25,104 @@ use crate::core::pin_value_packing::{
     the_records_message_of_members_of_a_bundle, unpack_pin_value,
 };
 
+/// What holds a pooled GPU frame against its producer's reuse while a message held names it;
+/// the frame is let go as it drops.
+pub type PooledGpuFrameClaimAMessageHolds = Box<dyn Send + Sync>;
+
+/// Claims the pooled GPU frame a message names, in the process that reads it; `Ok(None)` where
+/// nothing in that process covers the frame's pool.
+pub type ClaimOfThePooledGpuFrameAMessageNames = Box<
+    dyn Fn(
+            GpuPoolSlotFrameDescriptorBody,
+        ) -> Result<Option<PooledGpuFrameClaimAMessageHolds>, String>
+        + Send
+        + Sync,
+>;
+
 /// The newest of each member the links into one bundle input have carried: each small member's
 /// value, and each Texture, Audio or encoded member's message as it travelled, by member name. A
 /// newer message of a member replaces the one held, and a member whose link is removed is
-/// forgotten. A Texture held here is its descriptor alone and claims nothing; its reader claims
-/// the slot when it reads the bundle, as it would a Texture off a wire of its own.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// forgotten. A Texture held here keeps a claim on its frame, so every bundle re-sent with it
+/// names a frame its producer has not handed out again, however long its link is quiet; its
+/// reader's own claim, when it reads the bundle, lands on that one.
+#[derive(Debug, Default)]
 pub(crate) struct NewestOfEachMemberPutAtTheRead {
     /// Each small member's newest value, by name.
     pub(crate) small_members: Map<String, Value>,
     /// Each Texture, Audio or encoded member's newest message, by name.
-    pub(crate) heavy_members: BTreeMap<String, PackedPinValue>,
+    heavy_members: BTreeMap<String, HeldHeavyMember>,
+}
+
+/// A Texture, Audio or encoded member's newest message, and the claim on the frame it names.
+struct HeldHeavyMember {
+    message: PackedPinValue,
+    claim_on_its_frame: Option<PooledGpuFrameClaimAMessageHolds>,
+}
+
+impl std::fmt::Debug for HeldHeavyMember {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HeldHeavyMember")
+            .field("message", &self.message)
+            .field("its_frame_is_claimed", &self.claim_on_its_frame.is_some())
+            .finish()
+    }
 }
 
 impl NewestOfEachMemberPutAtTheRead {
-    /// Forget what the link into member `member` carried.
+    /// Forget what the link into member `member` carried, letting go of the frame it named.
     pub(crate) fn forget_the_member(&mut self, member: &str) {
         self.small_members.remove(member);
         self.heavy_members.remove(member);
+    }
+
+    /// Hold `payload`, the newest message of the heavy member `member`, of `descriptor`, over
+    /// the one held before: its bytes moved in when owned, else copied into the buffer held
+    /// before, and the frame it names claimed through `claim_of_a_pooled_gpu_frame` before the
+    /// one held on the frame before is let go. No claim is held for a message naming no pooled
+    /// frame, before the reading process can claim one, or when the claim is refused, which is
+    /// warned of.
+    fn hold_a_heavy_members_message(
+        &mut self,
+        member: &str,
+        descriptor: DataChannelPayloadDescriptor,
+        payload: Cow<'_, [u8]>,
+        claim_of_a_pooled_gpu_frame: Option<&ClaimOfThePooledGpuFrameAMessageNames>,
+    ) {
+        let claim_on_its_frame = descriptor
+            .pooled_gpu_frame_it_names()
+            .zip(claim_of_a_pooled_gpu_frame)
+            .and_then(|(frame, claim)| {
+                claim(frame).unwrap_or_else(|refusal| {
+                    tracing::warn!(
+                        member,
+                        "the frame a bundle member holds could not be claimed, so the bundles \
+                         re-sent with it may name a frame its producer has handed out again: \
+                         {refusal}"
+                    );
+                    None
+                })
+            });
+        match (self.heavy_members.get_mut(member), payload) {
+            (Some(held), Cow::Borrowed(bytes)) => {
+                held.message.payload_descriptor = descriptor;
+                held.message.payload.clear();
+                held.message.payload.extend_from_slice(bytes);
+                held.claim_on_its_frame = claim_on_its_frame;
+            }
+            (_, payload) => {
+                self.heavy_members.insert(
+                    member.to_owned(),
+                    HeldHeavyMember {
+                        message: PackedPinValue {
+                            payload_descriptor: descriptor,
+                            payload: payload.into_owned(),
+                        },
+                        claim_on_its_frame,
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -75,7 +157,8 @@ impl MemberPutAtTheRead {
     /// bytes; `None` while the whole bundle still lacks a small member that declares no default
     /// or a Texture, Audio or encoded member, which a default never stands in for. A
     /// whole bundle reads each member no link has carried from `set_on_the_input`, the value set
-    /// on its input, when that holds it. Fails saying why the message carries no value of the
+    /// on its input, when that holds it. A Texture member's frame is held through
+    /// `claim_of_a_pooled_gpu_frame`. Fails saying why the message carries no value of the
     /// member, or what it builds does not pack.
     pub(crate) fn the_message_built_with_the_member(
         &self,
@@ -83,8 +166,9 @@ impl MemberPutAtTheRead {
         payload: Cow<'_, [u8]>,
         newest: &mut NewestOfEachMemberPutAtTheRead,
         set_on_the_input: Option<&Map<String, Value>>,
+        claim_of_a_pooled_gpu_frame: Option<&ClaimOfThePooledGpuFrameAMessageNames>,
     ) -> Result<Option<(DataChannelSampleUserHeader, Vec<u8>)>, String> {
-        self.hold_the_members_message(header, payload, newest)?;
+        self.hold_the_members_message(header, payload, newest, claim_of_a_pooled_gpu_frame)?;
         let packed = match self.put_into {
             WhatTheMembersArePutInto::TheWholeBundle => {
                 let small_members = self.the_small_members_set_with_the_newest_over_them(
@@ -120,13 +204,15 @@ impl MemberPutAtTheRead {
 
     /// Hold `payload`, the member's message whose header is `header`, in `newest` over the one
     /// held before: a small member's value, or a heavy member's message as it travelled, its
-    /// bytes moved in when owned, else copied into the buffer held before. Fails saying why the
-    /// message carries no value of the member, holding nothing new.
+    /// bytes moved in when owned, else copied into the buffer held before, and the frame it names
+    /// claimed through `claim_of_a_pooled_gpu_frame` before the one held before is let go. Fails
+    /// saying why the message carries no value of the member, holding nothing new.
     fn hold_the_members_message(
         &self,
         header: &DataChannelSampleUserHeader,
         payload: Cow<'_, [u8]>,
         newest: &mut NewestOfEachMemberPutAtTheRead,
+        claim_of_a_pooled_gpu_frame: Option<&ClaimOfThePooledGpuFrameAMessageNames>,
     ) -> Result<(), String> {
         let member_type = &self.member.member_type;
         if !member_type.is_a_heavy_type() {
@@ -145,22 +231,12 @@ impl MemberPutAtTheRead {
             &header.payload_descriptor,
             "the message",
         )?;
-        match (newest.heavy_members.get_mut(&self.member.name), payload) {
-            (Some(held), Cow::Borrowed(bytes)) => {
-                held.payload_descriptor = header.payload_descriptor;
-                held.payload.clear();
-                held.payload.extend_from_slice(bytes);
-            }
-            (_, payload) => {
-                newest.heavy_members.insert(
-                    self.member.name.clone(),
-                    PackedPinValue {
-                        payload_descriptor: header.payload_descriptor,
-                        payload: payload.into_owned(),
-                    },
-                );
-            }
-        }
+        newest.hold_a_heavy_members_message(
+            &self.member.name,
+            header.payload_descriptor,
+            payload,
+            claim_of_a_pooled_gpu_frame,
+        );
         Ok(())
     }
 
@@ -180,8 +256,8 @@ impl MemberPutAtTheRead {
             .iter()
             .map(|(name, held)| HeavyMemberOfABundleFrame {
                 name,
-                descriptor: held.payload_descriptor,
-                payload: &held.payload,
+                descriptor: held.message.payload_descriptor,
+                payload: &held.message.payload,
             })
             .collect();
         the_bundle_frame_of_a_bundle(&self.bundle, &Value::Object(small_members), &heavy_members)
@@ -253,15 +329,17 @@ impl BundleMembersAtTheRead {
     /// The message the port hands its reader once `payload`, a message of the link's output
     /// whose header is `header`, has arrived: the member taken from it, put into what the port
     /// reads with `newest`, each member's newest value, taking it, over `set_on_the_input`, the
-    /// value set on its input. `None` while that is a whole bundle still lacking a member that
-    /// declares no default, or a heavy member. Fails saying why the message gives no member the
-    /// link reads.
+    /// value set on its input, a Texture member's frame held through
+    /// `claim_of_a_pooled_gpu_frame`. `None` while that is a whole bundle still lacking a member
+    /// that declares no default, or a heavy member. Fails saying why the message gives no member
+    /// the link reads.
     pub(super) fn the_message_the_port_reads(
         &self,
         header: &DataChannelSampleUserHeader,
         payload: &[u8],
         newest: &mut NewestOfEachMemberPutAtTheRead,
         set_on_the_input: Option<&Map<String, Value>>,
+        claim_of_a_pooled_gpu_frame: Option<&ClaimOfThePooledGpuFrameAMessageNames>,
     ) -> Result<Option<(DataChannelSampleUserHeader, Vec<u8>)>, String> {
         let (header, payload) = match &self.taken_from_its_output {
             Some(taken) => {
@@ -271,9 +349,13 @@ impl BundleMembersAtTheRead {
             None => (*header, Cow::Borrowed(payload)),
         };
         match &self.put_into_its_input {
-            Some(put) => {
-                put.the_message_built_with_the_member(&header, payload, newest, set_on_the_input)
-            }
+            Some(put) => put.the_message_built_with_the_member(
+                &header,
+                payload,
+                newest,
+                set_on_the_input,
+                claim_of_a_pooled_gpu_frame,
+            ),
             None => Ok(Some((header, payload.into_owned()))),
         }
     }

@@ -161,6 +161,11 @@ fn spawn_dedicated_thread(
         .iceoryx2_input_mailboxes_inner()
     {
         input_mailboxes_inner.reach_the_stream_clock(Arc::clone(&runtime_ctx.stream_clock));
+        input_mailboxes_inner.reach_the_claim_of_the_pooled_gpu_frames_its_bundles_hold(
+            runtime_ctx
+                .gpu
+                .claim_of_a_pooled_gpu_frame_against_producer_reuse(),
+        );
     }
     let node_arc_clone = Arc::clone(&node_to_attach.node_instance);
     let thread_kind = match runtime {

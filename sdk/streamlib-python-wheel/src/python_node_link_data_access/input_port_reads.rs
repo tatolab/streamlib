@@ -459,15 +459,7 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
         }
     }
     let mut pooled_gpu_frame_claim = None;
-    let pooled_frame_the_message_carries = match payload_descriptor.known_kind() {
-        Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame) => Some(
-            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
-        ),
-        Ok(DataChannelPayloadDescriptorKind::ImageFrame) => {
-            Some(ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body).slot)
-        }
-        _ => None,
-    };
+    let pooled_frame_the_message_carries = payload_descriptor.pooled_gpu_frame_it_names();
     if let (Some(pooled_frame), Some(gpu_limited_access)) =
         (pooled_frame_the_message_carries, offered_gpu_limited_access)
     {
