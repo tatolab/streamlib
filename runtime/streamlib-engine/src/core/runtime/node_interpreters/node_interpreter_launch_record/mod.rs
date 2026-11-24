@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::compiler::compiler_ops::node_interpreter_describe::{
-    INSTALLED_MODULES_DESCRIBE_BOUND, a_node_interpreter_describes,
+    LAUNCH_DESCRIBE_BOUND, a_node_interpreter_describes,
     describe_and_register_node_types_in_a_node_interpreter,
-    describe_the_node_types_installed_modules_declare_within,
-    register_the_node_types_installed_modules_declare,
+    describe_the_node_types_of_the_streams_launch_within,
+    register_the_node_types_described_at_the_streams_launch,
 };
 use crate::core::compiler::compiler_ops::node_interpreter_saved_value_cast::{
     WhereAConversionRunsOutOfStream, the_saved_value_cast_of_a_function_node_conversion,
@@ -137,12 +137,13 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         self.describe_and_register(std::slice::from_ref(node_type), lend_directory)
     }
 
-    /// Describe every class installed distributions declare in `tatolab.nodes`
-    /// and register each into this stream, so its catalog lists them before a
-    /// graph names one. A stream with no environment or no lend directory has
+    /// Describe every class installed distributions declare in `tatolab.nodes`,
+    /// and every class the project's own code declares, and register each into
+    /// this stream, so its catalog and its bundle menu list them before a graph
+    /// names one. A stream with no environment or no lend directory has
     /// no interpreter to read them in; a describe that fails is warned about
     /// and leaves the stream as it was, since no graph depends on it.
-    pub(crate) fn describe_and_register_the_node_types_installed_modules_declare(
+    pub(crate) fn describe_and_register_the_node_types_of_the_streams_launch(
         &self,
         lend_directory: Option<&Path>,
     ) {
@@ -155,10 +156,10 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             stream_environment,
             lend_directory,
         );
-        let described = describe_the_node_types_installed_modules_declare_within(
+        let described = describe_the_node_types_of_the_streams_launch_within(
             stream_environment,
             lend_directory,
-            INSTALLED_MODULES_DESCRIBE_BOUND,
+            LAUNCH_DESCRIBE_BOUND,
             &self.the_stream_its_helpers_belong_to,
             &|| {
                 self.runs_out_of_stream_interrupted_by_the_host
@@ -170,13 +171,14 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             Err(refusal) => {
                 tracing::warn!(
                     %refusal,
-                    "the stream's installed modules were not described, so its node catalog \
-                     lists none of their node types"
+                    "the stream's installed modules and its project's own code were not \
+                     described, so its node catalog lists none of their node types until a \
+                     graph names one"
                 );
                 return;
             }
         };
-        let registered = register_the_node_types_installed_modules_declare(
+        let registered = register_the_node_types_described_at_the_streams_launch(
             &self.node_types_this_stream_resolves,
             described,
             stream_environment,

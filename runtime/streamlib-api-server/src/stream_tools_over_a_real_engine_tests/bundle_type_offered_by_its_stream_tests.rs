@@ -344,3 +344,99 @@ async fn a_bundle_saved_unnamed_is_put_back_by_an_undo_of_a_set_over_it() {
         json!({ "bundle_type": a_tone() })
     );
 }
+
+/// The port `name` of `pin_type` as a node interpreter describes it.
+fn a_described_port(name: &str, pin_type: PinType) -> Value {
+    json!({
+        "name": name,
+        "description": "",
+        "family": PortFamilyDeclaration::of_family(
+            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
+        ),
+        "delivery_profile": "newest",
+        "pin_declaration": PinDeclaration::exactly(pin_type),
+    })
+}
+
+/// The class `node_type` of the project's own code, as its interpreter describes it.
+fn a_described_class_of_the_projects_own_code(
+    node_type: &str,
+    input_ports: Vec<Value>,
+    output_ports: Vec<Value>,
+) -> Value {
+    json!({
+        "import_path": node_type,
+        "short_name": node_type.rsplit(':').next().expect("a short name"),
+        "description": "",
+        "kind": "process",
+        "execution": { "mode": "reactive" },
+        "scheduling_priority": null,
+        "paced_by_real_time": false,
+        "config_schema": { "type": "object" },
+        "input_ports": input_ports,
+        "output_ports": output_ports,
+    })
+}
+
+/// A stream whose project's own code declares a `Thermometer` giving a reading and a `Synth`
+/// taking a tone, holding only a placed Make Bundle, offers both bundles: the stream's
+/// interpreter describes the project's classes when the stream loads, before a node names one.
+///
+/// Mental-revert: describing only the classes installed distributions declare at load leaves the
+/// project's own unnamed until a node of one is placed, and the Make Bundle offers no bundle.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_make_bundle_placed_alone_offers_the_bundles_its_projects_own_code_declares() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main", "nodes": [], "links": [],
+    }));
+    let described = json!({
+        "described_node_types": [
+            a_described_class_of_the_projects_own_code(
+                THERMOMETER_TYPE,
+                Vec::new(),
+                vec![a_described_port("reading", a_reading())],
+            ),
+            a_described_class_of_the_projects_own_code(
+                SYNTH_TYPE,
+                vec![a_described_port("tone", a_tone())],
+                Vec::new(),
+            ),
+        ],
+        "refused_node_types": [],
+        "installed_modules": [],
+        "project_node_types": [THERMOMETER_TYPE, SYNTH_TYPE],
+    });
+    write_an_executable_script_from_a_child_process(
+        &project.interpreter(),
+        &format!(
+            "#!/bin/sh\ncase \"$*\" in\n*--describe-installed-modules*)\n\
+             cat <<'DESCRIBED'\n{described}\nDESCRIBED\n;;\nesac\nexit 0\n"
+        ),
+    );
+
+    streamlib_media_builtins::register_media_builtin_node_types();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({
+                "author": an_agent_named("alice"),
+                "operations": [
+                    { "operation": "add_node", "stream": project.stream_asset_of("main"),
+                      "type": MakeBundle::node_class_import_path().as_str(), "name": "make" },
+                ],
+            }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the Make Bundle is placed: {refusal:?}"));
+
+    assert_eq!(
+        the_bundle_type_served_on(&engine, &stream_id, "make").await,
+        json!({
+            "type": "pin_type_choice",
+            "among": [a_reading(), a_tone()],
+            "among_the_bundles_its_stream_declares": true,
+        })
+    );
+}
