@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { controlContractIssues, isControlContractValue } from "../contract.js";
+import { controlContractIssues } from "../contract.js";
 
 const examples = JSON.parse(
   await readFile(new URL("./bundle_pin_types_taken_and_refused.json", import.meta.url), "utf8"),
@@ -17,9 +17,9 @@ test("the checker takes each bundle the runtime takes", () => {
   }
 });
 
-test("the checker refuses each bundle the runtime refuses", () => {
+test("the checker refuses each bundle the runtime refuses, where a client sends one", () => {
   for (const { why, pin_type: pinType } of examples.refused) {
-    assert.equal(isControlContractValue("PinType", pinType), false, why);
+    assert.notDeepEqual(controlContractIssues("PinType", pinType, "sent"), [], why);
   }
 });
 

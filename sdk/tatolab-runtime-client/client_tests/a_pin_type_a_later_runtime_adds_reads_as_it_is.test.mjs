@@ -27,3 +27,23 @@ test("a known pin type that breaks its member's shape is still refused", () => {
 test("a pin type with no tag is still refused", () => {
   assert.equal(readControlContractValue("PinType", { among: ["x"] }).read, false);
 });
+
+const A_BUNDLE_HOLDING_A_LATER_TYPE = {
+  type: "bundle",
+  members: [
+    { name: "gain", member_type: { type: "float" } },
+    { name: "later", member_type: A_PIN_TYPE_NO_MEMBER_NAMES },
+    { name: "laters", member_type: { type: "list_of", element_type: A_PIN_TYPE_NO_MEMBER_NAMES } },
+  ],
+};
+
+test("a bundle holding a member of a type a later runtime adds is read as it is", () => {
+  assert.deepEqual(readControlContractValue("PinType", A_BUNDLE_HOLDING_A_LATER_TYPE), {
+    read: true,
+    value: A_BUNDLE_HOLDING_A_LATER_TYPE,
+  });
+});
+
+test("a bundle holding a member of a type a later runtime adds is still refused where a client sends one", () => {
+  assert.notDeepEqual(controlContractIssues("PinType", A_BUNDLE_HOLDING_A_LATER_TYPE, "sent"), []);
+});
