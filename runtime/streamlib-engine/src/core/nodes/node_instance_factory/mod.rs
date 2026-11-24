@@ -351,8 +351,9 @@ impl NodeInstanceFactory {
 
     /// Register `P` as [`Self::register`] does, its nodes taking a config of `C` whole as a
     /// node type not yet typed does: its descriptor carries `C`'s schema, and a config `C`
-    /// would not take is refused before any node of it is added. A Rust node holds no config,
-    /// so this is the node type a test of the path a config takes registers.
+    /// would not take is refused before any node of it is added, and a live edit of a node's
+    /// config is taken when `C` takes it. A Rust node holds no config, so this is the node type
+    /// a test of the path a config takes registers.
     #[cfg(any(test, feature = "test-support"))]
     pub fn register_taking_a_config_for_a_test<P, C>(&self)
     where
@@ -364,7 +365,10 @@ impl NodeInstanceFactory {
             descriptor_of::<P>()
                 .map(|descriptor| descriptor.with_config_schema(C::node_config_schema_document()))
                 .and_then(|descriptor| {
-                    self.register_host_compiled_node_type_taking::<P, C>(
+                    self.register_host_compiled_node_type_taking::<
+                        node_taking_a_config_for_a_test::NodeTakingAConfigForATest<P, C>,
+                        C,
+                    >(
                         descriptor,
                         |_| P::Config::default(),
                         WhatAConversionSupplies::default(),
@@ -899,6 +903,9 @@ fn refuse_an_output_that_may_be_unset(descriptor: &NodeDescriptor) -> Result<()>
         None => Ok(()),
     }
 }
+
+#[cfg(any(test, feature = "test-support"))]
+mod node_taking_a_config_for_a_test;
 
 #[cfg(test)]
 mod tests;

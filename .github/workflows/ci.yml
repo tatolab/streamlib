@@ -343,15 +343,6 @@ jobs:
         with:
           shared-key: linux
 
-      - name: Restore the compile-fail tests' build
-        if: github.event_name != 'pull_request'
-        id: restore-trybuild
-        uses: actions/cache/restore@v5
-        with:
-          path: target/tests/trybuild
-          key: trybuild-${{ runner.os }}-${{ steps.cache-rust-dependencies.outputs.external-crate-set-digest }}
-          restore-keys: trybuild-${{ runner.os }}-
-
       - name: Cache the Linux bundled Vulkan driver build
         uses: actions/cache@v5
         with:
@@ -402,13 +393,9 @@ jobs:
       - name: Stage the Slang compiler
         run: bash scripts/stage_slang_compiler_libraries.sh
 
-      # The compile-fail test builds the engine a second time, in trybuild's
-      # own target directory; it runs on `main` and in the merge queue.
       - name: Unit, integration and hardware tests
-        env:
-          TEST_FILTER: ${{ github.event_name == 'pull_request' && 'not binary_id(streamlib-engine::compile_fail_config_without_json_schema)' || 'all()' }}
         run: >-
-          cargo nextest run --locked --profile ci -E "$TEST_FILTER"
+          cargo nextest run --locked --profile ci
           -p streamlib -p streamlib-macros -p streamlib-node-schema
           -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-gpu-frame-import-client
           -p streamlib-error
@@ -418,13 +405,6 @@ jobs:
           -p tatolab-read-track -p streamlib-relay-track-reader -p streamlib-asset-media-facts
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3,tatolab-module-sdk/function-node
           --lib --bins --tests
-
-      - name: Save the compile-fail tests' build
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-trybuild.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
-        with:
-          path: target/tests/trybuild
-          key: ${{ steps.restore-trybuild.outputs.cache-primary-key }}
 
       # Its own target dir: `--cfg loom` rebuilds every dependency, and the
       # workspace build must not see that cfg.
