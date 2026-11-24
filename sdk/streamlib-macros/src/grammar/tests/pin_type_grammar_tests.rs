@@ -13,7 +13,7 @@ fn a_port_declared_by_pin_type_serves_the_family_its_messages_belong_to() {
         execution = manual,
         input("gain", pin_type = Float, delivery_profile = "newest"),
         output("enabled", pin_type = Boolean),
-        output("frames", pin_type = Texture),
+        output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     let schema = parsed.to_node_schema();
 
@@ -27,7 +27,7 @@ fn a_port_declared_by_pin_type_serves_the_family_its_messages_belong_to() {
     assert_eq!(
         schema.outputs[1].pin_type,
         Some(PinType::Texture {
-            pixel_formats: vec![]
+            pixel_formats: vec![TexturePixelFormat::Rgba8Unorm]
         })
     );
     assert_eq!(schema.outputs[1].family.family, PortFamily::Image);
@@ -49,22 +49,38 @@ fn a_string_port_serves_the_records_family_and_states_its_flow() {
     assert_eq!(schema.outputs[0].flow, None);
 }
 
+/// Mental-revert: a Texture output stating no format is taken, and a link to it is judged by
+/// formats it never stated.
 #[test]
-fn a_port_declaring_only_a_family_declares_no_pin_type() {
+fn a_texture_output_stating_no_format_is_refused_and_an_input_may_state_none() {
+    let msg = parse_err(quote! {
+        execution = manual,
+        output("frames", pin_type = Texture),
+    });
+    assert!(
+        msg.contains("Texture output `frames` states no pixel format")
+            && msg.contains("`formats = [\"…\"]`"),
+        "got: {msg}"
+    );
+
     let schema = parse_ok(quote! {
         execution = manual,
-        output("frames", family = Image),
+        input("frames", pin_type = Texture),
     })
     .to_node_schema();
-
-    assert_eq!(schema.outputs[0].pin_type, None);
+    assert_eq!(
+        schema.inputs[0].pin_type,
+        Some(PinType::Texture {
+            pixel_formats: vec![]
+        })
+    );
 }
 
 #[test]
 fn a_pin_type_beside_the_family_it_is_carried_in_is_taken_with_its_family_keys() {
     let schema = parse_ok(quote! {
         execution = manual,
-        output("audio", family = Channels, pin_type = Audio, dtype = "f32"),
+        output("audio", pin_type = Audio, dtype = "f32"),
         output("frames", pin_type = Texture, formats = ["bgra8_unorm"]),
     })
     .to_node_schema();
@@ -83,17 +99,15 @@ fn a_pin_type_beside_the_family_it_is_carried_in_is_taken_with_its_family_keys()
     assert_eq!(schema.outputs[1].family.formats, vec!["bgra8_unorm"]);
 }
 
+/// Mental-revert: a port declares its family again beside, or in place of, its pin type.
 #[test]
-fn a_pin_type_beside_another_family_is_an_error_naming_both() {
+fn the_retired_family_key_is_refused_by_name() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("gain", family = Image, pin_type = Float),
+        output("gain", family = Channels, pin_type = Float),
     });
     assert!(
-        msg.contains(
-            "port `gain` declares `family = Image` and a pin type whose messages are \
-                      Channels"
-        ),
+        msg.contains("port `gain` declares `family = …`, which is retired"),
         "got: {msg}"
     );
 }
@@ -111,13 +125,15 @@ fn a_pin_type_a_rust_port_cannot_name_alone_is_an_error_listing_those_it_can() {
 }
 
 #[test]
-fn a_port_with_neither_a_family_nor_a_pin_type_names_both_ways_to_declare_one() {
+fn a_port_declaring_no_pin_type_names_both_ways_to_declare_one() {
     let msg = parse_err(quote! {
         execution = manual,
         output("video"),
     });
     assert!(
-        msg.contains("port `video` declares no family") && msg.contains("`pin_type = …`"),
+        msg.contains("port `video` declares no pin type")
+            && msg.contains("`pin_type = …`")
+            && msg.contains("`pin_type = from_setting(\"<setting>\")`"),
         "got: {msg}"
     );
 }
@@ -127,7 +143,7 @@ fn an_input_with_a_pin_may_state_no_delivery_profile_and_one_without_still_must(
     let parsed = parse_ok(quote! {
         execution = manual,
         input("gain", pin_type = Float),
-        input("frames", family = Image),
+        input("frames", pin_type = Texture),
         input("every_frame", pin_type = Texture, delivery_profile = "ordered"),
     });
     let deliveries: Vec<Option<&str>> = parsed
@@ -139,7 +155,7 @@ fn an_input_with_a_pin_may_state_no_delivery_profile_and_one_without_still_must(
 
     let msg = parse_err(quote! {
         execution = manual,
-        input("records", family = Records),
+        input("records", pin_type = from_setting("bundle_type"), flow = Stream),
     });
     assert!(
         msg.contains("input port `records` must declare a `delivery_profile`")
@@ -153,7 +169,7 @@ fn a_stated_flow_reaches_the_schema_and_a_picture_port_states_its_texture_with_i
     let schema = parse_ok(quote! {
         execution = manual,
         input("levels", pin_type = Float, flow = Stream),
-        input("still", family = Image, formats = ["rgba8_unorm"], flow = Value),
+        input("still", pin_type = Texture, formats = ["rgba8_unorm"], flow = Value),
         output("gain", pin_type = Float),
     })
     .to_node_schema();
@@ -185,16 +201,7 @@ fn a_flow_the_type_does_not_allow_is_refused_naming_the_port_and_the_flows_it_ha
 }
 
 #[test]
-fn a_flow_on_a_port_with_no_pin_or_an_unknown_flow_is_refused() {
-    let msg = parse_err(quote! {
-        execution = manual,
-        output("records", family = Records, flow = Value),
-    });
-    assert!(
-        msg.contains("port `records` states `flow = …` and has no pin type to flow by"),
-        "got: {msg}"
-    );
-
+fn an_unknown_flow_is_refused_naming_the_flows() {
     let msg = parse_err(quote! {
         execution = manual,
         output("gain", pin_type = Float, flow = Sometimes),

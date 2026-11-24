@@ -31,27 +31,16 @@ mod tests {
     use crate::core::runtime::Runner;
     use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
-    /// The one setting [`AddLocalSourceTakingOneSetting`] takes.
-    #[derive(
-        Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-    )]
-    #[serde(deny_unknown_fields)]
-    pub(super) struct AddLocalSourceTakingOneSettingConfig {
-        #[serde(default)]
-        pub frame_width: Option<u32>,
-    }
-
     /// A host type registered by [`LoadedStreamInThisRuntime::add_local`] alone.
     ///
     /// [`LoadedStreamInThisRuntime::add_local`]: crate::core::runtime::LoadedStreamInThisRuntime::add_local
     #[crate::node(
         execution = manual,
-        config = crate::core::runtime::streams_loaded_in_this_runtime::local_node_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
-        output("video", pin_type = Texture),
+        output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
     )]
-    pub(super) struct AddLocalSourceTakingOneSetting;
+    pub(super) struct AddLocalSource;
 
-    impl crate::core::ManualNode for AddLocalSourceTakingOneSetting::Node {
+    impl crate::core::ManualNode for AddLocalSource::Node {
         fn start(
             &mut self,
             _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -61,7 +50,7 @@ mod tests {
     }
 
     #[test]
-    fn a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add() {
+    fn a_type_added_locally_refuses_a_config_key_at_add() {
         let project_directory = tempfile::tempdir().expect("a project directory");
         let runner = Runner::new().unwrap();
         let stream = runner
@@ -71,7 +60,7 @@ mod tests {
             ))
             .unwrap();
         let source_type = stream
-            .add_local::<AddLocalSourceTakingOneSetting::Node>(serde_json::json!({}))
+            .add_local::<AddLocalSource::Node>(serde_json::json!({}))
             .unwrap();
 
         let refusal = stream

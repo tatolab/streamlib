@@ -77,7 +77,6 @@ impl<'de> Deserialize<'de> for CrashOnDemandTestNodeConfig {
 
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::crash_on_demand_test_node::CrashOnDemandTestNodeConfig,
 )]
 pub(crate) struct CrashOnDemandTestNode;
 
@@ -89,7 +88,10 @@ impl ManualNode for CrashOnDemandTestNode::Node {
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_crash_on_demand_test_node() {
-    NODE_REGISTRY.register::<CrashOnDemandTestNode::Node>();
+    NODE_REGISTRY.register_taking_a_config_for_a_test::<
+        CrashOnDemandTestNode::Node,
+        CrashOnDemandTestNodeConfig,
+    >();
 }
 
 #[cfg(test)]

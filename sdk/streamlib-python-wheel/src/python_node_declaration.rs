@@ -484,7 +484,12 @@ class AudioConsumer:
     /// the same port the Python class below declares.
     #[streamlib::sdk::node(
         execution = manual,
-        output("video", pin_type = Texture, frame_rate = from_config("frames_per_second")),
+        output(
+            "video",
+            pin_type = Texture,
+            formats = ["rgba8_unorm"],
+            frame_rate = from_setting("frames_per_second")
+        ),
     )]
     struct RustDeclaredFrameRateSource;
 
@@ -497,7 +502,7 @@ class AudioConsumer:
         }
     }
 
-    /// One frame rate, two authoring languages, one family declaration.
+    /// One frame rate, two authoring languages, one frame rate declaration.
     #[test]
     fn a_python_declared_frame_rate_and_a_rust_declared_one_are_the_same_declaration() {
         let python_outputs = read_python_declaration(
@@ -514,8 +519,8 @@ class AudioConsumer:
                 .expect("the macro emits a descriptor");
 
         assert_eq!(
-            python_outputs[0].family, rust_descriptor.outputs[0].family,
-            "the two authoring surfaces must produce one declaration"
+            python_outputs[0].family.frame_rate, rust_descriptor.outputs[0].family.frame_rate,
+            "the two authoring surfaces must produce one frame rate declaration"
         );
         assert_eq!(
             python_outputs[0].family.frame_rate.clone(),

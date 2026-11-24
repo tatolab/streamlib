@@ -11,8 +11,8 @@ fn full_execution_and_ports() {
     let parsed = parse_ok(quote! {
         execution = manual,
         scheduling = high,
-        input("video_in", family = Image, delivery_profile = "newest"),
-        output("video", family = Image),
+        input("video_in", pin_type = Texture, delivery_profile = "newest"),
+        output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert_eq!(parsed.execution, NodeSchemaExecution::Manual);
     assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
@@ -33,11 +33,11 @@ fn node_and_port_descriptions_parse() {
             execution = manual,
             input(
                 "video_in",
-                family = Image,
+                pin_type = Texture,
                 delivery_profile = "newest",
                 description = "Frames to convert"
             ),
-            output("video", family = Image, description = "Live video frames"),
+            output("video", pin_type = Texture, formats = ["rgba8_unorm"], description = "Live video frames"),
         },
     );
     let literal_text_of = |description: &Option<DeclaredDescription>| {
@@ -65,7 +65,7 @@ fn a_description_may_name_a_const_on_the_node_and_on_a_port() {
         quote! { #[meta(description = crate::descriptions::CAMERA_NODE_DESCRIPTION)] },
         quote! {
             execution = manual,
-            output("video", family = Image, description = VIDEO_PORT_DESCRIPTION),
+            output("video", pin_type = Texture, formats = ["rgba8_unorm"], description = VIDEO_PORT_DESCRIPTION),
         },
     );
     assert!(matches!(
@@ -279,22 +279,30 @@ fn continuous_without_interval_defaults_to_zero() {
     );
 }
 
+/// Mental-revert: a node taking `config = …` again holds a config beside its settings.
 #[test]
-fn a_config_key_binds_the_type_and_the_default_field_name() {
-    let parsed = parse_ok(quote! {
-        execution = manual,
-        config = crate::camera_config::CameraConfig,
-    });
-    assert!(parsed.config_type.is_some());
-    assert_eq!(parsed.config_field_name, "config");
+fn the_retired_config_keys_are_refused_by_name_with_the_settings_that_replace_them() {
+    for retired in [
+        quote! { config = crate::camera_config::CameraConfig },
+        quote! { config_field = "blur" },
+    ] {
+        let msg = parse_err(quote! {
+            execution = manual,
+            #retired,
+        });
+        assert!(
+            msg.contains("is retired") && msg.contains("`settings = …`"),
+            "{retired}: {msg}"
+        );
+    }
 }
 
 #[test]
-fn a_node_declaring_no_config_binds_no_config_type() {
+fn a_node_declaring_no_settings_binds_no_settings_type() {
     let parsed = parse_ok(quote! {
         execution = manual,
     });
-    assert!(parsed.config_type.is_none());
+    assert!(parsed.settings_type.is_none());
 }
 
 #[test]
@@ -305,7 +313,6 @@ fn a_settings_key_binds_the_settings_type_and_no_config() {
         output("blurred", pin_type = Audio, names = from_setting("channel_names")),
     });
     assert!(parsed.settings_type.is_some());
-    assert!(parsed.config_type.is_none());
     assert_eq!(
         parsed.outputs[0].family.names,
         Some(OutputPortDeclaredNames::FromConfig {
@@ -315,32 +322,13 @@ fn a_settings_key_binds_the_settings_type_and_no_config() {
 }
 
 #[test]
-fn settings_beside_a_config_are_refused() {
-    for beside in [
-        quote! { config = crate::BlurConfig },
-        quote! { config_field = "blur" },
-    ] {
-        let msg = parse_err(quote! {
-            execution = reactive,
-            settings = crate::blur::BlurSettings,
-            #beside,
-        });
-        assert!(
-            msg.contains("declares no `config` or `config_field`"),
-            "{beside}: {msg}"
-        );
-    }
-}
-
-#[test]
 fn the_retired_config_schema_key_is_refused_by_name_with_the_keys_that_remain() {
     let msg = parse_err(quote! {
         execution = reactive,
-        config = crate::BufferRechunkerConfig,
         config_schema = "com.tatolab.buffer_rechunker.config@1.0.0",
     });
     assert!(
-        msg.contains("`config_schema`") && msg.contains("`config`"),
+        msg.contains("`config_schema`") && msg.contains("`settings`"),
         "the error must name the retired key and list the ones that remain: {msg}"
     );
 }

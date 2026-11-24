@@ -454,9 +454,12 @@ fn a_rust_node_declaring_a_camel_case_port_registers_its_cast() {
 
 #[test]
 fn a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any() {
-    use crate::core::test_support::MockSourceTakingOneSetting;
+    use crate::core::test_support::{MockSourceTakingOneSetting, MockSourceTakingOneSettingConfig};
     let factory = NodeInstanceFactory::new();
-    factory.register::<MockSourceTakingOneSetting::Node>();
+    factory.register_taking_a_config_for_a_test::<
+        MockSourceTakingOneSetting::Node,
+        MockSourceTakingOneSettingConfig,
+    >();
     let python_class = class_import_path("my_app.nodes:Blur");
     factory
         .register_descriptor_only(descriptor_for(python_class.as_str()))
@@ -534,7 +537,7 @@ fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
 #[crate::node(
     execution = manual,
     output("level", pin_type = Float),
-    output("frames", pin_type = Texture),
+    output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 struct ValueAndStreamSource;
 

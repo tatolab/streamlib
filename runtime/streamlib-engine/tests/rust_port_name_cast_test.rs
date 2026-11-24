@@ -29,7 +29,7 @@ fn an_empty_stream_loaded_into(
 
 #[streamlib::sdk::node(
     execution = manual,
-    output("videoOut", pin_type = Texture),
+    output("videoOut", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub struct CamelCaseVideoSource;
 

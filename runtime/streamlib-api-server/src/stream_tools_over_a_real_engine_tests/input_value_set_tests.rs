@@ -34,7 +34,6 @@ pub(super) struct InputValueTestNodeConfig {
 /// `gain` reads for free.
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNodeConfig,
     input("gain", delivery_profile = "newest", pin_type = Float),
     input("video", delivery_profile = "newest", pin_type = Texture),
     output("level", pin_type = Float),
@@ -51,7 +50,10 @@ impl ManualNode for InputValueTestNode::Node {
 /// Register [`InputValueTestNode`] with the node registry, once per test binary.
 pub(super) fn register_the_input_value_test_node_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| NODE_REGISTRY.register::<InputValueTestNode::Node>());
+    REGISTERED.call_once(|| {
+        NODE_REGISTRY
+            .register_taking_a_config_for_a_test::<InputValueTestNode::Node, InputValueTestNodeConfig>()
+    });
 }
 
 pub(super) const MIXER_NODE_UUID: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";

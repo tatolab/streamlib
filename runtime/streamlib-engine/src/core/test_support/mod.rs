@@ -237,7 +237,7 @@ impl crate::core::ReactiveNode for MockBorrowingConsumerNode::Node {
 #[crate::node(
     execution = reactive,
     input("gain", delivery_profile = "newest", pin_type = Float),
-    output("frames", pin_type = Texture),
+    output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub(crate) struct MockPinTypedNode;
 
@@ -298,8 +298,7 @@ pub(crate) struct MockSourceTakingOneSettingConfig {
 /// Mock source whose config takes `frame_width` and refuses every other key.
 #[crate::node(
     execution = manual,
-    config = crate::core::test_support::MockSourceTakingOneSettingConfig,
-    output("video", pin_type = Texture),
+    output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub(crate) struct MockSourceTakingOneSetting;
 
@@ -327,8 +326,7 @@ pub(crate) struct MockSourceTakingAFrameSizeConfig {
 /// Mock source whose config takes `frame_width` and `frame_height`.
 #[crate::node(
     execution = manual,
-    config = crate::core::test_support::MockSourceTakingAFrameSizeConfig,
-    output("video", pin_type = Texture),
+    output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub(crate) struct MockSourceTakingAFrameSize;
 
@@ -354,8 +352,7 @@ pub(crate) struct MockSourceReadingAnImageAssetConfig {
 /// Mock source whose config names an image asset `{"asset": "<uuid>"}`.
 #[crate::node(
     execution = manual,
-    config = crate::core::test_support::MockSourceReadingAnImageAssetConfig,
-    output("video", pin_type = Texture),
+    output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub(crate) struct MockSourceReadingAnImageAsset;
 
@@ -423,9 +420,9 @@ pub(crate) fn ensure_test_mocks_registered() {
         NODE_REGISTRY.register::<MockOrderedInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockReactiveInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockNodeWithACamelCaseOutputPort::Node>();
-        NODE_REGISTRY.register::<MockSourceTakingOneSetting::Node>();
-        NODE_REGISTRY.register::<MockSourceTakingAFrameSize::Node>();
-        NODE_REGISTRY.register::<MockSourceReadingAnImageAsset::Node>();
+        NODE_REGISTRY.register_taking_a_config_for_a_test::<MockSourceTakingOneSetting::Node, MockSourceTakingOneSettingConfig>();
+        NODE_REGISTRY.register_taking_a_config_for_a_test::<MockSourceTakingAFrameSize::Node, MockSourceTakingAFrameSizeConfig>();
+        NODE_REGISTRY.register_taking_a_config_for_a_test::<MockSourceReadingAnImageAsset::Node, MockSourceReadingAnImageAssetConfig>();
         NODE_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Node>();
     });
 }

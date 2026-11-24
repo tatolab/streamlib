@@ -14,7 +14,7 @@ use serde_json::Value;
 const DEFINITION_POINTER_PREFIX: &str = "#/$defs/";
 
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` is a node `config =` type but does not derive `JsonSchema`",
+    message = "`{Self}` is a node config type but does not derive `JsonSchema`",
     note = "add `#[derive(streamlib::sdk::schemars::JsonSchema)]` and `#[schemars(crate = \"streamlib::sdk::schemars\")]` to `{Self}`",
     note = "the SDK re-exports `schemars` at `streamlib::sdk::schemars`, so the crate needs no new dependency"
 )]
@@ -42,15 +42,6 @@ impl<T: schemars::JsonSchema> NodeConfigJsonSchema for T {
     }
 }
 
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is a `#[node_config]` type but does not implement `Default`",
-    note = "derive `Default` on `{Self}`, or implement it, so every key a config leaves out is filled from it",
-    note = "`Default` must be a config the node runs with: a key with nothing sensible to default to is left unset, and the node reports itself not ready, naming the key, until it is set"
-)]
-pub trait NodeConfigFilledFromItsDefault: Default {}
-
-impl<T: Default> NodeConfigFilledFromItsDefault for T {}
-
 /// Where a schema carries the description a `#[description = …]` attribute
 /// declared until the document is rendered, apart from the `description` a
 /// doc comment fills.
@@ -62,8 +53,8 @@ pub trait NodeConfigKeyDescription {
     const DESCRIPTION: &'static str;
 }
 
-/// The schema `#[node_config]` gives a described key in place of its
-/// type's: `T`'s, carrying the description `D` declares.
+/// The schema a described config key takes in place of its type's: `T`'s,
+/// carrying the description `D` declares.
 pub struct NodeConfigKeyDescribedBy<T: ?Sized, D>(PhantomData<D>, PhantomData<Box<T>>);
 
 impl<T: JsonSchema + ?Sized, D: NodeConfigKeyDescription> JsonSchema

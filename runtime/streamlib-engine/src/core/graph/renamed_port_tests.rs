@@ -26,7 +26,7 @@ use crate::core::test_support::{MockPinTypedNode, ensure_test_mocks_registered};
     execution = reactive,
     input("gain", pin_type = Float, former_names = ["level"], may_be_unset = true),
     input("picture", pin_type = Texture, former_names = ["video_in"]),
-    output("frames", pin_type = Texture, former_names = ["video"]),
+    output("frames", pin_type = Texture, formats = ["rgba8_unorm"], former_names = ["video"]),
 )]
 struct MockRenamedPortsNode;
 

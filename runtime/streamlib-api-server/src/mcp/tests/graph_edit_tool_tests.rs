@@ -189,8 +189,7 @@ pub(super) struct AddNodeTestSourceTakingOneSettingConfig {
 /// A native source whose config refuses every key but `frame_width`.
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::mcp::tests::graph_edit_tool_tests::AddNodeTestSourceTakingOneSettingConfig,
-    output("video", pin_type = Texture),
+    output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub(super) struct AddNodeTestSourceTakingOneSetting;
 
@@ -207,7 +206,10 @@ impl streamlib::sdk::nodes::ManualNode for AddNodeTestSourceTakingOneSetting::No
 /// the node, its type and the setting, and adds nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn tools_call_add_node_refuses_a_setting_the_nodes_type_does_not_take_naming_it() {
-    streamlib::sdk::nodes::NODE_REGISTRY.register::<AddNodeTestSourceTakingOneSetting::Node>();
+    streamlib::sdk::nodes::NODE_REGISTRY.register_taking_a_config_for_a_test::<
+        AddNodeTestSourceTakingOneSetting::Node,
+        AddNodeTestSourceTakingOneSettingConfig,
+    >();
     let source_type = AddNodeTestSourceTakingOneSetting::node_class_import_path();
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runtime = streamlib::sdk::runtime::Runner::new().unwrap();

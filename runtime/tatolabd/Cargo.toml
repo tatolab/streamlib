@@ -27,6 +27,7 @@ machine-directories-under-a-test-root = [
     "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
     "streamlib-api-server/machine-directories-under-a-test-root",
     "streamlib/machine-directories-under-a-test-root",
+    "streamlib/test-support",
 ]
 
 [dependencies]

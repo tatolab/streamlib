@@ -39,14 +39,12 @@ pub struct BundleTypeSettings {
         "members",
         description = "The bundle's members, each wired or set on its own",
         delivery_profile = "ordered",
-        family = Records,
         pin_type = from_setting("bundle_type"),
         takes_a_value = true
     ),
     output(
         "bundle",
         description = "One bundle built from the newest value of each member",
-        family = Records,
         pin_type = from_setting("bundle_type")
     ),
 )]
@@ -80,13 +78,11 @@ impl ReactiveNode for MakeBundle::Node {
         "bundle",
         description = "The bundle to break into its members",
         delivery_profile = "ordered",
-        family = Records,
         pin_type = from_setting("bundle_type")
     ),
     output(
         "members",
         description = "The bundle's members, a wire starting at each",
-        family = Records,
         pin_type = from_setting("bundle_type")
     ),
 )]

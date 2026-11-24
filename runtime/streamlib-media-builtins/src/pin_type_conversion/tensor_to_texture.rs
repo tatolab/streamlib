@@ -76,7 +76,15 @@ impl Default for TensorToTextureSettings {
     output(
         "image",
         description = "One Image frame per Array frame",
-        pin_type = Texture
+        pin_type = Texture,
+        formats = [
+            "rgba8_unorm",
+            "rgba8_unorm_srgb",
+            "bgra8_unorm",
+            "bgra8_unorm_srgb",
+            "rgba16_float",
+            "rgba32_float"
+        ]
     ),
 )]
 #[meta(

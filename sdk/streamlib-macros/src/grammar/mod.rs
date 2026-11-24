@@ -298,8 +298,6 @@ pub(crate) struct ParsedNodeAttr {
     /// `tatolab.stream:<struct name>` rather than by its module path.
     pub built_in_node: bool,
     pub paced_by_real_time: bool,
-    pub config_type: Option<Path>,
-    pub config_field_name: String,
     /// The `#[node_settings]` struct the node reads at setup, each of its fields one of the
     /// node's inputs; `None` when it declares none.
     pub settings_type: Option<Path>,
@@ -374,9 +372,7 @@ fn parse_body(
     let mut unsafe_send = false;
     let mut built_in_node = false;
     let mut paced_by_real_time = false;
-    let mut config_type: Option<Path> = None;
-    let mut config_field_name: Option<String> = None;
-    let mut settings_type: Option<(Ident, Path)> = None;
+    let mut settings_type: Option<Path> = None;
     let mut inputs: Vec<ParsedPort> = Vec::new();
     let mut outputs: Vec<ParsedPort> = Vec::new();
 
@@ -421,18 +417,19 @@ fn parse_body(
                     }
                 });
             }
-            "config" => {
-                input.parse::<Token![=]>()?;
-                config_type = Some(input.parse()?);
+            retired @ ("config" | "config_field") => {
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!(
+                        "`{retired}` is retired: a node takes every value it reads at setup as \
+                         an input of its settings, declared with `settings = …` and a \
+                         `#[node_settings]` struct"
+                    ),
+                ));
             }
             "settings" => {
                 input.parse::<Token![=]>()?;
-                settings_type = Some((key.clone(), input.parse()?));
-            }
-            "config_field" => {
-                input.parse::<Token![=]>()?;
-                let lit: LitStr = input.parse()?;
-                config_field_name = Some(lit.value());
+                settings_type = Some(input.parse()?);
             }
             "type" => {
                 return Err(syn::Error::new(key.span(), class_path_rule()));
@@ -465,18 +462,6 @@ fn parse_body(
         )
     })?;
 
-    if let Some((settings_key, _)) = &settings_type
-        && (config_type.is_some() || config_field_name.is_some())
-    {
-        return Err(syn::Error::new(
-            settings_key.span(),
-            "a node declaring `settings = …` takes every value it reads at setup as an input \
-             of its settings, so it declares no `config` or `config_field`",
-        ));
-    }
-
-    let config_field_name = config_field_name.unwrap_or_else(|| "config".to_string());
-
     Ok(ParsedNodeAttr {
         node_class_short_name: struct_name.to_string(),
         description: node_meta.description,
@@ -487,9 +472,7 @@ fn parse_body(
         unsafe_send,
         built_in_node,
         paced_by_real_time,
-        config_type,
-        config_field_name,
-        settings_type: settings_type.map(|(_, settings_type)| settings_type),
+        settings_type,
         inputs,
         outputs,
     })
@@ -571,8 +554,6 @@ const NODE_ATTRIBUTE_KEYS: &[&str] = &[
     "unsafe_send",
     "built_in_node",
     "paced_by_real_time",
-    "config",
-    "config_field",
     "settings",
     "input",
     "output",

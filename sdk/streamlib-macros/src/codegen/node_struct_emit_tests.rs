@@ -25,7 +25,6 @@ fn node_struct_does_not_carry_audio_field() {
     let schema = minimal_schema();
     let rendered = generate_node_struct_from_schema(
         &schema,
-        &None,
         &NodeSettingsEmitted::of(None),
         &[],
         &quote! { pub },
@@ -47,8 +46,7 @@ fn node_struct_does_not_carry_audio_field() {
 fn from_config_initializer_does_not_construct_audio_converter() {
     let schema = minimal_schema();
     let rendered =
-        generate_from_config_from_schema(&schema, &None, &NodeSettingsEmitted::of(None), &[])
-            .to_string();
+        generate_from_config_from_schema(&schema, &NodeSettingsEmitted::of(None), &[]).to_string();
     assert!(
         !rendered.contains("NodeAudioConverter"),
         "from_config must not reference NodeAudioConverter — got: {}",
@@ -241,7 +239,6 @@ fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
 
     let generated_struct = parse_generated_node_struct(generate_node_struct_from_schema(
         &schema,
-        &None,
         &NodeSettingsEmitted::of(None),
         &custom_fields,
         &quote! { pub },
@@ -293,13 +290,9 @@ fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
              to carry the authored `#[cfg]`"
     );
 
-    let from_config_struct_expression =
-        parse_generated_from_config_struct_expression(generate_from_config_from_schema(
-            &schema,
-            &None,
-            &NodeSettingsEmitted::of(None),
-            &custom_fields,
-        ));
+    let from_config_struct_expression = parse_generated_from_config_struct_expression(
+        generate_from_config_from_schema(&schema, &NodeSettingsEmitted::of(None), &custom_fields),
+    );
     for port_field_name in ["inputs", "outputs"] {
         let port_initializer = initialized_field(&from_config_struct_expression, port_field_name)
             .unwrap_or_else(|| {
@@ -325,7 +318,6 @@ fn node_struct_preserves_cfg_attribute_on_custom_field() {
     let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
     let rendered = render_token_stream_without_whitespace(generate_node_struct_from_schema(
         &minimal_schema(),
-        &None,
         &NodeSettingsEmitted::of(None),
         &custom_fields,
         &quote! { pub },
@@ -351,7 +343,6 @@ fn from_config_initializer_preserves_cfg_attribute_on_custom_field() {
     let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
     let rendered = render_token_stream_without_whitespace(generate_from_config_from_schema(
         &minimal_schema(),
-        &None,
         &NodeSettingsEmitted::of(None),
         &custom_fields,
     ));
@@ -384,7 +375,6 @@ fn node_struct_forwards_doc_and_lint_attributes_but_not_cfg_attr() {
     let custom_fields = extract_custom_fields(&annotated_field_struct());
     let rendered = render_token_stream_without_whitespace(generate_node_struct_from_schema(
         &minimal_schema(),
-        &None,
         &NodeSettingsEmitted::of(None),
         &custom_fields,
         &quote! { pub },
@@ -556,7 +546,6 @@ fn from_config_initializer_forwards_cfg_only() {
     let from_config_struct_expression =
         parse_generated_from_config_struct_expression(generate_from_config_from_schema(
             &minimal_schema(),
-            &None,
             &NodeSettingsEmitted::of(None),
             &custom_fields,
         ));
@@ -702,10 +691,7 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(built_in_node, &schema.name),
-        &NodeConfigEmitted {
-            config_type: &quote! { __streamlib_sdk::nodes::EmptyConfig },
-            field_name: &None,
-        },
+        &quote! { __streamlib_sdk::nodes::EmptyConfig },
         &NodeSettingsEmitted::of(None),
         &[],
     ))
@@ -792,7 +778,7 @@ fn the_descriptor_never_reaches_for_type_name() {
 #[test]
 fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
     let declared_output_port = ParsedPort {
-        declared_marker_ident: Ident::new("videoOut", Span::call_site()),
+        declared_marker_ident: Ident::new("videoOut", proc_macro2::Span::call_site()),
         cast_name: "videoout".to_string(),
         description: None,
         delivery_profile: None,
@@ -913,7 +899,6 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
 
     let node_struct = render_token_stream_without_whitespace(generate_node_struct_from_schema(
         &minimal_schema(),
-        &None,
         &settings,
         &[],
         &quote! { pub },
@@ -944,10 +929,7 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(false, "MinimalProbe"),
-        &NodeConfigEmitted {
-            config_type: &config_type,
-            field_name: &None,
-        },
+        &config_type,
         &settings,
         &[],
     ));

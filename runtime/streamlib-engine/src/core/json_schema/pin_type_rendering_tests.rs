@@ -50,9 +50,15 @@ fn graph_serves_a_rust_ports_declared_pin_type_resolved_beside_its_family() {
 
     let frames = &node["ports"]["outputs"][0];
     assert_eq!(frames["name"], "frames");
-    assert_eq!(frames["pin_type"], json!({"type": "texture"}));
+    assert_eq!(
+        frames["pin_type"],
+        json!({"type": "texture", "pixel_formats": ["rgba8_unorm"]})
+    );
     assert_eq!(frames["flow"], "stream");
-    assert_eq!(frames["family"], json!({"family": "image"}));
+    assert_eq!(
+        frames["family"],
+        json!({"family": "image", "formats": ["rgba8_unorm"]})
+    );
 }
 
 #[test]
@@ -67,10 +73,13 @@ fn the_catalog_serves_a_rust_ports_declared_pin_type_beside_its_family() {
     assert_eq!(ports[0]["family"], json!({"family": "channels"}));
     assert_eq!(
         ports[1]["pin_type"],
-        json!({"kind": "is", "pin_type": {"type": "texture"}})
+        json!({"kind": "is", "pin_type": {"type": "texture", "pixel_formats": ["rgba8_unorm"]}})
     );
     assert_eq!(ports[1]["flow"], "stream");
-    assert_eq!(ports[1]["family"], json!({"family": "image"}));
+    assert_eq!(
+        ports[1]["family"],
+        json!({"family": "image", "formats": ["rgba8_unorm"]})
+    );
 }
 
 /// Mock node whose typed inputs state no delivery profile, except one, and
@@ -80,9 +89,9 @@ fn the_catalog_serves_a_rust_ports_declared_pin_type_beside_its_family() {
     input("gain", pin_type = Float),
     input("levels", pin_type = Float, flow = Stream),
     input("audio", pin_type = Audio),
-    input("frames", family = Image),
+    input("frames", pin_type = Texture),
     input("every_frame", pin_type = Texture, delivery_profile = "ordered"),
-    output("still", pin_type = Texture, flow = Value),
+    output("still", pin_type = Texture, formats = ["rgba8_unorm"], flow = Value),
 )]
 struct MockNodeReadingByItsPins;
 
@@ -143,31 +152,58 @@ fn graph_and_the_catalog_serve_the_flow_a_port_states_and_the_delivery_its_pin_d
     assert_eq!(flows_and_deliveries(&catalog_ports), expected);
 }
 
-/// Mock source whose one output declares only the Channels family, and so no exact pin type.
-#[crate::node(execution = manual, output("audio", family = Channels))]
-struct MockUntypedChannelsSourceNode;
-
-impl crate::core::ManualNode for MockUntypedChannelsSourceNode::Node {
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+/// The type of a node whose one output, `port`, declares only `family`, and so no exact pin type,
+/// as a Python node's may; registered once under `short_name`.
+fn a_node_type_whose_one_output_declares_only_its_family(
+    registered: &'static std::sync::Once,
+    short_name: &str,
+    port: &str,
+    family: crate::core::descriptors::PortFamily,
+) -> streamlib_node_schema::NodeClassImportPath {
+    use crate::core::descriptors::{
+        NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamilyDeclaration,
+    };
+    let node_type = streamlib_node_schema::NodeClassImportPath::new(format!(
+        "{}::{short_name}",
+        module_path!()
+    ))
+    .expect("a test's node type is a valid import path");
+    registered.call_once(|| {
+        NODE_REGISTRY
+            .register_descriptor_only(
+                NodeDescriptor::new(
+                    NodeClassShortName::new(short_name).expect("a valid short name"),
+                    node_type.clone(),
+                    "A node whose one output declares only its family",
+                )
+                .with_output(PortDescriptor::new(
+                    port,
+                    "",
+                    false,
+                    PortFamilyDeclaration::of_family(family),
+                )),
+            )
+            .expect("the node type registers");
+    });
+    node_type
 }
 
 #[test]
 fn a_port_with_no_exact_pin_type_serves_neither_field_in_graph_or_the_catalog() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| NODE_REGISTRY.register::<MockUntypedChannelsSourceNode::Node>());
-    let node = rendered_node_of_type(MockUntypedChannelsSourceNode::node_class_import_path());
+    let node_type = a_node_type_whose_one_output_declares_only_its_family(
+        &REGISTERED,
+        "MockUntypedChannelsSourceNode",
+        "audio",
+        crate::core::descriptors::PortFamily::Channels,
+    );
+    let node = rendered_node_of_type(node_type.clone());
     let audio = &node["ports"]["outputs"][0];
     assert_eq!(audio["family"], json!({"family": "channels"}));
     assert!(audio.get("pin_type").is_none(), "{audio}");
     assert!(audio.get("flow").is_none(), "{audio}");
 
-    let catalog_audio =
-        &catalog_ports_of_type(MockUntypedChannelsSourceNode::node_class_import_path())[0];
+    let catalog_audio = &catalog_ports_of_type(node_type)[0];
     assert!(catalog_audio.get("pin_type").is_none(), "{catalog_audio}");
     assert!(catalog_audio.get("flow").is_none(), "{catalog_audio}");
 }
@@ -200,10 +236,10 @@ fn a_graph_interface_port_of_the_image_family_is_a_texture_and_of_another_family
     assert!(unknown.get("pin_type").is_none(), "{unknown}");
 }
 
-/// Mock node whose Texture ports state pixel formats, one by its pin type and one by its family.
+/// Mock node whose Texture ports state pixel formats.
 #[crate::node(
     execution = reactive,
-    input("frames", family = Image, formats = ["rgba8_unorm", "bgra8_unorm"]),
+    input("frames", pin_type = Texture, formats = ["rgba8_unorm", "bgra8_unorm"]),
     output("picture", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 struct MockNodeStatingTextureFormats;
@@ -281,32 +317,21 @@ fn graph_serves_a_typed_ports_stream_facts_under_its_pin_type_beside_their_famil
     );
 }
 
-/// Mock node with one Packets output, which states no pin type.
-#[crate::node(execution = reactive, output("encoded", family = Packets))]
-struct MockNodeWritingEncodedUnits;
-
-impl crate::core::ReactiveNode for MockNodeWritingEncodedUnits::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
-
 #[test]
 fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_ports_by_family() {
     use crate::core::descriptors::{PacketsStreamFacts, PinFlow, PinType, ResolvedPin};
 
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| NODE_REGISTRY.register::<MockNodeWritingEncodedUnits::Node>());
+    let node_type = a_node_type_whose_one_output_declares_only_its_family(
+        &REGISTERED,
+        "MockNodeWritingEncodedUnits",
+        "encoded",
+        crate::core::descriptors::PortFamily::Packets,
+    );
     let mut graph = Graph::new();
     let added = graph
         .traversal_mut()
-        .add_v(NodeSpec::new(
-            MockNodeWritingEncodedUnits::node_class_import_path(),
-            serde_json::Value::Null,
-        ))
+        .add_v(NodeSpec::new(node_type, serde_json::Value::Null))
         .expect("the node is named");
     let node = added.first().expect("the mock is registered");
     let node_id = node.id.clone();

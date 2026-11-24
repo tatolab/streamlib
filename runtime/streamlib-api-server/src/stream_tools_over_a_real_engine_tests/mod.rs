@@ -93,7 +93,7 @@ mod venv_sync_stream_action_resource_tests;
 mod view_output_of_a_playing_stream_tests;
 
 /// A native source with one output port, `video`, and nothing to do.
-#[streamlib::sdk::node(execution = manual, output("video", pin_type = Texture))]
+#[streamlib::sdk::node(execution = manual, output("video", pin_type = Texture, formats = ["rgba8_unorm"]))]
 pub struct StreamToolsTestSource;
 
 impl ManualNode for StreamToolsTestSource::Node {

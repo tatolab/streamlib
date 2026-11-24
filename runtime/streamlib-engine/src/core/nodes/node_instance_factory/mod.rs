@@ -365,6 +365,56 @@ impl NodeInstanceFactory {
         Ok(node_class_import_path)
     }
 
+    /// Register `P` as [`Self::register`] does, its nodes taking a config of `C` whole as a
+    /// node type not yet typed does: its descriptor carries `C`'s schema, and a config `C`
+    /// would not take is refused before any node of it is added. A Rust node holds no config,
+    /// so this is the node type a test of the path a config takes registers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn register_taking_a_config_for_a_test<P, C>(&self)
+    where
+        P: GeneratedNode + 'static,
+        P::Config: Config,
+        C: Config + crate::core::descriptors::NodeConfigJsonSchema,
+    {
+        let registered = (|| {
+            let descriptor = <P as GeneratedNode>::descriptor()
+                .ok_or_else(|| {
+                    Error::Configuration(format!(
+                        "{} exposes no descriptor — it is not a #[node] type",
+                        std::any::type_name::<P>()
+                    ))
+                })?
+                .with_config_schema(C::node_config_schema_document());
+            let node_class_import_path = descriptor.node_class_import_path.clone();
+            let constructor: DynamicNodeConstructorFn = Box::new(
+                |node: &GraphNode| -> Result<Box<dyn DynGeneratedNode + Send>> {
+                    if let Some(config) = &node.config {
+                        config_the_node_type_takes::<C>(
+                            &node.display_name,
+                            &node.node_type,
+                            config,
+                        )?;
+                    }
+                    Ok(Box::new(P::from_config(P::Config::default())?))
+                },
+            );
+            let config_taken_check: NodeConfigTakenCheckFn =
+                Box::new(|node_name, node_type, config| {
+                    config_the_node_type_takes::<C>(node_name, node_type, config).map(drop)
+                });
+            self.register_with_constructor(
+                descriptor,
+                HostCompiledRustTypeRegistration {
+                    constructor,
+                    config_taken_check,
+                },
+                WhatAConversionSupplies::default(),
+            )?;
+            Ok(node_class_import_path)
+        })();
+        warn_of_a_failed_registration_of::<P>(registered);
+    }
+
     /// Register `registration` under `descriptor`'s import path, refusing a
     /// path already claimed, the conversion it states carrying the functions `supplied` gives.
     fn register_with_constructor(
