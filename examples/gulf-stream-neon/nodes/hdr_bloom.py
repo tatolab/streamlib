@@ -14,17 +14,20 @@ come out HDR, for the lens nodes to composite.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
-    Records,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
 
@@ -157,16 +160,6 @@ BLOOM_LEVELS = 6
 STREAK_LEVELS = 6
 
 
-@dataclass
-class HdrBloomPyramidConfig:
-    """HdrBloomPyramid's settings: where the glow starts, and how wide each chain spreads."""
-
-    threshold: float = 1.6
-    knee: float = 0.8
-    radius: float = 1.0
-    streak_radius: float = 1.6
-
-
 def groups(width: int, height: int) -> tuple[int, int, int]:
     return ((width + 7) // 8, (height + 7) // 8, 1)
 
@@ -175,17 +168,37 @@ def groups(width: int, height: int) -> tuple[int, int, int]:
     category="Gulf Stream Neon",
     description="AAA HDR bloom: soft-knee threshold, Karis average, a 13-tap downsample through six mips and a tent upsample back, plus an anamorphic streak chain.",
 )
-@node.process
+@node
 class HdrBloomPyramid:
     """The bloom pyramid and the anamorphic streak of an HDR picture."""
 
-    def __init__(self, config: HdrBloomPyramidConfig) -> None:
-        self.config = config
-
-    scene = Input(Image, delivery="newest", description="The HDR picture")
-    knobs = Input(Records, delivery="newest", description="threshold: from the graph's number nodes")
-    bloom = Output(Image, description="The bloom, HDR, at half the picture's size")
-    streak = Output(Image, description="The anamorphic streak, HDR, at half the picture's size")
+    threshold: Annotated[
+        float, NumberRange(minimum=0.0), Description("The brightness the glow starts at.")
+    ] = 1.6
+    knee: Annotated[
+        float, NumberRange(minimum=0.0), Description("How softly the glow starts past the threshold.")
+    ] = 0.8
+    radius: Annotated[
+        float, NumberRange(minimum=0.0), Description("How wide the bloom spreads.")
+    ] = 1.0
+    streak_radius: Annotated[
+        float, NumberRange(minimum=0.0), Description("How wide the streak spreads.")
+    ] = 1.6
+    scene: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("The HDR picture")]]
+    bloom: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(HDR_LAYER_FORMAT),
+            Description("The bloom, HDR, at half the picture's size"),
+        ]
+    ]
+    streak: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(HDR_LAYER_FORMAT),
+            Description("The anamorphic streak, HDR, at half the picture's size"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu = ctx.gpu_full_access
@@ -194,7 +207,6 @@ class HdrBloomPyramid:
         self.bloom_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
         self.streak_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
         self.extent: tuple[int, int] | None = None
-        self.latest_knobs: dict = {}
         self.gpu_full = gpu
 
     def _allocate(self, gpu, width: int, height: int) -> None:
@@ -217,7 +229,7 @@ class HdrBloomPyramid:
             group_count=groups(width, height),
             push_constants=DOWN_DIALS.pack(
                 width, height, 1.0 / source_width, 1.0 / source_height,
-                threshold, self.config.knee, 1.0 if first else 0.0, 1.0 if horizontal else 0.0,
+                threshold, self.knee, 1.0 if first else 0.0, 1.0 if horizontal else 0.0,
             ),
         )
 
@@ -231,16 +243,13 @@ class HdrBloomPyramid:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        knobs = ctx.inputs.read(self.knobs)
-        if knobs is not None:
-            self.latest_knobs = knobs
-        scene = ctx.inputs.read(self.scene)
+        scene = self.scene.read()
         if scene is None:
             return
         width, height = scene.width, scene.height
         if self.extent != (width, height):
             self._allocate(self.gpu_full, width, height)
-        threshold = float(self.latest_knobs.get("threshold", self.config.threshold))
+        threshold = self.threshold
         gpu = ctx.gpu_limited_access
 
         source, sw, sh = scene.surface_id, width, height
@@ -250,7 +259,7 @@ class HdrBloomPyramid:
         for level in range(BLOOM_LEVELS - 1, 0, -1):
             lower, lw, lh = self.mips[level]
             upper, uw, uh = self.mips[level - 1]
-            self._up(lower, lw, lh, upper, uw, uh, self.config.radius, 1.0, False)
+            self._up(lower, lw, lh, upper, uw, uh, self.radius, 1.0, False)
 
         source, sw, sh = scene.surface_id, width, height
         for level, (texture, w, h) in enumerate(self.streaks):
@@ -259,7 +268,7 @@ class HdrBloomPyramid:
         for level in range(STREAK_LEVELS - 1, 0, -1):
             lower, lw, lh = self.streaks[level]
             upper, uw, uh = self.streaks[level - 1]
-            self._up(lower, lw, lh, upper, uw, uh, self.config.streak_radius, 1.0, True)
+            self._up(lower, lw, lh, upper, uw, uh, self.streak_radius, 1.0, True)
 
         top, tw, th = self.mips[0]
         bloom_out = self.bloom_ring.next_texture_for_this_frame(gpu, tw, th)
@@ -267,5 +276,5 @@ class HdrBloomPyramid:
         streak_top, stw, sth = self.streaks[0]
         streak_out = self.streak_ring.next_texture_for_this_frame(gpu, stw, sth)
         gpu.copy_surface_to_surface(streak_top.surface_id, streak_out)
-        ctx.outputs.write(self.bloom, ImageFrameToWrite.of_texture(bloom_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
-        ctx.outputs.write(self.streak, ImageFrameToWrite.of_texture(streak_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
+        self.bloom.write(ImageFrameToWrite.of_texture(bloom_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
+        self.streak.write(ImageFrameToWrite.of_texture(streak_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)

@@ -11,36 +11,44 @@ stepped clock, no frame is ever dropped, however slow the GPU is.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 import numpy
-from tatolab.stream import Image, Input, RuntimeContextFullAccess, RuntimeContextLimitedAccess, log, node
-
-
-@dataclass
-class FrameRecorderConfig:
-    """FrameRecorder's settings: where the take goes, relative to the project."""
-
-    output_path: str = "capture/take.mkv"
-    frames_per_second: int = 30
+from tatolab.stream import (
+    Description,
+    InputPin,
+    NumberRange,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    log,
+    node,
+)
 
 
 @node.meta(
     category="Gulf Stream Neon",
     description="An ordered sink: every frame it receives, read back and piped into ffmpeg, so a stepped take records frame-exact.",
 )
-@node.process
+@node
 class FrameRecorder:
     """An ordered sink that pipes frames into ffmpeg."""
 
-    def __init__(self, config: FrameRecorderConfig) -> None:
-        self.config = config
-
-    program = Input(Image, delivery="ordered", description="The frames to record")
+    output_path: Annotated[
+        str, SettingOnly(), Description("Where the take goes, relative to the project.")
+    ] = "capture/take.mkv"
+    frames_per_second: Annotated[
+        int, SettingOnly(), NumberRange(minimum=1), Description("The take's frame rate.")
+    ] = 30
+    program: InputPin[
+        Annotated[Texture, StreamDelivery("ordered"), Description("The frames to record")]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        path = Path(self.config.output_path)
+        path = Path(self.output_path)
         if not path.is_absolute():
             path = Path(__file__).resolve().parent.parent / path
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +61,7 @@ class FrameRecorder:
             [
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{width}x{height}",
-                "-r", str(self.config.frames_per_second), "-i", "-",
+                "-r", str(self.frames_per_second), "-i", "-",
                 "-c:v", "ffv1", "-level", "3", "-slices", "24", "-threads", "16", "-pix_fmt", "yuv444p",
                 str(self.path),
             ],
@@ -61,7 +69,7 @@ class FrameRecorder:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.program)
+        frame = self.program.read()
         if frame is None:
             return
         if self.encoder is None:

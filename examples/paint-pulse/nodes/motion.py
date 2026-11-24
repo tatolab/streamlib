@@ -1,22 +1,66 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Function nodes that turn the listener's record and the stage's camera into pins.
+"""The bundles Paint Pulse's nodes pass, and the function nodes that turn them into pins.
 
-`MotionReadout` unpacks the listener's motion record into Float pins, so built-ins such as
-Lag, Remap, RgbSplit and HsvAdjust can follow the music. `OrbitCamera` folds the stage view's
-drag and zoom into one camera record, adding the slow spin a Speed node accumulates.
+`MotionReadout` unpacks the listener's `MusicMotion` into Float pins, so built-ins such as Lag,
+Remap, RgbSplit and HsvAdjust can follow the music. `OrbitCamera` folds the stage view's drag
+and zoom into one `BallCamera`, adding the slow spin a Speed node accumulates.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated, NamedTuple
 
-from tatolab.stream import node
+from tatolab.stream import Description, node
+
+BAND_COUNT = 24
 
 
 @dataclass(frozen=True)
-class MotionReading:
+class MusicMotion:
+    """The music as the ball moves to it, one per listening window: how far each of the 24
+    bands has flown out (0 to 3) and how loud each is (0 to 1), the kick's pump (1 on a hit and
+    falling away), the overall energy, and the levels of the lowest six and highest eight bands."""
+
+    clocks: list[float]
+    levels: list[float]
+    beat: float
+    energy: float
+    bass: float
+    highs: float
+
+
+#: The music before the listener has heard any.
+SILENCE = MusicMotion([0.0] * BAND_COUNT, [0.0] * BAND_COUNT, 0.0, 0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class StageCamera:
+    """Where the stage view has been dragged and zoomed to, and how many bursts it has asked for."""
+
+    yaw: float = 0.0
+    pitch: float = 0.0
+    zoom: float = 1.0
+    burst: int = 0
+
+
+#: The stage before it has been dragged, zoomed or clicked.
+STAGE_AT_REST = StageCamera()
+
+
+@dataclass(frozen=True)
+class BallCamera:
+    """Where the ball is drawn from, and how many bursts the stage has asked for."""
+
+    yaw: float = 0.0
+    pitch: float = 0.14
+    distance: float = 11.5
+    burst: int = 0
+
+
+class MotionReading(NamedTuple):
     """The music as numbers: the kick's pump, the overall energy, and the bass and highs levels."""
 
     beat: float
@@ -27,41 +71,32 @@ class MotionReading:
 
 @node.meta(
     category="Paint Pulse",
-    description="Unpack the listener's motion record into Float pins: beat, energy, bass and highs.",
+    description="Unpack the listener's motion into Float pins: beat, energy, bass and highs.",
 )
-@node.function
-def MotionReadout(motion: dict) -> MotionReading:
-    """Each named number of `motion`, or 0 before the first record arrives."""
-    if motion is None:
-        return MotionReading(0.0, 0.0, 0.0, 0.0)
-    return MotionReading(
-        float(motion.get("beat", 0.0)),
-        float(motion.get("energy", 0.0)),
-        float(motion.get("bass", 0.0)),
-        float(motion.get("highs", 0.0)),
-    )
+@node
+def MotionReadout(
+    motion: Annotated[MusicMotion, Description("From SpectrumListener")] = SILENCE,
+) -> MotionReading:
+    """Each named number of `motion`, or 0 before the listener has heard any."""
+    return MotionReading(motion.beat, motion.energy, motion.bass, motion.highs)
 
 
 @node.meta(
     category="Paint Pulse",
     description="The camera the ball is drawn from: the stage's drag and zoom, plus a slow spin.",
 )
-@node.function
+@node
 def OrbitCamera(
-    view: dict,
-    spin: float = 0.0,
-    tilt: float = 0.14,
-    distance: float = 11.5,
-) -> dict:
+    view: Annotated[StageCamera, Description("From the stage view")] = STAGE_AT_REST,
+    spin: Annotated[float, Description("Radians added to the stage's yaw.")] = 0.0,
+    tilt: Annotated[float, Description("Radians added to the stage's pitch.")] = 0.14,
+    distance: Annotated[float, Description("How far the camera sits at the stage's own zoom.")] = 11.5,
+) -> BallCamera:
     """Yaw is the stage's drag plus `spin`; pitch is `tilt` plus the stage's drag; the stage's
     zoom scales `distance`. The burst count passes through, so the ball can tell a new burst."""
-    view = view or {}
-    yaw = float(view.get("yaw", 0.0)) + spin
-    pitch = max(-1.2, min(1.2, tilt + float(view.get("pitch", 0.0))))
-    zoom = max(0.4, min(2.5, float(view.get("zoom", 1.0))))
-    return {
-        "yaw": yaw,
-        "pitch": pitch,
-        "distance": distance * zoom,
-        "burst": int(view.get("burst", 0)),
-    }
+    return BallCamera(
+        yaw=view.yaw + spin,
+        pitch=max(-1.2, min(1.2, tilt + view.pitch)),
+        distance=distance * max(0.4, min(2.5, view.zoom)),
+        burst=view.burst,
+    )
