@@ -17,7 +17,7 @@ import numpy
 import skia
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
@@ -95,6 +95,6 @@ class NeonOverlaySource:
         copy_host_pixels_into_ring_texture(overlay_texture, self.overlay_host_pixels)
 
         self.overlay_to_downstream.write(
-            ImageFrameToWrite.of_texture(overlay_texture, HOST_DRAWN_FRAME_COLOUR),
+            TextureToWrite.of_texture(overlay_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=tick_time_ns,
         )

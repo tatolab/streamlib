@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -625,6 +625,6 @@ class NeonHorizonRenderer:
             ),
         )
         self.scene.write(
-            ImageFrameToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
+            TextureToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=frame_ns,
         )

@@ -22,16 +22,14 @@ from typing import Annotated
 import numpy
 from tatolab.stream import (
     Audio,
-    ChannelsBlock,
     Description,
-    ImageFrame,
+    Texture,
     InputPin,
     NumberRange,
     OutputPin,
     RuntimeContextLimitedAccess,
     SettingOnly,
     StreamDelivery,
-    Texture,
     log,
     node,
 )
@@ -102,7 +100,7 @@ class BrowserSourceOutputProbe:
         while (frame := self.video_from_browser.read()) is not None:
             self._measure_frame(frame)
 
-    def _measure_audio_block(self, block: ChannelsBlock) -> None:
+    def _measure_audio_block(self, block: Audio) -> None:
         self._audio_blocks_read += 1
         if not numpy.from_dlpack(block).any():
             self._silent_audio_blocks += 1
@@ -129,7 +127,7 @@ class BrowserSourceOutputProbe:
                 input_port_name, DurationSamplesInOneReportingWindow()
             ).add(monotonic_now_ns() - input_timestamp_ns)
 
-    def _measure_frame(self, frame: ImageFrame) -> None:
+    def _measure_frame(self, frame: Texture) -> None:
         read_ns = monotonic_now_ns()
         if self._previous_frame_timestamp_ns is not None:
             self._frame_interval.add(frame.timestamp_ns - self._previous_frame_timestamp_ns)
@@ -142,7 +140,7 @@ class BrowserSourceOutputProbe:
         if self._frames_read % self.frames_between_reports == 0:
             self._report(frame, read_ns)
 
-    def _report(self, frame: ImageFrame, read_ns: int) -> None:
+    def _report(self, frame: Texture, read_ns: int) -> None:
         window_first_read_ns = self._window_first_frame_read_ns or read_ns
         window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
         frames_per_second = (self.frames_between_reports - 1) / window_seconds

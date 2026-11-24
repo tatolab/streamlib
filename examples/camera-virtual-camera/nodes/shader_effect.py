@@ -20,7 +20,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -179,6 +179,6 @@ class ShaderEffect:
         )
 
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(look_frame_texture, frame.colour),
+            TextureToWrite.of_texture(look_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

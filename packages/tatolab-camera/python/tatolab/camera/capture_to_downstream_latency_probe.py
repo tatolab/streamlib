@@ -15,12 +15,11 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrame,
+    Texture,
     InputPin,
     NumberRange,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     log,
     node,
 )
@@ -69,7 +68,7 @@ class CaptureToDownstreamLatencyProbe:
             if self._frames_read % self.frames_between_reports == 0:
                 self._report(frame, read_ns)
 
-    def _report(self, frame: ImageFrame, read_ns: int) -> None:
+    def _report(self, frame: Texture, read_ns: int) -> None:
         window_first_read_ns = self._window_first_read_ns or read_ns
         window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
         frames_per_second = (self.frames_between_reports - 1) / window_seconds

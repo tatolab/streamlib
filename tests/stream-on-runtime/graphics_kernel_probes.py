@@ -25,7 +25,7 @@ import numpy
 from tatolab.stream import (
     ColorInfo,
     GpuContextFullAccess,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -480,7 +480,7 @@ class RenderedTextureFrameProducer:
         if self._color_target is None:
             return
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(self._color_target, ColorInfo()),
+            TextureToWrite.of_texture(self._color_target, ColorInfo()),
             timestamp_ns=ctx.time,
         )
 

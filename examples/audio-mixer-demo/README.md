@@ -49,7 +49,7 @@ Further things it teaches:
   the graph document names a device format.
 - **A block is a `[channel][sample]` array.** Each voice and the mixer write a
   C-contiguous numpy array, with the stream-wide index of its first sample as
-  `start_sample`; a read hands back a `ChannelsBlock` that `numpy.from_dlpack`
+  `start_sample`; a read hands back an `Audio` block that `numpy.from_dlpack`
   views the same way. A voice's rate comes from its `sample_rate` setting, which its class
   cannot state, so each `write` names it with `sample_rate=`. The mixer copies each window out of
   its block, because a read's borrow ends with the `process()` that made it and

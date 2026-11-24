@@ -28,7 +28,7 @@ from tatolab.runtime._node_hosting import (
 from tatolab.runtime._node_interpreter_bootstrap import describe_one_node_class
 from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream import (
-    ChannelsBlock,
+    Audio,
     StreamBuilder,
     run_graph_generator,
     log,
@@ -203,7 +203,7 @@ class DecodedBlock:
     last_channel_samples: "list[float]"
 
 
-def decoded_block_of(block: ChannelsBlock) -> DecodedBlock:
+def decoded_block_of(block: Audio) -> DecodedBlock:
     planar = numpy.from_dlpack(block)
     return DecodedBlock(
         channel_count=block.channel_count,

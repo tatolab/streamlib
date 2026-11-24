@@ -40,7 +40,7 @@ from typing import NamedTuple
 from tatolab.stream import (
     Color,
     Description,
-    ImageFrame,
+    Texture,
     InputPin,
     OutputPin,
     State,
@@ -99,8 +99,8 @@ def ramp(rate: float, *, previous: State[Phase]) -> Stateful[Annotated[float, De
 @node.meta(category="Effects")
 @node.shader("float4 tint(ImageInput image, float amount, float4 hue, float2 shift) { return image.pixel * amount; }")
 def tint(
-    image: ImageFrame, amount: float = 1.0, hue: Color = Color(1, 1, 1), shift: Vector2 = Vector2(0, 0)
-) -> ImageFrame: ...
+    image: Texture, amount: float = 1.0, hue: Color = Color(1, 1, 1), shift: Vector2 = Vector2(0, 0)
+) -> Texture: ...
 
 
 def not_a_node(x: float) -> float:
@@ -303,7 +303,7 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     assert tint["kind"] == "shader"
     assert (tint["category"], tint["description"]) == ("Color", "Scales every channel by `amount`.")
     assert [port["family"] for port in tint["inputs"]] == ["image", "channels", "channels", "channels"]
-    assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "ImageFrame"}]
+    assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "Texture"}]
 
     assert project["graph_generators"] == [
         {
@@ -327,7 +327,7 @@ KIND_DECORATOR_AND_DECLARATION_BY_KIND = {
     "function": ("@node", "def Tint(amount: float = 1.0) -> float:\n    return amount"),
     "shader": (
         '@node.shader("float4 Tint(ImageInput image) { return image.pixel; }")',
-        "def Tint(image: ImageFrame) -> ImageFrame: ...",
+        "def Tint(image: Texture) -> Texture: ...",
     ),
 }
 
@@ -342,7 +342,7 @@ def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_k
     if meta_is_written == "below_the_kind_decorator":
         decorators.reverse()
     module_source = "\n".join(
-        ["from tatolab.stream import ImageFrame, InputPin, Texture, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
+        ["from tatolab.stream import InputPin, Texture, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
     )
 
     read = read_node_types_and_graph_generators_from_module_sources(

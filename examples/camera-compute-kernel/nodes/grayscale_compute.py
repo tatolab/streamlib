@@ -20,7 +20,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -167,6 +167,6 @@ class GrayscaleCompute:
 
         # The capture's timestamp, not the effect's: downstream orders frames by it.
         self.grayscale_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(grayscale_frame_texture, frame.colour),
+            TextureToWrite.of_texture(grayscale_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

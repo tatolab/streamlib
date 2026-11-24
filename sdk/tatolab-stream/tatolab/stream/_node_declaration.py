@@ -99,7 +99,7 @@ class AudioWindowContract:
 
     Written beside an `Audio` pin's type, `InputPin[Annotated[Audio, StreamDelivery("ordered"),
     AudioWindowContract(...)]]`, whose delivery must be `"ordered"`. Every argument is keyword-only. `window_size` counts
-    per-channel samples — the unit `ChannelsBlock.samples_per_channel` uses —
+    per-channel samples — the unit `Audio.samples_per_channel` uses —
     so one window carries `window_size * channels` samples. `hop` may be omitted and
     then resolves to `window_size`: contiguous, non-overlapping windows by
     default, a rolling window below that. The attribute always holds the
@@ -163,7 +163,7 @@ class AudioWindowContract:
         if dtype not in _AUDIO_WINDOW_DTYPES:
             raise ValueError(
                 f"AudioWindowContract field 'dtype' is {dtype!r} — must be one of "
-                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two a ChannelsBlock carries"
+                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two an Audio block carries"
             )
 
         if resolved_hop > window_size:
@@ -431,13 +431,13 @@ class NodeDeclarationDecorator:
 
         `shader_source` is the node's body, a Slang function named for the node
         returning the `float4` pixel it computes; the decorated function's
-        signature declares the ports and its body is `...`. Each `ImageFrame`
+        signature declares the ports and its body is `...`. Each `Texture`
         parameter arrives in Slang as an `ImageInput`, whose `pixel` is the
         input at this pixel, whose `uv` is this pixel's position from 0 to 1,
         and whose `sample(uv)` reads it at any position, bilinear; each `float`
         arrives as a value, a push constant. The return
-        is one `ImageFrame`, the output `result`, at the extent of the first
-        `ImageFrame` input. The runtime compiles and runs it on the GPU with no
+        is one `Texture`, the output `result`, at the extent of the first
+        `Texture` input. The runtime compiles and runs it on the GPU with no
         Python process, and takes RGBA Images only.
         """
 

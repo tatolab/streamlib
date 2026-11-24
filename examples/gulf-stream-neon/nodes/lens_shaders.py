@@ -13,7 +13,7 @@ unpacks it, adds bloom, streaks, rays and ghosts, and tone-maps with ACES.
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Texture, node
 
 # Shared by the RGBM writer and reader: the brightest value an RGBM pixel holds.
 RGBM_RANGE = 8.0
@@ -51,14 +51,14 @@ float4 GodRays(ImageInput scene, float sun_x, float sun_y, float density, float 
 """,
 )
 def GodRays(  # noqa: N802
-    scene: ImageFrame,
+    scene: Texture,
     sun_x: float = 0.5,
     sun_y: float = 0.3,
     density: float = 0.9,
     decay: float = 0.965,
     weight: float = 0.3,
     visible: float = 1.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -115,10 +115,10 @@ float4 LensComposite(ImageInput scene, ImageInput bloom, ImageInput streak, Imag
 """,
 )
 def LensComposite(  # noqa: N802
-    scene: ImageFrame,
-    bloom: ImageFrame,
-    streak: ImageFrame,
-    rays: ImageFrame,
+    scene: Texture,
+    bloom: Texture,
+    streak: Texture,
+    rays: Texture,
     exposure: float = 0.9,
     bloom_strength: float = 0.7,
     streak_strength: float = 0.5,
@@ -126,7 +126,7 @@ def LensComposite(  # noqa: N802
     ghost_strength: float = 0.25,
     sun_x: float = 0.5,
     sun_y: float = 0.3,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -165,12 +165,12 @@ float4 DepthOfField(ImageInput image, ImageInput depth, float focus_distance, fl
 """,
 )
 def DepthOfField(  # noqa: N802
-    image: ImageFrame,
-    depth: ImageFrame,
+    image: Texture,
+    depth: Texture,
     focus_distance: float = 0.4,
     aperture: float = 0.006,
     aspect: float = 1.7778,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -202,12 +202,12 @@ float4 HeatHaze(ImageInput image, float seconds, float amount, float horizon_y, 
 """,
 )
 def HeatHaze(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     seconds: float = 0.0,
     amount: float = 0.004,
     horizon_y: float = 0.45,
     band: float = 0.08,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -235,7 +235,7 @@ float4 ChromaticAberration(ImageInput image, float amount, float aspect)
 }
 """,
 )
-def ChromaticAberration(image: ImageFrame, amount: float = 0.02, aspect: float = 0.5625) -> ImageFrame: ...  # noqa: N802
+def ChromaticAberration(image: Texture, amount: float = 0.02, aspect: float = 0.5625) -> Texture: ...  # noqa: N802
 
 
 @node.meta(
@@ -261,12 +261,12 @@ float4 NeonGrade(ImageInput image, float shadow_magenta, float highlight_peach, 
 """,
 )
 def NeonGrade(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     shadow_magenta: float = 0.3,
     highlight_peach: float = 0.25,
     contrast: float = 1.08,
     saturation: float = 1.12,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -296,9 +296,9 @@ float4 FilmFinish(ImageInput image, float seconds, float grain, float scanlines,
 """,
 )
 def FilmFinish(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     seconds: float = 0.0,
     grain: float = 0.03,
     scanlines: float = 0.035,
     lines_across: float = 960.0,
-) -> ImageFrame: ...
+) -> Texture: ...

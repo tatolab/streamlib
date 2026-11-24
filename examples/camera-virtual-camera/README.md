@@ -67,7 +67,7 @@ both doors would list the same camera twice.
 
 **The effect publishes its own textures.** `nodes/inverting_effect.py` reads
 the camera's pixels through a read-only `numpy.from_dlpack(frame, device="cpu")`
-view of the `ImageFrame` its `InputPin[Texture]` hands it, and writes their inversion straight into a slot of its own
+view of the `Texture` its `InputPin[Texture]` hands it, and writes their inversion straight into a slot of its own
 `NodeOutputTextureRing`, in one pass on the host. It never edits the frame
 it was handed: the passthrough sink is reading that same engine-owned surface.
 Whenever a producer's output feeds more than one consumer, an effect between

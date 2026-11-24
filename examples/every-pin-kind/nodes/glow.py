@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Texture, node
 
 
 @node.meta(
@@ -22,7 +22,7 @@ float4 Glow(ImageInput image, float glow, float warmth)
 """,
 )
 def Glow(
-    image: ImageFrame,
+    image: Texture,
     glow: float = 0.0,
     warmth: float = 0.0,
-) -> ImageFrame: ...
+) -> Texture: ...

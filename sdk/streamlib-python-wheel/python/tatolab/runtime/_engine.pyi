@@ -188,7 +188,7 @@ def read_the_bundle_frame_at_an_input_port(
     input_port: str,
     pin_type: str,
 ) -> dict[str, Any] | None:
-    """Each member of the bundle holding a Texture of `pin_type` (JSON) `input_port` holds for this read, by name: a small member its stored JSON form, a Texture its `ImageFrame`; `None` when none arrived."""
+    """Each member of the bundle holding a Texture of `pin_type` (JSON) `input_port` holds for this read, by name: a small member its stored JSON form, a Texture as it was read; `None` when none arrived."""
 
 def write_the_bundle_frame_on_an_output_port(
     *,

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import pytest
-from tatolab.stream import ImageFrame, InputPin, StreamDelivery, Texture, node
+from tatolab.stream import Texture, InputPin, StreamDelivery, node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
@@ -50,12 +50,12 @@ def halftone_level_with_its_meta_below(level: float = 0.0) -> float:
 
 @node.meta(category="Effects/Stylize", description=HALFTONE_DESCRIPTION)
 @node.shader(_slang_passing_the_image_on("halftone_shader_with_its_meta_above"))
-def halftone_shader_with_its_meta_above(image: ImageFrame) -> ImageFrame: ...
+def halftone_shader_with_its_meta_above(image: Texture) -> Texture: ...
 
 
 @node.shader(_slang_passing_the_image_on("halftone_shader_with_its_meta_below"))
 @node.meta(category="Effects/Stylize", description=HALFTONE_DESCRIPTION)
-def halftone_shader_with_its_meta_below(image: ImageFrame) -> ImageFrame: ...
+def halftone_shader_with_its_meta_below(image: Texture) -> Texture: ...
 
 
 @pytest.mark.parametrize(

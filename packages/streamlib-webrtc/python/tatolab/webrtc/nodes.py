@@ -28,7 +28,6 @@ from tatolab.stream import (
     InputPin,
     Message,
     OutputPin,
-    PacketsUnit,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     SettingOnly,
@@ -289,7 +288,7 @@ class WhipSessionPublishing:
         self._track_by_inbound_link[inbound_link] = track
         return track
 
-    def _enters_or_continues_a_group(self, message: "Message[PacketsUnit]") -> bool:
+    def _enters_or_continues_a_group(self, message: "Message[EncodedVideo | EncodedAudio]") -> bool:
         """Whether `message` is sent: a link is entered at a group start, and
         re-entered at one after a read reports a loss."""
         inbound_link = message.inbound_link

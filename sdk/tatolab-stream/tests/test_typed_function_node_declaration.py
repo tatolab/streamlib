@@ -15,7 +15,7 @@ from tatolab.stream import (
     Color,
     Description,
     Float32,
-    ImageFrame,
+    Texture,
     Int8,
     Int64,
     NodeDeclarationRefusal,
@@ -259,7 +259,7 @@ def LevelsWithAUnitEach(levels: list[Annotated[float, NumberUnit("Hz")]] = []) -
     return 0.0
 
 
-def LevelsOfPictures(pictures: list[ImageFrame] = []) -> float:  # noqa: B006
+def LevelsOfPictures(pictures: list[Texture] = []) -> float:  # noqa: B006
     return 0.0
 
 
@@ -267,7 +267,7 @@ def Frames(at: list[Int64] = [0]) -> list[Int64]:  # noqa: B006
     return at
 
 
-def Pass(picture: ImageFrame | None = None) -> float:
+def Pass(picture: Texture | None = None) -> float:
     return 0.0
 
 
@@ -358,7 +358,7 @@ def test_an_object_no_pin_reads_and_an_annotation_written_twice_are_refused() ->
 
 
 def test_a_type_the_runtime_cannot_carry_yet_is_refused_by_name() -> None:
-    for function, named in ((Pass, "`ImageFrame`, a read type"),):
+    for function, named in ((Pass, "typed `Texture`, a Texture, which holds no stored value"),):
         refusal = refusal_of(function)
         assert refusal.finding_code == "pin_type_not_read_yet", function
         assert named in str(refusal)
@@ -480,7 +480,7 @@ def test_a_64_bit_integer_types_a_list_element() -> None:
             LevelsWithAUnitEach, "list_element_not_taken", "no annotation of its own", id="element unit"
         ),
         pytest.param(
-            LevelsOfPictures, "pin_type_not_read_yet", "a read type", id="a List of a stream type"
+            LevelsOfPictures, "list_element_not_taken", "`Texture` is not", id="a List of a stream type"
         ),
     ],
 )

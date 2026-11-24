@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from tatolab.stream import GpuSurfaceHandle, RuntimeContextLimitedAccess, ImageFrame
+from tatolab.stream import GpuSurfaceHandle, RuntimeContextLimitedAccess, Texture
 
 from ._native import PipeWireCameraDoor
 from .v4l2_color_fields import yuyv_picture_color_of
@@ -35,7 +35,7 @@ class PipeWireCameraPresentation:
         return self._pipewire_camera_door.failure_that_ended_the_camera
 
     def offer_the_extent_of(
-        self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame
+        self, ctx: RuntimeContextLimitedAccess, frame: Texture
     ) -> bool:
         """Offer the frame's extent where it differs from the one offered; `True` when it did."""
         extent = (frame.width, frame.height)
@@ -51,7 +51,7 @@ class PipeWireCameraPresentation:
         return True
 
     def present(
-        self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame
+        self, ctx: RuntimeContextLimitedAccess, frame: Texture
     ) -> PipeWireCameraFramePresentation:
         """Convert the frame into the held YUYV pixel buffer and hand its rows to the camera."""
         yuyv_pixel_buffer = self._yuyv_pixel_buffer

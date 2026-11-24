@@ -22,8 +22,8 @@ from tatolab.stream import (
     Description,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -32,7 +32,6 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
     node,
 )
@@ -184,7 +183,7 @@ class _LayerLandingTexture:
         )
         self.newest_frame_texture: "GpuSurfaceHandle | None" = None
 
-    def land(self, gpu_limited_access: GpuContextLimitedAccess, frame: ImageFrame, layer: int) -> None:
+    def land(self, gpu_limited_access: GpuContextLimitedAccess, frame: Texture, layer: int) -> None:
         landing_texture = self._landing_ring.next_texture_for_this_frame(
             gpu_limited_access, frame.width, frame.height
         )
@@ -276,7 +275,7 @@ class AlphaOverCompositor:
         self._layer_landing_textures[0].land(gpu_limited_access, backmost_frame, 0)
         composite = self._composite(gpu_limited_access)
         self.video.write(
-            ImageFrameToWrite.of_texture(composite, backmost_frame.colour),
+            TextureToWrite.of_texture(composite, backmost_frame.colour),
             timestamp_ns=backmost_frame.timestamp_ns,
         )
 

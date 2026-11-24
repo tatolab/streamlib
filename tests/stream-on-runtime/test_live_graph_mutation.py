@@ -51,7 +51,7 @@ LIVE_ADDED_EFFECT_SOURCE = '''\
 from typing import Annotated
 
 from tatolab.stream import (
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -98,7 +98,7 @@ class LiveAddedEffect:
         finally:
             texture.unlock()
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(texture, frame.colour),
+            TextureToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
         self._frames += 1

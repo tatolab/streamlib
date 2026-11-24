@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The frame an Array port's read returns: each named attribute a borrowed DLPack tensor.
+"""The `Tensor` a Tensor pin's read returns: each named attribute a borrowed DLPack tensor.
 
 Built from the message's Array descriptor and the attribute table its payload
 starts with. A CPU attribute borrows the sample it arrived in; a GPU attribute
@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Union
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
 if TYPE_CHECKING:
-    from ._node_context_protocols import ArrayFrameCpuAttribute
+    from ._node_context_protocols import TensorCpuAttribute
 
-__all__ = ["ArrayFrame", "ArrayFrameGpuAttribute"]
+__all__ = ["Tensor", "TensorGpuAttribute"]
 
 
 @dataclass(frozen=True, init=False)
-class ArrayFrameGpuAttribute(ClaimedSurfacePixelAccess):
-    """One GPU-resident attribute of an Array frame: a claimed tensor surface."""
+class TensorGpuAttribute(ClaimedSurfacePixelAccess):
+    """One GPU-resident attribute of a `Tensor`: a claimed tensor surface."""
 
     surface_id: str
     dtype: str
@@ -35,11 +35,11 @@ class ArrayFrameGpuAttribute(ClaimedSurfacePixelAccess):
         super().__init__(surface_id=surface_id, dtype=dtype, shape=tuple(shape))
 
 
-ArrayFrameAttribute = Union["ArrayFrameCpuAttribute", ArrayFrameGpuAttribute]
+TensorAttribute = Union["TensorCpuAttribute", TensorGpuAttribute]
 
 
-class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
-    """An Array frame, as a Tensor input pin's `read()` returns it: name to tensor.
+class Tensor(Mapping[str, TensorAttribute]):
+    """A Tensor, as a Tensor input pin's `read()` returns it: name to tensor.
 
     Each value speaks `__dlpack__` and states its `dtype` and `shape`, so
     `torch.from_dlpack(frame["boxes"])` reads it in place.
@@ -48,10 +48,10 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
     __slots__ = ("_attributes_by_name", "_timestamp_ns")
 
     pin_type: ClassVar[Literal["tensor"]] = "tensor"
-    """The pin type an Array frame is the read of."""
+    """The pin type a Tensor is the read of."""
 
     def __init__(
-        self, attributes: "Mapping[str, ArrayFrameAttribute]", timestamp_ns: int
+        self, attributes: "Mapping[str, TensorAttribute]", timestamp_ns: int
     ) -> None:
         """Hold the attributes a read built, in their table's order."""
         self._attributes_by_name = dict(attributes)
@@ -62,7 +62,7 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
         """The stream time the frame was stamped with, in nanoseconds."""
         return self._timestamp_ns
 
-    def __getitem__(self, attribute_name: str) -> ArrayFrameAttribute:
+    def __getitem__(self, attribute_name: str) -> TensorAttribute:
         return self._attributes_by_name[attribute_name]
 
     def __iter__(self) -> Iterator[str]:
@@ -76,4 +76,4 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
             f"{name}: {attribute.dtype}{list(attribute.shape)}"
             for name, attribute in self._attributes_by_name.items()
         )
-        return f"ArrayFrame({attributes})"
+        return f"Tensor({attributes})"

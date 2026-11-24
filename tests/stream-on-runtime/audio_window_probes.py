@@ -22,7 +22,6 @@ import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
-    ChannelsBlock,
     InputPin,
     OutputPin,
     RuntimeContextLimitedAccess,
@@ -55,7 +54,7 @@ WINDOW_SIZE = 960
 PUBLISHING_LEAD_NS = 100_000_000
 
 
-def _reading(block: ChannelsBlock) -> dict:
+def _reading(block: Audio) -> dict:
     return {
         "sample_rate": block.sample_rate,
         "channels": block.channel_count,

@@ -149,14 +149,14 @@ def test_a_pin_of_several_types_is_refused_unless_it_is_an_input_pin_of_streams(
 
 
 if TYPE_CHECKING:
-    from tatolab.stream import ArrayFrame, ChannelsBlock, ImageFrame, Message, PacketsUnit
+    from tatolab.stream import Message, Tensor
 
     def the_read_of_each_pin_of_several_types(publisher: Publisher, pictures: InputPin[Texture]) -> None:
         """A read of a pin of several types is typed as what any of them reads, narrowed by `pin_type`."""
-        assert_type(publisher.tracks.read(), "PacketsUnit | None")
-        assert_type(publisher.tracks.read_message(), "Message[PacketsUnit] | None")
+        assert_type(publisher.tracks.read(), "EncodedVideo | EncodedAudio | None")
+        assert_type(publisher.tracks.read_message(), "Message[EncodedVideo | EncodedAudio] | None")
         assert_type(
             publisher.pictures_or_sound.read(),
-            "ImageFrame | ChannelsBlock | ArrayFrame | PacketsUnit | None",
+            "Texture | Audio | Tensor | EncodedVideo | EncodedAudio | None",
         )
-        assert_type(pictures.read(), "ImageFrame | None")
+        assert_type(pictures.read(), "Texture | None")

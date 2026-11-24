@@ -17,7 +17,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
@@ -315,6 +315,6 @@ class RayTracedSceneRenderer:
         )
 
         self.ray_traced_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(traced_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR),
+            TextureToWrite.of_texture(traced_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR),
             timestamp_ns=frame_time_ns,
         )

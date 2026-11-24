@@ -27,14 +27,13 @@ from typing import Annotated, Literal, NoReturn
 from tatolab.stream import (
     Description,
     GpuSurfaceHandle,
-    ImageFrame,
+    Texture,
     InputPin,
     PinControl,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     SettingOnly,
     StreamDelivery,
-    Texture,
     log,
     node,
 )
@@ -344,7 +343,7 @@ class VirtualCameraSink:
         return device
 
     def _present_one_frame(
-        self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame
+        self, ctx: RuntimeContextLimitedAccess, frame: Texture
     ) -> None:
         if yuyv_picture_byte_count_or_none(frame.width, frame.height) is None:
             raise _LatchedRefusal(
@@ -398,7 +397,7 @@ class VirtualCameraSink:
         self,
         ctx: RuntimeContextLimitedAccess,
         pipewire_camera: PipeWireCameraPresentation,
-        frame: ImageFrame,
+        frame: Texture,
     ) -> None:
         if yuyv_picture_byte_count_or_none(frame.width, frame.height) is None:
             raise _LatchedRefusal(
@@ -441,7 +440,7 @@ class VirtualCameraSink:
         self,
         ctx: RuntimeContextLimitedAccess,
         device: V4l2LoopbackOutputDevice,
-        frame: ImageFrame,
+        frame: Texture,
     ) -> "StreamingOutputFormat | None":
         streaming = self._streaming
         if streaming is not None and streaming.matches(frame.width, frame.height):
@@ -495,7 +494,7 @@ class VirtualCameraSink:
         ctx: RuntimeContextLimitedAccess,
         streaming: StreamingOutputFormat,
         device_buffer_address: int,
-        frame: ImageFrame,
+        frame: Texture,
     ) -> None:
         yuyv_pixel_buffer = self._yuyv_pixel_buffer
         if yuyv_pixel_buffer is None:
@@ -519,7 +518,7 @@ class VirtualCameraSink:
         finally:
             yuyv_pixel_buffer.unlock()
 
-    def _count_a_written_frame(self, frame: ImageFrame) -> None:
+    def _count_a_written_frame(self, frame: Texture) -> None:
         self._frames_written += 1
         if self._frames_written == 1:
             log.info(

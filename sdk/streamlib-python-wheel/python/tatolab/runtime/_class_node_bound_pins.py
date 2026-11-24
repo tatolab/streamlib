@@ -120,7 +120,7 @@ def the_reader_of_a_value_at_an_input_port(
 
     A bundle, or each bundle element of a List, is built as `bundle_class`, the dataclass it is
     written as; a bundle holding a Texture is read off its Bundle frame, each Texture the
-    `ImageFrame` it is. A Texture or a Tensor read as a value is its newest frame. `None` for a pin type whose value
+    `Texture` it is. A Texture or a Tensor read as a value is its newest frame. `None` for a pin type whose value
     no wire carries, a node reference or a choice of pin type, and for Audio, encoded media and
     a Trigger, which travel only as a stream.
     """

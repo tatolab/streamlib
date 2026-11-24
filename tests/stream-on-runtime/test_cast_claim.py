@@ -4,7 +4,7 @@
 """The cast-claim contract, over a live camera, in the real placement.
 
 `[surface-id-lifetime-contract]` says the claim on a frame's pixels is taken
-when a Texture read builds its `ImageFrame` and released when that object drops,
+when a Texture read builds its `Texture` and released when that object drops,
 after which the frame's id rides pool depth like any other. Both halves are
 load-bearing: the first is what lets a node outlive the producer's ring,
 and the second is what keeps a dropped frame from pinning a slot.
@@ -14,12 +14,12 @@ cycles, a consumer one process away, and the surface-share service between
 them — so these start a `cast_claim_streams` stream on `tatolabd` against the
 rig's camera (`camera_under_test`) and assert on the probe's own report. The
 A/B is the whole design: the two probes differ in one line, holding the
-`ImageFrame` versus dropping it, and must reach opposite outcomes. Either one passing alone
+`Texture` versus dropping it, and must reach opposite outcomes. Either one passing alone
 proves little.
 
 `[cast-object-tensor-protocol]` then says that same object *is* the tensor
 protocol: `torch.from_dlpack(frame)` straight off the read, GPU-resident, with
-the resolve and the lock absorbed. That half is proven here for the `ImageFrame` a
+the resolve and the lock absorbed. That half is proven here for the `Texture` a
 Texture read returns. Its write doors close the gradient, and the only place they can be proven
 is one with a real producer behind the frame: an edit through `writable()` or
 `cpu()` is checked by resolving the surface again from scratch, because
@@ -144,7 +144,7 @@ def _require_a_moving_scene(observation: dict) -> None:
 def test_a_held_image_frame_claims_its_slot_and_outlives_the_producers_ring(
     start_tatolabd_running_stream,
 ):
-    """A Texture read takes the claim, and holding the `ImageFrame` is what keeps
+    """A Texture read takes the claim, and holding the `Texture` is what keeps
     the producer off that slot.
 
     No handle, no view, no context manager — the frame alone. A lease that rode
@@ -176,7 +176,7 @@ def test_a_held_image_frame_claims_its_slot_and_outlives_the_producers_ring(
 def test_a_dropped_image_frame_releases_its_slot_and_is_refused_once_the_slot_cycles(
     start_tatolabd_running_stream,
 ):
-    """The control: the claim ends when the `ImageFrame` drops.
+    """The control: the claim ends when the `Texture` drops.
 
     What the contract owes a consumer that keeps only the id is not protection
     it let go of, but a *loud* failure: outwaiting pool depth is an error
@@ -233,7 +233,7 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
 def test_the_image_frame_reaches_its_pixels_with_no_ceremony(
     start_tatolabd_running_stream,
 ):
-    """The `ImageFrame` a Texture read returns hands its pixels to a DLPack
+    """The `Texture` a Texture read returns hands its pixels to a DLPack
     consumer with no `resolve_surface`, no `lock` and no context manager, and
     they are the surface's own pixels."""
     observation = run_claim_probe(

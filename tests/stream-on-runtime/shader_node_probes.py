@@ -16,7 +16,7 @@ from typing import Annotated
 from tatolab.stream import (
     Color,
     ColorInfo,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -110,7 +110,7 @@ class KnownPixelsVideoSource:
                     pixels[:, column] = [red, green, blue, alpha]
         finally:
             texture.unlock()
-        self.video.write(ImageFrameToWrite.of_texture(texture, ColorInfo()))
+        self.video.write(TextureToWrite.of_texture(texture, ColorInfo()))
         self._frames_published += 1
 
 

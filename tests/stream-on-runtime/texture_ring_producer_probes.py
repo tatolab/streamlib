@@ -19,13 +19,12 @@ from typing import Annotated
 
 from tatolab.stream import (
     ColorInfo,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
     clock,
     log,
@@ -122,7 +121,7 @@ class TextureRingPublishingVideoSource:
             slot_for_this_frame.unlock()
 
         self.frames_to_downstream.write(
-            ImageFrameToWrite.of_texture(slot_for_this_frame, ColorInfo()),
+            TextureToWrite.of_texture(slot_for_this_frame, ColorInfo()),
         )
         self._surface_ids_published_so_far.append(slot_for_this_frame.surface_id)
 
@@ -195,7 +194,7 @@ class ClaimedFrameHoldingSink:
     frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
 
     def __init__(self) -> None:
-        self._held_frame: "ImageFrame | None" = None
+        self._held_frame: "Texture | None" = None
         self._later_frames_seen = 0
 
     def process(self, ctx) -> None:

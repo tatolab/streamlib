@@ -24,7 +24,7 @@ from tatolab.stream import (
     Description,
     GpuContextFullAccess,
     GpuSurfaceHandle,
-    ImageFrameToWrite,
+    TextureToWrite,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
@@ -300,7 +300,7 @@ class TestPatternSource:
         self._next_frame_index += 1
         timestamp_ns = monotonic_now_ns()
         self.video.write(
-            ImageFrameToWrite.of_texture(frame_texture, TEST_PATTERN_FRAME_COLOUR),
+            TextureToWrite.of_texture(frame_texture, TEST_PATTERN_FRAME_COLOUR),
             timestamp_ns=timestamp_ns,
         )
 

@@ -18,15 +18,14 @@ from typing import Annotated, ClassVar
 
 from tatolab.stream import (
     Description,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
 )
 
@@ -117,10 +116,10 @@ class SinglePassVideoEffect(ABC):
             push_constants=self.push_constants_for(frame, elapsed_seconds),
         )
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(color_target, frame.colour),
+            TextureToWrite.of_texture(color_target, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
 
     @abstractmethod
-    def push_constants_for(self, frame: ImageFrame, elapsed_seconds: float) -> bytes:
+    def push_constants_for(self, frame: Texture, elapsed_seconds: float) -> bytes:
         """This effect's push-constant block for one frame, packed as its shader declares it."""

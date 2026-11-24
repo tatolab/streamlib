@@ -13,8 +13,8 @@ Three families live here, and they need different hardware.
 
 The lagged holders need a camera: only a real capture pool recycles a slot
 underneath a held frame. Each holds one delivered frame while the camera runs
-ahead of it, then reads that frame's pixels again — the `ImageFrame` still held
-must come back unchanged, and the same probe dropping the `ImageFrame` as soon
+ahead of it, then reads that frame's pixels again — the `Texture` still held
+must come back unchanged, and the same probe dropping the `Texture` as soon
 as it is read must be refused loudly, because the camera recycled the slot and
 the published frame id retired with it. A scene that never moves would
 make the typed half vacuous, so scene motion is measured separately.
@@ -32,7 +32,7 @@ DMA-BUF where a test pattern is engine-allocated, so it is the harder subject
 for a device export.
 
 The bare-protocol and write-door probes read a Texture pin, so the object
-they hold is the `ImageFrame` the read returns.
+they hold is the `Texture` the read returns.
 """
 
 import json
@@ -45,11 +45,10 @@ from typing import Annotated, ClassVar
 import numpy
 
 from tatolab.stream import (
-    ImageFrame,
+    Texture,
     InputPin,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     log,
     node,
 )
@@ -116,7 +115,7 @@ def _report(probe_body) -> None:
 class _LaggedHolderProbe:
     """Read the first frame, let the camera run ahead, read its pixels again.
 
-    Subclasses differ in one line — whether the first `ImageFrame` is held or
+    Subclasses differ in one line — whether the first `Texture` is held or
     dropped — which is the whole variable under test.
     """
 
@@ -130,7 +129,7 @@ class _LaggedHolderProbe:
     video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
     def __init__(self) -> None:
-        self._held_frame: "ImageFrame | None" = None
+        self._held_frame: "Texture | None" = None
         self._held_surface_id: "str | None" = None
         self._claim_taken: "bool | None" = None
         self._pixels_as_delivered: "numpy.ndarray | None" = None
@@ -256,7 +255,7 @@ class _LaggedHolderProbe:
 
 @node
 class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
-    """The first `ImageFrame` is held, and holding the object is the only thing
+    """The first `Texture` is held, and holding the object is the only thing
     keeping the camera off that slot — no handle, no view, no context
     manager."""
 
@@ -265,7 +264,7 @@ class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
 
 @node
 class ADroppedImageFrameReleasesItsSlotProbe(_LaggedHolderProbe):
-    """The control. Same probe, same lag, the first `ImageFrame` dropped once
+    """The control. Same probe, same lag, the first `Texture` dropped once
     its pixels are sampled — so its claim is released and the camera is free
     to recycle the slot. The late re-read must be refused as recycled; a lookup
     that *succeeds* here hands back another frame's pixels under the dropped
@@ -391,7 +390,7 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
 
 @node
 class TheImageFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
-    """The `ImageFrame` a Texture read returns reaches its pixels through the
+    """The `Texture` a Texture read returns reaches its pixels through the
     object itself, and reaches the surface's own pixels."""
 
 

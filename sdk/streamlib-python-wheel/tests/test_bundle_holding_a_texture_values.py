@@ -34,7 +34,7 @@ FRAMED: "dict[str, Any]" = {
 
 @dataclass(frozen=True)
 class APicture:
-    """Stands in for the `ImageFrame` a read hands back: what names its pool slot."""
+    """Stands in for the `Texture` a read hands back: what names its pool slot."""
 
     surface_id: str
 

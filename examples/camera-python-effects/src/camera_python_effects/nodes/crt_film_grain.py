@@ -12,7 +12,7 @@ from __future__ import annotations
 import struct
 from typing import Annotated, ClassVar
 
-from tatolab.stream import Description, ImageFrame, NumberRange, node
+from tatolab.stream import Description, Texture, NumberRange, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
 
@@ -59,7 +59,7 @@ class CrtFilmGrain(SinglePassVideoEffect):
         float, NumberRange(minimum=0.0, maximum=2.0), Description("The picture's overall gain.")
     ] = 1.05
 
-    def push_constants_for(self, frame: ImageFrame, elapsed_seconds: float) -> bytes:
+    def push_constants_for(self, frame: Texture, elapsed_seconds: float) -> bytes:
         return struct.pack(
             CRT_PUSH_CONSTANT_FORMAT,
             float(frame.width),

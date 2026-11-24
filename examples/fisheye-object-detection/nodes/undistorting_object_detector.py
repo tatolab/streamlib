@@ -19,7 +19,7 @@ from typing import Annotated
 import torch
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     ModelInputTensorGeometry,
     ModelInputTensorKernel,
@@ -314,7 +314,7 @@ class UndistortingObjectDetector:
         self._report_detections(ctx.time, detections)
         # Stamped with the capture's timestamp: downstream orders by it.
         self.annotated_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(undistorted_frame_texture, frame.colour),
+            TextureToWrite.of_texture(undistorted_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
         self.detections_to_downstream.write(detections)

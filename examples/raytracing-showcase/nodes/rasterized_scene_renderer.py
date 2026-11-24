@@ -16,7 +16,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
@@ -218,7 +218,7 @@ class RasterizedSceneRenderer:
         )
 
         self.rasterized_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(
+            TextureToWrite.of_texture(
                 rasterized_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR
             ),
             timestamp_ns=frame_time_ns,

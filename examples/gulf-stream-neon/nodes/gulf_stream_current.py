@@ -19,7 +19,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -386,6 +386,6 @@ class GulfStreamCurrent:
         texture = self.output_textures.next_texture_for_this_frame(gpu, size, size)
         gpu.copy_surface_to_surface(self.trail_texture.surface_id, texture)
         self.trails.write(
-            ImageFrameToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
+            TextureToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )

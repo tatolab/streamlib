@@ -49,7 +49,7 @@ Four things fall out of that pair, and they are the whole lesson:
   the **Full** capability, the one `setup()` is handed, not on the limited
   context `process()` gets. This effect is one pass, so it needs neither.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  node writes it with `ImageFrameToWrite.of_texture(texture, frame.colour)`, so
+  node writes it with `TextureToWrite.of_texture(texture, frame.colour)`, so
   the frame downstream carries that id, an extent, the camera's colour and its
   timestamp. Pixels never ride a link.
 
@@ -66,7 +66,7 @@ ctx.gpu_limited_access.copy_surface_to_surface(
 ```
 
 The engine does the copy, so it is worth reading closely. `frame` — the object
-`self.camera_frame_from_upstream.read()` handed back, an `ImageFrame`, — holds a claim on the
+`self.camera_frame_from_upstream.read()` handed back, a `Texture`, — holds a claim on the
 camera's surface, and that claim is what keeps the camera's pixels still for
 the length of the copy. The call picks the copy a buffer-to-texture pair needs,
 converts nothing, and returns once the kernel's read of the texture would see

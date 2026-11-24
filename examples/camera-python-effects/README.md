@@ -101,7 +101,7 @@ frames and a kernel binding resolves texture-backed surfaces only, so a draw
 handed a camera surface id is refused by name. That is what
 `CameraFrameToTexture` is for: `ctx.gpu_limited_access.copy_surface_to_surface`
 copies the frame into a texture this node owns, device to device, with no GPU
-array package involved. The `ImageFrame` its `InputPin[Texture]` hands back
+array package involved. The `Texture` its `InputPin[Texture]` hands back
 holds its surface still for the length of the copy.
 
 It is also the *only* reason the chain opens that way. A camera frame is

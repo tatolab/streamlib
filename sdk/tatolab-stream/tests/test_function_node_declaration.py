@@ -13,7 +13,7 @@ import pytest
 
 from tatolab.stream import (
     Description,
-    ImageFrame,
+    Texture,
     State,
     Stateful,
     Time,
@@ -271,8 +271,8 @@ def test_a_stateful_output_is_described_inside_stateful():
 
 @node.shader("float4 tinted(ImageInput image, float amount) { return image.pixel * amount; }")
 def tinted(
-    image: Annotated[ImageFrame, Description("The picture tinted.")], amount: float = 1.0
-) -> Annotated[ImageFrame, Description("The tinted picture.")]: ...
+    image: Annotated[Texture, Description("The picture tinted.")], amount: float = 1.0
+) -> Annotated[Texture, Description("The tinted picture.")]: ...
 
 
 def test_a_shader_nodes_ports_are_described_the_same_way():

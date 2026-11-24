@@ -11,11 +11,10 @@ import traceback
 from typing import Annotated
 
 from tatolab.stream import (
-    ImageFrame,
+    Texture,
     InputPin,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     log,
 )
 
@@ -56,7 +55,7 @@ class DeviceExchangeFrameProbeBase:
     def __init__(self) -> None:
         self._frames_seen = 0
 
-    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> dict:
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: Texture) -> dict:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

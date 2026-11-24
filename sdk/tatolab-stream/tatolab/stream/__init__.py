@@ -76,8 +76,6 @@ from ._pin_types import Trigger as Trigger
 from ._pin_types import Vector2 as Vector2
 from ._pin_types import Vector3 as Vector3
 from ._pin_types import Vector4 as Vector4
-from ._project_asset_uuid import ProjectAssetMedia as ProjectAssetMedia
-from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import AudioToTensor as AudioToTensor
 from ._built_in_nodes import BooleanToFloat as BooleanToFloat
 from ._built_in_nodes import BooleanToInteger as BooleanToInteger
@@ -108,9 +106,8 @@ from ._gpu_protocols import RayTracingKernel as RayTracingKernel
 from ._node_context_protocols import LinkInputDataReader as LinkInputDataReader
 from ._node_context_protocols import LinkOutputDataWriter as LinkOutputDataWriter
 from ._node_context_protocols import NodeLinkDataAccess as NodeLinkDataAccess
-from ._node_context_protocols import ArrayFrameCpuAttribute as ArrayFrameCpuAttribute
-from ._node_context_protocols import ChannelsBlock as ChannelsBlock
-from ._node_context_protocols import PacketsUnit as PacketsUnit
+from ._node_context_protocols import EncodedMedia as EncodedMedia
+from ._node_context_protocols import TensorCpuAttribute as TensorCpuAttribute
 from ._node_context_protocols import PortPayloadBorrow as PortPayloadBorrow
 from ._node_context_protocols import PortPayloadLoan as PortPayloadLoan
 from ._node_context_protocols import StoreScopedToThisNode as StoreScopedToThisNode
@@ -176,22 +173,19 @@ from .model_input_tensor_kernel import ModelInputTensorKernel as ModelInputTenso
 from .model_input_tensor_kernel import ModelInputTensorLayout as ModelInputTensorLayout
 from .node_output_texture_ring import NodeOutputTextureRing as NodeOutputTextureRing
 from .color_info import ColorInfo as ColorInfo
-from .array_frame import ArrayFrame as ArrayFrame
-from .array_frame import ArrayFrameGpuAttribute as ArrayFrameGpuAttribute
-from .image_frame import ImageFrame as ImageFrame
-from .image_frame import ImageFrameToWrite as ImageFrameToWrite
+from .array_frame import TensorGpuAttribute as TensorGpuAttribute
+from .image_frame import TextureToWrite as TextureToWrite
 
 __all__ = [
     "AccelerationStructureHandle",
-    "ArrayFrame",
-    "ArrayFrameCpuAttribute",
-    "ArrayFrameGpuAttribute",
+    "TensorCpuAttribute",
+    "TensorGpuAttribute",
     "AudioToTensor",
     "AudioWindowContract",
     "BooleanToFloat",
     "BooleanToInteger",
     "BreakBundle",
-    "ChannelsBlock",
+    "EncodedMedia",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ComputeKernel",
@@ -210,8 +204,7 @@ __all__ = [
     "GpuSurfaceHandle",
     "GraphicsKernel",
     "IOSurfaceMachPortExport",
-    "ImageFrame",
-    "ImageFrameToWrite",
+    "TextureToWrite",
     "IntegerToBoolean",
     "IntegerToFloat",
     "KernelDispatchBatch",
@@ -276,8 +269,6 @@ __all__ = [
     "Vector4",
     "Rectangle",
     "Transform",
-    "ProjectAssetMedia",
-    "ProjectAssetUuid",
     "ExposedNameCastsToNothingError",
     "FunctionNode",
     "RustFunctionNode",
@@ -287,7 +278,6 @@ __all__ = [
     "State",
     "Stateful",
     "OpaqueFdAllocationExport",
-    "PacketsUnit",
     "PixelAccessToOneClaimedSurface",
     "PreviousValue",
     "PortPayloadBorrow",

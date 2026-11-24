@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from tatolab.stream import Color, Description, ImageFrame, NumberRange, NumberStep, node
+from tatolab.stream import Color, Description, Texture, NumberRange, NumberStep, node
 
 ORBIT_LIGHTS_SLANG = """
 static const float OrbitLights_WIDTH_IN_HEIGHTS = 1.7777778;
@@ -171,7 +171,7 @@ WARM_WHITE = Color(1.0, 0.92, 0.55, 1.0)
 @node.shader(ORBIT_LIGHTS_SLANG)
 def OrbitLights(
     size_from: Annotated[
-        ImageFrame, Description("Any picture: the lights are drawn at its size.")
+        Texture, Description("Any picture: the lights are drawn at its size.")
     ],
     seconds: Annotated[float, Description("The stream's clock, in seconds.")] = 0.0,
     speed: Annotated[
@@ -185,7 +185,7 @@ def OrbitLights(
         NumberRange(minimum=0.0, maximum=1.0),
         Description("How far the lights swell out, on the beat."),
     ] = 0.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -194,7 +194,7 @@ def OrbitLights(
 )
 @node.shader(KALEIDOSCOPE_SLANG)
 def Kaleidoscope(
-    image: Annotated[ImageFrame, Description("The picture to fold.")],
+    image: Annotated[Texture, Description("The picture to fold.")],
     segments: Annotated[
         float,
         NumberRange(minimum=2.0, maximum=16.0),
@@ -211,7 +211,7 @@ def Kaleidoscope(
         NumberRange(minimum=0.0, maximum=1.0),
         Description("How far it zooms in and rings out, on the beat."),
     ] = 0.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -220,7 +220,7 @@ def Kaleidoscope(
 )
 @node.shader(CLOCK_DIGITS_SLANG)
 def ClockDigits(
-    image: Annotated[ImageFrame, Description("The picture to stamp.")],
+    image: Annotated[Texture, Description("The picture to stamp.")],
     seconds: Annotated[float, Description("The time to show, in seconds.")] = 0.0,
     colour: Annotated[Color, Description("The digits' colour.")] = WARM_WHITE,
     size: Annotated[
@@ -229,4 +229,4 @@ def ClockDigits(
         NumberStep(0.1),
         Description("How tall the digits are; 1 is a tenth of the frame."),
     ] = 1.0,
-) -> ImageFrame: ...
+) -> Texture: ...

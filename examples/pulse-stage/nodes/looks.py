@@ -18,7 +18,7 @@ from tatolab.stream import (
     Description,
     GraphInput,
     GraphOutput,
-    ImageFrame,
+    Texture,
     NumberRange,
     NumberStep,
     StreamBuilder,
@@ -50,14 +50,14 @@ float4 GlowBlur(ImageInput image, float radius)
 """,
 )
 def GlowBlur(
-    image: Annotated[ImageFrame, Description("The picture to soften.")],
+    image: Annotated[Texture, Description("The picture to soften.")],
     radius: Annotated[
         float,
         NumberRange(minimum=0.0, maximum=0.1),
         NumberStep(0.001),
         Description("How far it spreads, as a share of the frame."),
     ] = 0.01,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @node.meta(
@@ -73,15 +73,15 @@ float4 GlowAdd(ImageInput picture, ImageInput light, float amount)
 """,
 )
 def GlowAdd(
-    picture: Annotated[ImageFrame, Description("The sharp picture.")],
-    light: Annotated[ImageFrame, Description("The softened light added over it.")],
+    picture: Annotated[Texture, Description("The sharp picture.")],
+    light: Annotated[Texture, Description("The softened light added over it.")],
     amount: Annotated[
         float,
         NumberRange(minimum=0.0, maximum=4.0),
         NumberStep(0.05),
         Description("How much light is added."),
     ] = 1.0,
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 @graph_generator

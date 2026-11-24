@@ -25,7 +25,7 @@ use crate::python_bag_conversion::{
 };
 use crate::python_node_context::{PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess};
 use crate::python_port_family_read_types::{
-    PythonArrayFrameCpuAttribute, PythonChannelsBlock, PythonPacketsUnit,
+    PythonAudio, PythonEncodedMedia, PythonTensorCpuAttribute,
 };
 use crate::python_port_payload::PythonPortPayloadBorrow;
 
@@ -361,7 +361,7 @@ fn payload_read_as_its_shape<'py>(
                     ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
                 return Ok(Bound::new(
                     python,
-                    PythonChannelsBlock::holding(port_name, payload, block, timestamp_ns)?,
+                    PythonAudio::holding(port_name, payload, block, timestamp_ns)?,
                 )?
                 .into_any());
             }
@@ -394,7 +394,7 @@ fn payload_read_as_its_shape<'py>(
                     Bound::new(python, PythonPortPayloadBorrow::holding(payload, None))?;
                 return Ok(Bound::new(
                     python,
-                    PythonPacketsUnit {
+                    PythonEncodedMedia {
                         payload: payload_borrow.unbind(),
                         pts: timestamp_ns,
                         starts_group: group_boundary == MessageGroupBoundary::StartsGroup,
@@ -487,7 +487,7 @@ fn color_info_of_the_image_frame_colour<'py>(
         .call((), Some(&axes))
 }
 
-/// The `ImageFrame` an Image descriptor states, its slot claimed.
+/// The `Texture` an Image descriptor states, its slot claimed.
 pub(crate) fn image_frame_of_the_read<'py>(
     python: Python<'py>,
     port_name: &str,
@@ -522,13 +522,13 @@ pub(crate) fn image_frame_of_the_read<'py>(
     family_type_built_offering_gpu_access(
         &python
             .import("tatolab.stream.image_frame")?
-            .getattr("ImageFrame")?,
+            .getattr("Texture")?,
         &fields,
         offered_gpu_limited_access,
     )
 }
 
-/// The `ArrayFrame` an Array payload's attribute table states: each CPU
+/// The `Tensor` an Array payload's attribute table states: each CPU
 /// attribute borrowed in the sample, each GPU attribute's slot claimed.
 fn array_frame_of_the_read<'py>(
     python: Python<'py>,
@@ -559,7 +559,7 @@ fn array_frame_of_the_read<'py>(
                 byte_len,
             } => Bound::new(
                 python,
-                PythonArrayFrameCpuAttribute::over(
+                PythonTensorCpuAttribute::over(
                     port_name,
                     &borrowed_payload,
                     payload_base_address,
@@ -583,7 +583,7 @@ fn array_frame_of_the_read<'py>(
                 fields.set_item("dtype", &row.dtype)?;
                 fields.set_item("shape", PyTuple::new(python, &row.shape)?)?;
                 family_type_built_offering_gpu_access(
-                    &array_frame_module.getattr("ArrayFrameGpuAttribute")?,
+                    &array_frame_module.getattr("TensorGpuAttribute")?,
                     &fields,
                     offered_gpu_limited_access,
                 )?
@@ -592,6 +592,6 @@ fn array_frame_of_the_read<'py>(
         attributes.set_item(&row.name, attribute)?;
     }
     array_frame_module
-        .getattr("ArrayFrame")?
+        .getattr("Tensor")?
         .call1((attributes, timestamp_ns))
 }

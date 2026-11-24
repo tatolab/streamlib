@@ -19,7 +19,7 @@ use streamlib::sdk::rhi::{TensorElementType, TensorStorageBufferLayout, TextureF
 use super::{PythonNodeLinkDataAccess, declared_port_name_the_spelling_names};
 use crate::python_bag_conversion::python_type_name_for_error_message;
 use crate::python_node_context::PythonGpuContextLimitedAccess;
-use crate::python_port_family_read_types::PythonArrayFrameCpuAttribute;
+use crate::python_port_family_read_types::PythonTensorCpuAttribute;
 
 impl PythonNodeLinkDataAccess {
     /// Publish `samples`, a `[channel][sample]` array, as one Channels block
@@ -82,7 +82,7 @@ impl PythonNodeLinkDataAccess {
         )
     }
 
-    /// Publish `image`, an `ImageFrame` this node read or a GPU surface it
+    /// Publish `image`, a `Texture` this node read or a GPU surface it
     /// acquired from a pool, as one Image frame on `port_name`.
     #[allow(
         clippy::too_many_arguments,
@@ -151,7 +151,7 @@ impl PythonNodeLinkDataAccess {
         let mut cpu_data_held = Vec::new();
         for item in attributes.items()?.iter() {
             let (name, value): (String, Bound<'_, PyAny>) = item.extract()?;
-            if let Ok(read_attribute) = value.cast::<PythonArrayFrameCpuAttribute>() {
+            if let Ok(read_attribute) = value.cast::<PythonTensorCpuAttribute>() {
                 let byte_len = read_attribute.get().attribute_bytes().len() as u64;
                 rows.push(ArrayFrameAttributeRow {
                     name,
@@ -446,7 +446,7 @@ impl PythonNodeLinkDataAccess {
     }
 }
 
-/// The Image frame descriptor of `image`, an `ImageFrame` this node read or a GPU surface it
+/// The Image frame descriptor of `image`, a `Texture` this node read or a GPU surface it
 /// acquired from a pool, as a write on `port_name` publishes it: its pool slot, size, format and
 /// colour; refused for anything else, a surface no pool slot of this node holds, or a format
 /// `declared_formats`, when it names any, does not list.
@@ -458,7 +458,7 @@ pub(crate) fn image_frame_descriptor_of_the_image(
 ) -> PyResult<ImageFrameDescriptorBody> {
     let not_an_image = || {
         PyTypeError::new_err(format!(
-            "a write on Image output port {port_name:?} takes an ImageFrame this node read \
+            "a write on Image output port {port_name:?} takes a Texture this node read \
              or a texture it acquired from a pool; got a {}",
             python_type_name_for_error_message(image, "value")
         ))
@@ -498,7 +498,7 @@ pub(crate) fn image_frame_descriptor_of_the_image(
     })
 }
 
-/// The H.273 codes an `ImageFrame`'s `colour` spells; unspecified when it states none.
+/// The H.273 codes a `Texture`'s `colour` spells; unspecified when it states none.
 fn image_frame_colour_the_image_states(image: &Bound<'_, PyAny>) -> PyResult<ImageFrameH273Colour> {
     let colour = image
         .getattr_opt("colour")?
@@ -580,7 +580,7 @@ impl ArrayOutputPortDeclaredResidency {
 /// Python buffer, or an attribute a read of an Array port returned.
 enum ArrayAttributeCpuBytesHeldForOneWrite<'py> {
     PythonBuffer(PythonBufferHeldForOneWrite),
-    ReadAttribute(Bound<'py, PythonArrayFrameCpuAttribute>),
+    ReadAttribute(Bound<'py, PythonTensorCpuAttribute>),
 }
 
 impl ArrayAttributeCpuBytesHeldForOneWrite<'_> {

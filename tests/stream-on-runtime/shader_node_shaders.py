@@ -3,7 +3,7 @@
 
 """The shader nodes the shader-node scenarios run: Slang the runtime compiles, with no Python behind it."""
 
-from tatolab.stream import Color, ImageFrame, Vector3, node
+from tatolab.stream import Color, Texture, Vector3, node
 
 TINT_AMOUNT = 0.5
 
@@ -16,7 +16,7 @@ float4 tint(ImageInput image, float amount)
 }
 """
 )
-def tint(image: ImageFrame, amount: float = TINT_AMOUNT) -> ImageFrame: ...
+def tint(image: Texture, amount: float = TINT_AMOUNT) -> Texture: ...
 
 
 @node.shader(
@@ -27,7 +27,7 @@ float4 invert(ImageInput image)
 }
 """
 )
-def invert(image: ImageFrame) -> ImageFrame: ...
+def invert(image: Texture) -> Texture: ...
 
 
 @node.shader(
@@ -38,7 +38,7 @@ float4 swap_red_and_blue(ImageInput image)
 }
 """
 )
-def swap_red_and_blue(image: ImageFrame) -> ImageFrame: ...
+def swap_red_and_blue(image: Texture) -> Texture: ...
 
 
 @node.shader(
@@ -50,7 +50,7 @@ float4 horizontal_blur(ImageInput image)
 }
 """
 )
-def horizontal_blur(image: ImageFrame) -> ImageFrame: ...
+def horizontal_blur(image: Texture) -> Texture: ...
 
 
 @node.shader(
@@ -61,7 +61,7 @@ float4 red_ramp_of_the_extent_of(ImageInput extent_from)
 }
 """
 )
-def red_ramp_of_the_extent_of(extent_from: ImageFrame) -> ImageFrame: ...
+def red_ramp_of_the_extent_of(extent_from: Texture) -> Texture: ...
 
 
 @node.shader(
@@ -73,7 +73,7 @@ float4 tint_by_a_color_and_lift(ImageInput image, float4 tint_color, float3 lift
 """
 )
 def tint_by_a_color_and_lift(
-    image: ImageFrame,
+    image: Texture,
     tint_color: Color = Color(1.0, 1.0, 1.0),
     lift: Vector3 = Vector3(0.0, 0.0, 0.0),
-) -> ImageFrame: ...
+) -> Texture: ...
