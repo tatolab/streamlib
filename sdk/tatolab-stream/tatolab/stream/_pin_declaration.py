@@ -57,9 +57,9 @@ from ._pin_annotations_on_the_wire import (
 from ._pin_declaration_refusal_words import (
     TypeParameterLimit,
     words_refusing_a_function_pin_of,
-    PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES,
+    PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES,
     words_refusing_an_input_declaration_annotation_on,
-    words_refusing_an_input_pin_of_several_types_taking,
+    words_refusing_a_pin_of_several_types_taking,
     words_refusing_a_type_parameter_limited_to,
 )
 from ._pin_default_refusal_words import fix_of_a_default_not_taken
@@ -148,6 +148,9 @@ class DeclaredPin:
     """The type parameter that types it, whose value its node can only hand on; `None` for a
     pin typed otherwise."""
 
+    chosen_among: "tuple[PinType, ...]" = ()
+    """Each type the setting typing a module's output may choose; empty for any other pin."""
+
 
 # The read types of the family grammar, by the typed spelling that replaces each.
 _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME: Final[dict[str, str]] = {
@@ -212,7 +215,7 @@ class _PinReading:
         self._node = node
         self._pin_name = pin_name
         self._direction: PinDirection = direction
-        self._form = form
+        self._form: PinForm = form
         self._of_the_runtimes_own_node = of_the_runtimes_own_node
         self._a_setting = a_setting
         self._member_of = member_of
@@ -325,28 +328,27 @@ class _PinReading:
         optional: bool,
         default: object,
     ) -> DeclaredPin:
-        """A pin written `Annotated[object, PinTypeFromSetting("...")]`, of the type that setting
-        chooses: a value, whose default, if any, is `None`."""
-        if not self._of_the_runtimes_own_node:
-            raise self._refusal(
-                f"{self._pin_named} carries `{type_settings[0]!r}`, which only the runtime's own "
-                f"nodes declare yet. To fix: type it as one of {_spellings_read_today()}.",
-                "pin_type_not_read_yet",
-            )
-        declaration = declaration_of_a_pin_a_setting_types(
+        """A pin carrying `PinTypeFromSetting("...")`, of the type that setting chooses."""
+        declaration, chosen_among = declaration_of_a_pin_a_setting_types(
             pin_named=self._pin_named,
             written_type=written_type,
             metadata=metadata,
             type_settings=type_settings,
-            an_output=self._direction == "output",
+            of_the_runtimes_own_node=self._of_the_runtimes_own_node,
+            direction=self._direction,
+            form=self._form,
             optional=optional,
             default=default,
+            member_pin_type=self._a_member_pin_type,
             refusal=self._refusal,
         )
         self._state_former_names(declaration, metadata)
         takes_none = self._direction != "output" and optional
         return DeclaredPin(
-            declaration, optional=optional, default_value=None if takes_none else NO_DEFAULT
+            declaration,
+            optional=optional,
+            default_value=None if takes_none else NO_DEFAULT,
+            chosen_among=chosen_among,
         )
 
     def _read_an_input_holding_no_value(
@@ -546,9 +548,9 @@ class _PinReading:
             pin_types.append(pin_type)
         if self._form != "pin":
             return {"kind": "one_of", "pin_types": pin_types}, the_flow_a_function_input_reads(pin_types[0])
-        not_streamed = [each for each in pin_types if each["type"] not in PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES]
+        not_streamed = [each for each in pin_types if each["type"] not in PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES]
         if not_streamed:
-            raise self._refusal(words_refusing_an_input_pin_of_several_types_taking(self._pin_named, not_streamed[0]["type"]), "pin_type_not_read_yet")
+            raise self._refusal(words_refusing_a_pin_of_several_types_taking(self._pin_named, not_streamed[0]["type"]), "pin_type_not_read_yet")
         return {"kind": "one_of", "pin_types": pin_types}, "stream"
 
     def _a_union_input_pin(self, written_type: object) -> bool:
@@ -740,12 +742,11 @@ class _PinReading:
         return member
 
     def _reads_a_type_choice(self, written_form: str) -> bool:
-        """Whether the pin is a `PinTypeChoice` or a `NodeReference` setting of the runtime's own
-        node, the one place each is read yet."""
-        return (
-            written_form in ("PinTypeChoice", "NodeReference")
-            and self._of_the_runtimes_own_node
-            and self._form == "field"
+        """Whether the pin is a class node's `PinTypeChoice` field, or a `NodeReference` setting
+        of the runtime's own node, the one place each is read yet."""
+        return self._form == "field" and (
+            written_form == "PinTypeChoice"
+            or (written_form == "NodeReference" and self._of_the_runtimes_own_node)
         )
 
     def _refusal_of_a_type_only_a_pin_carries(

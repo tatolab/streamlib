@@ -110,8 +110,9 @@ impl GraphNode {
             }
             *self.ports.on_mut(direction) = ports;
         }
+        let values = self.the_values_its_port_facts_read();
         self.stream_facts_of_output_ports()
-            .hold_the_output_ports(&self.ports.outputs, self.config.as_ref());
+            .hold_the_output_ports(&self.ports.outputs, values.as_ref());
         true
     }
 }

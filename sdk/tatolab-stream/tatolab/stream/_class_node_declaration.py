@@ -22,7 +22,11 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Final, Literal, Optional
 
 from ._class_node_pins import InputPin, OutputPin
-from ._contract_pin_types import PinDeclarationOnTheWire
+from ._class_node_type_choice import (
+    family_declaration_of_an_output_a_setting_types,
+    give_each_type_choice_what_it_may_choose,
+)
+from ._contract_pin_types import PinDeclarationOnTheWire, PinType
 from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._input_declaration_annotations import (
@@ -149,6 +153,8 @@ class _ClassNodeReading:
         self._input_ports_of_each_type_parameter: dict[typing.TypeVar, list[str]] = {}
         self._input_port_by_name: dict[str, DeclaredPort] = {}
         self._default_by_attribute: dict[str, object] = {}
+        self._among_of_each_choosing_setting: dict[str, tuple[PinType, ...]] = {}
+        """Each type a module's output its setting types may choose, by the output's port."""
         self.pin_groups: list[ClassNodePinGroup] = []
         """Each `PinGroup` the class declares, in declaration order, once `ports` has read them."""
 
@@ -211,6 +217,10 @@ class _ClassNodeReading:
                 )
             )
         refuse_former_names_that_find_no_one_pin(self._node, typed_pins)
+        if not self._of_the_runtimes_own_node:
+            give_each_type_choice_what_it_may_choose(
+                self._node, input_ports, output_ports, self._among_of_each_choosing_setting
+            )
         for output_port in output_ports:
             followed = output_port["family"].get("family_follows_input_port")
             if followed is not None and "family" not in output_port["family"]:
@@ -592,10 +602,16 @@ class _ClassNodeReading:
             of_the_runtimes_own_node=self._of_the_runtimes_own_node,
         )
         port_name = self._cast_port_name(attribute_name)
+        if declared.chosen_among:
+            self._among_of_each_choosing_setting[port_name] = declared.chosen_among
         return {
             "name": port_name,
             "description": description or "",
-            "family": self._family_of_an_output_pin(port_name, declared.declaration),
+            "family": (
+                family_declaration_of_an_output_a_setting_types(declared.declaration, declared.chosen_among)
+                if declared.chosen_among
+                else self._family_of_an_output_pin(port_name, declared.declaration)
+            ),
             "pin_declaration": declared.declaration,
         }
 

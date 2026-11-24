@@ -16,11 +16,11 @@ from ._contract_pin_types import PinTypeDescription
 from ._input_declaration_annotations import StreamDelivery
 
 __all__ = [
-    "PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES",
+    "PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES",
     "TypeParameterLimit",
     "words_refusing_a_function_pin_of",
     "words_refusing_an_input_declaration_annotation_on",
-    "words_refusing_an_input_pin_of_several_types_taking",
+    "words_refusing_a_pin_of_several_types_taking",
     "words_refusing_a_type_parameter_limited_to",
 ]
 
@@ -91,20 +91,23 @@ def words_refusing_an_input_declaration_annotation_on(pin_named: str, entry: obj
     )
 
 
-PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES: Final = frozenset(
-    {"texture", "audio", "tensor", "encoded_video", "encoded_audio"}
+PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES: Final = frozenset(
+    {"texture", "audio", "tensor", "encoded_video", "encoded_audio", "named"}
 )
-"""The types a class node's `InputPin` of several types takes: each a stream its own family carries."""
+"""The types a class node's `InputPin` of several types, or an `OutputPin` its setting types,
+takes: each a stream its own family carries, or a module's named type, carried as its bytes."""
 
 
-def words_refusing_an_input_pin_of_several_types_taking(pin_named: str, pin_type_name: str) -> str:
-    """The words refusing the pin `pin_named` names, an `InputPin` of several types, one of which
+def words_refusing_a_pin_of_several_types_taking(
+    pin_named: str, pin_type_name: str, pin_form: str = "InputPin"
+) -> str:
+    """The words refusing the pin `pin_named` names, a `pin_form` of several types, one of which
     is `pin_type_name`, which is not a stream."""
     return (
-        f"{pin_named} is an `InputPin` of several types, and one of them is a {pin_type_name}, "
-        f"which is no stream. An `InputPin` of several types takes Texture, Audio, Tensor, "
-        f"EncodedVideo and EncodedAudio. To fix: declare the {pin_type_name} as a pin or a field "
-        f"of its own."
+        f"{pin_named} is an `{pin_form}` of several types, and one of them is a {pin_type_name}, "
+        f"which is no stream. An `{pin_form}` of several types takes Texture, Audio, Tensor, "
+        f"EncodedVideo, EncodedAudio and a module's named type. To fix: declare the "
+        f"{pin_type_name} as a pin or a field of its own."
     )
 
 

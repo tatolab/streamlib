@@ -132,7 +132,12 @@ impl GraphNode {
         let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
         let stream_facts_of_output_ports = Arc::new(StreamFactsOfOutputPorts::as_declared_by(
             &outputs,
-            config.as_ref(),
+            crate::core::graph::the_values_port_facts_read(
+                config.as_ref(),
+                &inputs,
+                &serde_json::Map::new(),
+            )
+            .as_ref(),
         ));
         let ports = GraphNodePorts { inputs, outputs }
             .resolved_against_the_config(&node_type, config.as_ref());
@@ -222,14 +227,19 @@ impl GraphNode {
 
     /// Resolve this node's ports against what its config and pins declare of them: a
     /// `GraphInput`'s `value` ports take the pin type, the family, the range and the lifetime
-    /// its settings name. The ports of every other node type are as it declares them.
+    /// its settings name, and every output carries its stream facts on the family its settings
+    /// read at setup choose. The ports of every other node type are as it declares them.
     pub(crate) fn resolve_the_ports_its_settings_declare(&mut self) {
-        if !self.is_a_graph_input() {
-            return;
+        if self.is_a_graph_input() {
+            let settings = serde_json::Value::Object(self.input_values());
+            self.ports = std::mem::take(&mut self.ports)
+                .resolved_against_the_config(&self.node_type, Some(&settings));
         }
-        let settings = serde_json::Value::Object(self.input_values());
-        self.ports = std::mem::take(&mut self.ports)
-            .resolved_against_the_config(&self.node_type, Some(&settings));
+        self.stream_facts_of_output_ports
+            .take_the_families_declared_by(
+                &self.ports.outputs,
+                self.the_values_its_port_facts_read().as_ref(),
+            );
     }
 
     /// Refuse a link into input `input` when it is a setting that takes no wire: one read each

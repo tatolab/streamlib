@@ -46,6 +46,17 @@ impl PortFamily {
         }
     }
 
+    /// The family a port of the type a pin type choice chooses travels on: the family one
+    /// message of which carries a whole value of it, or Records for a named type, whose port is
+    /// declared on Records and carries the bytes its class packs. `None` for a List and a type
+    /// that takes no wire.
+    pub fn a_chosen_pin_type_travels_on(pin_type: &PinType) -> Option<Self> {
+        match pin_type {
+            PinType::Named { .. } => Some(Self::Records),
+            other => Self::carrying_a_whole_value_of(other),
+        }
+    }
+
     /// The family whose messages carry a pin of the built-in type `name`, as [`Self::carrying`]
     /// finds it.
     pub fn carrying_a_pin_of(name: BuiltInPinTypeName) -> Option<Self> {

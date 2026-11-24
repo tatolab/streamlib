@@ -16,8 +16,8 @@ use super::{InputValueChangesAConnectWaitsFor, the_verdict_connect_takes_on_a_li
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
-    NodeInputMode, PinDeclaration, PinLinkOutcome, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime,
+    NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType,
+    PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
 };
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
@@ -40,6 +40,13 @@ const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
 const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
 const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
 const CHANNELS_FLOAT_SINK: &str = "FoundAnotherWayChannelsFloatSink";
+/// A node whose output `value`, typed by its setting `kind` choosing H.264, Opus or a named
+/// `Note` and choosing the `Note` by default, travels on the family and codec of the type `kind`
+/// holds, declared as a module declares an `OutputPin[Annotated[H264 | OPUS | Note,
+/// PinTypeFromSetting("kind")]]`: on the first type's family until `kind` is read, and as a
+/// stream.
+const FAMILY_CHOSEN_SOURCE: &str = "FoundAnotherWayFamilyChosenSource";
+const H264_SINK: &str = "FoundAnotherWayH264Sink";
 /// A node whose input `value`, typed by its setting `kind`, takes a wire or a value.
 const CHOSEN_SINK_TAKING_A_VALUE: &str = "FoundAnotherWayChosenSinkTakingAValue";
 /// The output of a `PASS_ON` node, which takes the type of its input `value`.
@@ -51,6 +58,17 @@ fn class_path(class_name: &str) -> NodeClassImportPath {
 
 fn float() -> PinType {
     PinType::Float { exact_size: None }
+}
+
+fn encoded_video(codec: &str) -> PinType {
+    PinType::EncodedVideo {
+        codecs: vec![codec.to_owned()],
+    }
+}
+
+fn a_note() -> PinType {
+    serde_json::from_value(json!({"type": "named", "named_pin_type": "notes:Note"}))
+        .expect("a named type")
 }
 
 /// A port declaring `pin_type`, of a family no test here judges a link by.
@@ -201,6 +219,63 @@ fn register_the_fixture_node_types() {
                         PortFamilyDeclaration::of_family(PortFamily::Channels),
                     )
                     .with_pin_declaration(PinDeclaration::exactly(float())),
+                ],
+                Vec::new(),
+            ),
+            a_node_type(
+                FAMILY_CHOSEN_SOURCE,
+                vec![
+                    a_port(
+                        "kind",
+                        is(PinType::PinTypeChoice {
+                            among: vec![
+                                encoded_video("h264"),
+                                PinType::EncodedAudio {
+                                    codecs: vec!["opus".to_owned()],
+                                },
+                                a_note(),
+                            ],
+                            among_the_bundles_its_stream_declares: false,
+                        }),
+                    )
+                    .with_input_mode(NodeInputMode::SettingOnly {
+                        read: SettingReadTime::AtSetup,
+                    })
+                    .with_pin_default(json!(a_note())),
+                ],
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration {
+                            family_from_config_key: Some("kind".to_owned()),
+                            codec_from_config_key: Some("kind".to_owned()),
+                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                        },
+                    )
+                    .with_pin_declaration(PinDeclaration {
+                        pin_type: DeclaredPinType::SetByInput {
+                            input_name: "kind".to_owned(),
+                        },
+                        flow: PinFlow::Stream,
+                        ..PinDeclaration::exactly(PinType::String {})
+                    }),
+                ],
+            ),
+            a_node_type(
+                H264_SINK,
+                vec![
+                    PortDescriptor::new(
+                        "value",
+                        "value",
+                        true,
+                        PortFamilyDeclaration {
+                            requires_codec: vec!["h264".to_owned()],
+                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                        },
+                    )
+                    .with_pin_declaration(PinDeclaration::exactly(encoded_video("h264"))),
                 ],
                 Vec::new(),
             ),
@@ -696,6 +771,74 @@ fn a_port_whose_type_is_found_another_way_is_judged_by_its_family_though_it_reso
         matches!(refused, Error::InvalidLink(_)),
         "refused by the families, not {refused:?}"
     );
+}
+
+/// Whether output `value` of `node` carries stream facts of Packets now, which only a Packets
+/// output takes.
+fn carries_packets_stream_facts(compiler: &Compiler, node: &NodeRunId) -> bool {
+    let facts = compiler.scope(|graph, _tx| {
+        std::sync::Arc::clone(
+            graph
+                .traversal()
+                .v(node)
+                .first()
+                .expect("the node is held")
+                .stream_facts_of_output_ports(),
+        )
+    });
+    facts
+        .replace_facts_of("value", PacketsStreamFacts::default().into())
+        .is_ok()
+}
+
+#[test]
+fn an_output_whose_family_its_choice_sets_travels_on_the_family_and_codec_of_the_type_chosen() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+
+    let chose_h264 = a_node_holding(
+        &compiler,
+        FAMILY_CHOSEN_SOURCE,
+        choosing(encoded_video("h264")),
+    );
+    connect(&compiler, &chose_h264, &a_node_of(&compiler, H264_SINK))
+        .expect("a choice of H.264 carries Packets of H.264");
+    assert!(carries_packets_stream_facts(&compiler, &chose_h264));
+
+    let chose_opus = a_node_holding(
+        &compiler,
+        FAMILY_CHOSEN_SOURCE,
+        choosing(PinType::EncodedAudio {
+            codecs: vec!["opus".to_owned()],
+        }),
+    );
+    let refused = connect(&compiler, &chose_opus, &a_node_of(&compiler, H264_SINK))
+        .expect_err("a choice of Opus does not feed an H.264 input");
+    assert!(
+        matches!(&refused, Error::InvalidLink(words) if words.contains("states \"opus\"")),
+        "refused naming the codec chosen, not {refused:?}"
+    );
+}
+
+#[test]
+fn an_output_whose_choice_holds_no_value_travels_on_the_family_of_its_default() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chose_by_default = a_node_holding(&compiler, FAMILY_CHOSEN_SOURCE, serde_json::Map::new());
+    let chose_a_note = a_node_holding(&compiler, FAMILY_CHOSEN_SOURCE, choosing(a_note()));
+
+    for (node, held) in [(chose_by_default, "by default"), (chose_a_note, "saved")] {
+        let refused = connect(&compiler, &node, &a_node_of(&compiler, H264_SINK))
+            .expect_err("a `Note` chosen travels on Records, which feeds no Packets input");
+        assert!(
+            matches!(&refused, Error::InvalidLink(words) if words.contains("(Records)")),
+            "a `Note` chosen {held} is refused by its family, not {refused:?}"
+        );
+        assert!(
+            !carries_packets_stream_facts(&compiler, &node),
+            "a `Note` chosen {held} carries Records facts, though Packets is declared first"
+        );
+    }
 }
 
 #[test]

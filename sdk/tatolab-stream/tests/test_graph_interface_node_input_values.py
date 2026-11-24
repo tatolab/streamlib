@@ -192,14 +192,6 @@ class _AnAuthorsSettingWithNoDefault:
     radius: Annotated[float, SettingOnly()]
 
 
-class _AnAuthorsTypeChoice:
-    content_type: PinTypeChoice | None = None
-
-
-class _AnAuthorsPinTypedByASetting:
-    content: InputPin[Annotated[object, PinTypeFromSetting("content_type")]]
-
-
 class _AnAuthorsSettingReadEachRun:
     level: Annotated[float, SettingOnly(read="each_run")] = 0.0
 
@@ -212,8 +204,6 @@ class _AnAuthorsPublishedField:
     ("node_class", "words"),
     [
         (_AnAuthorsSettingWithNoDefault, "has no default"),
-        (_AnAuthorsTypeChoice, "only the runtime's own nodes declare a setting that chooses"),
-        (_AnAuthorsPinTypedByASetting, "which only the runtime's own nodes declare yet"),
         (_AnAuthorsSettingReadEachRun, "which only the runtime's own nodes declare"),
         (_AnAuthorsPublishedField, "which only the runtime's own nodes declare"),
     ],

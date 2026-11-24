@@ -439,6 +439,57 @@ fn an_output_family_and_codec_from_config_resolve_against_the_output_nodes_confi
 }
 
 #[test]
+fn an_output_whose_type_a_choice_holds_travels_on_that_types_family_and_codec() {
+    let output = PortFamilyDeclaration {
+        family_from_config_key: Some("content_type".into()),
+        codec_from_config_key: Some("content_type".into()),
+        ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+    };
+    let chosen = |pin_type: serde_json::Value| serde_json::json!({ "content_type": pin_type });
+
+    let h264 = chosen(serde_json::json!({"type": "encoded_video", "codecs": ["h264"]}));
+    assert_eq!(
+        output_port_family_resolved_against_config(&output, Some(&h264)),
+        Ok(PortFamily::Packets)
+    );
+    assert_eq!(
+        output_port_codec_resolved_against_config(&output, Some(&h264)),
+        Ok(Some("h264".to_owned()))
+    );
+
+    let named = chosen(serde_json::json!({"type": "named", "named_pin_type": "notes:Note"}));
+    assert_eq!(
+        output_port_family_resolved_against_config(&output, Some(&named)),
+        Ok(PortFamily::Records),
+        "a named type's port is declared on Records"
+    );
+    assert_eq!(
+        output_port_codec_resolved_against_config(&output, Some(&named)),
+        Ok(None)
+    );
+
+    let any_codec = chosen(serde_json::json!({"type": "encoded_audio"}));
+    assert_eq!(
+        output_port_codec_resolved_against_config(&output, Some(&any_codec)),
+        Ok(None),
+        "a choice naming no one codec states none"
+    );
+
+    let a_list = chosen(serde_json::json!({"type": "list_of", "element_type": {"type": "float"}}));
+    let refusal = output_port_family_resolved_against_config(&output, Some(&a_list))
+        .expect_err("a List travels on no one family");
+    assert!(
+        refusal.contains("no stream's port carries"),
+        "got {refusal}"
+    );
+
+    let no_pin_type = chosen(serde_json::json!({"type": "a picture"}));
+    let refusal = output_port_family_resolved_against_config(&output, Some(&no_pin_type))
+        .expect_err("an object naming no pin type is refused");
+    assert!(refusal.contains("chooses no pin type"), "got {refusal}");
+}
+
+#[test]
 fn an_input_taking_several_families_takes_each_and_refuses_another_naming_the_conversion() {
     let input = PortFamilyDeclaration {
         also_takes_families: vec![PortFamily::Records],

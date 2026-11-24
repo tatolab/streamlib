@@ -5,7 +5,9 @@
 //! the pin type `pin_type` chooses and the family that type travels on, else the family `family`
 //! names; and the one helper that writes both onto every `value` port.
 
-use streamlib_node_schema::output_port_family_resolved_against_config;
+use streamlib_node_schema::{
+    output_port_family_resolved_against_config, the_pin_type_a_choice_holds,
+};
 
 use super::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PIN_TYPE_SETTING,
@@ -28,30 +30,16 @@ pub(crate) fn the_pin_type_an_interface_node_chooses(
     else {
         return Ok(None);
     };
-    let chosen: PinType = serde_json::from_value(held.clone()).map_err(|why| {
-        format!(
-            "its `{GRAPH_INTERFACE_PIN_TYPE_SETTING}` is {held}, and a pin type choice holds a \
-             pin type, `{{\"type\": \"<name>\"}}`: {why}"
-        )
-    })?;
-    if matches!(
-        chosen,
-        PinType::NodeReference { .. } | PinType::PinTypeChoice { .. }
-    ) {
-        return Err(format!(
-            "its `{GRAPH_INTERFACE_PIN_TYPE_SETTING}` chooses {chosen}, which only a setting \
-             holds, and a stream's port carries what a link carries"
-        ));
-    }
-    Ok(Some(chosen))
+    the_pin_type_a_choice_holds(GRAPH_INTERFACE_PIN_TYPE_SETTING, held).map(Some)
 }
 
-/// The family a port of the chosen `pin_type` travels on; refused for a type no family's
-/// message carries, such as a List or a bundle.
+/// The family a port of the chosen `pin_type` travels on, as
+/// [`PortFamily::a_chosen_pin_type_travels_on`] finds it; refused for a type no family's message
+/// carries, such as a List.
 pub(crate) fn the_family_a_chosen_pin_type_travels_on(
     pin_type: &PinType,
 ) -> std::result::Result<PortFamily, String> {
-    PortFamily::carrying(pin_type).ok_or_else(|| {
+    PortFamily::a_chosen_pin_type_travels_on(pin_type).ok_or_else(|| {
         format!(
             "its `{GRAPH_INTERFACE_PIN_TYPE_SETTING}` chooses {pin_type}, which no stream's port \
              carries yet. To fix: choose a type a single message carries, such as a Float, a \
