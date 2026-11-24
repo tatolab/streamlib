@@ -123,6 +123,12 @@ impl TatolabStateDirectory {
         self.path.join("runtime-run-in-progress")
     }
 
+    /// `<state>/core-project/history.git`, the history of the core project the runtime unit
+    /// carries, kept here because the unit may be installed read-only.
+    pub fn core_project_history_directory(&self) -> PathBuf {
+        self.path.join("core-project").join("history.git")
+    }
+
     /// `<state>/services/<service name>`, what a shared native service keeps
     /// across its runs, such as every stream's browser profile.
     pub fn shared_native_service_state_directory(&self, service_name: &str) -> PathBuf {

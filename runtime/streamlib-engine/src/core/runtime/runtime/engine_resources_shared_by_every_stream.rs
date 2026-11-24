@@ -56,6 +56,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     /// each check's outcome kept by what it checked.
     pub(crate) extension_code_checkers:
         crate::core::compiler::compiler_ops::extension_code_checked_against_the_kit::ExtensionCodeCheckersHeld,
+    /// Where the host keeps the history of the core project the runtime unit carries, outside
+    /// the unit, which may be read-only.
+    pub(crate) core_project_history_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// What the host commits a created project's files with, as its history's first commit.
     pub(crate) created_project_first_commit: OnceLock<CreatedProjectFirstCommit>,
     /// The project history the host records each move of a project's first-party packages

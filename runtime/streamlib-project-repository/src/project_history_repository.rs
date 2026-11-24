@@ -50,28 +50,35 @@ pub struct ProjectHistoryRepository {
 impl ProjectHistoryRepository {
     /// Make the history of a new project at `project_directory`.
     pub fn create_for_project(project_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
-        let history_directory = project_directory.join(PROJECT_HISTORY_DIRECTORY);
+        Self::create_in(&project_directory.join(PROJECT_HISTORY_DIRECTORY))
+    }
+
+    fn create_in(history_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
         let mut options = git2::RepositoryInitOptions::new();
         options
             .bare(true)
             .initial_head(PROJECT_HISTORY_BRANCH)
             .mkpath(true);
-        let repository = Repository::init_opts(&history_directory, &options)?;
+        let repository = Repository::init_opts(history_directory, &options)?;
         Ok(Self {
-            history_directory,
+            history_directory: history_directory.to_path_buf(),
             repository,
         })
     }
 
     /// Open the history of the project at `project_directory`, making it when the project has none yet.
     pub fn open_for_project(project_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
-        let history_directory = project_directory.join(PROJECT_HISTORY_DIRECTORY);
+        Self::open_in(&project_directory.join(PROJECT_HISTORY_DIRECTORY))
+    }
+
+    /// Open the history kept in `history_directory`, making it there when there is none yet.
+    pub fn open_in(history_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
         if !history_directory.exists() {
-            return Self::create_for_project(project_directory);
+            return Self::create_in(history_directory);
         }
-        let repository = Repository::open_bare(&history_directory)?;
+        let repository = Repository::open_bare(history_directory)?;
         Ok(Self {
-            history_directory,
+            history_directory: history_directory.to_path_buf(),
             repository,
         })
     }

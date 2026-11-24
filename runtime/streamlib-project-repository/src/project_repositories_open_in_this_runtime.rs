@@ -90,6 +90,7 @@ pub struct ProjectRepositoriesOpenInThisRuntime {
     project_change_feed: broadcast::Sender<ProjectChangeFeedAnnouncement>,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
     core_project_directory_the_runtime_carries: Option<CoreProjectDirectoryTheRuntimeCarries>,
+    core_project_history_directory: Option<PathBuf>,
 }
 
 impl Default for ProjectRepositoriesOpenInThisRuntime {
@@ -100,6 +101,7 @@ impl Default for ProjectRepositoriesOpenInThisRuntime {
             project_change_feed: broadcast::channel(PROJECT_CHANGE_FEED_CAPACITY).0,
             python_requirements_lock: None,
             core_project_directory_the_runtime_carries: None,
+            core_project_history_directory: None,
         }
     }
 }
@@ -126,6 +128,30 @@ impl ProjectRepositoriesOpenInThisRuntime {
         self.core_project_directory_the_runtime_carries =
             Some(core_project_directory_the_runtime_carries);
         self
+    }
+
+    /// These projects, the core project the runtime carries opened with its history kept in
+    /// `core_project_history_directory`, since the runtime unit holding it may be read-only;
+    /// every other project keeps its history in its own `.tatolab/`.
+    pub fn keeping_the_core_projects_history_in(
+        mut self,
+        core_project_history_directory: PathBuf,
+    ) -> Self {
+        self.core_project_history_directory = Some(core_project_history_directory);
+        self
+    }
+
+    /// Where the project at `resolved_project_directory` keeps its history when not in its own
+    /// `.tatolab/`: the carried core project's, outside the runtime unit.
+    fn history_directory_outside_the_project_at(
+        &self,
+        resolved_project_directory: &Path,
+    ) -> Option<&Path> {
+        let core_project_history_directory = self.core_project_history_directory.as_deref()?;
+        let core_project_directory = (self.core_project_directory_the_runtime_carries.as_ref()?)()?;
+        let resolved_core_project_directory = std::fs::canonicalize(core_project_directory).ok()?;
+        (resolved_core_project_directory == resolved_project_directory)
+            .then_some(core_project_history_directory)
     }
 
     /// The open project whose `tatolab-project.json` names `project`, if this runtime has opened it.
@@ -374,7 +400,14 @@ impl ProjectRepositoriesOpenInThisRuntime {
         {
             return Ok(Arc::clone(open));
         }
-        let mut opened = ProjectRepository::open(&resolved_project_directory)?;
+        let mut opened =
+            match self.history_directory_outside_the_project_at(&resolved_project_directory) {
+                Some(history_directory) => ProjectRepository::open_with_its_history_in(
+                    &resolved_project_directory,
+                    history_directory,
+                )?,
+                None => ProjectRepository::open(&resolved_project_directory)?,
+            };
         if let Some(python_requirements_lock) = &self.python_requirements_lock {
             opened.lock_the_python_requirements_with(Arc::clone(python_requirements_lock));
         }
@@ -400,8 +433,55 @@ impl ProjectRepositoriesOpenInThisRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PROJECT_RUNTIME_DIRECTORY;
     use crate::project_files_changed_outside_the_runtime_watch::PROJECT_FILE_CHANGES_GATHERED_FOR;
     use crate::project_transaction::ProjectTransactionAuthor;
+
+    #[test]
+    fn the_carried_core_project_opens_with_its_history_outside_it_and_any_other_in_its_own_folder()
+    {
+        let parent = tempfile::tempdir().unwrap();
+        let core_project_directory = parent.path().join("unit/core-projects/tatolab-core-nodes");
+        let other_project_directory = parent.path().join("arm");
+        for project_directory in [&core_project_directory, &other_project_directory] {
+            ProjectRepository::create(
+                project_directory,
+                "made",
+                &ProjectTransactionAuthor::the_runtime(),
+            )
+            .unwrap();
+        }
+        // The unit carries the core project with no `.tatolab/`, as its staging checks.
+        std::fs::remove_dir_all(core_project_directory.join(PROJECT_RUNTIME_DIRECTORY)).unwrap();
+        std::fs::remove_dir_all(other_project_directory.join(PROJECT_RUNTIME_DIRECTORY)).unwrap();
+        let core_project_history_directory = parent
+            .path()
+            .join("state/core-projects/tatolab-core-nodes/history.git");
+        let carried = core_project_directory.clone();
+        let open = ProjectRepositoriesOpenInThisRuntime::default()
+            .reading_the_core_project_the_runtime_carries_at(Arc::new(move || {
+                Some(carried.clone())
+            }))
+            .keeping_the_core_projects_history_in(core_project_history_directory.clone());
+
+        open.the_project_repository_at(&core_project_directory)
+            .unwrap();
+        open.the_project_repository_at(&other_project_directory)
+            .unwrap();
+
+        assert!(
+            !core_project_directory
+                .join(PROJECT_RUNTIME_DIRECTORY)
+                .exists()
+        );
+        assert!(core_project_history_directory.join("HEAD").is_file());
+        assert!(
+            other_project_directory
+                .join(crate::project_history_repository::PROJECT_HISTORY_DIRECTORY)
+                .join("HEAD")
+                .is_file()
+        );
+    }
 
     #[test]
     fn two_spellings_of_one_project_reach_the_one_writer() {

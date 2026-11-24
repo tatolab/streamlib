@@ -106,6 +106,28 @@ impl Runner {
             .set(runtime_unit_uv)
     }
 
+    /// Hand this runtime where it keeps the history of the core project its runtime unit
+    /// carries, outside the unit, which a package may install read-only. The host calls it
+    /// once, before any load; a second call is refused. A runtime never handed one keeps it in
+    /// the core project's own `.tatolab/`, as every other project's.
+    pub fn set_core_project_history_directory(
+        &self,
+        core_project_history_directory: PathBuf,
+    ) -> Result<()> {
+        self.engine_resources_shared_by_every_stream
+            .core_project_history_directory
+            .set(core_project_history_directory)
+    }
+
+    /// Where the history of the core project the runtime unit carries is kept, when the host
+    /// handed one.
+    pub fn the_core_project_history_directory(&self) -> Option<PathBuf> {
+        self.engine_resources_shared_by_every_stream
+            .core_project_history_directory
+            .get()
+            .map(Path::to_path_buf)
+    }
+
     /// Hand this runtime the programs and the kit it checks a project's views and controls
     /// with, as the host found them. The host calls it once, before any check; a second call is
     /// refused. A runtime never handed them answers each such check not checked.

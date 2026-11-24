@@ -295,6 +295,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             self.engine.as_ref(),
         )
     }
+    fn the_core_project_history_directory(&self) -> Option<PathBuf> {
+        OperationsOnTheStreamsLoadedInThisRuntime::the_core_project_history_directory(
+            self.engine.as_ref(),
+        )
+    }
     fn record_first_party_package_moves_in(
         &self,
         history: Arc<dyn streamlib::sdk::runtime::ProjectHistoryRecordingFirstPartyPackageMoves>,

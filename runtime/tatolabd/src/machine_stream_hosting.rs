@@ -169,6 +169,14 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "{no_uv}; every stream whose project's .venv needs making is recorded failed"
         ),
     }
+    if let Err(history_refusal) = engine.set_core_project_history_directory(
+        tatolab_state_directory.core_project_history_directory(),
+    ) {
+        return write_refusal_to_standard_error(&format!(
+            "the engine could not be handed where the core project's history is kept: \
+             {history_refusal}"
+        ));
+    }
     let extension_code_checkers =
         crate::runtime_unit_executable_beside_tatolabd::extension_code_checkers_beside_this_one();
     for no_code_checker in [
