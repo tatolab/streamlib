@@ -132,12 +132,13 @@ impl ProjectRepositoriesOpenInThisRuntime {
 
     /// These projects, the core project the runtime carries opened with its history kept in
     /// `core_project_history_directory`, since the runtime unit holding it may be read-only;
-    /// every other project keeps its history in its own `.tatolab/`.
+    /// every other project, and the core project when it is `None`, keeps its history in its
+    /// own `.tatolab/`.
     pub fn keeping_the_core_projects_history_in(
         mut self,
-        core_project_history_directory: PathBuf,
+        core_project_history_directory: Option<PathBuf>,
     ) -> Self {
-        self.core_project_history_directory = Some(core_project_history_directory);
+        self.core_project_history_directory = core_project_history_directory;
         self
     }
 
@@ -454,15 +455,13 @@ mod tests {
         // The unit carries the core project with no `.tatolab/`, as its staging checks.
         std::fs::remove_dir_all(core_project_directory.join(PROJECT_RUNTIME_DIRECTORY)).unwrap();
         std::fs::remove_dir_all(other_project_directory.join(PROJECT_RUNTIME_DIRECTORY)).unwrap();
-        let core_project_history_directory = parent
-            .path()
-            .join("state/core-projects/tatolab-core-nodes/history.git");
+        let core_project_history_directory = parent.path().join("state/core-project/history.git");
         let carried = core_project_directory.clone();
         let open = ProjectRepositoriesOpenInThisRuntime::default()
             .reading_the_core_project_the_runtime_carries_at(Arc::new(move || {
                 Some(carried.clone())
             }))
-            .keeping_the_core_projects_history_in(core_project_history_directory.clone());
+            .keeping_the_core_projects_history_in(Some(core_project_history_directory.clone()));
 
         open.the_project_repository_at(&core_project_directory)
             .unwrap();

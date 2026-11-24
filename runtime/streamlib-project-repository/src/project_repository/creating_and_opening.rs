@@ -118,7 +118,7 @@ impl ProjectRepository {
     }
 
     /// Open the project in `project_directory` as [`Self::open`] does, its history kept in
-    /// `history_directory` rather than in the project, which is then only read.
+    /// `history_directory` rather than in the project, so opening writes nothing into it.
     pub fn open_with_its_history_in(
         project_directory: &Path,
         history_directory: &Path,

@@ -113,7 +113,7 @@ impl LocalApiMcpServerHandler {
     ) -> Self {
         let runtime_locking_python_requirements = Arc::clone(&operations_on_the_loaded_streams);
         let runtime_carrying_the_core_nodes_project = Arc::clone(&operations_on_the_loaded_streams);
-        let project_repositories_open_in_this_runtime =
+        let project_repositories_open_in_this_runtime = Arc::new(
             ProjectRepositoriesOpenInThisRuntime::locking_python_requirements_with(Arc::new(
                 move |project_directory| {
                     runtime_locking_python_requirements
@@ -123,13 +123,10 @@ impl LocalApiMcpServerHandler {
             .reading_the_core_project_the_runtime_carries_at(Arc::new(move || {
                 runtime_carrying_the_core_nodes_project
                     .the_core_nodes_project_directory_this_runtime_carries()
-            }));
-        let project_repositories_open_in_this_runtime = Arc::new(
-            match operations_on_the_loaded_streams.the_core_project_history_directory() {
-                Some(core_project_history_directory) => project_repositories_open_in_this_runtime
-                    .keeping_the_core_projects_history_in(core_project_history_directory),
-                None => project_repositories_open_in_this_runtime,
-            },
+            }))
+            .keeping_the_core_projects_history_in(
+                operations_on_the_loaded_streams.the_core_project_history_directory(),
+            ),
         );
         operations_on_the_loaded_streams.record_first_party_package_moves_in(Arc::new(
             crate::first_party_package_moves_recorded_in_the_open_projects::FirstPartyPackageMovesRecordedInTheOpenProjects {
