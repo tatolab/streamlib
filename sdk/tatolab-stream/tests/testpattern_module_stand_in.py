@@ -12,14 +12,16 @@ installed `tatolab` namespace package the compile imports from.
 from pathlib import Path
 
 TESTPATTERN_MODULE_PACKAGE_STAND_IN_SOURCE = (
-    "from tatolab.stream import Image, Output, node\n"
+    "from typing import ClassVar\n"
+    "\n"
+    "from tatolab.stream import OutputPin, Texture, node\n"
     "\n"
     "\n"
-    '@node.process(execution="continuous", interval_ms=33)\n'
+    '@node(execution="continuous", interval_ms=33)\n'
     "class TestPatternSource:\n"
-    "    __test__ = False\n"
+    "    __test__: ClassVar[bool] = False\n"
     "\n"
-    "    video = Output(Image)\n"
+    "    video: OutputPin[Texture]\n"
 )
 
 TESTPATTERN_MODULE_NODE_TYPE = "tatolab.testpattern:TestPatternSource"

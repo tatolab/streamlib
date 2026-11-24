@@ -20,7 +20,7 @@ fn requested(import_path: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(import_path).expect("the test path names a class")
 }
 
-/// A described node type carrying what `@tatolab.stream.node.process` stamps,
+/// A described node type carrying what bare `@tatolab.stream.node` stamps on a class,
 /// with `input_ports` as given.
 pub(super) fn described_node_type_with_input_ports(
     input_ports: serde_json::Value,
@@ -684,6 +684,23 @@ fn an_unknown_execution_mode_is_refused_naming_it() {
     described["execution"] = serde_json::json!({"mode": "eventually"});
 
     assert!(refusal_of(&described).contains("\"eventually\""));
+}
+
+/// A Python node takes each value as an input, so it describes no config schema; the catalog
+/// serves the empty config's, as it does for a native node that takes none.
+///
+/// Mental-revert: requiring the key again refuses every Python node with `missing key`.
+#[test]
+fn a_node_describing_no_config_schema_is_served_the_empty_configs() {
+    let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+    described.as_object_mut().unwrap().remove("config_schema");
+
+    let declaration = read(&described).unwrap();
+
+    assert_eq!(
+        declaration.descriptor.config_schema,
+        Some(EmptyConfig::node_config_schema_document())
+    );
 }
 
 #[test]

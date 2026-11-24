@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`node.rust_function(...)` reads a `#[function_node]` declaration into the
-same stamps `@node.function` writes, with `language` `rust`, and calls the node
+same stamps bare `@node` writes on a function, with `language` `rust`, and calls the node
 through its evaluate entry."""
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 
 from tatolab.stream import (
+    NodeDeclarationRefusal,
     RustFunctionNode,
     StreamBuilder,
-    UnreadMessage,
     graph_generator,
     node,
     run_graph_generator,
@@ -28,10 +28,12 @@ from tatolab.stream._function_node_declaration import (
 )
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CATEGORY_STAMP,
-    NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_KIND_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
+from tatolab.stream._rust_function_node_declaration import (
+    NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP,
 )
 
 _EVALUATE_ENTRY_TYPE = ctypes.CFUNCTYPE(
@@ -118,7 +120,7 @@ def test_its_ports_config_and_state_are_stamped_as_a_function_nodes():
         "evaluated_at_ns",
         "overflowed",
     ]
-    assert getattr(Ramp, NODE_DECLARATION_CONFIG_SCHEMA_STAMP) == {
+    assert getattr(Ramp, NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP) == {
         "type": "object",
         "properties": {"gain": {"type": "number", "default": 2.0}},
         "additionalProperties": False,
@@ -208,7 +210,7 @@ def test_a_negative_zero_default_keeps_its_sign():
             config_fields=[{"name": "gain", "value_type": "float", "default": -0.0}]
         )
     )
-    schema = getattr(negative_zero_gain, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)
+    schema = getattr(negative_zero_gain, NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP)
     assert math.copysign(1.0, schema["properties"]["gain"]["default"]) == -1.0
 
 
@@ -245,20 +247,6 @@ def a_gate_declaration(**overrides: Any) -> "dict[str, Any]":
 
 
 RustGate = node.rust_function(a_gate_declaration())
-
-
-@node.function
-def gate(value: UnreadMessage, open: bool = True) -> "UnreadMessage | None":
-    return value if open else None
-
-
-def test_a_rust_gate_is_stamped_as_the_python_gate_of_the_same_signature_is():
-    for stamp in (NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP):
-        assert getattr(RustGate, stamp) == getattr(gate, stamp)
-    rust_signature = getattr(RustGate, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
-    python_signature = getattr(gate, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
-    assert rust_signature["inputs"] == python_signature["inputs"]
-    assert rust_signature["outputs"] == python_signature["outputs"]
 
 
 def test_a_rust_gate_called_hands_on_the_object_it_was_handed_or_none():
@@ -341,3 +329,15 @@ def test_a_gate_declaration_breaking_what_unread_messages_allow_is_refused_by_na
 ):
     with pytest.raises(ValueError, match=refusal):
         node.rust_function(a_gate_declaration(**override))
+
+
+def test_a_conversion_stated_on_a_rust_function_node_is_refused_naming_bare_node():
+    """Only bare `@node` and `@node.shader` read the pin types a conversion is judged by.
+
+    Mental-revert: dropping the check stamps the Rust gate a conversion.
+    """
+    with pytest.raises(NodeDeclarationRefusal) as refused:
+        node.meta(conversion=True)(node.rust_function(a_gate_declaration()))
+
+    assert "states `conversion=True` under `node.rust_function`" in str(refused.value)
+    assert refused.value.finding_code == "conversion_reads_no_pin_types"

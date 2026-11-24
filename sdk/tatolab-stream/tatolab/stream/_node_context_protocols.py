@@ -55,7 +55,7 @@ class PortPayloadBorrow(Protocol):
 
 @runtime_backed_protocol
 class UnreadMessage(Protocol):
-    """A message of any family a `@node.function` body hands on without reading it.
+    """A message of any family a node hands on without reading it.
 
     Its body can only return it, or `None` to hand out nothing, and keep it in
     its state; the output takes the family of what is linked into the input it
@@ -453,11 +453,6 @@ class StoreScopedToThisNode(Protocol):
 
 class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
     """The runtime-context members the limited and the full context both carry."""
-
-    @property
-    def config(self) -> dict[str, Any]:
-        """The node's configuration."""
-        ...
 
     @property
     def time(self) -> int:

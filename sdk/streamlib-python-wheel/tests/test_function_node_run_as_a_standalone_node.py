@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A `@node.function` node promoted to run as its helper's node.
+"""A function node promoted to run as its helper's node.
 
 The promoted node reads its inputs and writes each output as a control value,
 compiled or run as Python.
@@ -13,7 +13,6 @@ import array
 import os
 import struct
 import itertools
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import pytest
@@ -23,7 +22,6 @@ from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
-    FunctionNodeRunAsPythonInItsReader,
     prepare_function_node_to_evaluate,
 )
 from tatolab.runtime._function_node_run_as_a_standalone_node import (
@@ -31,7 +29,8 @@ from tatolab.runtime._function_node_run_as_a_standalone_node import (
     the_node_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._node_hosting import apply_configuration, construct_node_instance
-from tatolab.stream import State, Stateful, UnreadMessage, node
+from tatolab.runtime._function_node_compilation import FunctionNodeDoesNotCompile
+from tatolab.stream import node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -40,9 +39,9 @@ from tatolab.stream._node_declaration import (
 from function_node_test_nodes import (
     Phase,
     RustGate,
+    WeightedSumCountingItsCalls,
     amplify,
-    count_the_label_letters,
-    label_the_level,
+    measure_its_own_spelling,
     tally,
 )
 
@@ -58,18 +57,7 @@ def _constructed_with_its_ports_declared(node_class: Any, config: Any, data_plan
         [port["name"] for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP)],
         [port["name"] for port in getattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)],
     )
-    return construct_node_instance(node_class, config, data_plane)
-
-
-class _InputsHandingOverRecords:
-    """The input reader handing each Records port the record set for it, once."""
-
-    def __init__(self) -> None:
-        self.record_by_port: "dict[str, dict[str, Any]]" = {}
-
-    def read(self, port: str, *, families: "list[str]") -> "dict[str, Any] | None":
-        assert families == ["records"]
-        return self.record_by_port.pop(port, None)
+    return construct_node_instance(node_class, config)
 
 
 _links_into_promoted_nodes_opened = itertools.count()
@@ -105,7 +93,7 @@ class _ChannelsBlocksWrittenIntoAPromotedNode:
         )
         self._source_outputs = link_output_data_writer_of(
             _engine.open_runtime_context_full_access_for_helper_process(
-                {}, self._source, "runtime-under-test", "source-under-test"
+                self._source, "runtime-under-test", "source-under-test"
             )
         )
 
@@ -150,7 +138,6 @@ class _OutputsRecordingEachControlValueWritten:
 
 class _ContextOfOneProcess:
     def __init__(self) -> None:
-        self._link_input_data_reader = _InputsHandingOverRecords()
         self._link_output_data_writer = _OutputsRecordingEachControlValueWritten()
 
 
@@ -159,24 +146,28 @@ def test_a_promoted_function_node_runs_as_a_process_writing_each_output_as_a_con
     runner_class = the_node_class_a_promoted_function_node_runs_as(
         amplify, f"{__name__}:amplify", "amplify-1", data_plane
     )
-    assert [port["name"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)] == ["x"]
     assert [port["name"] for port in getattr(runner_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
         "result"
     ]
-    runner = _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
+    assert [port["name"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)] == [
+        "x",
+        "gain",
+        "inverted",
+    ]
+    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     ctx = _ContextOfOneProcess()
 
     runner.process(ctx)
-    assert ctx._link_output_data_writer.blocks_written == [], "an input with no pin value waits for its first value"
-
-    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x", "gain"])
     control_values.write_control_value("x", 2.0)
+    control_values.write_control_value("gain", 3.0)
     runner.process(ctx)
     runner.process(ctx)
     assert ctx._link_output_data_writer.blocks_written == [
-        ("result", [[6.0]], 0, 0),
+        ("result", [[0.0]], 0, 0),
         ("result", [[6.0]], 1, 0),
-    ], "each run writes one f64 at rate 0, the input keeping its newest value between reads"
+        ("result", [[6.0]], 2, 0),
+    ], "each run writes one f64 at rate 0, an input reading its default until a value arrives"
 
 
 def test_a_promoted_function_node_reads_a_number_as_an_island_does_off_an_f32_block_of_any_shape():
@@ -185,7 +176,7 @@ def test_a_promoted_function_node_reads_a_number_as_an_island_does_off_an_f32_bl
         the_node_class_a_promoted_function_node_runs_as(
             amplify, f"{__name__}:amplify", "amplify-1", data_plane
         ),
-        {"gain": 2.0},
+        None,
         data_plane,
     )
     control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
@@ -209,7 +200,7 @@ def test_a_promoted_function_node_refuses_a_number_read_off_a_message_that_is_no
         the_node_class_a_promoted_function_node_runs_as(
             amplify, f"{__name__}:amplify", "amplify-1", data_plane
         ),
-        {"gain": 2.0},
+        None,
         data_plane,
     )
     control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
@@ -219,13 +210,13 @@ def test_a_promoted_function_node_refuses_a_number_read_off_a_message_that_is_no
         runner.process(_ContextOfOneProcess())
 
 
-@node.function
-def gate_each_message(value: UnreadMessage, open: bool = True) -> "UnreadMessage | None":
+@node
+def gate_each_message[PinValue](value: PinValue, open: bool = True) -> PinValue | None:
     return value if open else None
 
 
-@node.function
-def hand_each_message_on_once_it_has_built_an_object(value: UnreadMessage) -> UnreadMessage:
+@node
+def hand_each_message_on_once_it_has_built_an_object[PinValue](value: PinValue) -> PinValue:
     repr(object())
     return value
 
@@ -641,110 +632,6 @@ def test_a_promoted_function_node_starts_from_its_pin_values():
     assert ctx._link_output_data_writer.blocks_written == [("result", [[7.0]], 0, 0)]
 
 
-def test_a_promoted_function_node_reads_a_live_config_update_at_its_next_call():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    assert isinstance(
-        prepare_function_node_to_evaluate(amplify, f"{__name__}:amplify"),
-        FunctionNodeCompiledToItsEvaluateEntry,
-    )
-    runner_class = the_node_class_a_promoted_function_node_runs_as(
-        amplify, f"{__name__}:amplify", "amplify-1", data_plane
-    )
-    runner = _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
-    ctx = _ContextOfOneProcess()
-    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
-    control_values.write_control_value("x", 2.0)
-    runner.process(ctx)
-
-    apply_configuration(runner, {"gain": 5.0, "inverted": True})
-    runner.process(ctx)
-
-    assert ctx._link_output_data_writer.blocks_written == [
-        ("result", [[6.0]], 0, 0),
-        ("result", [[-10.0]], 1, 0),
-    ], "a compiled node's float and bool config fields reach the call after the update"
-
-
-@dataclass(frozen=True)
-class LabelledGainConfig:
-    gain: float = 2.0
-    label: str = "gain"
-
-
-@node.function
-def amplify_while_labelled(x: float, config: LabelledGainConfig) -> float:
-    return x * config.gain if config.label else 0.0
-
-
-def test_a_promoted_function_node_run_as_python_reads_a_live_config_update_at_its_next_call():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    import_path = f"{__name__}:amplify_while_labelled"
-    assert isinstance(
-        prepare_function_node_to_evaluate(amplify_while_labelled, import_path),
-        FunctionNodeRunAsPythonInItsReader,
-    ), "a `str` config field does not compile"
-    runner_class = the_node_class_a_promoted_function_node_runs_as(
-        amplify_while_labelled, import_path, "amplify-1", data_plane
-    )
-    runner = _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
-    ctx = _ContextOfOneProcess()
-    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
-    control_values.write_control_value("x", 2.0)
-    runner.process(ctx)
-
-    apply_configuration(runner, {"gain": 0.5, "label": "half"})
-    runner.process(ctx)
-    apply_configuration(runner, {"gain": 0.5, "label": ""})
-    runner.process(ctx)
-
-    assert ctx._link_output_data_writer.blocks_written == [
-        ("result", [[6.0]], 0, 0),
-        ("result", [[1.0]], 1, 0),
-        ("result", [[0.0]], 2, 0),
-    ], "a body run as Python reads each field of the config it was last handed"
-
-
-@dataclass(frozen=True)
-class CallStepConfig:
-    step: float = 1.0
-
-
-@dataclass(frozen=True)
-class CallsCountedByTheirStep:
-    total: float = 0.0
-
-
-@node.function
-def counts_its_calls_by_its_configured_step(
-    x: float, *, config: CallStepConfig, previous: State[CallsCountedByTheirStep]
-) -> Stateful[float, CallsCountedByTheirStep]:
-    total = previous.total + config.step
-    return total, CallsCountedByTheirStep(total)
-
-
-def test_a_promoted_stateful_function_node_keeps_its_state_through_a_live_config_update():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    runner_class = the_node_class_a_promoted_function_node_runs_as(
-        counts_its_calls_by_its_configured_step,
-        f"{__name__}:counts_its_calls_by_its_configured_step",
-        "counter-1",
-        data_plane,
-    )
-    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
-    ctx = _ContextOfOneProcess()
-    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
-    control_values.write_control_value("x", 0.0)
-    runner.process(ctx)
-    runner.process(ctx)
-
-    apply_configuration(runner, {"step": 10.0})
-    runner.process(ctx)
-
-    assert [block[1] for block in ctx._link_output_data_writer.blocks_written] == [[[1.0]], [[2.0]], [[12.0]]], (
-        "the count carries on from its state, stepping by the step it was handed"
-    )
-
-
 @node
 def passes_its_process_and_setup_inputs_on(process: float = 0.0, setup: float = 0.0) -> float:
     return process + setup
@@ -774,25 +661,13 @@ def test_a_promoted_function_node_with_ports_named_like_runner_members_runs():
     assert ctx._link_output_data_writer.blocks_written == [("result", [[2.5]], 0, 0)]
 
 
-class _OutputsRecordingEachWrite(_OutputsRecordingEachControlValueWritten):
-    """The output writer recording each Channels block, and each Records write by its port."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.records_written: "list[tuple[str, object]]" = []
-
-    def write(self, port: str, payload: Any, *, family: str) -> None:
-        assert family == "records"
-        self.records_written.append((port, payload))
-
-
 def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compiled():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     compiled = the_node_class_a_promoted_function_node_runs_as(
         amplify, f"{__name__}:amplify", "amplify-1", data_plane
     )
     run_as_python = the_node_class_a_promoted_function_node_runs_as(
-        label_the_level, f"{__name__}:label_the_level", "label-1", data_plane
+        measure_its_own_spelling, f"{__name__}:measure_its_own_spelling", "spelling-1", data_plane
     )
 
     assert ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(compiled) == {
@@ -800,38 +675,44 @@ def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compile
     }
     assert ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(
         run_as_python
-    ) == {"label-1": False}
+    ) == {"spelling-1": False}
     assert ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(Phase) == {}, (
         "a class that runs no promoted function node reports none"
     )
 
 
-def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
+def test_a_promoted_rust_function_node_reads_a_live_config_update_at_its_next_call():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
-    labelling = _constructed_with_its_ports_declared(
-        the_node_class_a_promoted_function_node_runs_as(
-            label_the_level, f"{__name__}:label_the_level", "label-1", data_plane
-        ),
-        None,
-        data_plane,
+    import_path = f"{__name__}:WeightedSumCountingItsCalls"
+    runner_class = the_node_class_a_promoted_function_node_runs_as(
+        WeightedSumCountingItsCalls, import_path, "weighted-1", data_plane
     )
+    runner = _constructed_with_its_ports_declared(runner_class, {"weight": 3.0}, data_plane)
     ctx = _ContextOfOneProcess()
-    ctx._link_output_data_writer = _OutputsRecordingEachWrite()
-    labelling.process(ctx)
-    assert ctx._link_output_data_writer.records_written == [("result", {"label": "high"})], (
-        "the input keeps its pin value until one arrives"
-    )
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_control_value("x", 2.0)
+    runner.process(ctx)
 
-    counting = _constructed_with_its_ports_declared(
-        the_node_class_a_promoted_function_node_runs_as(
-            count_the_label_letters, f"{__name__}:count_the_label_letters", "count-1", data_plane
-        ),
-        None,
-        data_plane,
+    apply_configuration(runner, {"weight": 5.0})
+    runner.process(ctx)
+
+    assert ctx._link_output_data_writer.blocks_written == [
+        ("result", [[6.25]], 0, 0),
+        ("result", [[10.25]], 1, 0),
+    ], "a Rust function node's config field reaches the call after the update"
+
+
+@pytest.mark.parametrize("function_node", [amplify, measure_its_own_spelling])
+def test_a_promoted_python_function_node_refuses_a_config_naming_the_inputs_that_replace_it(
+    function_node: Any,
+):
+    """Mental-revert: reading the config again takes `gain` as the node's setting."""
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner_class = the_node_class_a_promoted_function_node_runs_as(
+        function_node, f"{__name__}:{function_node.__name__}", "python-1", data_plane
     )
-    ctx = _ContextOfOneProcess()
-    counting.process(ctx)
-    assert ctx._link_output_data_writer.blocks_written == [], "an input with no pin value waits for its first record"
-    ctx._link_input_data_reader.record_by_port["record"] = {"label": "low"}
-    counting.process(ctx)
-    assert ctx._link_output_data_writer.blocks_written == [("result", [[3.0]], 0, 0)]
+    with pytest.raises(FunctionNodeDoesNotCompile, match="config sets gain, and it takes no config"):
+        _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
+    with pytest.raises(FunctionNodeDoesNotCompile, match="config sets gain, and it takes no config"):
+        apply_configuration(runner, {"gain": 5.0})

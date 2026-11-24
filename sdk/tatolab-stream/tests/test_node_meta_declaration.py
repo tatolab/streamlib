@@ -145,8 +145,6 @@ def test_a_category_that_is_not_a_string_is_refused():
 @pytest.mark.parametrize("meta_key", ["description", "category"])
 def test_a_kind_decorator_refuses_a_meta_key_naming_it(meta_key: str):
     with pytest.raises(TypeError, match=meta_key):
-        node.process(**{meta_key: "Effects"})  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match=meta_key):
-        node.function(**{meta_key: "Effects"})  # type: ignore[call-overload]
+        node(**{meta_key: "Effects"})  # type: ignore[call-overload]
     with pytest.raises(TypeError, match=meta_key):
         node.shader(_slang_passing_the_image_on("tint"), **{meta_key: "Effects"})  # type: ignore[call-arg]

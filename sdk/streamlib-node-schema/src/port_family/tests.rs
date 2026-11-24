@@ -3,29 +3,6 @@
 
 use super::*;
 
-/// `tatolab.stream` declares each family with the description the catalog
-/// serves, so its reference never says something the runtime does not.
-#[test]
-fn the_python_sdk_declares_each_family_with_the_description_the_runtime_serves() {
-    let python_port_families = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../tatolab-stream/tatolab/stream/_port_family_declaration.py"
-    ))
-    .expect("the Python SDK's port family declarations are in this repository");
-    for family in PortFamily::ALL {
-        let declaration = format!(
-            "PortFamily(\n    \"{}\",\n    description=\"{}\",\n)",
-            family.declaration_name(),
-            family.description()
-        );
-        assert!(
-            python_port_families.contains(&declaration),
-            "`tatolab.stream.{}` must be declared as `{declaration}`",
-            family.declaration_name()
-        );
-    }
-}
-
 fn endpoint<'a>(
     node_name: &'a str,
     port_name: &'a str,

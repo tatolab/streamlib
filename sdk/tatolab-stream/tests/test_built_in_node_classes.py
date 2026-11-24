@@ -144,8 +144,8 @@ def test_a_typed_built_in_refuses_a_value_its_input_does_not_take(input_values, 
 
 
 def test_a_typed_built_in_refuses_a_config():
-    with pytest.raises(TypeError, match=r"`TensorToTexture` is a typed node"):
+    with pytest.raises(TypeError, match=r"`config=` is retired, and .*TensorToTexture.* takes its values as `input_values="):
         tatolab.stream.StreamBuilder("rig").add(
-            tatolab.stream.TensorToTexture,
-            config={"format": "bgra8_unorm"},  # pyright: ignore[reportArgumentType]
+            tatolab.stream.TensorToTexture,  # pyright: ignore[reportArgumentType]
+            config={"format": "bgra8_unorm"},  # pyright: ignore[reportArgumentType, reportCallIssue]
         )

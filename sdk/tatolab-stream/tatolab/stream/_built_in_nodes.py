@@ -5,13 +5,13 @@
 # built-in descriptors. Do not edit: CI fails when this file differs from a
 # regeneration.
 
-"""The runtime's built-in nodes, each with its fields and pins, or the shape of its config."""
+"""The runtime's built-in nodes, each with its fields and pins."""
 
 from __future__ import annotations
 
 from typing import Annotated, ClassVar, Literal
 
-from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
+from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin, OutputPin
 from ._description import Description
 from ._input_declaration_annotations import SettingOnly, StreamDelivery
@@ -35,7 +35,7 @@ __all__ = [
 ]
 
 
-class AudioToTensor(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class AudioToTensor(BuiltInNode):
     """Converts each Channels block on `channels` into one Array frame on `array`, whose
     one CPU attribute `samples` holds the block's samples as a `[channels, samples]`
     tensor of the block's sample type, `float32` or `float64`. The samples are copied
@@ -67,7 +67,7 @@ class AudioToTensor(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class BooleanToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class BooleanToFloat(BuiltInNode):
     """Casts each Boolean on `value` into a Float on `cast`: false becomes 0.0 and true
     becomes 1.0.
 
@@ -96,7 +96,7 @@ class BooleanToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class BooleanToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class BooleanToInteger(BuiltInNode):
     """Casts each Boolean on `value` into an Integer on `cast`: false becomes 0 and true
     becomes 1.
 
@@ -125,7 +125,7 @@ class BooleanToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class BreakBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class BreakBundle(BuiltInNode):
     """Breaks each bundle of `bundle_type` on `bundle` into its members. A wire starts
     at each member of `members` and carries that member alone, typed as it, so several
     nodes each read the member they take. A Texture or Audio member is carried by
@@ -163,7 +163,7 @@ class BreakBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class FloatToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class FloatToBoolean(BuiltInNode):
     """Casts each Float on `value` into a Boolean on `cast`: 0.0 becomes false and any
     other value true.
 
@@ -192,7 +192,7 @@ class FloatToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class FloatToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class FloatToInteger(BuiltInNode):
     """Casts each Float on `value` into an Integer on `cast`, truncated toward zero and
     held to the range an Integer holds: 2.9 becomes 2 and -2.9 becomes -2, as a link
     from a Float into an Integer reads it.
@@ -222,7 +222,7 @@ class FloatToInteger(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class IntegerToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class IntegerToBoolean(BuiltInNode):
     """Casts each Integer on `value` into a Boolean on `cast`: 0 becomes false and any
     other value true.
 
@@ -251,7 +251,7 @@ class IntegerToBoolean(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class IntegerToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class IntegerToFloat(BuiltInNode):
     """Casts each Integer on `value` into the Float of the same value on `cast`: 2
     becomes 2.0. Every value an Integer holds is a Float exactly.
 
@@ -280,7 +280,7 @@ class IntegerToFloat(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class MakeBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class MakeBundle(BuiltInNode):
     """Makes one bundle of `bundle_type` from its members. A wire ends at each member of
     `members`, and a member no wire reaches reads the value set on it. Each message a
     member wire carries sends one bundle on `bundle`, built from the newest value of
@@ -320,7 +320,7 @@ class MakeBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class TensorToAudio(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class TensorToAudio(BuiltInNode):
     """Converts one attribute of each Array frame on `array`, `attribute` (`samples` by
     default), into one Channels block on `channels`. The attribute is a CPU `[channels,
     samples]` tensor of `float32` or `float64`, one row per name in `channel_names`, and
@@ -373,7 +373,7 @@ class TensorToAudio(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class TensorToTexture(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class TensorToTexture(BuiltInNode):
     """Converts one attribute of each Array frame on `array`, `attribute` (`image` by
     default), into one Image frame on `image` stating `format` (`rgba8_unorm` by
     default; also `rgba8_unorm_srgb`, `bgra8_unorm`, `bgra8_unorm_srgb`, `rgba16_float`
@@ -423,7 +423,7 @@ class TensorToTexture(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class TextureFormatConvert(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class TextureFormatConvert(BuiltInNode):
     """Converts each `rgba8_unorm` or `bgra8_unorm` Image frame on `image` into one
     `rgba8_unorm` Image frame on `rgba_image`, of the same size and colour, its channels
     in RGBA order. One GPU dispatch samples the frame into a texture, which one copy
@@ -458,7 +458,7 @@ class TextureFormatConvert(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class TextureToTensor(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class TextureToTensor(BuiltInNode):
     """Converts each Image frame on `image` into one Array frame on `array`, whose one
     GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, 4]`
     tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for `rgba16_float` and

@@ -42,15 +42,13 @@ _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", boo
 PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = ("color", "vector2", "vector3", "vector4", "rectangle")
 
 # The value types a body run as Python takes and gives: the scalars, a value of parts, a String,
-# a Menu, an Asset, a List, a `dict` as Records, a value of a named type, and a message it hands
-# on unread.
+# a Menu, an Asset, a List, a value of a named type, and a message it hands on unread.
 _VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = (
     "float",
     "int",
     "bool",
     *PART_VALUE_TYPES,
     *STORED_VALUE_TYPES,
-    "records",
     NAMED_VALUE_TYPE,
     UNREAD_MESSAGE_VALUE_TYPE,
 )
@@ -140,7 +138,6 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     output_ports: "tuple[str, ...]"
     config_fields: "tuple[str, ...]"
     config_field_defaults: "dict[str, float]"
-    config_field_default_factories: "dict[str, Callable[[], Any]]"
     state_fields: "tuple[str, ...]"
     initial_state_values: "tuple[float, ...]"
     is_stateful: bool
@@ -163,8 +160,6 @@ class FunctionNodeRunAsPythonInItsReader:
     input_ports: "tuple[str, ...]"
     pin_defaults_by_input_port: "dict[str, PinValueCarried]"
     output_ports: "tuple[str, ...]"
-    ports_carrying_records: "frozenset[str]"
-    config_class: Optional[type]
     state_record_class: Optional[type]
     state_value_types: "dict[str, str]"
     initial_state_values: "tuple[float, ...]"

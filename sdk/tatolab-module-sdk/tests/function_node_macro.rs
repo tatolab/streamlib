@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `#[function_node]` declares the node `@node.function` would from the same
+//! `#[function_node]` declares the node bare `@node` would from the same
 //! signature, and its evaluate entry computes what the function does.
 
 #![cfg(feature = "function-node")]

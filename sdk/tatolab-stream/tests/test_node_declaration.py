@@ -1,322 +1,154 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@node.process` grammar and its `Input` / `Output` port attributes, exercised without an engine.
+"""How a class node runs, the retired declaration forms and imports, and the audio window contract,
+exercised without an engine."""
 
-Everything here is a pure declaration check — no runtime boots — so this is the
-half of the authoring surface that stays honest on a machine with no GPU.
-"""
+from __future__ import annotations
 
 import dataclasses
-import inspect
+import importlib
+import pathlib
+from typing import Annotated
 
 import pytest
 
 import tatolab.stream
-from tatolab.stream import AudioWindowContract, Channels, Image, Input, Output, node
-
-# Not `from tatolab.stream import ...`: the sentinel is on no public surface, so
-# reaching the private module for it is what an author would have to do to
-# reach the refusal below at all.
+from tatolab.stream import (
+    AudioWindowContract,
+    InputPin,
+    NodeDeclarationRefusal,
+    OutputPin,
+    StreamDelivery,
+    Texture,
+    node,
+)
 from tatolab.stream import _node_declaration
-from tatolab.stream._node_declaration import AUDIO_WINDOW_MATCH_DEVICE
+from tatolab.stream._retired_declarations import (
+    RETIRED_DECLARATION_FINDING_CODE,
+    RETIRED_IMPORTS,
+    RetiredImportRefusal,
+)
 
 
-def test_a_bare_decorator_needs_no_arguments_at_all():
-    """The zero-ceremony bar: a filter declares its ports and nothing else.
+def test_a_filter_declares_its_pins_and_nothing_else():
+    """The zero-ceremony bar: a node with an input reacts to it, with no keyword written."""
 
-    An input's delivery profile is part of declaring the port, not ceremony
-    on top of it — there is no identity, no manifest, no schema to wrangle.
-    """
-
-    @node.process
+    @node
     class BrightnessFilter:
-        frames_from_upstream = Input(Image, delivery="newest")
+        frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
 
-        frames_to_downstream = Output(Image)
+        frames_to_downstream: OutputPin[Texture]
 
-    assert BrightnessFilter.__tatolab_node_declared__ is True
-    assert BrightnessFilter.__tatolab_node_execution__ == {
-        "mode": "reactive",
-        "interval_ms": 0,
-    }
+    assert getattr(BrightnessFilter, "__tatolab_node_declared__") is True
+    assert getattr(BrightnessFilter, "__tatolab_node_execution__") == {"mode": "reactive", "interval_ms": 0}
 
 
 @pytest.mark.parametrize("retired_port_decorator_name", ["input", "output"])
 def test_node_carries_no_port_decorator(retired_port_decorator_name: str):
-    """A port is an `Input` or `Output` attribute, so `@node.input` fails where it is written."""
+    """A port is a pin, so `@node.input` fails where it is written."""
     with pytest.raises(AttributeError, match=retired_port_decorator_name):
         getattr(node, retired_port_decorator_name)
     assert retired_port_decorator_name not in tatolab.stream.__all__
 
 
-def test_a_port_declared_without_a_family_is_refused_at_import():
-    with pytest.raises(TypeError):
-        Input(delivery="newest")  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        Output()  # type: ignore[call-arg]
-
-
-def test_the_attribute_name_is_the_port_name():
-    """A port is named once — no string repeated between declaration and use."""
-
-    @node.process
-    class Passthrough:
-        frames_from_upstream = Input(Image, delivery="ordered")
-
-        frames_to_downstream = Output(Image, description="the filtered frames")
-
-    assert Passthrough.__tatolab_node_input_ports__ == [
-        {
-            "name": "frames_from_upstream",
-            "description": "",
-            "delivery_profile": "ordered",
-            "family": {"family": "image"},
-        }
-    ]
-    assert Passthrough.__tatolab_node_output_ports__ == [
-        {
-            "name": "frames_to_downstream",
-            "description": "the filtered frames",
-            "family": {"family": "image"},
-        }
-    ]
-
-
-def test_a_port_declaration_takes_no_schema():
-    """A port carries its family and nothing that names a type."""
-    with pytest.raises(TypeError, match="unexpected keyword argument 'schema'"):
-        Input(Image, schema="ImageFrame", delivery="newest")  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="unexpected keyword argument 'schema'"):
-        Output(Image, schema="ImageFrame")  # type: ignore[call-arg]
-
-
-def test_a_declared_port_carries_no_type_key_under_any_spelling():
-    @node.process
-    class Untyped:
-        frames_from_upstream = Input(Image, delivery="newest")
-
-        frames_to_downstream = Output(Image)
-
-    declared = (
-        Untyped.__tatolab_node_input_ports__
-        + Untyped.__tatolab_node_output_ports__
-    )
-    for port in declared:
-        for key in ("schema", "data_type", "type", "schema_ident"):
-            assert key not in port, f"port {port['name']!r} carries a type key {key!r}"
-
-
-def test_a_declared_borrow_quota_rides_the_port_and_an_undeclared_one_is_absent():
-    @node.process
-    class HoldsFrames:
-        frames = Input(Image, delivery="ordered", borrow_quota=4)
-
-        audio = Input(Image, delivery="newest")
-
-    assert HoldsFrames.__tatolab_node_input_ports__ == [
-        {
-            "name": "frames",
-            "description": "",
-            "delivery_profile": "ordered",
-            "family": {"family": "image"},
-            "borrow_quota": 4,
-        },
-        {
-            "name": "audio",
-            "description": "",
-            "delivery_profile": "newest",
-            "family": {"family": "image"},
-        },
-    ]
-
-
-@pytest.mark.parametrize("borrow_quota", [-1, 1.5, True])
-def test_a_borrow_quota_that_is_not_a_whole_count_is_refused_at_declaration(borrow_quota: object):
-    with pytest.raises(ValueError, match="invalid borrow_quota"):
-        Input(Image, delivery="ordered", borrow_quota=borrow_quota)  # type: ignore[arg-type]
-
-
-def test_an_unknown_delivery_is_refused_at_declaration():
-    with pytest.raises(ValueError, match="declares `delivery=` 'eventually'; it is one of"):
-        Input(Image, delivery="eventually")
-
-
-def test_an_input_port_stating_no_delivery_sends_none_for_the_runtime_to_default():
-    """The runtime holds the one table of defaults by pin type, so the stream package sends
-    no delivery for an input that states none."""
-
-    @node.process(execution="reactive")
-    class Sink:
-        frames = Input(Image)
-
-    assert Sink.__tatolab_node_input_ports__ == [
-        {"name": "frames", "description": "", "family": {"family": "image"}}
-    ]
-
-
-def test_an_output_port_needs_no_delivery_profile():
-    """Delivery is the consuming port's policy — an output declaring none is correct."""
-
-    @node.process(execution="manual")
-    class Source:
-        frames_to_downstream = Output(Image)
-
-    assert Source.__tatolab_node_output_ports__ == [
-        {"name": "frames_to_downstream", "description": "", "family": {"family": "image"}}
-    ]
-
-
-def test_a_port_is_declared_under_its_cast_name():
-    """A port name is an exposed name, so it is cast like one — the author's
-    attribute name is never refused for its spelling."""
-
-    @node.process
-    class CastPorts:
-        Video = Input(Image, delivery="newest")
-
-        Frames_Out = Output(Image)
-
-    assert [port["name"] for port in CastPorts.__tatolab_node_input_ports__] == [
-        "video"
-    ]
-    assert [port["name"] for port in CastPorts.__tatolab_node_output_ports__] == [
-        "frames_out"
-    ]
-
-
-def test_two_ports_casting_alike_are_refused_naming_both():
-    with pytest.raises(ValueError) as refusal:
-
-        @node.process
-        class CastClash:
-            Video = Input(Image, delivery="newest")
-
-            video = Output(Image)
-
-    message = str(refusal.value)
-    assert "'Video'" in message and "'video'" in message
-    assert "both cast to 'video'" in message
-
-
 def test_the_package_exports_node():
-    # That no public name says the retired word is the runtime suite's
-    # `test_tatolab_namespace.py`, which sweeps both packages.
     assert "node" in tatolab.stream.__all__
 
 
-def test_the_process_decorator_names_its_class_parameter_node_class():
-    assert next(iter(inspect.signature(node.process).parameters)) == "node_class"
+@pytest.mark.parametrize("written_as", ["bare", "with keyword arguments"])
+def test_node_process_is_refused_naming_a_class_of_typed_pins(written_as: str):
+    """`@node.process` stays only as a name that answers with its replacement.
 
+    Mental-revert: restoring the old reader declares the class and raises nothing.
+    """
+    with pytest.raises(NodeDeclarationRefusal) as refusal:
+        if written_as == "bare":
 
-def test_a_process_node_carries_its_kind():
-    @node.process
-    class BrightnessFilter:
-        frames_from_upstream = Input(Image, delivery="newest")
-
-    assert BrightnessFilter.__tatolab_node_kind__ == "process"
-
-
-@pytest.mark.parametrize("decorated_as", ["bare", "with keyword arguments"])
-def test_bare_node_is_refused_naming_node_process(decorated_as: str):
-    """Every node names its kind, so `@node` alone declares nothing and says what to write."""
-    with pytest.raises(TypeError, match=r"`@node\.process`"):
-        if decorated_as == "bare":
-
-            @node
+            @node.process
             class BrightnessFilter:
-                frames_from_upstream = Input(Image, delivery="newest")
+                pass
 
         else:
 
-            @node(execution="manual")
+            @node.process(execution="manual")
             class Camera:
-                frames_to_downstream = Output(Image)
+                pass
+
+    assert refusal.value.finding_code == RETIRED_DECLARATION_FINDING_CODE
+    words = str(refusal.value)
+    assert "`@node.process`, which is retired" in words
+    assert "bare `@node` on a class whose fields are its typed pins" in words
+    assert "`video: InputPin[Texture]`" in words
+    assert "`execution`, `interval_ms`, `scheduling` and `paced_by_real_time` go on" in words
+    assert words.startswith("`BrightnessFilter`" if written_as == "bare" else "A node")
+
+
+@pytest.mark.parametrize("written_as", ["bare", "called"])
+def test_node_function_is_refused_naming_bare_node(written_as: str):
+    with pytest.raises(NodeDeclarationRefusal) as refusal:
+        if written_as == "bare":
+
+            @node.function
+            def half(value: float = 0.0) -> float:
+                return value / 2
+
+        else:
+
+            @node.function()
+            def half(value: float = 0.0) -> float:
+                return value / 2
+
+    assert refusal.value.finding_code == RETIRED_DECLARATION_FINDING_CODE
+    assert "`@node.function`, which is retired. To fix: bare `@node`" in str(refusal.value)
+
+
+@pytest.mark.parametrize("retired", RETIRED_IMPORTS, ids=lambda retired: retired.name)
+def test_each_retired_name_is_refused_on_import_with_its_replacement(retired):
+    """`from tatolab.stream import Input` fails where it is written, saying what to write.
+
+    Mental-revert: restoring the export imports the name and raises nothing.
+    """
+    with pytest.raises(RetiredImportRefusal) as refusal:
+        exec(f"from tatolab.stream import {retired.name}", {})
+    assert str(refusal.value) == (
+        f"`tatolab.stream.{retired.name}` is retired. To fix: {retired.replaced_by}."
+    )
+    assert retired.name not in tatolab.stream.__all__
+
+
+def test_a_name_the_package_never_had_is_an_attribute_error():
+    with pytest.raises(AttributeError, match="no attribute 'NeverDeclared'"):
+        importlib.import_module("tatolab.stream").NeverDeclared  # noqa: B018
 
 
 def test_a_source_must_declare_its_execution_mode():
     """Reactive defaults only where reacting is possible.
 
-    A node with no input port has nothing to react to, so a silent
-    reactive default would hand the author a node that never runs once —
-    the failure this refuses to produce.
+    A node with no input has nothing to react to, so a silent reactive default would hand the
+    author a node that never runs once.
     """
     with pytest.raises(ValueError, match="declares no input ports"):
 
-        @node.process
+        @node
         class TestPatternSource:
-            frames_to_downstream = Output(Image)
+            frames_to_downstream: OutputPin[Texture]
 
 
 def test_a_source_that_declares_a_mode_is_accepted():
-    @node.process(execution="continuous", interval_ms=33)
+    @node(execution="continuous", interval_ms=33)
     class TestPatternSource:
-        frames_to_downstream = Output(Image)
+        frames_to_downstream: OutputPin[Texture]
 
-    assert TestPatternSource.__tatolab_node_execution__ == {
-        "mode": "continuous",
-        "interval_ms": 33,
-    }
+    assert getattr(TestPatternSource, "__tatolab_node_execution__") == {"mode": "continuous", "interval_ms": 33}
 
 
-def test_keyword_arguments_are_the_whole_grammar():
-    @node.process(execution="manual", scheduling="realtime")
+def test_a_scheduling_priority_is_stamped():
+    @node(execution="manual", scheduling="realtime")
     class Camera:
-        frames_to_downstream = Output(Image)
+        frames_to_downstream: OutputPin[Texture]
 
-    assert Camera.__tatolab_node_declared__ is True
-    assert Camera.__tatolab_node_scheduling_priority__ == "realtime"
-
-
-@pytest.mark.parametrize(
-    "identity",
-    [
-        "@tatolab/camera/Camera",
-        "@tatolab/camera/Camera@1.0.0",
-        "tatolab/camera/Camera",
-        "@tatolab/camera",
-    ],
-)
-def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: str):
-    """Every spelling the deleted grammar accepted lands on one refusal.
-
-    Mental-revert guard: restore the positional identity parameter and these
-    declare cleanly instead of raising. The argument is deliberately the wrong
-    type — the decorator's signature takes `type | None` — because the runtime
-    refusal is what a caller without a type checker actually meets.
-    """
-    with pytest.raises(TypeError, match="takes no positional argument"):
-
-        @node.process(identity, execution="manual")  # pyright: ignore[reportArgumentType]
-        class Camera:
-            frames_to_downstream = Output(Image)
-
-
-def test_the_refusal_names_where_the_identity_actually_comes_from():
-    with pytest.raises(TypeError) as refusal:
-
-        @node.process("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
-        class Camera:
-            frames_to_downstream = Output(Image)
-
-    message = str(refusal.value)
-    assert "import path" in message
-    assert "__module__" in message and "__qualname__" in message
-
-
-def test_a_class_name_that_is_not_pascal_case_is_accepted():
-    """Python does not enforce PascalCase, so neither does the decorator.
-
-    The old grammar refused `lowercase_name` because it had to fit a
-    `^[A-Z][A-Za-z0-9]*$` type segment. Nothing parses the class name now — it
-    is read off `__name__` for the display-name default and passed through.
-    """
-
-    @node.process
-    class lowercase_name:
-        frames_from_upstream = Input(Image, delivery="newest")
-
-    assert lowercase_name.__tatolab_node_declared__ is True
+    assert getattr(Camera, "__tatolab_node_scheduling_priority__") == "realtime"
 
 
 @pytest.mark.parametrize(
@@ -329,24 +161,24 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
 def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message):
     with pytest.raises(ValueError, match=expected_message):
 
-        @node.process(**{keyword: value})
+        @node(**{keyword: value})
         class Filter:
-            frames_from_upstream = Input(Image, delivery="newest")
+            frames_from_upstream: InputPin[Texture]
 
 
 def test_a_negative_interval_is_refused():
     with pytest.raises(ValueError, match="non-negative int"):
 
-        @node.process(execution="continuous", interval_ms=-1)
+        @node(execution="continuous", interval_ms=-1)
         class TestPatternSource:
-            frames_to_downstream = Output(Image)
+            frames_to_downstream: OutputPin[Texture]
 
 
 @pytest.mark.parametrize("paced_by_real_time", [True, False])
 def test_a_node_is_stamped_with_whether_it_is_paced_by_real_time(paced_by_real_time: bool):
-    @node.process(execution="manual", paced_by_real_time=paced_by_real_time)
+    @node(execution="manual", paced_by_real_time=paced_by_real_time)
     class CameraSource:
-        frames_to_downstream = Output(Image)
+        frames_to_downstream: OutputPin[Texture]
 
     stamp = getattr(CameraSource, _node_declaration.NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP)
     assert stamp is paced_by_real_time
@@ -356,121 +188,9 @@ def test_a_node_is_stamped_with_whether_it_is_paced_by_real_time(paced_by_real_t
 def test_paced_by_real_time_other_than_a_bool_is_refused(not_a_bool: object):
     with pytest.raises(TypeError, match="invalid paced_by_real_time"):
 
-        @node.process(execution="manual", paced_by_real_time=not_a_bool)  # type: ignore[arg-type]
+        @node(execution="manual", paced_by_real_time=not_a_bool)  # type: ignore[arg-type]
         class CameraSource:
-            frames_to_downstream = Output(Image)
-
-
-def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
-    @node.process
-    class BaseFilter:
-        frames_from_upstream = Input(Image, delivery="newest")
-
-        frames_to_downstream = Output(Image)
-
-    @node.process
-    class AudioFilter(BaseFilter):
-        frames_from_upstream = Input(Image, delivery="ordered")
-
-    assert AudioFilter.__tatolab_node_input_ports__ == [
-        {
-            "name": "frames_from_upstream",
-            "description": "",
-            "delivery_profile": "ordered",
-            "family": {"family": "image"},
-        }
-    ]
-    # The inherited output survives the subclass's redeclaration of the input.
-    assert [port["name"] for port in AudioFilter.__tatolab_node_output_ports__] == [
-        "frames_to_downstream"
-    ]
-
-
-# ---- `audio_window`: the declaration, and every way it is refused ----
-
-
-def test_an_audio_input_declares_its_window_contract():
-    @node.process
-    class WakeWordDetector:
-        audio_from_microphone = Input(
-            Channels,
-            delivery="ordered",
-            window=AudioWindowContract(
-                sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=512
-            ),
-        )
-
-    assert WakeWordDetector.__tatolab_node_input_ports__ == [
-        {
-            "name": "audio_from_microphone",
-            "description": "",
-            "delivery_profile": "ordered",
-            "family": {"family": "channels"},
-            "audio_window": {
-                "resolved_from": "declaration",
-                "sample_rate": 16_000,
-                "channels": 1,
-                "dtype": "f32",
-                "window_size": 512,
-                "hop": 512,
-            },
-        }
-    ]
-
-
-@pytest.mark.parametrize("delivery_profile", ["ordered", "newest"])
-def test_the_device_matching_sentinel_is_refused_at_import(delivery_profile: str):
-    """No Python node can resolve it, so the line that writes it never takes.
-
-    Under either delivery profile: the sentinel is refused for what it is, not
-    for the company it keeps, so the profile refusal never gets to speak first
-    and send an author to fix the wrong knob.
-    """
-    with pytest.raises(TypeError) as refusal:
-
-        @node.process(execution="manual")
-        class Speaker:
-            audio_from_upstream = Input(
-                Channels,
-                delivery=delivery_profile,
-                window=AUDIO_WINDOW_MATCH_DEVICE,  # type: ignore[arg-type]
-            )
-
-    message = str(refusal.value)
-    assert "audio" in message, message
-    assert "AUDIO_WINDOW_MATCH_DEVICE" in message, message
-    assert "helper" in message, message
-    assert "setup()" in message, message
-    assert "AudioWindowContract" in message, message
-
-
-def test_the_device_matching_sentinel_is_on_no_public_surface():
-    """The refusal above is the second guard; not being reachable is the first.
-
-    The declaring module's own list counts: it is what a `import *` would take,
-    so a name restored there is back on the surface whatever the package root
-    re-exports.
-    """
-    for name in ("AUDIO_WINDOW_MATCH_DEVICE", "AudioWindowMatchDeviceSentinel"):
-        assert name not in tatolab.stream.__all__, name
-        assert not hasattr(tatolab.stream, name), name
-        assert name not in _node_declaration.__all__, name
-
-
-def test_a_port_declaring_no_contract_carries_no_audio_window_key():
-    """The contract is opt-in: nothing about a contract-less port moves."""
-
-    @node.process
-    class Passthrough:
-        frames_from_upstream = Input(Image, delivery="newest")
-
-        frames_to_downstream = Output(Image)
-
-    for port in (
-        Passthrough.__tatolab_node_input_ports__
-        + Passthrough.__tatolab_node_output_ports__
-    ):
-        assert "audio_window" not in port
+            frames_to_downstream: OutputPin[Texture]
 
 
 def test_an_omitted_hop_defaults_to_the_window_size():
@@ -582,51 +302,10 @@ def test_a_declared_channel_count_of_zero_is_still_refused():
 
 
 def test_the_contract_takes_no_positional_arguments():
-    """Keyword-only, so a positional call fails loudly rather than binding a
-    value to the wrong keyword."""
+    """Keyword-only, so a positional call fails loudly rather than binding a value to the wrong
+    keyword."""
     with pytest.raises(TypeError):
         AudioWindowContract(16_000, "f32", 512)  # type: ignore[misc]
-
-
-def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs():
-    with pytest.raises(ValueError) as refusal:
-
-        @node.process
-        class Skipping:
-            audio_from_microphone = Input(
-                Channels,
-                delivery="newest",
-                window=AudioWindowContract(
-                    sample_rate=16_000, channels=1, dtype="f32", window_size=512
-                ),
-            )
-
-    message = str(refusal.value)
-    assert "audio_window" in message and "newest" in message and "ordered" in message
-
-
-def test_an_audio_window_that_is_not_a_contract_is_refused():
-    with pytest.raises(TypeError, match="AudioWindowContract"):
-
-        @node.process
-        class Wrong:
-            audio_from_microphone = Input(
-                Channels, delivery="ordered", window={"window_size": 512}  # type: ignore[arg-type]
-            )
-
-
-def test_an_output_port_takes_no_window_contract():
-    """A producer publishes what it has; only a consumer states what it needs.
-
-    The contract handed over is a valid one, so what the refusal rejects is
-    unambiguously the keyword and not the value behind it.
-    """
-    contract = AudioWindowContract(
-        sample_rate=16_000, channels=1, dtype="f32", window_size=512
-    )
-
-    with pytest.raises(TypeError):
-        Output(Channels, window=contract)  # type: ignore[call-arg]
 
 
 def test_a_contract_is_frozen_after_declaration():
@@ -642,65 +321,42 @@ def test_a_contract_is_frozen_after_declaration():
 def test_a_docstring_never_stands_in_for_a_description():
     """A docstring is the code's own reading; only `@node.meta`'s description reaches the catalog."""
 
-    @node.process(execution="manual")
+    @node(execution="manual")
     class DescribedByItsDocstringAlone:
         """Read by whoever reads the code, never by the catalog."""
 
-    assert DescribedByItsDocstringAlone.__tatolab_node_description__ == ""
+    assert getattr(DescribedByItsDocstringAlone, "__tatolab_node_description__") == ""
 
 
 def test_the_description_keyword_is_served_exactly_as_written():
     markdown = "Blurs `video`.\n\n- **radius**: in pixels"
 
     @node.meta(description=markdown)
-    @node.process(execution="manual")
+    @node(execution="manual")
     class DescribedInMarkdown:
         """The docstring, which the catalog never reads."""
 
-    assert DescribedInMarkdown.__tatolab_node_description__ == markdown
-
-
-def test_a_description_held_in_a_variable_is_served():
-    blur_node_description = "Blurs each frame."
-
-    @node.meta(description=blur_node_description)
-    @node.process(execution="manual")
-    class DescribedByAVariable:
-        pass
-
-    assert DescribedByAVariable.__tatolab_node_description__ == "Blurs each frame."
+    assert getattr(DescribedInMarkdown, "__tatolab_node_description__") == markdown
 
 
 def test_a_description_that_is_not_a_string_is_refused():
-    import pathlib
-
     with pytest.raises(TypeError, match="never a path to read it from"):
 
         @node.meta(description=pathlib.Path("README.md"))  # type: ignore[arg-type]
-        @node.process(execution="manual")
+        @node(execution="manual")
         class DescribedByAPath:
             pass
 
 
-def test_a_node_with_neither_is_described_by_the_empty_string():
-    """Never `None`: the descriptor's description is a string."""
-
-    @node.process(execution="manual")
-    class DescribedByNothingAtAll:
-        pass
-
-    assert DescribedByNothingAtAll.__tatolab_node_description__ == ""
-
-
-def test_a_process_node_has_the_category_it_declares_and_none_when_it_declares_none():
-    @node.process
+def test_a_class_node_has_the_category_it_declares_and_none_when_it_declares_none():
+    @node
     class Uncategorized:
-        frames_from_upstream = Input(Image, delivery="newest")
+        frames_from_upstream: InputPin[Texture]
 
     @node.meta(category="Image effects")
-    @node.process
+    @node
     class Categorized:
-        frames_from_upstream = Input(Image, delivery="newest")
+        frames_from_upstream: InputPin[Texture]
 
-    assert Uncategorized.__tatolab_node_category__ is None
-    assert Categorized.__tatolab_node_category__ == "Image effects"
+    assert getattr(Uncategorized, "__tatolab_node_category__") is None
+    assert getattr(Categorized, "__tatolab_node_category__") == "Image effects"

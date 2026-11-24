@@ -5,7 +5,7 @@
 
 The module's native half hands its Python half the declaration
 `tatolab-module-sdk` builds, a dict. Reading it stamps the same declaration a
-`@node.function` carries, with `language` `rust`, so the graph and the catalog
+function under bare `@node` carries, with `language` `rust`, so the graph and the catalog
 see one kind of node whichever language wrote it.
 """
 
@@ -26,11 +26,14 @@ from ._function_node_declaration import (
     UNREAD_MESSAGE_VALUE_TYPE,
     FunctionNode,
 )
-from ._node_config_schema import json_schema_for_a_node_declaring_no_config
 
 __all__ = ["RustFunctionNode", "RustFunctionNodeDeclaration"]
 
 RUST_FUNCTION_NODE_LANGUAGE = "rust"
+
+# The stamp a Rust function node's config schema rides on, read beside the stamps every node
+# carries; a Python node takes no config and stamps none.
+NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 
 # The value types an evaluate entry carries, each as one f64, and the JSON
 # Schema type a config field of each is.
@@ -274,8 +277,7 @@ def declare_rust_function_node(
         declaration_stamps["declared"]: True,
         declaration_stamps["kind"]: FUNCTION_NODE_KIND,
         NODE_DECLARATION_LANGUAGE_STAMP: RUST_FUNCTION_NODE_LANGUAGE,
-        declaration_stamps["config_class"]: None,
-        declaration_stamps["config_schema"]: _config_schema(declaration.config_fields),
+        NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP: _config_schema(declaration.config_fields),
         declaration_stamps["description"]: declaration.description,
         declaration_stamps["category"]: declaration.category,
         declaration_stamps["conversion"]: False,
@@ -512,7 +514,11 @@ def _a_port_name(short_name: str, spelling: str, ports_by_cast_name: "dict[str, 
 
 def _config_schema(config_fields: "tuple[RustFunctionNodeRecordField, ...]") -> "dict[str, Any]":
     if not config_fields:
-        return json_schema_for_a_node_declaring_no_config()
+        return {
+            "type": "object",
+            "description": "This node declares no configuration.",
+            "additionalProperties": False,
+        }
     return {
         "type": "object",
         "properties": {

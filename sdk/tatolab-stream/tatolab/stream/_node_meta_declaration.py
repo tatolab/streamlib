@@ -36,7 +36,7 @@ NODE_CATEGORY_PATH_SEPARATOR = "/"
 # The kind a class node is: it runs in a process of its own.
 PROCESS_NODE_KIND: Final = "process"
 
-NodeDeclaredBy = Literal["@node", "@node.shader", "@node.process", "@node.function", "node.rust_function"]
+NodeDeclaredBy = Literal["@node", "@node.shader", "node.rust_function"]
 """The decorator that read a node's ports."""
 
 NodeKindDeclared = Literal["process", "function", "shader"]
@@ -110,11 +110,11 @@ def the_conversion_a_node_states(
         return False
     if declared_by not in _DECORATORS_DECLARING_PIN_TYPES:
         raise NodeDeclarationRefusal(
-            f"`{node}` states `conversion=True` under `{declared_by}`, whose ports declare "
-            f"families, and a conversion is judged by the pin types its pins state. To fix: "
-            f"declare it with bare `@node`, {_how_bare_node_writes_what(declared_by)}, or leave "
-            f"`conversion=True` out.",
-            finding_code="conversion_under_a_family_grammar",
+            f"`{node}` states `conversion=True` under `{declared_by}`, and a conversion is "
+            f"judged by the pin types its pins state, which only bare `@node` and `@node.shader` "
+            f"read. To fix: declare it with bare `@node`, each pin typed by its pin type, or "
+            f"leave `conversion=True` out.",
+            finding_code="conversion_reads_no_pin_types",
             node=node,
         )
     if pin_groups:
@@ -231,15 +231,6 @@ def _refuse_the_shape(node: str, has: str, to_fix: str, *, pin: Optional[str] = 
 
 def _takes_a_wire(input_port: "dict[str, Any]") -> bool:
     return input_port.get("input_mode", {}).get("mode") != "setting_only"
-
-
-def _how_bare_node_writes_what(declared_by: NodeDeclaredBy) -> str:
-    if declared_by == "@node.process":
-        return (
-            "its streams as `InputPin[...]` and `OutputPin[...]` and its settings as fields "
-            "marked `SettingOnly()`"
-        )
-    return "each pin typed by its pin type"
 
 
 def _counted(names: "Sequence[str]", what: Literal["input", "output"]) -> str:

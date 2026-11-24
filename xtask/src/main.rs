@@ -545,7 +545,7 @@ enum Commands {
     Psnr(psnr::PsnrCommand),
 
     /// Regenerate `tatolab/stream/_built_in_nodes.py` — one Python class per
-    /// built-in, with a `TypedDict` for its config — from the runtime's own
+    /// built-in, each setting a field and each port a pin — from the runtime's own
     /// descriptors. `--check` is the CI gate: it fails when the checked-in
     /// module differs from a regeneration. Linux only, the floor that compiles
     /// in every built-in. See [`generate_built_in_node_classes`].

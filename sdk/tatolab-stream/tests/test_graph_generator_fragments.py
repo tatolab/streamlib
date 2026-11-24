@@ -14,7 +14,6 @@ from tatolab.stream import (
     GraphFragmentReference,
     GraphInput,
     GraphOutput,
-    Packets,
     SteppedStreamClock,
     StreamBuilder,
     graph_generator,
@@ -32,23 +31,23 @@ CAMERA_NAMES = ["front", "back"]
 @graph_generator
 def invert_twice(stream_builder: StreamBuilder, strength: int = 4) -> None:
     """Two inverters between one Input and one Output."""
-    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Packets})
+    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": "packets"})
     first = stream_builder.add(FrameInverter, name="first", input_values={"strength": strength})
     second = stream_builder.add(FrameInverter, name="second")
     stream_builder.connect(source.output("value"), first.input("video_from_upstream"))
     stream_builder.connect(
         first.output("video_to_downstream"), second.input("video_from_upstream")
     )
-    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": Packets})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": "packets"})
     stream_builder.connect(second.output("video_to_downstream"), sink.input("value"))
 
 
 @graph_generator
 def look(stream_builder: StreamBuilder) -> None:
-    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Packets})
+    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": "packets"})
     soft = stream_builder.add(invert_twice, name="soft", strength=8)
     stream_builder.connect(source.output("value"), soft.input("video"))
-    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": Packets})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": "packets"})
     stream_builder.connect(soft.output("video"), sink.input("value"))
 
 
@@ -197,9 +196,9 @@ def test_a_node_class_given_promoted_settings_is_refused_naming_input_values() -
         StreamBuilder("rig").add(FrameInverter, strength=3)  # pyright: ignore[reportArgumentType]
 
 
-def test_a_generator_given_config_is_refused_naming_keyword_settings() -> None:
+def test_a_generator_given_input_values_is_refused_naming_keyword_settings() -> None:
     with pytest.raises(TypeError, match="takes its promoted settings as keyword arguments"):
-        StreamBuilder("rig").add(invert_twice, config={"strength": 3})  # pyright: ignore[reportArgumentType, reportCallIssue]
+        StreamBuilder("rig").add(invert_twice, input_values={"strength": 3})  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 def test_a_fragment_nested_deeper_than_a_graph_document_reads_is_refused_naming_it() -> None:
@@ -226,7 +225,7 @@ def test_a_fragment_nested_deeper_than_a_graph_document_reads_is_refused_naming_
     )
 
 
-@pytest.mark.parametrize("reserved_setting", ["name", "config"])
+@pytest.mark.parametrize("reserved_setting", ["name", "input_values"])
 def test_a_generator_promoting_a_keyword_add_takes_itself_is_refused(
     reserved_setting: str,
 ) -> None:

@@ -5,17 +5,18 @@
 
 A graph generator is a `@graph_generator` function that adds and links nodes on a
 `StreamBuilder`; `run_graph_generator` returns the graph it builds, and one
-generator `add`ed in another is stored inside its graph as a fragment. A node
-declares its execution with `@node.process` and its ports as `Input` and `Output` class
-attributes of one family each, and receives a capability-typed context in every lifecycle hook. The contexts, link
-endpoints, GPU classes and timer a node is handed while it runs are
-`typing.Protocol`s the runtime implements; the clock and the timer's start are
-functions that reach the runtime when called, and raise `RuntimeError` naming
-themselves where no runtime is lent. A read through a port attribute returns
-the family's type, and a read by name the raw payload. Everything else here is pure Python, so a stream imports, type-checks and
-compiles with no runtime installed. The built-in nodes are generated from the
-runtime's own declarations, each with a `TypedDict` for its config.
+generator `add`ed in another is stored inside its graph as a fragment. A node is declared
+with bare `@node`, on a function whose parameters and return are its typed pins or on a class
+whose fields are, and receives a capability-typed context in every lifecycle hook. The
+contexts, GPU classes and timer a node is handed while it runs are `typing.Protocol`s the
+runtime implements; the clock and the timer's start are functions that reach the runtime when
+called, and raise `RuntimeError` naming themselves where no runtime is lent. Everything else
+here is pure Python, so a stream imports, type-checks and compiles with no runtime installed.
+The built-in nodes are generated from the runtime's own declarations, each with its fields and
+pins. A name this module retired is refused on import with what replaces it.
 """
+
+from typing import TYPE_CHECKING
 
 from . import clock as clock
 from . import log as log
@@ -127,22 +128,13 @@ from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
 from ._previous_value_node import PreviousValue as PreviousValue
+from ._retired_declarations import RETIRED_IMPORTS_BY_NAME, RetiredImportRefusal
 from ._function_node_declaration import FunctionNode as FunctionNode
 from ._function_node_declaration import State as State
 from ._function_node_declaration import Stateful as Stateful
 from ._function_node_declaration import Time as Time
 from ._rust_function_node_declaration import RustFunctionNode as RustFunctionNode
 from ._shader_node_declaration import ShaderNode as ShaderNode
-from ._port_family_declaration import Array as Array
-from ._port_family_declaration import Channels as Channels
-from ._port_family_declaration import Image as Image
-from ._port_family_declaration import Input as Input
-from ._port_family_declaration import Output as Output
-from ._port_family_declaration import Packets as Packets
-from ._port_family_declaration import PortFamily as PortFamily
-from ._port_family_declaration import PortNamesFromConfig as PortNamesFromConfig
-from ._port_family_declaration import Records as Records
-from ._port_family_declaration import from_config as from_config
 from ._graph_interface_nodes import GraphInput as GraphInput
 from ._graph_interface_nodes import GraphOutput as GraphOutput
 from ._graph_variable_nodes import GetVariable as GetVariable
@@ -191,7 +183,6 @@ from .image_frame import ImageFrameToWrite as ImageFrameToWrite
 
 __all__ = [
     "AccelerationStructureHandle",
-    "Array",
     "ArrayFrame",
     "ArrayFrameCpuAttribute",
     "ArrayFrameGpuAttribute",
@@ -200,7 +191,6 @@ __all__ = [
     "BooleanToFloat",
     "BooleanToInteger",
     "BreakBundle",
-    "Channels",
     "ChannelsBlock",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
@@ -220,10 +210,8 @@ __all__ = [
     "GpuSurfaceHandle",
     "GraphicsKernel",
     "IOSurfaceMachPortExport",
-    "Image",
     "ImageFrame",
     "ImageFrameToWrite",
-    "Input",
     "IntegerToBoolean",
     "IntegerToFloat",
     "KernelDispatchBatch",
@@ -299,18 +287,13 @@ __all__ = [
     "State",
     "Stateful",
     "OpaqueFdAllocationExport",
-    "Output",
-    "Packets",
     "PacketsUnit",
     "PixelAccessToOneClaimedSurface",
-    "PortFamily",
     "PreviousValue",
-    "PortNamesFromConfig",
     "PortPayloadBorrow",
     "PortPayloadLoan",
     "RayTracingKernel",
     "RealTimeStreamClock",
-    "Records",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "ScaledStreamClock",
@@ -328,7 +311,6 @@ __all__ = [
     "UnreadMessage",
     "clock",
     "connection_type",
-    "from_config",
     "graph_generator",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
@@ -339,3 +321,13 @@ __all__ = [
     "start_monotonic_timer",
     "stream_facts",
 ]
+
+if not TYPE_CHECKING:
+    # Hidden from the type checker, which would otherwise read every missing name as present.
+
+    def __getattr__(name: str) -> object:
+        """Refuse a name `tatolab.stream` retired with what replaces it, and any other as missing."""
+        retired = RETIRED_IMPORTS_BY_NAME.get(name)
+        if retired is not None:
+            raise RetiredImportRefusal(retired)
+        raise AttributeError(f"module 'tatolab.stream' has no attribute {name!r}", name=name, obj=None)

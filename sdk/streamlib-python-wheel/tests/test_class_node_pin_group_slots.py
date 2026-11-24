@@ -121,12 +121,12 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
         ],
     )
     ctx = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, data_plane, "runtime-under-test", "mixer-1"
+        data_plane, "runtime-under-test", "mixer-1"
     )
     source = _engine.open_node_link_data_access_for_helper_process()
     source_outputs = link_output_data_writer_of(
         _engine.open_runtime_context_full_access_for_helper_process(
-            {}, source, "runtime-under-test", "source-1"
+            source, "runtime-under-test", "source-1"
         )
     )
     node_interpreter_bootstrap.wire_link_data_access(

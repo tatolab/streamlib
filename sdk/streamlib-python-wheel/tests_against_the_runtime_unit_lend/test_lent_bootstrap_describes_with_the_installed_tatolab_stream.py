@@ -22,25 +22,25 @@ from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 SECONDS_A_DESCRIBE_HAS_TO_ANSWER = 60.0
 
 NODES_EVERY_RUNNABLE_TATOLAB_STREAM_DECLARES = '''
-from tatolab.stream import Input, Output, Packets, node
+from tatolab.stream import InputPin, OutputPin, Texture, node
 
 
-@node.process
-class PacketRelay:
-    packets_from_upstream = Input(Packets, delivery="ordered")
-    packets_to_downstream = Output(Packets)
+@node
+class PictureRelay:
+    picture_from_upstream: InputPin[Texture]
+    picture_to_downstream: OutputPin[Texture]
 
     def process(self, ctx) -> None: ...
 
 
-@node.function
-def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
+@node
+def remap(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:
     """Map 0..1 onto low..high."""
     return low + x * (high - low)
 '''
 
 
-def test_the_lent_bootstrap_describes_a_process_node_and_a_function_node(tmp_path: Path):
+def test_the_lent_bootstrap_describes_a_class_node_and_a_function_node(tmp_path: Path):
     lend_directory = runtime_unit_lend_directory()
     (tmp_path / "nodes_of_the_project.py").write_text(
         textwrap.dedent(NODES_EVERY_RUNNABLE_TATOLAB_STREAM_DECLARES)
@@ -51,7 +51,7 @@ def test_the_lent_bootstrap_describes_a_process_node_and_a_function_node(tmp_pat
             sys.executable,
             str(lend_directory / "tatolab" / "runtime" / "_node_interpreter_bootstrap.py"),
             "--describe",
-            "nodes_of_the_project:PacketRelay",
+            "nodes_of_the_project:PictureRelay",
             "nodes_of_the_project:remap",
         ],
         cwd=tmp_path,
@@ -73,4 +73,4 @@ def test_the_lent_bootstrap_describes_a_process_node_and_a_function_node(tmp_pat
     assert [
         (described_node_type["short_name"], described_node_type["kind"])
         for described_node_type in document["described_node_types"]
-    ] == [("PacketRelay", "process"), ("remap", "function")]
+    ] == [("PictureRelay", "process"), ("remap", "function")]

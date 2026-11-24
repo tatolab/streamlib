@@ -21,7 +21,7 @@ def outputs():
     data_plane.declare_ports([], ["out"])
     return link_output_data_writer_of(
         _engine.open_runtime_context_full_access_for_helper_process(
-            {}, data_plane, "runtime-under-test", "writer-under-test"
+            data_plane, "runtime-under-test", "writer-under-test"
         )
     )
 

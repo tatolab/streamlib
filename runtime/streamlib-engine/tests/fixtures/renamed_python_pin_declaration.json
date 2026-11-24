@@ -106,7 +106,6 @@
     ],
     "time_parameter": null,
     "state_parameter": null,
-    "state_record_class": null,
-    "config_parameter": null
+    "state_record_class": null
   }
 }

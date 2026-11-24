@@ -884,8 +884,10 @@ class _PinReading:
                 raise self._refusal(
                     f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a "
                     f"port family, and a pin under bare `@node` is typed by its pin type, "
-                    f"`{typed_spelling}`, which a function does not take yet. To fix: keep "
-                    f"this node on `@node.function` until it does.",
+                    f"`{typed_spelling}`, which only a class node's pin takes yet. To fix: "
+                    f"declare a class node with `{self._pin_name}: "
+                    f"{'InputPin' if self._direction == 'input' else 'OutputPin'}"
+                    f"[{typed_spelling}]`.",
                     "pin_type_not_read_yet",
                 )
             raise self._refusal(

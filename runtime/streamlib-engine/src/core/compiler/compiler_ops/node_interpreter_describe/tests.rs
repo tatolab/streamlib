@@ -242,7 +242,7 @@ fn a_class_carrying_no_node_stamp_is_refused_by_name() {
             "described_node_types": [],
             "refused_node_types": [{
                 "import_path": "my_app.nodes:Plain",
-                "refusal": "the class `Plain` carries no `@node.process` declaration, so it is not a node",
+                "refusal": "the class `Plain` carries no `@node` declaration, so it is not a node",
             }],
         }))
     ));
@@ -251,7 +251,7 @@ fn a_class_carrying_no_node_stamp_is_refused_by_name() {
 
     assert_eq!(node_types, [import_path("my_app.nodes:Plain")]);
     assert!(
-        refusal.contains("the class `Plain` carries no `@node.process` declaration"),
+        refusal.contains("the class `Plain` carries no `@node` declaration"),
         "{refusal}"
     );
 }

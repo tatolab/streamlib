@@ -18,10 +18,8 @@ from tatolab.runtime._function_node_compilation import (
 from tatolab.stream import State, Stateful, Time, node
 
 
-# Kept on `@node.function`: its `x` holds no default, which bare `@node` refuses, and the
-# island tests read what an input with no link, pin or default does.
-@node.function
-def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
+@node
+def remap(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:
     return low + x * (high - low)
 
 
@@ -38,15 +36,9 @@ def lfo(rate_hz: float = 1.0, *, now: Time, previous: State[Phase]) -> Stateful[
     return math.sin(2.0 * math.pi * cycles), Phase(cycles, now)
 
 
-@dataclass(frozen=True)
-class GainConfig:
-    gain: float = 2.0
-    inverted: bool = False
-
-
-@node.function
-def amplify(x: float, config: GainConfig) -> float:
-    return -x * config.gain if config.inverted else x * config.gain
+@node
+def amplify(x: float = 0.0, gain: float = 2.0, inverted: bool = False) -> float:
+    return -x * gain if inverted else x * gain
 
 
 @node
@@ -150,16 +142,6 @@ RustGate = node.rust_function(
 @node
 def measure_its_own_spelling(x: float = 2.0) -> float:
     return float(len(f"{x:.1f}"))
-
-
-@node.function
-def label_the_level(level: float = 0.75) -> dict:
-    return {"label": "high" if level > 0.5 else "low"}
-
-
-@node.function
-def count_the_label_letters(record: dict) -> int:
-    return len(record["label"])
 
 
 @dataclass(frozen=True)

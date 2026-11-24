@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Annotated, ClassVar
 
-from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
+from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin, OutputPin
 from ._description import Description
 from ._input_declaration_annotations import SettingOnly
@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 
-class SetVariable(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class SetVariable(BuiltInNode):
     """Names one value under `variable`: the port's output linked into `value`, or the node
     in `node_reference`. It runs nothing; every `GetVariable` of the name on its level, the
     stream's or a fragment's, or on a fragment inside that level, reads the value.
@@ -45,7 +45,7 @@ class SetVariable(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class GetVariable(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class GetVariable(BuiltInNode):
     """Reads the variable `variable` from the setter on its own level, or else from the
     nearest enclosing level's. A variable holding a port's output is read by linking
     `value`, which runs as a link from the setter's source with that port's type; one

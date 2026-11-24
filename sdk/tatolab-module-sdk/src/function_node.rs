@@ -5,9 +5,9 @@
 //! the read seam calls, beside the declaration its module's Python half hands
 //! `node.rust_function(...)`.
 //!
-//! The grammar is `@node.function`'s. What describes the node, its `category`
+//! The grammar is a function's under bare `@node`. What describes the node, its `category`
 //! and `description`, is the `#[meta(...)]` written under `#[function_node]`,
-//! as `@node.meta(...)` is beside `@node.function`. Each plain parameter is an input pin, and
+//! as `@node.meta(...)` is beside bare `@node`. Each plain parameter is an input pin, and
 //! `#[pin_default(...)]` its value when nothing is wired. A parameter typed
 //! [`Time`] is handed the reader's stream time, one typed [`State<Record>`] the
 //! state the last call returned in its [`Stateful<Output, Record>`], and one

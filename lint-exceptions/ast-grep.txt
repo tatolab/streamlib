@@ -376,7 +376,6 @@
 1 no-inline-test-module sdk/streamlib-python-wheel/src/python_module_host_table/shared_native_service_leases.rs
 1 no-inline-test-module sdk/streamlib-python-wheel/src/python_monotonic_timer/linux.rs
 1 no-inline-test-module sdk/streamlib-python-wheel/src/python_monotonic_timer/macos.rs
-1 no-inline-test-module sdk/streamlib-python-wheel/src/python_node_context/link_data_access/mod.rs
 1 no-inline-test-module sdk/streamlib-python-wheel/src/python_node_declaration.rs
 1 no-inline-test-module sdk/tatolab-module-sdk/src/module_host_payload_descriptor.rs
 1 no-inline-test-module xtask/src/check_graph_document_node_types.rs

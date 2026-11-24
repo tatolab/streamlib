@@ -15,8 +15,6 @@ from tatolab.stream import (
     EncodedVideo,
     GraphInput,
     GraphOutput,
-    Image,
-    InputPin,
     NodeDeclarationRefusal,
     PinTypeChoice,
     SettingOnly,
@@ -29,8 +27,6 @@ from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
 )
-from tatolab.stream._pin_type_choice import PinTypeFromSetting
-from tatolab.stream._pin_value_stored_form import PinValueNotTaken, stored_form_of_a_pin_value
 
 
 def the_values_recorded_for(node_class: Any, input_values: "dict[str, Any]") -> "dict[str, Any]":
@@ -93,7 +89,7 @@ def test_a_graph_input_records_its_family_by_name_and_its_default_as_its_value()
     )
 
     assert recorded == {"port": "cue", "family": "records", "value": {"scene": 1}}
-    assert the_values_recorded_for(GraphOutput, {"port": "video", "family": Image}) == {
+    assert the_values_recorded_for(GraphOutput, {"port": "video", "family": "image"}) == {
         "port": "video",
         "family": "image",
     }
@@ -132,8 +128,8 @@ def test_a_chosen_type_no_family_carries_is_refused_as_the_runtime_refuses_it() 
 
 def test_the_value_ports_are_the_names_a_link_takes() -> None:
     stream_builder = StreamBuilder("rig")
-    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": Image})
-    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": Image})
+    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": "image"})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": "image"})
 
     stream_builder.connect(source.output("value"), sink.input("value"))
     with pytest.raises(ValueError, match=r"declares no output `video`"):
@@ -183,11 +179,6 @@ def test_a_graph_inputs_fields_declare_the_settings_and_the_value_the_runtime_de
     ] == {"pin_type": set_by_pin_type, "flow": "value"}
 
 
-def test_a_port_family_set_on_a_menu_of_other_names_is_refused_as_none_of_its_options() -> None:
-    with pytest.raises(PinValueNotTaken, match=r"'image', which is none of its options"):
-        stored_form_of_a_pin_value(Image, {"type": "menu", "option_names": ["sine", "square"]})
-
-
 class _AnAuthorsSettingWithNoDefault:
     radius: Annotated[float, SettingOnly()]
 
@@ -220,6 +211,6 @@ class Tone:
     shape: Annotated[Literal["sine", "square"], SettingOnly()] = "sine"
 
 
-def test_a_typed_nodes_menu_of_other_names_refuses_a_port_family() -> None:
+def test_a_typed_nodes_menu_refuses_a_name_that_is_none_of_its_options() -> None:
     with pytest.raises(TypeError, match=r"'image', which is none of its options"):
-        StreamBuilder("rig").add(Tone, input_values={"shape": Image})
+        StreamBuilder("rig").add(Tone, input_values={"shape": "image"})

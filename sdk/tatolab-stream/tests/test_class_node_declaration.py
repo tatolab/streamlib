@@ -12,10 +12,8 @@ import pytest
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
-    Channels,
     Description,
     FormerlyNamed,
-    Input,
     InputPin,
     InputValueLifetime,
     NodeDeclarationRefusal,
@@ -30,7 +28,6 @@ from tatolab.stream import (
     node,
 )
 from tatolab.stream._node_declaration import (
-    NODE_DECLARATION_CONFIG_CLASS_STAMP,
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_KIND_STAMP,
@@ -68,7 +65,8 @@ def output_port(declared: Any, name: str) -> dict[str, Any]:
 
 def test_a_class_node_is_a_process_node_with_no_config() -> None:
     assert getattr(Blur, NODE_DECLARATION_KIND_STAMP) == "process"
-    assert getattr(Blur, NODE_DECLARATION_CONFIG_CLASS_STAMP) is None
+    assert not hasattr(Blur, "__tatolab_node_config_class__")
+    assert not hasattr(Blur, "__tatolab_node_config_schema__")
     assert getattr(Blur, NODE_DECLARATION_EXECUTION_STAMP) == {"mode": "reactive", "interval_ms": 0}
 
 
@@ -264,10 +262,6 @@ def test_an_audio_window_on_an_input_pin_reaches_the_port() -> None:
     assert input_port(Listener, "voice")["audio_window"]["window_size"] == 512
 
 
-class KeepsAnInput:
-    video = Input(Channels, delivery="newest")
-
-
 class TakesAConfig:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -302,7 +296,6 @@ class FormerNameOfAnotherField:
 @pytest.mark.parametrize(
     ("node_class", "finding_code", "fix"),
     [
-        (KeepsAnInput, "class_declares_a_retired_port", "`video: InputPin[Texture]`"),
         (TakesAConfig, "class_takes_a_config", "`radius: Annotated[float, SettingOnly()] = 4.0`"),
         (TakesParameters, "init_takes_parameters", "declare each value the node reads as a field"),
         (PublicStateNotAPin, "attribute_not_a_pin", "`_frames`, or a `ClassVar[...]`"),

@@ -18,7 +18,6 @@ from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     FunctionNode,
 )
-from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 from tatolab.stream._rust_function_node_declaration import (
     RustFunctionNode,
 )
@@ -43,6 +42,7 @@ from tatolab.runtime._function_node_evaluate_entry_compiler import (
 )
 from tatolab.runtime._function_node_body_run_as_python import (
     FunctionNodeBodyRunAsPython,
+    refuse_a_config_given_a_function_node_taking_none,
 )
 
 # The value types of the inputs a body run as Python may take as `None`: a message input no new
@@ -60,7 +60,7 @@ def how_one_function_node_is_called(
     and the index among them each input past the node's own sets.
 
     A compiled node is called through its entry's address with its config as
-    f64s; a node run as Python through an object holding its config and state.
+    f64s; a node run as Python through an object holding its state, and taking no config.
     Each of `linked_exposed_config_fields` is an input past the node's own, in
     that order, setting the config field of its name at each evaluation.
     """
@@ -73,9 +73,13 @@ def how_one_function_node_is_called(
                 for field in linked_exposed_config_fields
             ],
         )
-    body_run_as_python = FunctionNodeBodyRunAsPython(prepared, node_id, config)
-    body_run_as_python.config_fields_set_by_the_inputs_past_its_own = linked_exposed_config_fields
-    return body_run_as_python, [], []
+    if linked_exposed_config_fields:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}` exposes {', '.join(f'`{field}`' for field in linked_exposed_config_fields)} "
+            f"as an input, and a Python function node takes no config: each value is an input of "
+            f"its own"
+        )
+    return FunctionNodeBodyRunAsPython(prepared, node_id, config), [], []
 
 
 def _the_config_value_index_of(
@@ -113,7 +117,7 @@ def function_node_run_as_python_in_its_reader(
     """`function_node` ready to run as Python, refusing by name a signature a body run as Python cannot carry."""
     if not isinstance(function_node, FunctionNode):
         raise FunctionNodeDoesNotCompile(
-            f"{import_path} names {function_node!r}, which is not a `@node.function` function"
+            f"{import_path} names {function_node!r}, which is not a function under bare `@node`"
         )
     function_signature: "dict[str, Any]" = getattr(
         function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
@@ -146,12 +150,6 @@ def function_node_run_as_python_in_its_reader(
         input_ports=tuple(each_input["port"] for each_input in function_signature["inputs"]),
         pin_defaults_by_input_port=_pin_defaults_by_input_port(import_path, function_signature),
         output_ports=tuple(each_output["port"] for each_output in function_signature["outputs"]),
-        ports_carrying_records=frozenset(
-            each_port["port"]
-            for each_port in (*function_signature["inputs"], *function_signature["outputs"])
-            if each_port["value_type"] == "records"
-        ),
-        config_class=getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None),
         state_record_class=state_record_class,
         state_value_types=state_value_types,
         initial_state_values=(
@@ -190,6 +188,8 @@ def config_values_of_one_function_node(
     """`node_id`'s config, as the f64s its evaluate entry takes, each field in its declared order."""
     config_values_by_field = dict(config) if isinstance(config, dict) else {}
     fields_it_does_not_declare = sorted(set(config_values_by_field) - set(compiled.config_fields))
+    if fields_it_does_not_declare and not compiled.config_fields:
+        refuse_a_config_given_a_function_node_taking_none(node_id, config_values_by_field)
     if fields_it_does_not_declare:
         raise FunctionNodeDoesNotCompile(
             f"function node `{node_id}`'s config sets {', '.join(fields_it_does_not_declare)}, "
@@ -203,10 +203,6 @@ def config_values_of_one_function_node(
             config_values.append(_exactly_as_f64(config_values_by_field[field], what_it_is))
         elif field in compiled.config_field_defaults:
             config_values.append(compiled.config_field_defaults[field])
-        elif field in compiled.config_field_default_factories:
-            config_values.append(
-                _exactly_as_f64(compiled.config_field_default_factories[field](), what_it_is)
-            )
         else:
             raise FunctionNodeDoesNotCompile(
                 f"function node `{node_id}`'s config sets no `{field}`, and the field declares "

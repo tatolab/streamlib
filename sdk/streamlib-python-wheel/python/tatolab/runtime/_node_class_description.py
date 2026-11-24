@@ -16,7 +16,6 @@ from tatolab.stream._function_node_declaration import (
 )
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_DECLARED_STAMP,
-    NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_KIND_STAMP,
@@ -72,25 +71,23 @@ def load_node_class(import_path: str) -> type:
 
 
 
-#: Each key of a described process node type the class's own `@node.process` stamp fills, in wire order.
+#: Each key of a described class node type the class's own `@node` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("kind", NODE_DECLARATION_KIND_STAMP),
     ("execution", NODE_DECLARATION_EXECUTION_STAMP),
     ("scheduling_priority", NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP),
     ("paced_by_real_time", NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP),
-    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
 )
 
 
-#: Each key of a described function node type its `@node.function` stamp fills, in wire order.
+#: Each key of a described function node type its `@node` stamp fills, in wire order.
 DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("kind", NODE_DECLARATION_KIND_STAMP),
     ("language", NODE_DECLARATION_LANGUAGE_STAMP),
-    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
     ("function_signature", NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP),
@@ -105,7 +102,6 @@ DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
 DESCRIBED_SHADER_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("kind", NODE_DECLARATION_KIND_STAMP),
-    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
     ("shader_source", "__tatolab_node_shader_source__"),
@@ -116,14 +112,16 @@ DESCRIBED_SHADER_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
 SHADER_NODE_KIND = "shader"
 
 
-#: Each key of a described node type of any kind, filled from a stamp an older
-#: `tatolab-stream` does not write, and left out when the node carries none: the engine reads an
-#: absent key as undeclared. Spelled here, not imported, because the `tatolab-stream` in a
+#: Each key of a described node type of any kind, filled from a stamp not every node carries,
+#: and left out when the node carries none: the engine reads an absent key as undeclared. An
+#: older `tatolab-stream` writes no category, conversion or pin groups, and only a Rust function
+#: node writes a config schema. Spelled here, not imported, because the `tatolab-stream` in a
 #: project's venv may predate the stamp, and its attribute name is the wire contract both sides hold.
-DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE = (
+DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_NOT_EVERY_NODE_CARRIES = (
     ("category", "__tatolab_node_category__"),
     ("conversion", "__tatolab_node_conversion__"),
     ("pin_groups", "__tatolab_node_pin_groups__"),
+    ("config_schema", "__tatolab_node_config_schema__"),
 )
 
 
@@ -170,15 +168,15 @@ def _describe_the_node_class_its_imported_module_defines(
         what_it_names = "function"
     elif isinstance(resolved, FunctionNode):
         described_keys_and_their_stamps = DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
-        the_decorator_that_stamps_them = "@node.function"
+        the_decorator_that_stamps_them = "@node"
         what_it_names = "function"
     elif isinstance(resolved, type):
         described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
-        the_decorator_that_stamps_them = "@node.process"
+        the_decorator_that_stamps_them = "@node"
         what_it_names = "class"
     else:
         raise NodeClassNotDescribable(
-            f"it names a {type(resolved).__name__}, not a class or a `@node.function`"
+            f"it names a {type(resolved).__name__}, not a class or a function under `@node`"
         )
     if getattr(resolved, NODE_DECLARATION_DECLARED_STAMP, False) is not True:
         raise NodeClassNotDescribable(
@@ -214,7 +212,7 @@ def _describe_the_node_class_its_imported_module_defines(
     for (
         described_node_type_key,
         node_declaration_stamp,
-    ) in DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE:
+    ) in DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_NOT_EVERY_NODE_CARRIES:
         if hasattr(resolved, node_declaration_stamp):
             described_node_type[described_node_type_key] = getattr(
                 resolved, node_declaration_stamp

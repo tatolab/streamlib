@@ -14,7 +14,8 @@ generator, or one that does not parse), or, with `paths`, the modules at those p
 Each module is imported with the project directory first on `sys.path`, so the judge is the
 reader that loads the node: each `NodeDeclarationRefusal` is an `error` finding with its code,
 and any other failure to import is one `module_does_not_import` finding with its traceback. A
-node declared in a retired form is a `warning` naming its replacement.
+node declared in a retired form, and each retired name imported, is an `error` naming its
+replacement, found where the source writes it; the import it fails is not reported again.
 
 stdout carries one JSON object per line, each flushed as it is written:
 
@@ -49,7 +50,7 @@ from ._node_type_source_reader import (
 )
 from ._pin_declaration import NodeDeclarationRefusal
 from ._project_node_type_listing_entry import project_module_sources
-from ._retired_declarations import RETIRED_DECLARATION_FINDING_CODE
+from ._retired_declarations import RETIRED_DECLARATION_FINDING_CODE, RetiredImportRefusal
 
 __all__ = ["check_the_node_declarations_of_a_project", "main"]
 
@@ -61,7 +62,6 @@ MODULE_DOES_NOT_IMPORT_FINDING_CODE = "module_does_not_import"
 PATH_NOT_A_MODULE_FINDING_CODE = "path_not_a_python_module"
 
 ERROR_SEVERITY = "error"
-WARNING_SEVERITY = "warning"
 
 _TATOLAB_STREAM_DISTRIBUTION = "tatolab-stream"
 
@@ -100,17 +100,22 @@ def _the_modules_to_check(
             (module_name_of_a_source_path(path), path)
             for path in sorted({PurePosixPath(path).as_posix() for path in paths})
         ]
-    listing = read_node_types_and_graph_generators_from_module_sources(
-        project_module_sources(project_directory)
-    )
-    paths_the_listing_names = {
+    module_sources = list(project_module_sources(project_directory))
+    listing = read_node_types_and_graph_generators_from_module_sources(module_sources)
+    paths_to_check = {
         row["path"]
         for rows in (listing["node_types"], listing["graph_generators"], listing["unreadable_modules"])
         for row in rows
     }
-    return [
-        (module_name_of_a_source_path(path), path) for path in sorted(paths_the_listing_names)
-    ]
+    # A node in a retired form is no node type the listing names, so its module is found by
+    # what it retired.
+    paths_to_check.update(
+        path
+        for module_name, path, source_text in module_sources
+        if isinstance(source_text, str)
+        and read_retired_declarations_from_module_source(module_name, path, source_text)
+    )
+    return [(module_name_of_a_source_path(path), path) for path in sorted(paths_to_check)]
 
 
 def _the_findings_of_one_module(
@@ -128,7 +133,9 @@ def _the_findings_of_one_module(
         ]
     findings = _the_retired_declarations_of(module, path, source_bytes)
     import_finding = _the_finding_of_its_import(project_directory, module, path)
-    if import_finding is not None:
+    if import_finding is not None and not (
+        findings and import_finding["finding_code"] == RETIRED_DECLARATION_FINDING_CODE
+    ):
         findings.append(import_finding)
     return findings
 
@@ -141,9 +148,8 @@ def _the_retired_declarations_of(
     return [
         _finding(
             RETIRED_DECLARATION_FINDING_CODE,
-            WARNING_SEVERITY,
-            f"`{retired_declaration['node_type']}` is declared with `{retired_declaration['retired'].spelling}`, "
-            f"which is retired. To fix: {retired_declaration['retired'].replaced_by}.",
+            ERROR_SEVERITY,
+            retired_declaration["words"],
             path,
             line=retired_declaration["line"],
             column=retired_declaration["column"],
@@ -172,6 +178,16 @@ def _the_finding_of_its_import(
             column=column,
             node_type=f"{module}:{refusal.node}",
             port=refusal.pin,
+        )
+    except RetiredImportRefusal as refusal:
+        line, column = _the_place_in(refusal, module_file)
+        return _finding(
+            RETIRED_DECLARATION_FINDING_CODE,
+            ERROR_SEVERITY,
+            str(refusal),
+            path,
+            line=line,
+            column=column,
         )
     except BaseException as not_imported:  # noqa: BLE001 - the project's code may raise anything, `SystemExit` included
         line, column = _the_place_in(not_imported, module_file)

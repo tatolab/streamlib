@@ -312,7 +312,6 @@ fn a_described_hold_frame() -> serde_json::Value {
             "time_parameter": null,
             "state_parameter": "previous",
             "state_record_class": "core_nodes.logic:HeldFrame",
-            "config_parameter": null,
         },
     })
 }

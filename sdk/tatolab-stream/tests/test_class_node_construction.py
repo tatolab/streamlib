@@ -133,11 +133,10 @@ def test_a_field_named_by_its_cast_port_name_finds_its_attribute():
 
 
 def test_only_a_class_under_bare_node_has_members_to_build_it_from():
-    @node.process(execution="continuous", interval_ms=5)
-    class Retired:
+    class Undecorated:
         def process(self, ctx: Any) -> None:
             pass
 
-    assert class_node_members(Retired) is None
+    assert class_node_members(Undecorated) is None
     with pytest.raises(TypeError, match="not a class under bare `@node`"):
-        construct_class_node(Retired, field_values={}, pins={})
+        construct_class_node(Undecorated, field_values={}, pins={})
