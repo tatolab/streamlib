@@ -489,7 +489,7 @@ impl PythonNodeLinkDataAccess {
 
         python
             .detach(|| -> Result<(), Error> {
-                if !input_mailboxes.has_port(port_name) {
+                if !input_mailboxes.has_a_mailbox(port_name) {
                     match audio_window {
                         // The window contract sizes the mailbox itself, and the
                         // envelope's ring depth is the windowed ring the

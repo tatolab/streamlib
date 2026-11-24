@@ -22,8 +22,10 @@ from helper_placement_streams import (
     lfo_into_python_sink_reporting_each_batch_it_reads,
     python_class_reporting_its_configured_level,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
+    one_width_source_alone,
     typed_level_scaled_by_the_gain_its_input_values_hold_into_python_sink,
 )
+from helper_placement_nodes import WIDTH_HELD_UNLINKED, WIDTH_WRITTEN
 from helper_process_observation import (
     helper_process_ids_started_in,
 )
@@ -31,6 +33,10 @@ from stream_runs_on_tatolabd import TatolabRunOfAProject
 
 
 pytestmark = pytest.mark.requires_gpu
+
+#: How many batches a sink reads after a live `connect` before its link must drive the setting:
+#: the first may have started before the link was wired.
+BATCHES_A_LINK_MADE_LIVE_IS_GIVEN_TO_DRIVE_A_SETTING = 3
 
 
 def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_set_live(
@@ -453,3 +459,57 @@ def test_a_typed_node_built_with_input_values_starts_with_them_and_reopens_with_
         f"the reopened project reads the gain its document saved, and the class read {reopened}"
     )
     assert gain_reopened["value_comes_from"] == "saved", gain_reopened
+
+
+def test_a_setting_of_a_python_class_added_while_playing_takes_a_link_made_in_a_later_edit(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A class reading its `width` setting, as `SolidColor` reads its size, added while the
+    stream plays reads the 4 it holds; a link from a running source's `width`, made in a later
+    edit, is wired and drives the setting, so the class reads 7.
+
+    Fail-without-fix: the helper takes the setting it reads unlinked for a port already opened,
+    opens no mailbox, and the link errors with `Unknown input port: width`.
+    """
+    tatolabd = start_tatolabd_running_stream(one_width_source_alone)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    (reader,) = edit_live(
+        "add_node",
+        {"type": "helper_placement_nodes:ReportsEachBatchOfTheWidthItHolds", "name": "reader"},
+    )["added_nodes"]
+    held, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert held["lowest"] == held["highest"] == WIDTH_HELD_UNLINKED, (
+        f"the class added while playing reads the width it holds, and read {held}"
+    )
+
+    (widths,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "widths"
+    ]
+    edit_live(
+        "connect",
+        {
+            "source": {"node": widths["id"], "port": "width"},
+            "target": {"node": reader["node"], "port": "width"},
+        },
+    )
+    connected_at_monotonic_ns = time.monotonic_ns()
+    batches_since: "list[dict]" = []
+    while len(batches_since) < BATCHES_A_LINK_MADE_LIVE_IS_GIVEN_TO_DRIVE_A_SETTING:
+        batch, occurrence = the_first_value_batch_read_after(
+            tatolabd, connected_at_monotonic_ns, from_occurrence=occurrence + 1
+        )
+        batches_since.append(batch)
+        if batch["lowest"] == batch["highest"] == WIDTH_WRITTEN:
+            break
+    assert batches_since[-1]["lowest"] == batches_since[-1]["highest"] == WIDTH_WRITTEN, (
+        f"the link made later drives the width, and the class read {batches_since}"
+    )
+    links = local_api.call_tool("graph", {"stream": stream_id})["links"]
+    assert [link["state"] for link in links] == ["wired"], links
