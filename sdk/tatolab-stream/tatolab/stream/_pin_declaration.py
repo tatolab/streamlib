@@ -57,7 +57,9 @@ from ._pin_annotations_on_the_wire import (
 from ._pin_declaration_refusal_words import (
     TypeParameterLimit,
     words_refusing_a_function_pin_of,
+    PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES,
     words_refusing_an_input_declaration_annotation_on,
+    words_refusing_an_input_pin_of_several_types_taking,
     words_refusing_a_type_parameter_limited_to,
 )
 from ._pin_default_refusal_words import fix_of_a_default_not_taken
@@ -544,17 +546,13 @@ class _PinReading:
             pin_types.append(pin_type)
         if self._form != "pin":
             return {"kind": "one_of", "pin_types": pin_types}, the_flow_a_function_input_reads(pin_types[0])
-        flows: "set[PinFlow]" = {self._flow_of(_PIN_TYPE_DESCRIPTION_BY_NAME[each["type"]], each) for each in pin_types}
-        if len(flows) > 1:
-            raise self._refusal(
-                f"{self._pin_named} is an `InputPin` of a Trigger and of types that stream, and one "
-                f"pin either fires or streams. To fix: declare the Trigger as a pin of its own.",
-                "pin_flow_not_taken",
-            )
-        return {"kind": "one_of", "pin_types": pin_types}, flows.pop()
+        not_streamed = [each for each in pin_types if each["type"] not in PIN_TYPES_AN_INPUT_PIN_OF_SEVERAL_TAKES]
+        if not_streamed:
+            raise self._refusal(words_refusing_an_input_pin_of_several_types_taking(self._pin_named, not_streamed[0]["type"]), "pin_type_not_read_yet")
+        return {"kind": "one_of", "pin_types": pin_types}, "stream"
 
     def _a_union_input_pin(self, written_type: object) -> bool:
-        """Whether the pin is a class node's `InputPin` of several types, each of which streams."""
+        """Whether the pin is a class node's `InputPin` of several types."""
         return self._form == "pin" and self._direction == "input" and _is_a_union(written_type)
 
     def _a_member_pin_type(

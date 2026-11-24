@@ -10,8 +10,9 @@ like any other Python node. The transport stack comes up in that
 interpreter the first time a session needs it.
 """
 
+from .nodes import PublishedTracks as PublishedTracks
 from .nodes import WhepPlayer as WhepPlayer
 from .nodes import WhipPublisher as WhipPublisher
 from .nodes import WhipSessionPublishing as WhipSessionPublishing
 
-__all__ = ["WhepPlayer", "WhipPublisher", "WhipSessionPublishing"]
+__all__ = ["PublishedTracks", "WhepPlayer", "WhipPublisher", "WhipSessionPublishing"]

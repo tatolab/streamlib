@@ -9,20 +9,9 @@ environment, so the variables are set where the runtime starts.
 """
 
 import os
-from typing import Annotated
 
-from tatolab.stream import (
-    Description,
-    EncodedAudio,
-    EncodedCodecs,
-    EncodedVideo,
-    InputPin,
-    RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess,
-    StreamDelivery,
-    node,
-)
-from tatolab.webrtc import WhipSessionPublishing
+from tatolab.stream import RuntimeContextFullAccess, RuntimeContextLimitedAccess, node
+from tatolab.webrtc import PublishedTracks, WhipSessionPublishing
 
 WHIP_URL_ENVIRONMENT_VARIABLE = "STREAMLIB_WHIP_URL"
 WHIP_BEARER_TOKEN_ENVIRONMENT_VARIABLE = "STREAMLIB_WHIP_BEARER_TOKEN"
@@ -51,13 +40,7 @@ def whip_session_publishing_to_the_runtime_environments_endpoint() -> WhipSessio
 class WhipPublisherToTheRuntimeEnvironmentsEndpoint:
     """A `WhipPublisher` session at `STREAMLIB_WHIP_URL`, sent `STREAMLIB_WHIP_BEARER_TOKEN`, with no setting."""
 
-    tracks: InputPin[
-        Annotated[
-            Annotated[EncodedVideo, EncodedCodecs("h264")] | Annotated[EncodedAudio, EncodedCodecs("opus")],
-            StreamDelivery("ordered"),
-            Description("H.264 access units or Opus packets; each inbound link becomes one track"),
-        ]
-    ]
+    tracks: PublishedTracks
 
     def __init__(self) -> None:
         self._publishing = whip_session_publishing_to_the_runtime_environments_endpoint()

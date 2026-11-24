@@ -43,11 +43,15 @@ def family_a_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
 
 def family_declaration_of_an_input_of_several_types(pin_types: "list[PinType]") -> dict[str, Any]:
     """The family declaration of an input taking each of `pin_types`: the family of the first,
-    also taking each other family they travel on."""
+    also taking each other family they travel on. Encoded media each of whose types names its
+    codecs requires one of them, so a link from a port declared by family is judged by its codec."""
     families = list(dict.fromkeys(family_a_pin_type_travels_on(pin_type) for pin_type in pin_types))
     declaration: dict[str, Any] = {"family": families[0]}
     if len(families) > 1:
         declaration["also_takes_families"] = families[1:]
+    codecs_of_each = [pin_type.get("codecs") for pin_type in pin_types]
+    if families == ["packets"] and all(codecs_of_each):
+        declaration["requires_codec"] = list(dict.fromkeys(codec for codecs in codecs_of_each for codec in codecs or ()))
     return declaration
 
 

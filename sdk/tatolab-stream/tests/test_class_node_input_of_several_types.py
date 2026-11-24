@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, assert_type
 
 import pytest
 
@@ -50,7 +50,7 @@ def test_each_type_is_taken_narrowed_as_it_is_written_and_streams():
     assert the_port("tracks") == {
         "name": "tracks",
         "description": "Video or audio, one track per link",
-        "family": {"family": "packets"},
+        "family": {"family": "packets", "requires_codec": ["h264", "opus"]},
         "pin_declaration": {
             "pin_type": {
                 "kind": "one_of",
@@ -79,6 +79,24 @@ def _a_trigger_beside_a_stream() -> None:
     @node
     class Mixed:
         either: InputPin[Trigger | Texture]
+
+        def process(self, ctx: Any) -> None:
+            del ctx
+
+
+def _numbers() -> None:
+    @node
+    class Numbers:
+        number: InputPin[float | int]
+
+        def process(self, ctx: Any) -> None:
+            del ctx
+
+
+def _a_stream_beside_a_number() -> None:
+    @node
+    class Mixed:
+        either: InputPin[Texture | float]
 
         def process(self, ctx: Any) -> None:
             del ctx
@@ -114,15 +132,31 @@ def _a_field_of_several_types() -> None:
 @pytest.mark.parametrize(
     ("declare", "finding_code"),
     [
-        (_a_trigger_beside_a_stream, "pin_flow_not_taken"),
+        (_a_trigger_beside_a_stream, "pin_type_not_read_yet"),
+        (_numbers, "pin_type_not_read_yet"),
+        (_a_stream_beside_a_number, "pin_type_not_read_yet"),
         (_a_narrowing_of_another_type, "pin_annotation_not_taken"),
         (_an_output_of_several_types, "pin_type_not_read_yet"),
         (_a_field_of_several_types, "pin_type_not_read_yet"),
     ],
 )
-def test_a_pin_of_several_types_is_refused_unless_it_is_an_input_pin_of_one_flow(
+def test_a_pin_of_several_types_is_refused_unless_it_is_an_input_pin_of_streams(
     declare: Any, finding_code: str
 ):
     with pytest.raises(NodeDeclarationRefusal) as refused:
         declare()
     assert refused.value.finding_code == finding_code, refused.value
+
+
+if TYPE_CHECKING:
+    from tatolab.stream import ArrayFrame, ChannelsBlock, ImageFrame, Message, PacketsUnit
+
+    def the_read_of_each_pin_of_several_types(publisher: Publisher, pictures: InputPin[Texture]) -> None:
+        """A read of a pin of several types is typed as what any of them reads, narrowed by `pin_type`."""
+        assert_type(publisher.tracks.read(), "PacketsUnit | None")
+        assert_type(publisher.tracks.read_message(), "Message[PacketsUnit] | None")
+        assert_type(
+            publisher.pictures_or_sound.read(),
+            "ImageFrame | ChannelsBlock | ArrayFrame | PacketsUnit | None",
+        )
+        assert_type(pictures.read(), "ImageFrame | None")

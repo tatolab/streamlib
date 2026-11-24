@@ -170,6 +170,17 @@ def _optional_bearer_token(bearer_token: Any) -> "str | None":
     return bearer_token if isinstance(bearer_token, str) and bearer_token else None
 
 
+PublishedTracks = InputPin[
+    Annotated[
+        Annotated[EncodedVideo, EncodedCodecs("h264")] | Annotated[EncodedAudio, EncodedCodecs("opus")],
+        StreamDelivery("ordered"),
+        Description("H.264 access units or Opus packets; each inbound link becomes one track"),
+    ]
+]
+"""The `tracks` pin of a node running a `WhipSessionPublishing`: H.264 video or Opus audio, one
+track per inbound link, read in order."""
+
+
 class WhipSessionPublishing:
     """One WHIP session, publishing what the `tracks` pin of the node running it reads.
 
@@ -187,7 +198,7 @@ class WhipSessionPublishing:
         self._media_frames_published = 0
         self._media_frames_discarded_awaiting_a_group_start = 0
 
-    def set_up(self, tracks: "InputPin[EncodedVideo | EncodedAudio]") -> None:
+    def set_up(self, tracks: PublishedTracks) -> None:
         """Make the session against the links feeding `tracks`, which are wired before `setup()`
         runs, so the track count is known before a message has arrived and before anything is
         offered."""
@@ -209,7 +220,7 @@ class WhipSessionPublishing:
 
         self._session = _native.WhipSession(self._url, self._bearer_token)
 
-    def publish_the_next_message(self, tracks: "InputPin[EncodedVideo | EncodedAudio]") -> None:
+    def publish_the_next_message(self, tracks: PublishedTracks) -> None:
         """Send the next message `tracks` holds, if any, on its link's track."""
         message = tracks.read_message()
         if message is None:
@@ -259,7 +270,7 @@ class WhipSessionPublishing:
                 f"WhipPublisher: media_frames_published={self._media_frames_published}"
             )
 
-    def _track_of(self, tracks: "InputPin[EncodedVideo | EncodedAudio]", inbound_link: str) -> PublishedTrack:
+    def _track_of(self, tracks: PublishedTracks, inbound_link: str) -> PublishedTrack:
         """The track `inbound_link` publishes as, read off its upstream stream
         facts on its first message and fixed for the session."""
         track = self._track_by_inbound_link.get(inbound_link)
@@ -367,13 +378,7 @@ class WhipPublisher:
     bearer_token: Annotated[
         str | None, Description("Sent as `Authorization: Bearer` when the endpoint wants one.")
     ] = None
-    tracks: InputPin[
-        Annotated[
-            Annotated[EncodedVideo, EncodedCodecs("h264")] | Annotated[EncodedAudio, EncodedCodecs("opus")],
-            StreamDelivery("ordered"),
-            Description("H.264 access units or Opus packets; each inbound link becomes one track"),
-        ]
-    ]
+    tracks: PublishedTracks
 
     def __init__(self) -> None:
         self._publishing = WhipSessionPublishing(
