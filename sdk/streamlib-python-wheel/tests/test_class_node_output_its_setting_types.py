@@ -11,7 +11,7 @@ from typing import Annotated, Any, cast
 
 import pytest
 
-from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
+from tatolab.runtime._class_node_bound_pins import BoundOutputPin, bind_the_pins_of_a_class_node
 from tatolab.runtime._class_node_fields import ClassNodeFields
 from tatolab.runtime._node_hosting import class_node_members_of
 from tatolab.stream import (
@@ -97,5 +97,7 @@ def test_a_connection_output_binds_and_refuses_a_write_since_each_wire_brings_th
         outputs=cast(Any, None),
         node_id="hub-1",
     )
+    connection = pins["connection"]
+    assert isinstance(connection, BoundOutputPin)
     with pytest.raises(TypeError, match="gives its node out as a connection"):
-        pins["connection"].write(object())
+        connection.write(object())
