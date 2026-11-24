@@ -12,8 +12,8 @@ use crate::core::descriptors::{
     DeclaredPinType, PinConversionOutputPick, PinConversionOutputPicked,
 };
 use crate::core::graph::{
-    refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse,
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
+    refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse,
 };
 
 const RASTER_SOURCE: &str = "VerdictCheckRasterSource";
@@ -87,7 +87,11 @@ fn register_the_held_settings_fixture_node_types() {
                     vec![a_typed_port("raster", raster())],
                     vec![a_texture_port("image", &[])],
                 )
-                .stating_a_conversion(),
+                .stating_a_conversion()
+                .with_config_schema(json!({
+                    "type": "object",
+                    "properties": {"format": {"type": "string"}},
+                })),
                 Box::new(|_node| Err(Error::NotSupported("a fixture runs no node".to_owned()))),
                 PinConversionOutputPick {
                     picked_for: the_format_picked_for,
@@ -243,19 +247,23 @@ fn a_config_update_choosing_a_format_a_wired_link_refuses_is_refused() {
         }
 
         fixture.compiler.scope(|graph, _tx| {
-            let refused = refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
+            let refused = refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
                 graph,
                 &fixture.convert_node,
-                &json!({ "format": "bgra8_unorm" }),
+                &json!({ "format": "bgra8_unorm" })
+                    .as_object()
+                    .expect("an object of input values"),
             )
             .expect_err("the wired input takes only rgba8_unorm");
             let words = refused.to_string();
             assert!(words.contains("bgra8_unorm"), "{words}");
             assert!(words.contains("config update for"), "{words}");
-            refuse_a_config_update_a_wired_link_out_of_a_convert_node_would_refuse(
+            refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
                 graph,
                 &fixture.convert_node,
-                &json!({ "format": "rgba8_unorm" }),
+                &json!({ "format": "rgba8_unorm" })
+                    .as_object()
+                    .expect("an object of input values"),
             )
             .expect("rgba8_unorm is what the input takes");
         });
@@ -284,7 +292,7 @@ fn a_format_set_as_an_input_value_a_wired_link_refuses_is_refused() {
                 .v(&fixture.convert_node)
                 .first_mut()
                 .expect("the node is held")
-                .pins
+                .input_values
                 .insert("format".to_owned(), json!(format));
         };
         set_format(graph, "bgra8_unorm");

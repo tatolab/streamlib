@@ -918,7 +918,7 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         "{node_impl}"
     );
     assert!(
-        node_impl.contains(".with_pins_and_studio_fields("),
+        node_impl.contains(".with_input_values_and_studio_fields("),
         "{node_impl}"
     );
 }

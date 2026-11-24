@@ -24,7 +24,6 @@ pub(super) async fn commit_live_graph_change(
         if !compiler.the_transaction_is_held_for_one_commit() {
             take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler);
         }
-        hand_each_config_update_to_its_node_now_no_commit_builds(compiler);
         return Ok(());
     };
     let compiler = Arc::clone(compiler);
@@ -104,31 +103,6 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
         for node_run_id in &nodes_pending_deletion {
             if !this_streams_graph.drop_the_node(node_run_id, WhyTheNodeLeaves::Removed) {
                 tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
-            }
-        }
-    });
-}
-
-/// On a stream no commit builds, a stopped one or one not started, hand each config update
-/// logged for a node no instance runs to that node now: the graph it holds to read and edit then
-/// shows the config, and the node is built from it at the next start.
-fn hand_each_config_update_to_its_node_now_no_commit_builds(compiler: &Compiler) {
-    compiler.scope(|this_streams_graph, tx| {
-        let nodes_no_instance_runs: HashSet<NodeRunId> = this_streams_graph
-            .traversal()
-            .v(())
-            .iter()
-            .filter(|node| !node.has::<NodeInstanceComponent>())
-            .map(|node| node.id.clone())
-            .collect();
-        for (node_run_id, config_to_apply) in tx.take_each_config_update_of(&nodes_no_instance_runs)
-        {
-            if let Some(node) = this_streams_graph
-                .traversal_mut()
-                .v(&node_run_id)
-                .first_mut()
-            {
-                node.set_config(config_to_apply);
             }
         }
     });

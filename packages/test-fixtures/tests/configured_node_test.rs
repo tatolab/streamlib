@@ -55,12 +55,11 @@ fn the_settings_held_before_setup_are_the_ones_it_holds() {
 }
 
 /// A spec of the node built from settings holds them as its input values, under each key the
-/// config held, and an empty config.
+/// config held.
 ///
 /// Mental-revert: a spec built from a config holds `threshold` in its config.
 #[test]
 fn a_spec_built_from_settings_holds_them_as_input_values() {
     let spec = ConfiguredNode::node(ConfiguredNodeSettings { threshold: 0.8 });
-    assert_eq!(spec.pins, held(json!({"threshold": 0.8_f32})));
-    assert_eq!(spec.config, json!({}));
+    assert_eq!(spec.input_values, held(json!({"threshold": 0.8_f32})));
 }

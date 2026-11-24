@@ -20,7 +20,7 @@ fn a_graph_input_saved_with(settings: serde_json::Value) -> GraphNode {
         descriptor.node_class_import_path.clone(),
         None,
         "lines",
-        Some(settings),
+        settings.as_object().cloned().unwrap_or_default(),
         descriptor.inputs.iter().map(PortInfo::from).collect(),
         descriptor.outputs.iter().map(PortInfo::from).collect(),
     )

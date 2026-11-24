@@ -38,7 +38,7 @@ fn a_running_stream_with_a_frame_width_taking_node() -> (
     Arc<LoadedStreamInThisRuntime>,
     Uuid,
 ) {
-    NODE_REGISTRY.register_taking_a_config_for_a_test::<FrameWidthTakingTestNode::Node, FrameWidthTakingTestNodeConfig>();
+    NODE_REGISTRY.register_with_a_config_schema_for_a_test::<FrameWidthTakingTestNode::Node, FrameWidthTakingTestNodeConfig>();
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner
@@ -116,19 +116,16 @@ fn the_graph_answers_a_config_the_running_node_took_as_soon_as_the_edit_answers(
 
 #[test]
 #[serial]
-fn a_config_the_running_node_refuses_is_refused_and_the_node_keeps_its_config() {
+fn a_config_the_schema_of_its_setting_refuses_is_refused_and_the_node_keeps_its_config() {
     let (_project_directory, _runner, stream, node) =
         a_running_stream_with_a_frame_width_taking_node();
 
-    let refusal = set_the_node_config_live(
-        &stream,
-        node,
-        serde_json::json!({"frame_width": u64::from(u32::MAX) + 1}),
-    )
-    .expect_err("a width the node's config cannot hold is refused")
-    .to_string();
+    let refusal =
+        set_the_node_config_live(&stream, node, serde_json::json!({"frame_width": "wide"}))
+            .expect_err("a width the schema of the setting refuses is refused")
+            .to_string();
 
-    assert!(refusal.contains("expected u32"), "{refusal}");
+    assert!(refusal.contains("`frame_width`"), "{refusal}");
     assert_eq!(
         the_config_the_graph_answers_for(&stream, node),
         serde_json::json!({"frame_width": 640})

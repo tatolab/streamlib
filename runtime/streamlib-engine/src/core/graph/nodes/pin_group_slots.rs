@@ -66,7 +66,7 @@ impl GraphNode {
     /// The slot count the node's value of its input named after `group` sets, a group that
     /// follows its wires reading none; the input's default while it holds none.
     fn the_slot_count_set_for(&self, group: &PinGroupDescriptor) -> usize {
-        let set = self.pins.get(&group.name).or_else(|| {
+        let set = self.input_values.get(&group.name).or_else(|| {
             self.ports
                 .input_named(&group.name)
                 .and_then(|input| input.pin_default.as_ref())
@@ -112,7 +112,7 @@ impl GraphNode {
         }
         let values = self.the_values_its_port_facts_read();
         self.stream_facts_of_output_ports()
-            .hold_the_output_ports(&self.ports.outputs, values.as_ref());
+            .hold_the_output_ports(&self.ports.outputs, Some(&values));
         true
     }
 }

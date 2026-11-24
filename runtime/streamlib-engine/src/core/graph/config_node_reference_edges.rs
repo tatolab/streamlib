@@ -61,7 +61,7 @@ pub(crate) struct ConfigNodeReferenceEdgeOfOneNode {
 /// any other value than `{"node": "<name>"}` is refused naming the key.
 pub(crate) fn config_node_reference_edges_of_one_node(
     node_name: &str,
-    config: &serde_json::Value,
+    config: &serde_json::Map<String, serde_json::Value>,
     keys_holding_a_node_reference: Vec<ConfigKeyHoldingANodeReference>,
 ) -> Result<Vec<ConfigNodeReferenceEdgeOfOneNode>> {
     let mut edges = Vec::new();
@@ -156,18 +156,21 @@ pub(crate) fn refuse_a_reference_to_a_node_of_the_wrong_type(
     )))
 }
 
-pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
+/// Refuse `input_values`, the values node `node_run_id` of `graph` holds, when one naming a node
+/// names a node the graph does not hold, one of the wrong type, or one another node already
+/// names where a node takes one referrer.
+pub(crate) fn refuse_input_values_naming_a_node_the_graph_does_not_hold(
     graph: &Graph,
     node_types: &NodeTypesOneStreamResolves,
     node_run_id: &NodeRunId,
-    config_to_apply: &serde_json::Value,
+    input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
     let Some(updated_node) = graph.traversal().v(node_run_id).first() else {
         return Ok(());
     };
     let references = config_node_reference_edges_of_one_node(
         &updated_node.display_name,
-        config_to_apply,
+        input_values,
         config_keys_of_a_node_type_holding_a_node_reference(node_types, &updated_node.node_type),
     )?;
     if references.is_empty() {
@@ -215,12 +218,9 @@ pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
             if &live_node.id == node_run_id {
                 continue;
             }
-            let Some(live_config) = &live_node.config else {
-                continue;
-            };
             references_of_every_other_live_node.extend(config_node_reference_edges_of_one_node(
                 &live_node.display_name,
-                live_config,
+                &live_node.input_values,
                 config_keys_of_a_node_type_holding_a_node_reference(
                     node_types,
                     &live_node.node_type,

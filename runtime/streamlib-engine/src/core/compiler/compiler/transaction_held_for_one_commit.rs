@@ -144,31 +144,4 @@ impl Compiler {
             }
         }
     }
-
-    /// Take the config updates logged under the hold for one commit, which a commit asked for
-    /// meanwhile compiles at once: a value set reaches its node as it would outside the hold,
-    /// and the graph edits logged beside it wait for the commit that releases the hold.
-    pub(super) fn take_the_config_updates_logged_under_the_hold(
-        &self,
-        logged_before: usize,
-    ) -> Vec<PendingOperation> {
-        let mut transaction = self.transaction.lock();
-        let logged_before = logged_before.min(transaction.len());
-        let config_updates: Vec<PendingOperation> = transaction
-            .extract_if(logged_before.., |operation| {
-                matches!(operation, PendingOperation::UpdateNodeConfig { .. })
-            })
-            .collect();
-        let mut configs_a_commit_is_applying = self.configs_a_commit_is_applying.lock();
-        for operation in &config_updates {
-            if let PendingOperation::UpdateNodeConfig {
-                node_run_id,
-                config_to_apply,
-            } = operation
-            {
-                configs_a_commit_is_applying.insert(node_run_id.clone(), config_to_apply.clone());
-            }
-        }
-        config_updates
-    }
 }

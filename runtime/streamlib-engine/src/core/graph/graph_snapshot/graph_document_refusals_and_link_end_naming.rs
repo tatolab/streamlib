@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::core::graph::{
     GraphNodePorts, PortInfo, cast_exposed_name_to_url_safe, port_names_listed_for_a_refusal,
-    refuse_a_link_into_a_port_taking_no_wire, the_input_ports_of_the_exposed_config_fields,
+    refuse_a_link_into_a_port_taking_no_wire,
 };
 use crate::core::json_schema::LabelledNodeGroup;
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -303,37 +303,16 @@ fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
     }
 }
 
-/// The input and output ports node `node_name` of a graph document has: those its type
-/// declares and, among the inputs, one for each config field it exposes, which a placeholder
-/// of a type not described already holds. `None` when the stream resolves no node type of
-/// its `type`.
+/// The input and output ports `node` of a graph document has, as its type declares them; a
+/// placeholder of a type not described holds one for each field the node was saved exposing.
+/// `None` when the stream resolves no node type of its `type`.
 pub(crate) fn the_ports_of_a_graph_document_node(
     node_types: &NodeTypesOneStreamResolves,
-    node_name: &str,
     node: &GraphSnapshotNode,
-) -> Result<Option<(Vec<PortInfo>, Vec<PortInfo>)>> {
-    let Some(GraphNodePorts {
-        mut inputs,
-        outputs,
-    }) = node_types.port_info(&node.node_type)
-    else {
-        return Ok(None);
-    };
-    if node_types
-        .placeholder_of_the_node_type_not_described(&node.node_type)
-        .is_some()
-    {
-        return Ok(Some((inputs, outputs)));
-    }
-    let declared_ports: Vec<PortInfo> = inputs.iter().chain(&outputs).cloned().collect();
-    inputs.extend(the_input_ports_of_the_exposed_config_fields(
-        node_name,
-        &node.node_type,
-        node_types,
-        &declared_ports,
-        &node.exposed_config_fields,
-    )?);
-    Ok(Some((inputs, outputs)))
+) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+    node_types
+        .port_info(&node.node_type)
+        .map(|GraphNodePorts { inputs, outputs }| (inputs, outputs))
 }
 
 /// Refuse `port` unless `node` has it in `direction`, whether its type declares it or it is
@@ -347,7 +326,7 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
     direction: PortDirection,
 ) -> Result<()> {
     let port_cast = cast_exposed_name_to_url_safe(port)?;
-    let ports: Vec<PortInfo> = the_ports_of_a_graph_document_node(node_types, node_name, node)?
+    let ports: Vec<PortInfo> = the_ports_of_a_graph_document_node(node_types, node)
         .map(|(inputs, outputs)| match direction {
             PortDirection::Input => inputs,
             PortDirection::Output => outputs,

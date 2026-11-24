@@ -42,9 +42,6 @@ use crate::core::graph::graph_interface_resolution::{
     the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_variable_resolution::is_a_graph_variable_node_type;
-use crate::core::graph::legacy_config_of_a_node::{
-    config_of_a_node, fields_the_config_schema_of_a_node_type_lists,
-};
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
@@ -232,8 +229,7 @@ pub struct GraphSnapshotNode {
     pub node_type: NodeClassImportPath,
 
     /// The value the node holds for each input, by input name; an input it names no value for
-    /// reads its declared default. Which of them a node type not yet typed reads as its config
-    /// is [`crate::core::graph::legacy_config_of_a_node`]'s to say.
+    /// reads its declared default.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub input_values: serde_json::Map<String, serde_json::Value>,
 
@@ -249,6 +245,22 @@ pub struct GraphSnapshotNode {
     /// the generator's promoted config; absent on every other node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<GraphFragment>,
+}
+
+impl GraphSnapshotNode {
+    /// `node`, a node of a running graph, as a graph document holds it: its uuid, name, type,
+    /// input values and studio fields, exposing nothing and of no fragment.
+    pub(crate) fn of_a_running_node(node: &crate::core::graph::GraphNode) -> Self {
+        Self {
+            id: Some(node.node_uuid),
+            name: node.display_name.clone(),
+            node_type: node.node_type.clone(),
+            input_values: node.input_values.clone(),
+            exposed_config_fields: Vec::new(),
+            studio: node.studio.clone(),
+            fragment: None,
+        }
+    }
 }
 
 /// A fragment's stored output: the nodes and links its graph generator built, each link end
@@ -503,7 +515,7 @@ impl GraphSnapshot {
             node_types.refuse_a_node_this_stream_cannot_add(
                 &node.name,
                 &node.node_type,
-                &config_of_a_node(node_types, &node.node_type, &node.input_values),
+                &node.input_values,
             )?;
             if node_types.port_info(&node.node_type).is_none() {
                 return Err(Error::UnknownNodeType {
@@ -551,7 +563,7 @@ impl GraphSnapshot {
         for node in &self.nodes {
             for reference in config_node_reference_edges_of_one_node(
                 &node.name,
-                &serde_json::Value::Object(node.input_values.clone()),
+                &node.input_values,
                 config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type),
             )? {
                 let referenced_node_name = &reference.edge.referenced_node;
@@ -605,12 +617,8 @@ fn each_port_of_one_level_under_its_current_name(
         let Some(ports) = node_types.port_info(&node.node_type) else {
             continue;
         };
-        if !crate::core::graph::input_values::node_type_takes_a_config(node_types, &node.node_type)
-        {
-            node.exposed_config_fields.clear();
-        }
-        let config_fields =
-            fields_the_config_schema_of_a_node_type_lists(node_types, &node.node_type);
+        node.exposed_config_fields.clear();
+        let config_fields = node_types.the_settings_its_config_schema_lists(&node.node_type);
         let (config_values, input_values): (serde_json::Map<_, _>, serde_json::Map<_, _>) =
             std::mem::take(&mut node.input_values)
                 .into_iter()

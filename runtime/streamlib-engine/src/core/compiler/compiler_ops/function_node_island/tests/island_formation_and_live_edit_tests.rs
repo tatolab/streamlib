@@ -333,7 +333,6 @@ fn a_function_node_linked_live_into_a_running_reader_is_handed_over_as_its_islan
             std::slice::from_ref(&lfo),
             &[],
             std::slice::from_ref(&into_the_reader),
-            &[],
             &[]
         )
         .is_none(),
@@ -388,7 +387,7 @@ fn a_pin_edit_on_an_island_node_hands_its_running_reader_the_island_carrying_it(
         .v(&lfo)
         .first_mut()
         .unwrap()
-        .pins
+        .input_values
         .insert("rate_hz".to_string(), serde_json::json!(4.0));
     hand_each_reader_the_island_a_compile_changed(&mut graph, &[]).unwrap();
 
@@ -481,8 +480,7 @@ fn unwiring_an_island_link_tells_its_running_reader_to_stop_evaluating_it() {
             &[],
             std::slice::from_ref(&lfo),
             &[],
-            std::slice::from_ref(&into_the_reader),
-            &[]
+            std::slice::from_ref(&into_the_reader)
         )
         .is_none(),
         "a running reader's island may be removed live"
@@ -516,7 +514,6 @@ fn a_link_closing_a_cycle_of_function_nodes_is_refused_naming_the_cycle() {
         &[],
         &[],
         std::slice::from_ref(&closing_the_cycle),
-        &[],
         &[],
     )
     .expect("refused");
@@ -556,7 +553,6 @@ fn a_link_closing_a_loop_through_previous_value_is_taken_live() {
             &[],
             &[],
             std::slice::from_ref(&closing_the_loop),
-            &[],
             &[]
         ),
         None
@@ -618,25 +614,6 @@ fn a_loop_whose_way_back_skips_previous_value_is_still_refused() {
 }
 
 #[test]
-fn a_live_config_update_to_a_function_node_is_refused_by_name() {
-    let mut graph = a_graph_resolving_three_function_node_types();
-    let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
-    let refusal = the_refusal_of_a_commit(
-        &graph,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[(lfo, serde_json::json!({"rate_hz": 3.0}))],
-    )
-    .expect("refused");
-    assert!(
-        refusal.contains("a live config update is not carried to an island"),
-        "{refusal}"
-    );
-}
-
-#[test]
 fn a_second_link_into_a_port_an_island_feeds_is_refused_by_name() {
     let mut graph = a_graph_resolving_three_function_node_types();
     let first_lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
@@ -649,7 +626,6 @@ fn a_second_link_into_a_port_an_island_feeds_is_refused_by_name() {
         &[first_lfo, second_lfo, reader],
         &[],
         &[first, second],
-        &[],
         &[],
     )
     .expect("refused");
@@ -675,7 +651,6 @@ fn an_island_into_a_port_declaring_an_audio_window_is_refused_by_name() {
         &[],
         &[into_the_window],
         &[],
-        &[],
     )
     .expect("refused");
     assert!(refusal.contains("declares an `audio_window`"), "{refusal}");
@@ -694,7 +669,7 @@ fn removing_the_last_source_of_a_reactive_reader_an_island_feeds_is_refused() {
     link(&mut graph, (&lfo, "result"), (&reader, "in1"));
     let from_the_source = link(&mut graph, (&source, "out2"), (&reader, "in2"));
     let refusal =
-        the_refusal_of_a_commit(&graph, &[], &[], &[], &[from_the_source], &[]).expect("refused");
+        the_refusal_of_a_commit(&graph, &[], &[], &[], &[from_the_source]).expect("refused");
     assert!(refusal.contains("would never run again"), "{refusal}");
 }
 

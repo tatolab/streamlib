@@ -10,7 +10,14 @@ use super::*;
 fn a_promoted_function_nodes_own_helper_reports_how_it_ran_it() {
     let import_path =
         crate::core::descriptors::NodeClassImportPath::new("my_app.ops:counter").unwrap();
-    let mut node = GraphNode::new(import_path.clone(), None, "counter", None, vec![], vec![]);
+    let mut node = GraphNode::new(
+        import_path.clone(),
+        None,
+        "counter",
+        serde_json::Map::new(),
+        vec![],
+        vec![],
+    );
     let how_its_own_helper_ran_it = Arc::new(HowItsHelpersRanAFunctionNode::default());
     node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
         process_execution: ProcessExecution::Continuous { interval_ms: 10 },
@@ -49,7 +56,14 @@ fn a_promoted_function_node_feeding_a_setting_tells_its_helper_to_evaluate_it_at
     for evaluated_at_setup in [true, false] {
         let import_path =
             crate::core::descriptors::NodeClassImportPath::new("my_app.ops:counter").unwrap();
-        let mut node = GraphNode::new(import_path.clone(), None, "counter", None, vec![], vec![]);
+        let mut node = GraphNode::new(
+            import_path.clone(),
+            None,
+            "counter",
+            serde_json::Map::new(),
+            vec![],
+            vec![],
+        );
         node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
             process_execution: ProcessExecution::Continuous { interval_ms: 10 },
             evaluated_at_setup,
@@ -96,7 +110,14 @@ fn the_wiring_envelope_carries_the_mode_the_child_drives_its_node_in() {
         import_path.clone(),
         "a test double",
     );
-    let node = GraphNode::new(import_path, None, "PollingSinkNode", None, vec![], vec![]);
+    let node = GraphNode::new(
+        import_path,
+        None,
+        "PollingSinkNode",
+        serde_json::Map::new(),
+        vec![],
+        vec![],
+    );
 
     for child_execution in [
         ProcessExecution::Continuous { interval_ms: 5 },

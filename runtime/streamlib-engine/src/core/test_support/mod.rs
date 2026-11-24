@@ -420,9 +420,9 @@ pub(crate) fn ensure_test_mocks_registered() {
         NODE_REGISTRY.register::<MockOrderedInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockReactiveInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockNodeWithACamelCaseOutputPort::Node>();
-        NODE_REGISTRY.register_taking_a_config_for_a_test::<MockSourceTakingOneSetting::Node, MockSourceTakingOneSettingConfig>();
-        NODE_REGISTRY.register_taking_a_config_for_a_test::<MockSourceTakingAFrameSize::Node, MockSourceTakingAFrameSizeConfig>();
-        NODE_REGISTRY.register_taking_a_config_for_a_test::<MockSourceReadingAnImageAsset::Node, MockSourceReadingAnImageAssetConfig>();
+        NODE_REGISTRY.register_with_a_config_schema_for_a_test::<MockSourceTakingOneSetting::Node, MockSourceTakingOneSettingConfig>();
+        NODE_REGISTRY.register_with_a_config_schema_for_a_test::<MockSourceTakingAFrameSize::Node, MockSourceTakingAFrameSizeConfig>();
+        NODE_REGISTRY.register_with_a_config_schema_for_a_test::<MockSourceReadingAnImageAsset::Node, MockSourceReadingAnImageAssetConfig>();
         NODE_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Node>();
     });
 }

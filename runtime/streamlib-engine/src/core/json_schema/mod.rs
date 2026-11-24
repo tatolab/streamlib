@@ -15,15 +15,18 @@ use crate::core::descriptors::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict, PortFamilyDeclaration,
     SettingReadTime,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    ConfigAndPinValues, ConfigFieldDescribedAsASetting, LegacyConfigOfANodeType,
-    config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
-    input_values_of_a_config_and_pin_values, the_config_fields_a_node_of_the_type_can_expose,
+use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::nodes::{
+    ConfigFieldDescribedAsASetting, the_config_fields_a_node_of_the_type_can_expose,
     the_config_fields_described_as_settings,
 };
-use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
 use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
+
+mod input_values_under_the_older_graph_keys;
+pub(crate) use input_values_under_the_older_graph_keys::{
+    InputValuesRendered, OlderGraphKeysOfANodeType, redraw_a_node_over_its_pins,
+};
 pub use streamlib_node_schema::NodeClassImportPath;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
@@ -54,79 +57,6 @@ pub type GraphNodeOutput = GraphNodeOnTheWire;
 
 /// The nodes and links a fragment holds, as `graph` answers them.
 pub type GraphFragmentOutput = GraphFragmentOnTheWire;
-
-/// The values a node holds as `graph` renders them: `input_values`, as its graph document holds
-/// them, and what they split into for a client that reads no `input_values`, the `config` with
-/// its checksum and the `pins`.
-pub(crate) struct InputValuesRendered {
-    pub(crate) input_values: serde_json::Map<String, serde_json::Value>,
-    pub(crate) config: serde_json::Value,
-    pub(crate) config_checksum: u64,
-    pub(crate) pins: serde_json::Map<String, serde_json::Value>,
-}
-
-impl InputValuesRendered {
-    /// `input_values`, split as a node whose type `legacy_config` describes takes them.
-    pub(crate) fn split_by(
-        legacy_config: &LegacyConfigOfANodeType,
-        input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> Self {
-        Self::split_as(input_values, legacy_config.split(input_values))
-    }
-
-    /// `input_values` of a node that has no input of its own to hold a value on, a variable or
-    /// an interface node: every one is its config.
-    pub(crate) fn of_a_node_holding_no_pin_value(
-        input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> Self {
-        Self::of_a_node_holding_no_pin_value_whose_config_renders_as(
-            input_values,
-            config_of_a_node_holding_no_pin_value(input_values),
-        )
-    }
-
-    /// `input_values` of a node that has no input of its own to hold a value on, whose config
-    /// renders as `config`.
-    pub(crate) fn of_a_node_holding_no_pin_value_whose_config_renders_as(
-        input_values: &serde_json::Map<String, serde_json::Value>,
-        config: serde_json::Value,
-    ) -> Self {
-        Self::split_as(
-            input_values,
-            ConfigAndPinValues {
-                config,
-                pin_values: serde_json::Map::new(),
-            },
-        )
-    }
-
-    fn split_as(
-        input_values: &serde_json::Map<String, serde_json::Value>,
-        config_and_pin_values: ConfigAndPinValues,
-    ) -> Self {
-        let ConfigAndPinValues { config, pin_values } = config_and_pin_values;
-        Self {
-            input_values: input_values.clone(),
-            config_checksum: crate::core::utils::compute_json_checksum(&config),
-            config,
-            pins: pin_values,
-        }
-    }
-}
-
-/// Redraw `node` from `input_values`, as a graph document holds them, over the values its inputs
-/// already hold: every other value is its config. Its pins stay as they are, and its input values
-/// are that config with its pins drawn over it, so a pin set since `input_values` were read shows
-/// its own value.
-pub(crate) fn redraw_a_node_over_its_pins(
-    node: &mut GraphNodeOutput,
-    input_values: &serde_json::Map<String, serde_json::Value>,
-) {
-    let config = config_of_a_node_as_drawn(input_values, &node.pins);
-    node.config_checksum = crate::core::utils::compute_json_checksum(&config);
-    node.input_values = input_values_of_a_config_and_pin_values(Some(&config), &node.pins);
-    node.config = Some(config);
-}
 
 /// A link of a stream's graph, as `graph` answers it.
 pub type LinkOutput = GraphLinkOnTheWire;
@@ -482,18 +412,24 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             }
             None => (None, None),
         };
+        let older_keys = InputValuesRendered::split_by(
+            &OlderGraphKeysOfANodeType::of_the_input_ports(node.ports.inputs.iter().flat_map(
+                |input| std::iter::once(input.name.clone()).chain(input.former_names.clone()),
+            )),
+            &node.input_values,
+        );
         Self {
             id: node.node_uuid.to_string(),
             node_type: node.node_type.clone(),
             kind,
             language,
             name: node.display_name.clone(),
-            config: node.config.clone(),
-            config_checksum: node.config_checksum,
+            config: Some(older_keys.config),
+            config_checksum: older_keys.config_checksum,
             ports: ports_rendered_over_their_settled_contracts(node),
-            input_values: input_values_of_a_config_and_pin_values(node.config.as_ref(), &node.pins),
-            pins: node.pins.clone(),
-            exposed_config_fields: node.exposed_config_fields.clone(),
+            input_values: older_keys.input_values,
+            pins: older_keys.pins,
+            exposed_config_fields: Vec::new(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
             components: the_components_of_a_node_with_its_health(node),

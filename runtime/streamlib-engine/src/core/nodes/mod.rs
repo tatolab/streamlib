@@ -26,6 +26,7 @@ mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
 mod placed_stream_node_type;
 mod project_view_node;
+mod settings_a_config_schema_lists;
 pub use crate::core::graph::{NodeState, NodeStateComponent};
 
 pub use traits::{Config, ConfigValidationError};
@@ -84,4 +85,9 @@ pub(crate) use project_view_node::{
     render_the_settings_of_each_view_node_into, the_names_listed,
     the_refusal_of_a_value_an_output_does_not_carry,
     the_saved_values_without_any_on_an_output_a_panel_writes,
+};
+pub(crate) use settings_a_config_schema_lists::{
+    ConfigFieldDescribedAsASetting, refuse_a_config_field_named_as_an_input_port,
+    the_config_fields_a_node_of_the_type_can_expose, the_config_fields_described_as_settings,
+    the_settings_a_config_schema_lists,
 };

@@ -62,7 +62,7 @@ def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
     lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
     lifecycle_thread.start()
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": None, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {
         "rpc": "ready",
         "function_nodes_ran_compiled": {node_id: ran_compiled},
@@ -111,7 +111,6 @@ def test_a_promoted_function_node_is_evaluated_as_it_sets_up_when_its_setup_comm
         {
             "cmd": "setup",
             "capability": "full",
-            "config": None,
             "ports": {},
             "function_node_evaluated_at_setup": evaluated_at_setup,
         }

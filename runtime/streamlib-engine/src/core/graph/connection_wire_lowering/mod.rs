@@ -54,7 +54,7 @@ impl GraphSnapshot {
         let mut node_index_by_cast: HashMap<String, usize> = HashMap::new();
         for (node_index, node) in self.nodes.iter().enumerate() {
             let cast = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
-            if let Some(ports) = the_ports_of_a_graph_document_node(node_types, &node.name, node)? {
+            if let Some(ports) = the_ports_of_a_graph_document_node(node_types, node) {
                 ports_of_each_node_by_cast.insert(cast.clone(), ports);
             }
             node_index_by_cast.insert(cast, node_index);

@@ -26,14 +26,13 @@ use crate::core::graph::input_values::{
     TakesAWireRendered, the_read_of_an_input_a_link_feeds,
     the_settings_rendered_reading_the_values_held,
 };
-use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
 };
 use crate::core::json_schema::{
     GraphFragmentOutput, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire, GraphNodeOutput,
     GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
-    LinkStateOutput, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
+    LinkStateOutput, OlderGraphKeysOfANodeType, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, the_setting_of_a_placed_stream_named,
@@ -512,7 +511,7 @@ impl GraphFragmentAsDrawn {
             }
         }
         let values = InputValuesRendered::split_by(
-            &LegacyConfigOfANodeType::of_the_input_ports(
+            &OlderGraphKeysOfANodeType::of_the_input_ports(
                 inputs.iter().map(|port| port.name.clone()),
             ),
             &self.node.input_values,
@@ -804,8 +803,8 @@ pub(crate) fn rendered_as_stored(
     node: &GraphSnapshotNode,
     node_types: &NodeTypesOneStreamResolves,
 ) -> GraphNodeOutput {
-    let legacy_config = match &node.fragment {
-        Some(fragment) => LegacyConfigOfANodeType::of_the_input_ports(
+    let older_keys = match &node.fragment {
+        Some(fragment) => OlderGraphKeysOfANodeType::of_the_input_ports(
             fragment
                 .nodes
                 .iter()
@@ -818,9 +817,9 @@ pub(crate) fn rendered_as_stored(
                         .map(cast_or_as_written)
                 }),
         ),
-        None => LegacyConfigOfANodeType::of(node_types, &node.node_type),
+        None => OlderGraphKeysOfANodeType::of(node_types, &node.node_type),
     };
-    let values = InputValuesRendered::split_by(&legacy_config, &node.input_values);
+    let values = InputValuesRendered::split_by(&older_keys, &node.input_values);
     GraphNodeOutput {
         id: node
             .id

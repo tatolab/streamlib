@@ -224,7 +224,7 @@ fn a_member_set_live_changes_that_member_alone_and_announces_it_as_its_row() {
         "each member's notification equals its row"
     );
     assert_eq!(
-        node.pins["reading"],
+        node.input_values["reading"],
         json!({ "level": 0.2, "label": "kitchen" }),
         "the saved reading is kept"
     );
@@ -282,7 +282,7 @@ fn a_member_saved_changes_that_member_and_keeps_every_other_member_set_live() {
     );
     let graph = graph.read();
     assert_eq!(
-        graph.node_by_uuid(reader_uuid).unwrap().pins["reading"],
+        graph.node_by_uuid(reader_uuid).unwrap().input_values["reading"],
         json!({ "level": 0.2, "label": "hall" })
     );
 }

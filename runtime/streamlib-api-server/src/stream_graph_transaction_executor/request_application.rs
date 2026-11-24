@@ -479,7 +479,8 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations
-                .the_config_a_node_holding_the_input_values_takes(node_type, input_values)
+                .the_settings_a_set_node_config_replaces(node_type, input_values)
+                .map(Value::Object)
                 .map_err(GraphRequestRefusal::from)
         };
         let mut placed_stream_a_collapse_saves = None;

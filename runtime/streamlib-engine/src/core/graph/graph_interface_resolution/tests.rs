@@ -576,7 +576,10 @@ fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none(
         descriptor.node_class_import_path.clone(),
         None,
         "fader",
-        Some(serde_json::json!({ "port": "fader", "family": "array", "range": [0, 1] })),
+        serde_json::json!({ "port": "fader", "family": "array", "range": [0, 1] })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
         descriptor
             .inputs
             .iter()
@@ -596,11 +599,21 @@ fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none(
     assert_eq!(value_input(&node).family.family, PortFamily::Array);
     assert!(value_input(&node).range().is_some());
 
-    node.set_config(serde_json::json!({ "port": "fader" }));
+    node.hold_the_input_values(
+        serde_json::json!({ "port": "fader" })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    );
     assert_eq!(value_input(&node).family.family, PortFamily::Records);
     assert_eq!(value_input(&node).range(), None);
 
-    node.set_config(serde_json::json!({ "port": "fader", "family": "channels" }));
+    node.hold_the_input_values(
+        serde_json::json!({ "port": "fader", "family": "channels" })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    );
     assert_eq!(value_input(&node).family.family, PortFamily::Channels);
 }
 
@@ -874,7 +887,10 @@ fn a_graph_input_choosing_a_texture_carries_it_as_a_stream() {
         descriptor.node_class_import_path.clone(),
         None,
         "picture",
-        Some(serde_json::json!({ "port": "picture", "pin_type": {"type": "texture"} })),
+        serde_json::json!({ "port": "picture", "pin_type": {"type": "texture"} })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
         descriptor
             .inputs
             .iter()

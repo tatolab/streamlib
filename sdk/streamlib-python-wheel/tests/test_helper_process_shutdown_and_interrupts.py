@@ -54,7 +54,6 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
         {
             "cmd": "setup",
             "capability": "full",
-            "config": {},
             "ports": {"inputs": [engine_shaped_link_wiring("input", link_id)]},
         }
     )
@@ -114,7 +113,7 @@ def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
         bridge, load_node_class(f"{PROBE_MODULE}:InterruptedInProcessProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 0})
     deadline = time.monotonic() + 5.0
@@ -151,7 +150,7 @@ def test_an_interrupted_setup_is_answered_and_still_gets_its_teardown(
         bridge, load_node_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
     assert "interrupted" in refusal["error"]
@@ -175,7 +174,7 @@ def test_a_parent_gone_after_an_interrupted_setup_still_leaves_its_teardown_run(
         bridge, load_node_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive()["rpc"] == "error"
     stand_in_parent.parent_end.close()
 
@@ -199,7 +198,7 @@ def test_a_parent_gone_after_a_setup_that_raised_leaves_no_teardown_run(
         bridge, load_node_class(f"{PROBE_MODULE}:RaisesInSetupProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive()["rpc"] == "error"
     stand_in_parent.parent_end.close()
 

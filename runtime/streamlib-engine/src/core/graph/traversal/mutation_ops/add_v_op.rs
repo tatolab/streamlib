@@ -12,7 +12,7 @@ use crate::core::graph::{
     NodeFailureReasonComponent, NodeNotReadyBecauseComponent, NodeRunId, NodeTraversalMut,
     ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
-    config_node_reference_edges_of_one_node, the_input_ports_of_the_exposed_config_fields,
+    config_node_reference_edges_of_one_node,
 };
 use crate::core::nodes::{NodeSpec, NodeState, NodeTypesOneStreamResolves};
 
@@ -32,7 +32,7 @@ impl<'a> TraversalSourceMut<'a> {
             spec.display_name.as_deref(),
             &spec.name,
         )?;
-        node_types.refuse_a_node_this_stream_cannot_add(&name, &spec.name, &spec.config)?;
+        node_types.refuse_a_node_this_stream_cannot_add(&name, &spec.name, &spec.input_values)?;
         if node_types.is_a_view_type_of_this_streams_project(&spec.name)
             && let Some(holder) = self
                 .graph
@@ -55,20 +55,7 @@ impl<'a> TraversalSourceMut<'a> {
 
         // A missed node carries the requested path verbatim, so
         // `graph` names exactly what the caller asked for.
-        let GraphNodePorts {
-            mut inputs,
-            outputs,
-        } = resolved_ports.unwrap_or_default();
-        if !registry_miss && placeholder_of_its_type.is_none() {
-            let declared_ports: Vec<_> = inputs.iter().chain(&outputs).cloned().collect();
-            inputs.extend(the_input_ports_of_the_exposed_config_fields(
-                &name,
-                &spec.name,
-                node_types,
-                &declared_ports,
-                &spec.exposed_config_fields,
-            )?);
-        }
+        let GraphNodePorts { inputs, outputs } = resolved_ports.unwrap_or_default();
 
         if let Some(node_uuid) = spec.node_uuid
             && let Some(holder) = self
@@ -86,22 +73,23 @@ impl<'a> TraversalSourceMut<'a> {
             spec.name,
             node_kind,
             name,
-            Some(spec.config),
+            serde_json::Map::new(),
             inputs,
             outputs,
         );
         if let Some(node_uuid) = spec.node_uuid {
             node.node_uuid = node_uuid;
         }
-        node.pins = crate::core::nodes::the_saved_values_without_any_on_an_output_a_panel_writes(
-            node_types,
-            &node.node_type,
-            &node.ports,
-            &node.display_name,
-            node.ports.input_values_under_the_current_names(spec.pins),
-        );
-        node.resolve_the_ports_its_settings_declare();
-        node.exposed_config_fields = spec.exposed_config_fields;
+        let input_values =
+            crate::core::nodes::the_saved_values_without_any_on_an_output_a_panel_writes(
+                node_types,
+                &node.node_type,
+                &node.ports,
+                &node.display_name,
+                node.ports
+                    .input_values_under_the_current_names(spec.input_values),
+            );
+        node.hold_the_input_values(input_values);
         node.studio = spec.studio;
         if let Some(descriptor) = node_types.descriptor(&node.node_type)
             && !descriptor.pin_groups.is_empty()
@@ -162,12 +150,9 @@ impl TraversalSourceMut<'_> {
             });
         }
         for node in self.graph.node_weights() {
-            let Some(config) = &node.config else {
-                continue;
-            };
             for reference in config_node_reference_edges_of_one_node(
                 &node.display_name,
-                config,
+                &node.input_values,
                 config_keys_of_a_node_type_holding_a_node_reference(
                     self.node_types_this_stream_resolves,
                     &node.node_type,

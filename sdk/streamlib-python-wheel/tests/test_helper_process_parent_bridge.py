@@ -278,7 +278,7 @@ def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
         bridge, load_node_class(f"{PROBE_MODULE}:ReleasesAStructureInTeardownProbe")
     )
 
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     register = stand_in_parent.receive()
     assert register["op"] == "register_acceleration_structure_blas"
     stand_in_parent.send(
@@ -331,7 +331,7 @@ def test_an_interrupt_during_teardowns_wait_for_releases_still_answers_teardown(
     lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
-    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})

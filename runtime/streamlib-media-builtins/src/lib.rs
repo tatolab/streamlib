@@ -190,7 +190,9 @@ mod built_in_node_type_tests {
             let refusal = NODE_REGISTRY.refuse_a_node_this_runtime_cannot_add(
                 "probe",
                 &built_in_node_type,
-                &serde_json::json!({"a_setting_no_built_in_takes": 1}),
+                serde_json::json!({"a_setting_no_built_in_takes": 1})
+                    .as_object()
+                    .expect("the probe is an object of input values"),
             );
 
             match refusal {
@@ -254,7 +256,9 @@ mod built_in_node_type_tests {
                 .refuse_a_node_this_runtime_cannot_add(
                     "former",
                     &former_node_type,
-                    &serde_json::json!({"device_id": "default"}),
+                    serde_json::json!({"device_id": "default"})
+                        .as_object()
+                        .expect("the probe is an object of input values"),
                 )
                 .unwrap_err();
 

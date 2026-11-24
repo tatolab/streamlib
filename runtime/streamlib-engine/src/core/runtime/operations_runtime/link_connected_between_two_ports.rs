@@ -29,9 +29,6 @@ use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
     PortDescriptor, ResolvedPin,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    node_spec_holding_the_input_values, node_spec_of_a_document_node,
-};
 use crate::core::graph::{
     ALinkConnected, Graph, Link, LinkUniqueId, NodeRunId, WhyTheNodeLeaves,
     cast_exposed_name_to_url_safe, refuse_a_link_its_pin_types_or_families_refuse,
@@ -426,23 +423,16 @@ pub(in crate::core::runtime) struct ANodeTypesPortToJudge {
 }
 
 impl ANodeTypesPortToJudge {
-    /// Port `port_name` of `node_type`, or its `member` when it carries a bundle,
-    /// as `node_types` resolves the type, among the type's `ports_of_its_direction`, which every
-    /// port of the type judged in one batch shares.
+    /// Port `port_name` of `node_type`, or its `member` when it carries a bundle, among the
+    /// type's `ports_of_its_direction`, which every port of the type judged in one batch shares.
     pub(in crate::core::runtime) fn of(
-        node_types: &NodeTypesOneStreamResolves,
         node_type: NodeClassImportPath,
         ports_of_its_direction: Arc<[PortDescriptor]>,
         port_name: &str,
         member: Option<&str>,
     ) -> Self {
         Self {
-            spec: node_spec_holding_the_input_values(
-                node_types,
-                node_type.clone(),
-                &serde_json::Map::new(),
-                serde_json::Map::new(),
-            ),
+            spec: NodeSpec::of_the_type(node_type.clone()),
             node_type,
             port_name: port_name.to_owned(),
             member: member.map(str::to_owned),
@@ -780,7 +770,7 @@ fn the_node_a_placed_level_builds(
     }
     graph
         .traversal_mut()
-        .add_v(node_spec_of_a_document_node(node_types, node_type, node))
+        .add_v(NodeSpec::of_a_graph_document_node(node_type, node))
         .and_then(|added| {
             added
                 .first()

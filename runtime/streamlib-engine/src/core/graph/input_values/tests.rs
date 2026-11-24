@@ -120,12 +120,13 @@ fn a_number_outside_its_declared_range_is_refused_and_never_clamped() {
 }
 
 #[test]
-fn an_exposure_is_recorded_only_on_a_node_type_that_takes_a_config() {
+fn an_exposure_naming_an_input_taking_a_wire_is_taken_and_one_naming_none_is_refused() {
     ensure_test_mocks_registered();
     let node_types = NodeTypesOneStreamResolves::new();
     let exposing = |node_type: &NodeClassImportPath, names: &[&str]| {
-        an_exposure_of_config_fields_is_recorded_on(
+        refuse_an_exposure_naming_no_input_that_takes_a_wire(
             &node_types,
+            "mixer",
             node_type,
             &names
                 .iter()
@@ -133,17 +134,15 @@ fn an_exposure_is_recorded_only_on_a_node_type_that_takes_a_config() {
                 .collect::<Vec<_>>(),
         )
     };
-    assert!(
-        exposing(&MockSourceTakingOneSetting::node_class_import_path(), &[]).unwrap(),
-        "a type taking a config records its exposures"
-    );
-    assert!(
-        !exposing(&MockPinTypedNode::node_class_import_path(), &["gain"]).unwrap(),
-        "a type taking no config records none"
-    );
+    exposing(&MockPinTypedNode::node_class_import_path(), &["gain"])
+        .expect("`gain` is an input of its type that takes a wire");
     let refusal = exposing(&MockPinTypedNode::node_class_import_path(), &["volume"])
         .expect_err("`volume` is none of its inputs");
     assert!(refusal.to_string().contains("`volume`"), "{refusal}");
+    assert!(
+        refusal.to_string().contains("node `mixer` exposes"),
+        "{refusal}"
+    );
 }
 
 /// A Channels input typed `pin_type`, named `label`.

@@ -41,8 +41,6 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
         Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
     /// The Trigger inputs of each hand-over that fired any, in order.
     pub(crate) fires_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
-    /// Every set of exposed config fields handed over, in order.
-    pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
     /// Whether the far side refuses the input values handed over, as a helper that died does.
     pub(crate) refuses_input_values: Arc<std::sync::atomic::AtomicBool>,
     /// Whether the far side refuses the next input values handed over, and takes those after.
@@ -144,16 +142,6 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         if let Some(while_handed_over) = while_handed_over {
             while_handed_over();
         }
-        Ok(())
-    }
-
-    fn hand_over_the_config_fields_its_node_exposes_as_inputs(
-        &self,
-        exposed_config_fields: &[String],
-    ) -> crate::core::Result<()> {
-        self.exposed_config_fields_handed_over
-            .lock()
-            .push(exposed_config_fields.to_vec());
         Ok(())
     }
 

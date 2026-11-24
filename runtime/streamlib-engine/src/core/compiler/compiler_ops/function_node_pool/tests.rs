@@ -203,9 +203,7 @@ fn islands_read_in_the_app_process_are_carried_through_one_pool() {
     assert_eq!(pool_node.ports.inputs.len(), 2);
     assert_eq!(pool_node.ports.outputs.len(), 2);
     assert_eq!(
-        pool_node.config.as_ref().unwrap()["carries"]
-            .as_array()
-            .map(Vec::len),
+        pool_node.input_values["carries"].as_array().map(Vec::len),
         Some(2)
     );
     assert_eq!(
@@ -481,7 +479,7 @@ fn a_class_node_read_through_a_gate_by_the_app_process_is_read_at_the_pool_and_h
         .family;
     let pool_node = graph.traversal().v(&pool).first().unwrap();
     assert_eq!(
-        pool_node.config.as_ref().unwrap()["carries"][0],
+        pool_node.input_values["carries"][0],
         serde_json::json!({
             "input_port": "island_0",
             "output_port": "island_0_output",
@@ -568,15 +566,15 @@ fn a_running_pool_takes_a_new_island_and_names_every_carry_for_its_helper() {
 
     assert_eq!(handed.pool, pool);
     assert_eq!(handed.halves_through_the_pool.len(), 2);
-    let config_naming_every_carry = graph
+    let carries = graph
         .traversal()
         .v(&pool)
         .first()
-        .and_then(|pool| pool.config.clone())
-        .expect("the pool holds its config");
-    let carries = config_naming_every_carry["carries"]
+        .and_then(|pool| pool.input_values.get("carries").cloned())
+        .expect("the pool names its carries");
+    let carries = carries
         .as_array()
-        .expect("the config names its carries")
+        .expect("the pool's carries are a list")
         .clone();
     assert_eq!(
         carries.len(),
@@ -669,15 +667,7 @@ fn an_island_into_a_setting_read_at_setup_is_carried_through_the_pool_written_at
         "the half out of the pool is a channel, read by the engine into the setting"
     );
     let pool = the_function_node_pool_of(&graph).unwrap();
-    let carries = graph
-        .traversal()
-        .v(&pool)
-        .first()
-        .unwrap()
-        .config
-        .clone()
-        .unwrap()["carries"]
-        .clone();
+    let carries = graph.traversal().v(&pool).first().unwrap().input_values["carries"].clone();
     assert_eq!(
         carries,
         serde_json::json!([{

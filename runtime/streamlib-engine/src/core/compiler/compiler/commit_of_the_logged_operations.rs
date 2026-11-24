@@ -76,9 +76,7 @@ impl Compiler {
             }
         };
         let operations = match held_since {
-            Some(logged_before) => {
-                self.take_the_config_updates_logged_under_the_hold(logged_before)
-            }
+            Some(_) => Vec::new(),
             None => self.take_the_logged_operations_to_compile(),
         };
         if operations.is_empty() {
@@ -97,7 +95,6 @@ impl Compiler {
             runtime_ctx,
             &self.abandoned_node_threads,
         );
-        self.configs_a_commit_is_applying.lock().clear();
         compiled.map(|()| WhatTheHeldCommitFound::TheHold)
     }
 }

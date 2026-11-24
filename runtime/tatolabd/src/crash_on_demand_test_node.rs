@@ -88,7 +88,7 @@ impl ManualNode for CrashOnDemandTestNode::Node {
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_crash_on_demand_test_node() {
-    NODE_REGISTRY.register_taking_a_config_for_a_test::<
+    NODE_REGISTRY.register_with_a_config_schema_for_a_test::<
         CrashOnDemandTestNode::Node,
         CrashOnDemandTestNodeConfig,
     >();

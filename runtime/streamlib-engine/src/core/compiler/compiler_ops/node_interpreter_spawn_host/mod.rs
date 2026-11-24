@@ -193,7 +193,8 @@ pub(crate) struct NodeInterpreterSpawnHost {
     node_class_import_path: String,
     node_display_name: String,
     node_run_id: String,
-    node_configuration: Option<serde_json::Value>,
+    /// Every value set on the node, by input name, which its helper is set up with.
+    node_input_values: serde_json::Map<String, serde_json::Value>,
     descriptor: NodeDescriptor,
     stream_environment: StreamEnvironment,
     /// The directory holding the `tatolab/runtime/` the child borrows.
@@ -693,7 +694,7 @@ pub(crate) fn spawn_host_for_graph_node(
         node_class_import_path: node_class_import_path.to_string(),
         node_display_name: node.display_name.clone(),
         node_run_id: node.id.to_string(),
-        node_configuration: node.config.clone(),
+        node_input_values: node.input_values.clone(),
         descriptor: descriptor.clone(),
         stream_environment: stream_environment.clone(),
         node_interpreter_lend_directory: node_interpreter_lend_directory.to_path_buf(),

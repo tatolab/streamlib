@@ -731,18 +731,13 @@ fn a_graph_whose_graph_input_drives_the_glows_strength(
     .unwrap()
 }
 
+/// A setting a node's type's config schema lists takes no wire, whether or not the node was
+/// saved exposing it.
+///
+/// Mental-revert: reading the saved exposure as an input port validates the link.
 #[test]
-fn a_link_into_a_config_field_the_node_exposes_validates() {
-    a_graph_whose_graph_input_drives_the_glows_strength(&["strength"])
-        .validate(&node_types_with_a_glow_configured_by_a_strength())
-        .expect(
-            "a link into an exposed config field's input validates as the live edit applied it",
-        );
-}
-
-#[test]
-fn a_link_into_a_config_field_the_node_does_not_expose_is_refused_naming_its_inputs() {
-    let refusal = a_graph_whose_graph_input_drives_the_glows_strength(&[])
+fn a_link_into_a_config_field_is_refused_naming_its_inputs_though_the_node_exposes_it() {
+    let refusal = a_graph_whose_graph_input_drives_the_glows_strength(&["strength"])
         .validate(&node_types_with_a_glow_configured_by_a_strength())
         .unwrap_err()
         .to_string();

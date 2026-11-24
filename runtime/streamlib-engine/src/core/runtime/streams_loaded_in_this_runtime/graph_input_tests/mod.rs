@@ -237,7 +237,7 @@ fn the_saved_value_of(stream: &LoadedStreamInThisRuntime, node: Uuid) -> Option<
         graph
             .node_by_uuid(node)
             .expect("the graph holds it")
-            .pins
+            .input_values
             .get("value")
             .cloned()
     })

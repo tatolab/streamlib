@@ -19,10 +19,7 @@ from tatolab.runtime._function_node_carried_values import (
 from tatolab.runtime._function_node_evaluate_entry_compiler import (
     compile_function_node_to_its_evaluate_entry,
 )
-from tatolab.runtime._function_node_body_run_as_python import (
-    FunctionNodeBodyRunAsPython,
-    the_value_a_config_field_takes,
-)
+from tatolab.runtime._function_node_body_run_as_python import FunctionNodeBodyRunAsPython
 from tatolab.runtime._function_node_preparation import (
     config_values_of_one_function_node,
     function_node_run_as_python_in_its_reader,

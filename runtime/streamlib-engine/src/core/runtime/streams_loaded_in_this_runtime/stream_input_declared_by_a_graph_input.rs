@@ -86,7 +86,7 @@ fn the_graph_input_declaring_the_input<'graph>(
     let input_cast = cast_exposed_name_to_url_safe(input_name)?;
     let graph_inputs: Vec<&GraphNode> = graph.every_graph_input().collect();
     let declared_port_of = |node: &GraphNode| -> Option<String> {
-        node.input_values()
+        node.input_values
             .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)?
             .as_str()
             .map(str::to_string)

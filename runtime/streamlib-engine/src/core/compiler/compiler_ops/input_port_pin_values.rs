@@ -1,44 +1,20 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The config fields a helper's node exposes as inputs, the number a Channels input reads of a
-//! pin value, and the function node inputs no value reaches.
+//! The number a Channels input reads of a pin value, and the function node inputs no value
+//! reaches.
 
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
-use crate::core::graph::{
-    Graph, GraphNode, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
-};
+use crate::core::graph::{Graph, GraphNode};
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, chooses_among_the_bundles_its_stream_declares,
 };
 use serde_json::Value as JsonValue;
 
-use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::graph::input_values::{
     refuse_a_value_the_input_port_does_not_take, the_pin_values_with_the_live_ones_over_them,
 };
-
-/// Hand each helper the config fields its node takes as inputs, when they
-/// differ from those it holds.
-pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
-    graph: &Graph,
-) -> Result<()> {
-    for node in graph.traversal().v(()).iter() {
-        if runs_inside_the_read_of_each_node_it_feeds(graph, &node.id) {
-            continue;
-        }
-        let Some(link_wiring) = node.get::<OutOfProcessLinkWiringComponent>() else {
-            continue;
-        };
-        link_wiring
-            .0
-            .record_the_exposed_config_fields_and_hand_them_to_a_far_side_past_its_setup_command(
-                node.exposed_config_fields.clone(),
-            )?;
-    }
-    Ok(())
-}
 
 /// The inputs of function node `node` in `graph` that no link feeds, that carry
 /// no pin value, that declare no default and that may not be unset, so the node
@@ -67,7 +43,6 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .filter(|port| {
             port.pin_default.is_none()
                 && !port.may_be_unset
-                && !node.is_an_exposed_config_field_input(&port.name)
                 && !pin_values.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)
         })
@@ -86,7 +61,7 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     let Some(port) = node.input_port(input) else {
         return Ok(());
     };
-    let mut port = port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
+    let mut port = port.typed_by_its_setting_in(&node.ports.inputs, &node.input_values);
     if chooses_among_the_bundles_its_stream_declares(&port) {
         node_types.list_the_bundles_its_node_types_declare_on(std::slice::from_mut(port.to_mut()));
     }
@@ -109,12 +84,11 @@ pub(crate) mod tests {
         PortFamilyDeclaration,
     };
     use crate::core::execution::ProcessExecution;
-    use crate::core::graph::GraphNodeWithComponents;
+    use crate::core::graph::{GraphNodeWithComponents, OutOfProcessLinkWiringComponent};
     use crate::core::nodes::{
         HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves,
         OutOfProcessLinkWiringEnvelope,
     };
-    use crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery;
     use crate::core::{NodeRunId, descriptors::PortFamily};
 
     const LEVEL_METER_NODE_TYPE: &str = "test_nodes:LevelMeter";
@@ -216,45 +190,8 @@ pub(crate) mod tests {
             .v(node_id)
             .first_mut()
             .unwrap()
-            .pins
+            .input_values
             .insert(input.to_string(), pin);
-    }
-
-    #[test]
-    fn a_helpers_setup_carries_the_config_fields_its_node_exposes_and_a_later_change_is_handed_over()
-     {
-        let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
-        let level_meter = a_level_meter_in_a_helper(&mut graph);
-        let expose = |graph: &mut Graph, exposed_config_fields: &[&str]| {
-            graph
-                .traversal_mut()
-                .v(&level_meter)
-                .first_mut()
-                .unwrap()
-                .exposed_config_fields = exposed_config_fields
-                .iter()
-                .map(ToString::to_string)
-                .collect();
-        };
-        expose(&mut graph, &["threshold"]);
-        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph).unwrap();
-        assert_eq!(
-            the_link_wiring_of(&graph, &level_meter).as_setup_command_ports()["exposed_config_fields"],
-            serde_json::json!(["threshold"])
-        );
-
-        let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
-        the_link_wiring_of(&graph, &level_meter)
-            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
-            .unwrap();
-        expose(&mut graph, &["threshold", "ceiling"]);
-        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph).unwrap();
-        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph).unwrap();
-        assert_eq!(
-            *delivery.exposed_config_fields_handed_over.lock(),
-            vec![vec!["threshold".to_string(), "ceiling".to_string()]],
-            "fields that did not change are not handed over again"
-        );
     }
 
     #[test]

@@ -453,10 +453,11 @@ fn a_rust_node_declaring_a_camel_case_port_registers_its_cast() {
 }
 
 #[test]
-fn a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any() {
+fn a_registered_type_refuses_an_input_value_naming_none_of_its_inputs_and_a_python_class_takes_any()
+{
     use crate::core::test_support::{MockSourceTakingOneSetting, MockSourceTakingOneSettingConfig};
     let factory = NodeInstanceFactory::new();
-    factory.register_taking_a_config_for_a_test::<
+    factory.register_with_a_config_schema_for_a_test::<
         MockSourceTakingOneSetting::Node,
         MockSourceTakingOneSettingConfig,
     >();
@@ -465,71 +466,28 @@ fn a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_t
         .register_descriptor_only(descriptor_for(python_class.as_str()))
         .unwrap();
     let typed = MockSourceTakingOneSetting::node_class_import_path();
-    let a_misspelled_setting = serde_json::json!({"frame_widht": 640});
+    let input_values = |values: serde_json::Value| values.as_object().cloned().unwrap_or_default();
+    let a_misspelled_setting = input_values(serde_json::json!({"frame_widht": 640}));
 
     let refusal = factory
-        .refuse_a_config_the_node_type_does_not_take("front", &typed, &a_misspelled_setting)
+        .refuse_a_node_this_runtime_cannot_add("front", &typed, &a_misspelled_setting)
         .unwrap_err()
         .to_string();
 
     assert!(refusal.contains("node `front`"), "{refusal}");
     assert!(refusal.contains(typed.as_str()), "{refusal}");
-    assert!(refusal.contains("`frame_widht`"), "{refusal}");
-    let a_setting_of_the_wrong_kind = factory
-        .refuse_a_config_the_node_type_does_not_take(
-            "front",
-            &typed,
-            &serde_json::json!({"frame_width": "wide"}),
-        )
-        .unwrap_err()
-        .to_string();
-    assert!(
-        a_setting_of_the_wrong_kind.contains("frame_width: invalid type"),
-        "{a_setting_of_the_wrong_kind}"
-    );
+    assert!(refusal.contains("unknown input `frame_widht`"), "{refusal}");
+    assert!(refusal.contains("`frame_width`"), "{refusal}");
     factory
-        .refuse_a_config_the_node_type_does_not_take(
+        .refuse_a_node_this_runtime_cannot_add(
             "front",
             &typed,
-            &serde_json::json!({"frame_width": 640}),
+            &input_values(serde_json::json!({"frame_width": 640})),
         )
         .unwrap();
     factory
-        .refuse_a_config_the_node_type_does_not_take("blur", &python_class, &a_misspelled_setting)
+        .refuse_a_node_this_runtime_cannot_add("blur", &python_class, &a_misspelled_setting)
         .unwrap();
-}
-
-/// A live edit of the config of a node a test registered taking a config is taken when the
-/// config type takes it, and refused saying why when it does not.
-///
-/// Mental-revert: the edit is read as the node's own config, which takes none, so a width it
-/// would take is refused.
-#[test]
-fn a_live_config_edit_of_a_node_taking_a_config_for_a_test_is_read_as_that_config() {
-    use crate::core::test_support::{MockSourceTakingOneSetting, MockSourceTakingOneSettingConfig};
-    let factory = NodeInstanceFactory::new();
-    factory.register_taking_a_config_for_a_test::<
-        MockSourceTakingOneSetting::Node,
-        MockSourceTakingOneSettingConfig,
-    >();
-    let mut node = factory
-        .create(&GraphNode::new(
-            MockSourceTakingOneSetting::node_class_import_path(),
-            None,
-            "front",
-            Some(serde_json::json!({"frame_width": 640})),
-            vec![],
-            vec![],
-        ))
-        .expect("the node is built");
-
-    node.apply_config_json(&serde_json::json!({"frame_width": 1280}))
-        .expect("a width the config takes is taken");
-    let refusal = node
-        .apply_config_json(&serde_json::json!({"frame_width": "wide"}))
-        .unwrap_err()
-        .to_string();
-    assert!(refusal.contains("invalid type"), "{refusal}");
 }
 
 #[test]
@@ -544,7 +502,7 @@ fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
     );
 
     let refusal = factory
-        .refuse_a_node_this_runtime_cannot_add("moved", &moved_out, &serde_json::json!({}))
+        .refuse_a_node_this_runtime_cannot_add("moved", &moved_out, &serde_json::Map::new())
         .unwrap_err();
 
     assert!(

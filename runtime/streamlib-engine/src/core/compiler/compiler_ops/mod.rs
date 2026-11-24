@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-mod apply_node_config_update_op;
 pub(crate) mod cross_floor_check_in_the_projects_interpreter;
 pub(crate) mod entry_run_in_the_projects_interpreter;
 pub(crate) mod extension_code_checked_against_the_kit;
@@ -31,7 +30,6 @@ mod subprocess_escalate;
 mod subprocess_escalate_wire_types;
 pub(crate) mod unlinked_input_values_delivery;
 
-pub(crate) use apply_node_config_update_op::{NodeConfigUpdateOutcome, apply_node_config_update};
 pub(crate) use open_iceoryx2_service_op::{
     ReaderOfALinkIntoASettingComponent, close_iceoryx2_service, open_iceoryx2_service,
 };

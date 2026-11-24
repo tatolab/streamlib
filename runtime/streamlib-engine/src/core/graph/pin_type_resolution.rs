@@ -115,10 +115,8 @@ fn the_pin_type_followed_upstream<'graph>(
                 .map_or(PinTypeInItsGraph::Untyped, PinTypeInItsGraph::Is)
         }
         Some(DeclaredPinType::Is { .. }) | None => match direction {
-            PortDirection::Output => {
-                the_type_a_convert_node_gives_under(graph, node, port, node.config.as_ref())
-                    .map_or_else(|| the_pin_type_it_states(port), PinTypeInItsGraph::Is)
-            }
+            PortDirection::Output => the_type_a_convert_node_gives_under(graph, node, port, None)
+                .map_or_else(|| the_pin_type_it_states(port), PinTypeInItsGraph::Is),
             PortDirection::Input => the_pin_type_it_states(port),
         },
     }
@@ -150,13 +148,10 @@ pub(crate) fn the_type_a_convert_node_gives_under(
     graph: &Graph,
     node: &GraphNode,
     output_port: &PortInfo,
-    config: Option<&serde_json::Value>,
+    input_values: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<PinType> {
     let conversion = the_conversion_whose_output_follows_a_setting(graph, node, output_port)?;
-    let mut held = config
-        .and_then(|config| config.as_object())
-        .cloned()
-        .unwrap_or_default();
+    let mut held = input_values.cloned().unwrap_or_default();
     held.extend(the_pin_values_with_the_live_ones_over_them(graph, node));
     conversion.output_given_under(&held)
 }
@@ -234,7 +229,7 @@ pub(crate) fn the_pin_type_a_setting_chooses(
 ) -> Option<PinType> {
     let setting = node.input_port(input_name)?;
     let held = node
-        .pins
+        .input_values
         .get(&setting.name)
         .or(setting.pin_default.as_ref())?;
     serde_json::from_value(held.clone()).ok()

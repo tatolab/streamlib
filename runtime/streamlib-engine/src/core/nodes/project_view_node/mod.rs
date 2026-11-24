@@ -266,7 +266,6 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
 pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
-    config_json: JsonValue,
     family_of_each_output: HashMap<String, PortFamily>,
     pin_type_of_each_typed_output: HashMap<String, PinType>,
     current_value_of_each_output: HashMap<String, JsonValue>,
@@ -324,7 +323,7 @@ impl ValueSourceNode {
             Option<&JsonValue>,
         ) -> std::result::Result<(Option<PinType>, PortFamily), String>,
     ) -> Result<Self> {
-        let settings = JsonValue::Object(node.input_values());
+        let settings = JsonValue::Object(node.input_values.clone());
         let (chosen, family) = carried(Some(&settings)).map_err(|why| {
             Error::Configuration(format!("`{type_name}` node `{}`: {why}", node.display_name))
         })?;
@@ -356,10 +355,6 @@ impl ValueSourceNode {
         Self {
             node_name: node.display_name.clone(),
             descriptor,
-            config_json: node
-                .config
-                .clone()
-                .unwrap_or_else(|| JsonValue::Object(Default::default())),
             family_of_each_output,
             pin_type_of_each_typed_output,
             current_value_of_each_output: HashMap::new(),
@@ -582,11 +577,6 @@ impl DynGeneratedNode for ValueSourceNode {
             .and_then(InputMailboxes::inner_arc)
     }
 
-    fn apply_config_json(&mut self, config_json: &JsonValue) -> Result<()> {
-        self.config_json = config_json.clone();
-        Ok(())
-    }
-
     fn set_unlinked_input_values(
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
@@ -609,10 +599,6 @@ impl DynGeneratedNode for ValueSourceNode {
 
     fn to_runtime_json(&self) -> JsonValue {
         JsonValue::Null
-    }
-
-    fn config_json(&self) -> JsonValue {
-        self.config_json.clone()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

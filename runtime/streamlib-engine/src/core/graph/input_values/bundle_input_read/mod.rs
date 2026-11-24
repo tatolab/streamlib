@@ -11,7 +11,6 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::core::descriptors::{BundleMember, PinType};
-use crate::core::graph::legacy_config_of_a_node::input_values_of_a_config_and_pin_values;
 use crate::core::graph::{GraphNode, PortInfo, WhatTheLinksIntoAnInputFeed};
 
 /// The members of the bundle input `port` carries; `None` for an input carrying another type.
@@ -93,16 +92,15 @@ impl ValuesABundleInputHolds<'_> {
     }
 }
 
-/// The input values a live set on input `input` of `node` is checked against: its config and
-/// saved pin values, and, on a bundle input, the bundle its members read once `live_after_the_set`
+/// The input values a live set on input `input` of `node` is checked against: its saved input
+/// values, and, on a bundle input, the bundle its members read once `live_after_the_set`
 /// is its live value, each member set live over its saved one.
 pub(crate) fn the_input_values_a_live_set_is_checked_against(
     node: &GraphNode,
     input: &str,
     live_after_the_set: Option<&Value>,
 ) -> Map<String, Value> {
-    let mut input_values =
-        input_values_of_a_config_and_pin_values(node.config.as_ref(), &node.pins);
+    let mut input_values = node.input_values.clone();
     let Some((port, members)) = node
         .input_port(input)
         .and_then(|port| Some((port, the_bundle_members_of(port)?)))
@@ -111,7 +109,7 @@ pub(crate) fn the_input_values_a_live_set_is_checked_against(
     };
     let read = ValuesABundleInputHolds {
         live: live_after_the_set,
-        saved: node.pins.get(&port.name),
+        saved: node.input_values.get(&port.name),
         input_default: port.pin_default.as_ref(),
     }
     .the_bundle_read(members);

@@ -21,9 +21,6 @@ use crate::core::graph::input_values::{
     TakesAWireRendered, the_read_of_an_input_a_link_feeds,
     the_settings_rendered_reading_the_values_held,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    config_of_a_node, config_of_a_node_holding_no_pin_value,
-};
 use crate::core::graph::{
     GraphNodePorts, PortAnnotations, cast_exposed_name_to_url_safe,
     the_refusal_of_a_link_into_a_setting, the_values_port_facts_read,
@@ -261,7 +258,7 @@ impl GraphInterfaceNodeAsDrawn {
             the_config_a_graph_interface_node_renders(
                 &self.node.node_type,
                 &self.node.input_values,
-                config_of_a_node_holding_no_pin_value(&self.node.input_values),
+                serde_json::Value::Object(self.node.input_values.clone()),
             ),
         );
         GraphNodeOutput {
@@ -724,8 +721,7 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
             direction_of_the_port_to_read = GraphInterfacePortDirection::Input;
             continue;
         }
-        let (inputs, outputs) =
-            the_ports_of_a_graph_document_node(node_types, &port_to_read.node, node).ok()??;
+        let (inputs, outputs) = the_ports_of_a_graph_document_node(node_types, node)?;
         let port_cast = cast_of(&port_to_read.port).ok()?;
         if direction_of_the_port_to_read == GraphInterfacePortDirection::Input {
             return inputs
@@ -735,14 +731,9 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
         }
         let output = outputs.into_iter().find(|port| port.name == port_cast)?;
         let Some(followed_input) = output.family.family_follows_input_port.clone() else {
-            let config = config_of_a_node(node_types, &node.node_type, &node.input_values);
-            let values_read =
-                the_values_port_facts_read(Some(&config), &inputs, &node.input_values);
-            return output_port_family_resolved_against_config(
-                &output.family,
-                values_read.as_ref(),
-            )
-            .ok();
+            let values_read = the_values_port_facts_read(&inputs, &node.input_values);
+            return output_port_family_resolved_against_config(&output.family, Some(&values_read))
+                .ok();
         };
         let followed_input_cast = cast_of(&followed_input).ok()?;
         port_to_read = graph
@@ -813,24 +804,20 @@ impl GraphInterfaceAsDrawn {
                     node_types,
                     linked_node,
                     linked_port,
-                    &config_of_a_node(
-                        node_types,
-                        &linked_node.node_type,
-                        &linked_node.input_values,
-                    ),
+                    &linked_node.input_values,
                 )?;
             }
         }
         Ok(())
     }
 
-    /// Refuse a config update for `node` under which a port the interface
+    /// Refuse `input_values` for `node` under which a port the interface
     /// declares would no longer meet the port of `node` linked to it.
-    pub fn refuse_a_config_update_that_breaks_a_declared_port(
+    pub fn refuse_input_values_that_break_a_declared_port(
         &self,
         node_types: &NodeTypesOneStreamResolves,
         node: &GraphSnapshotNode,
-        config_to_apply: &serde_json::Value,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         let node_cast = cast_of(&node.name)?;
         for declared in self.declared_ports() {
@@ -843,13 +830,10 @@ impl GraphInterfaceAsDrawn {
                         node_types,
                         node,
                         linked_port,
-                        config_to_apply,
+                        input_values,
                     )
                     .map_err(|refusal| {
-                        Error::Config(format!(
-                            "config update for {} refused: {refusal}",
-                            node.name
-                        ))
+                        Error::Config(format!("input values for {} refused: {refusal}", node.name))
                     })?;
             }
         }

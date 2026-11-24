@@ -165,10 +165,6 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
         None
     }
 
-    fn apply_config_json(&mut self, _config_json: &Value) -> Result<()> {
-        Ok(())
-    }
-
     fn set_unlinked_input_values(&mut self, input_values: &Map<String, Value>) -> Result<()> {
         if input_values.get("kernel_size") == Some(&json!(A_KERNEL_SIZE_IT_IS_NOT_HANDED)) {
             return Err(Error::Configuration(format!(
@@ -180,10 +176,6 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
     }
 
     fn to_runtime_json(&self) -> Value {
-        Value::Null
-    }
-
-    fn config_json(&self) -> Value {
         Value::Null
     }
 
@@ -289,15 +281,7 @@ impl DynGeneratedNode for IntegerSourceATestWrites {
         None
     }
 
-    fn apply_config_json(&mut self, _config_json: &Value) -> Result<()> {
-        Ok(())
-    }
-
     fn to_runtime_json(&self) -> Value {
-        Value::Null
-    }
-
-    fn config_json(&self) -> Value {
         Value::Null
     }
 

@@ -14,7 +14,6 @@ pub(super) struct CompilationPlan {
     pub(super) nodes_to_remove: Vec<(NodeRunId, WhyTheNodeLeaves)>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
-    pub(super) config_updates: Vec<(NodeRunId, serde_json::Value)>,
     /// Each running node to stop and build again, once, so it reads its settings read at setup
     /// as the graph holds them now.
     pub(super) nodes_to_rebuild: Vec<NodeRunId>,
@@ -41,7 +40,6 @@ impl CompilationPlan {
             && self.nodes_to_remove.is_empty()
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
-            && self.config_updates.is_empty()
             && self.function_node_promotions.is_empty()
     }
 
@@ -105,24 +103,6 @@ impl CompilationPlan {
                     && !node_ids.contains(link.to_port().node_run_id())
             })
         });
-    }
-
-    pub(super) fn hand_config_updates_to_nodes_this_batch_constructs(&mut self, graph: &mut Graph) {
-        let Self {
-            nodes_to_add,
-            config_updates,
-            ..
-        } = self;
-        if nodes_to_add.is_empty() || config_updates.is_empty() {
-            return;
-        }
-        for (node_run_id, config_to_apply) in
-            config_updates.extract_if(.., |(node_run_id, _)| nodes_to_add.contains(node_run_id))
-        {
-            if let Some(node) = graph.traversal_mut().v(&node_run_id).first_mut() {
-                node.set_config(config_to_apply);
-            }
-        }
     }
 
     pub(super) fn drop_link_adds_into_removed_nodes(&mut self, graph: &Graph) {
@@ -219,43 +199,6 @@ mod tests {
             "a link whose endpoint node is removed in the same batch must not \
              stay queued for the WIRE phase",
         );
-    }
-
-    #[test]
-    fn a_config_update_for_a_node_this_batch_constructs_lands_on_its_node_before_it_is_built() {
-        let (mut graph, constructed_in_this_batch, _link_id) = graph_with_one_link();
-        let already_running: NodeRunId = "P-already-running".into();
-
-        let mut plan = CompilationPlan {
-            nodes_to_add: vec![constructed_in_this_batch.clone()],
-            config_updates: vec![
-                (
-                    constructed_in_this_batch.clone(),
-                    serde_json::json!({"gain": 2}),
-                ),
-                (already_running.clone(), serde_json::json!({"gain": 5})),
-                (
-                    constructed_in_this_batch.clone(),
-                    serde_json::json!({"gain": 3}),
-                ),
-            ],
-            ..Default::default()
-        };
-        plan.hand_config_updates_to_nodes_this_batch_constructs(&mut graph);
-
-        assert_eq!(
-            plan.config_updates,
-            vec![(already_running, serde_json::json!({"gain": 5}))],
-            "only a node that is already running is asked to reconfigure",
-        );
-        let config_on_the_node = graph
-            .traversal()
-            .v(&constructed_in_this_batch)
-            .first()
-            .expect("the node is in the graph")
-            .config
-            .clone();
-        assert_eq!(config_on_the_node, Some(serde_json::json!({"gain": 3})));
     }
 
     /// A link whose endpoints both survive the batch stays queued — the

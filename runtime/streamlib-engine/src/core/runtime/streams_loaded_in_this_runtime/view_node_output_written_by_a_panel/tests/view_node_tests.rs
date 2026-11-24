@@ -138,23 +138,28 @@ fn a_write_onto_a_view_node_of_a_stopped_project_says_the_project_is_stopped_and
 
 #[test]
 #[serial]
-fn a_view_nodes_config_its_views_settings_do_not_declare_or_type_is_refused_naming_each_key() {
+fn a_view_nodes_setting_its_views_settings_do_not_declare_or_type_is_refused() {
     let stream = AStreamOfAProjectBringingViews::load();
     let level_id = stream.add_a_node(LEVEL_VIEW_TYPE, "level").unwrap();
 
     stream
         .stream
-        .update_node_config(&level_id, json!({ "gain": 0.5 }))
+        .set_pin_value(&level_id, "gain", None, Some(json!(0.5)))
         .expect("a setting the view declares, of its type, is taken");
     let refusal = stream
         .stream
-        .update_node_config(&level_id, json!({ "gain": "loud", "colour": 3 }))
-        .expect_err("a setting of the wrong type and one the view does not declare are refused")
+        .set_pin_value(&level_id, "gain", None, Some(json!("loud")))
+        .expect_err("a setting of the wrong type is refused")
         .to_string();
     assert!(refusal.contains("`gain`"), "{refusal}");
     assert!(refusal.contains("\"loud\""), "{refusal}");
-    assert!(refusal.contains("colour"), "{refusal}");
     assert!(refusal.contains(LEVEL_VIEW_TYPE), "{refusal}");
+    let refusal = stream
+        .stream
+        .set_pin_value(&level_id, "colour", None, Some(json!(3)))
+        .expect_err("a setting the view does not declare is refused")
+        .to_string();
+    assert!(refusal.contains("colour"), "{refusal}");
 
     let refusal = stream
         .stream
@@ -168,6 +173,82 @@ fn a_view_nodes_config_its_views_settings_do_not_declare_or_type_is_refused_nami
         .expect_err("a view that declares no settings takes none")
         .to_string();
     assert!(refusal.contains("bpm"), "{refusal}");
+}
+
+/// Mental-revert: checking each setting on its own takes a node missing `gain`, which the
+/// mixer's settings require.
+#[test]
+#[serial]
+fn a_view_node_whose_settings_leave_out_one_they_require_is_refused() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let add_a_mixer_holding = |input_values: Value| {
+        stream.stream.add_node(
+            NodeSpec::new(
+                NodeClassImportPath::new(MIXER_VIEW_TYPE).unwrap(),
+                input_values,
+            )
+            .with_display_name("mixer".to_string()),
+        )
+    };
+
+    let refusal = add_a_mixer_holding(json!({ "trim": 0.5 }))
+        .expect_err("a mixer missing the gain its settings require is refused")
+        .to_string();
+    assert!(refusal.contains("gain"), "{refusal}");
+    let mixer_id =
+        add_a_mixer_holding(json!({ "gain": 1 })).expect("a mixer holding its gain is added");
+    let refusal = stream
+        .stream
+        .set_pin_value(&mixer_id, "gain", None, None)
+        .expect_err("taking off the gain its settings require is refused")
+        .to_string();
+    assert!(refusal.contains("gain"), "{refusal}");
+}
+
+/// Mental-revert: setting each value as it comes keeps `trim` set though `gain` is refused.
+#[test]
+#[serial]
+fn several_values_set_on_a_node_one_of_which_is_refused_set_none() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let mixer_id = stream
+        .stream
+        .add_node(
+            NodeSpec::new(
+                NodeClassImportPath::new(MIXER_VIEW_TYPE).unwrap(),
+                json!({ "gain": 1, "trim": 0 }),
+            )
+            .with_display_name("mixer".to_string()),
+        )
+        .expect("a mixer holding its gain is added");
+    let a_set_of = |input: &str, value: Value| {
+        crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::InputValueSetOnANode {
+            input: input.to_owned(),
+            member: None,
+            value: Some(value),
+        }
+    };
+
+    let refusal = stream
+        .stream
+        .set_the_input_values_of_a_node(
+            &mixer_id,
+            vec![
+                a_set_of("trim", json!(0.5)),
+                a_set_of("gain", json!("loud")),
+            ],
+        )
+        .expect_err("a gain of the wrong type is refused")
+        .to_string();
+    assert!(refusal.contains("`gain`"), "{refusal}");
+    let held = stream.stream.compiler.scope_reading(|graph| {
+        graph
+            .traversal()
+            .v(&mixer_id)
+            .first()
+            .map(|mixer| mixer.input_values.clone())
+            .expect("the mixer is in the stream")
+    });
+    assert_eq!(held, *json!({ "gain": 1, "trim": 0 }).as_object().unwrap());
 }
 
 #[test]

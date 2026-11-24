@@ -87,7 +87,14 @@ fn spawn_host_for_test_driven_in(
 ) -> NodeInterpreterSpawnHost {
     let import_path =
         crate::core::descriptors::NodeClassImportPath::new("my_app.filters:BlurNode").unwrap();
-    let node = GraphNode::new(import_path.clone(), None, "BlurNode", None, vec![], vec![]);
+    let node = GraphNode::new(
+        import_path.clone(),
+        None,
+        "BlurNode",
+        serde_json::Map::new(),
+        vec![],
+        vec![],
+    );
     let mut host = spawn_host_for_graph_node(
         "my_app.filters:BlurNode",
         &NodeDescriptor::new(

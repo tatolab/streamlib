@@ -181,11 +181,11 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::std::vec::Vec<::streamlib::sdk::descriptors::PinGroupDescriptor> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn the_config_a_node_holding_the_input_values_takes(
+        fn the_settings_a_set_node_config_replaces(
             &self,
             _node_type: &str,
             _input_values: &::serde_json::Map<String, ::serde_json::Value>,
-        ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
+        ) -> ::streamlib::sdk::error::Result<::serde_json::Map<String, ::serde_json::Value>> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
         fn refuse_an_input_value_its_input_does_not_take(
@@ -217,17 +217,18 @@ macro_rules! graph_mutation_ops_are_unreachable {
         > {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn node_type_takes_a_config(
+        fn a_set_node_config_replaces_every_setting_on(
             &self,
             _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
         ) -> bool {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn an_exposure_of_config_fields_is_recorded_on(
+        fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
             &self,
+            _node_name: &str,
             _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
             _exposed_config_fields: &[String],
-        ) -> ::streamlib::sdk::error::Result<bool> {
+        ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
         fn hold_an_edit_its_document_holds_not_live(

@@ -8,7 +8,7 @@
 use parking_lot::RwLock;
 use serde_json::Value as JsonValue;
 
-use super::the_function_node_pool_descriptor;
+use super::{FUNCTION_NODE_POOL_CARRIES_INPUT, every_carry_of, the_function_node_pool_descriptor};
 use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::NodeInterpreterSpawnHost;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -21,7 +21,8 @@ use crate::core::graph::{
 pub(crate) struct CarriesHandedToTheRunningFunctionNodePool {
     pub(crate) pool: NodeRunId,
     pub(crate) ports_before_the_carries: GraphNodePorts,
-    pub(crate) config_before_the_carries: Option<JsonValue>,
+    /// The carries the pool named before them; `None` when it named none.
+    pub(crate) carries_held_before: Option<JsonValue>,
     /// The links into and out of the pool each carried link is wired as.
     pub(crate) halves_through_the_pool: Vec<LinkUniqueId>,
 }
@@ -42,7 +43,7 @@ pub(crate) fn hand_the_running_function_node_pool_its_carries(
 }
 
 fn the_pool_takes_its_carries(graph: &RwLock<Graph>, pool: &NodeRunId) -> Result<()> {
-    let (instance, descriptor, config_naming_every_carry) = {
+    let (instance, descriptor, every_carry) = {
         let graph = graph.read();
         let node = graph
             .traversal()
@@ -59,11 +60,7 @@ fn the_pool_takes_its_carries(graph: &RwLock<Graph>, pool: &NodeRunId) -> Result
             })?;
         let descriptor =
             the_function_node_pool_descriptor(Some((&node.ports.inputs, &node.ports.outputs)))?;
-        (
-            instance,
-            descriptor,
-            node.config.clone().unwrap_or(JsonValue::Null),
-        )
+        (instance, descriptor, JsonValue::Array(every_carry_of(node)))
     };
     let mut instance = instance.lock();
     let host = instance
@@ -74,7 +71,7 @@ fn the_pool_takes_its_carries(graph: &RwLock<Graph>, pool: &NodeRunId) -> Result
                 "the running function node pool `{pool}` does not run in a helper process"
             ))
         })?;
-    host.hand_the_running_function_node_pool_its_carries(descriptor, config_naming_every_carry)
+    host.hand_the_running_function_node_pool_its_carries(descriptor, every_carry)
 }
 
 fn put_the_pool_back_as_it_was_before_the_carries(
@@ -86,8 +83,9 @@ fn put_the_pool_back_as_it_was_before_the_carries(
     }
     if let Some(pool) = graph.traversal_mut().v(&carries.pool).first_mut() {
         pool.ports = carries.ports_before_the_carries.clone();
-        if let Some(config) = carries.config_before_the_carries.clone() {
-            pool.set_config(config);
-        }
+        pool.set_input_value(
+            FUNCTION_NODE_POOL_CARRIES_INPUT,
+            carries.carries_held_before.clone(),
+        );
     }
 }

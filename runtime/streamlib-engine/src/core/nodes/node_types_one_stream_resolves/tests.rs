@@ -41,7 +41,14 @@ fn a_constructor_refusing_with(refusal: &'static str) -> DynamicNodeConstructorF
 }
 
 fn a_node_of(node_type: &NodeClassImportPath) -> GraphNode {
-    GraphNode::new(node_type.clone(), None, "a-node", None, vec![], vec![])
+    GraphNode::new(
+        node_type.clone(),
+        None,
+        "a-node",
+        serde_json::Map::new(),
+        vec![],
+        vec![],
+    )
 }
 
 /// A described type stating a Texture-to-Texture conversion, at `path`.

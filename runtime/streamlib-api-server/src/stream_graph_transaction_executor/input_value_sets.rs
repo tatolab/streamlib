@@ -300,11 +300,12 @@ impl StreamGraphTransactionExecutor<'_> {
             } => {
                 if let Some(exposed_on) =
                     self.the_node_an_action_sets_values_on(stream_id, level, node, staged)
-                    && !stream_operations.an_exposure_of_config_fields_is_recorded_on(
+                {
+                    stream_operations.refuse_an_exposure_naming_no_input_that_takes_a_wire(
+                        &exposed_on.name,
                         &the_node_type_of(&exposed_on)?,
                         exposed_config_fields,
-                    )?
-                {
+                    )?;
                     return Ok(Vec::new());
                 }
             }
@@ -507,9 +508,9 @@ pub(super) fn refuse_a_value_the_input_does_not_take(
 
 /// The input values `config`, sent to `set_node_config`, sets on `configured`, checked: each it
 /// names, even one the graph document already holds, since the running node may hold another
-/// set live, and, on a node type that takes a config, each config field it does not name taken
-/// off, among them each `config_the_running_node_holds` holds live alone, so the config is
-/// replaced whole.
+/// set live, and, on a node type whose `set_node_config` replaces every setting, each setting
+/// it does not name taken off, among them each `config_the_running_node_holds` holds live
+/// alone, so the settings are replaced whole.
 fn the_input_value_sets_a_config_stands_for(
     stream_operations: &dyn RuntimeOperations,
     configured: &StreamGraphDocumentNode,
@@ -526,22 +527,12 @@ fn the_input_value_sets_a_config_stands_for(
             )
         })
         .collect();
-    if stream_operations.node_type_takes_a_config(&node_type) {
-        let config_held = match stream_operations.the_config_a_node_holding_the_input_values_takes(
+    if stream_operations.a_set_node_config_replaces_every_setting_on(&node_type) {
+        let settings_held = stream_operations.the_settings_a_set_node_config_replaces(
             &configured.node_type,
             &configured.input_values,
-        )? {
-            Value::Object(config_held) => config_held,
-            Value::Null => Map::new(),
-            other => {
-                return Err(format!(
-                    "node {} `{}` holds the config {other}, which is no object",
-                    configured.id, configured.name
-                )
-                .into());
-            }
-        };
-        let mut taken_off: Vec<&String> = config_held
+        )?;
+        let mut taken_off: Vec<&String> = settings_held
             .keys()
             .filter(|input| {
                 !config.contains_key(*input) && configured.input_values.contains_key(*input)

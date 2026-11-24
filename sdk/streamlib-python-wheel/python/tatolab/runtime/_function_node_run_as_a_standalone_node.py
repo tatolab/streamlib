@@ -56,7 +56,6 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
-    config_values_of_one_function_node,
     how_one_function_node_is_called,
     prepare_function_node_to_evaluate,
 )
@@ -179,17 +178,6 @@ class _FunctionNodeRunAsAStandaloneNode:
                 prepared.how_its_values_are_carried["outputs_carried_in_parts"]
             ),
         )
-
-    def configure(self, config: Any) -> None:
-        """Call the node with `config` from the next run on, keeping its state."""
-        prepared = self._prepared
-        config_as_a_mapping = _config_as_a_mapping(config)
-        if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
-            self._compiled_config_values_handed_to_each_call = config_values_of_one_function_node(
-                prepared, self._node_id, config_as_a_mapping
-            )
-        elif self._body_run_as_python is not None:
-            self._body_run_as_python.take_the_config(config_as_a_mapping)
 
     def process(self, ctx: Any) -> None:
         prepared = self._prepared

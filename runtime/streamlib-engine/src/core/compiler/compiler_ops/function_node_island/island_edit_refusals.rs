@@ -5,8 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_json::Value as JsonValue;
-
 use crate::core::NodeRunId;
 use crate::core::compiler::compiler_ops::function_node_pool::the_function_node_pool_evaluates_an_island_from_into;
 use crate::core::descriptors::{NodeClassImportPath, PinConversion};
@@ -28,14 +26,13 @@ use super::{
 /// Refuse, before a commit changes anything, an edit an island cannot take: a
 /// second link into a port an island feeds, an island into a port declaring an
 /// audio window, a removal that leaves a running reactive reader fed only by
-/// islands, and a live config update to a function node.
+/// islands.
 pub(crate) fn refuse_an_edit_an_island_cannot_take(
     graph: &Graph,
     nodes_to_add: &[NodeRunId],
     nodes_to_remove: &[NodeRunId],
     links_to_add: &[LinkUniqueId],
     links_to_remove: &[LinkUniqueId],
-    config_updates: &[(NodeRunId, JsonValue)],
 ) -> Result<()> {
     let is_a_running_reader = |node_id: &NodeRunId| {
         !runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
@@ -57,15 +54,6 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
             &removal_named,
             &reader_id,
         ));
-    }
-    for (updated_id, _) in config_updates {
-        if runs_inside_the_read_of_each_node_it_feeds(graph, updated_id) {
-            return Err(Error::Config(format!(
-                "function node `{updated_id}`'s config goes to each reader of its island with \
-                 the island, and a live config update is not carried to an island, so it is \
-                 refused. To fix: stop the stream and start it with the new config"
-            )));
-        }
     }
     Ok(())
 }

@@ -19,7 +19,7 @@ use crate::core::nodes::{
 use super::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE,
     LONGEST_WAIT_FOR_A_COMPILE_TO_CLAIM_A_FUNCTION_NODE_PROMOTION, NodeInterpreterSpawnHost,
-    lifecycle_reply_tag, reported_reason, standard_error_tail_as_a_refusal_quotes_it,
+    standard_error_tail_as_a_refusal_quotes_it,
 };
 
 impl DynGeneratedNode for NodeInterpreterSpawnHost {
@@ -381,32 +381,6 @@ impl DynGeneratedNode for NodeInterpreterSpawnHost {
         None
     }
 
-    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
-        // Unlike the lifecycle hooks, which swallow a lost child because
-        // teardown must proceed regardless, a config update has no such
-        // constraint — reporting success while the child runs the old
-        // configuration would be a lie the control plane passes on.
-        let reply = self
-            .exchange_with_child(
-                &serde_json::json!({"cmd": "update_config", "config": config_json}),
-                "update_config",
-            )
-            .ok_or_else(|| {
-                Error::Runtime(format!(
-                    "[{}] its helper process did not answer update_config",
-                    self.node_display_name
-                ))
-            })?;
-        if lifecycle_reply_tag(&reply) != Some("ok") {
-            let reported = reported_reason(&reply);
-            return Err(Error::Runtime(format!(
-                "[{}] its helper process refused update_config: {reported}",
-                self.node_display_name
-            )));
-        }
-        Ok(())
-    }
-
     fn to_runtime_json(&self) -> serde_json::Value {
         serde_json::json!({
             "helper_process_pid": self.child.as_ref().map(|child| child.id()),
@@ -414,12 +388,6 @@ impl DynGeneratedNode for NodeInterpreterSpawnHost {
             "interpreter": self.stream_environment.interpreter.to_string_lossy(),
             "helper_process_is_gone": self.child_is_gone,
         })
-    }
-
-    fn config_json(&self) -> serde_json::Value {
-        self.node_configuration
-            .clone()
-            .unwrap_or(serde_json::Value::Null)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

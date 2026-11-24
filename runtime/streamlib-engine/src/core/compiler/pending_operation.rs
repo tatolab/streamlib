@@ -16,11 +16,6 @@ pub(crate) enum PendingOperation {
     /// Unwire and remove a link that is currently wired.
     RemoveLink(LinkUniqueId),
 
-    UpdateNodeConfig {
-        node_run_id: NodeRunId,
-        config_to_apply: serde_json::Value,
-    },
-
     /// Stop a running node and build it again, its links wired again, so it reads each setting
     /// read at setup as the graph holds it now.
     RebuildNode(NodeRunId),
@@ -43,9 +38,6 @@ impl std::fmt::Display for PendingOperation {
             PendingOperation::RemoveNode(id, _) => write!(f, "RemoveNode({})", id),
             PendingOperation::AddLink(id) => write!(f, "AddLink({})", id),
             PendingOperation::RemoveLink(id) => write!(f, "RemoveLink({})", id),
-            PendingOperation::UpdateNodeConfig { node_run_id, .. } => {
-                write!(f, "UpdateNodeConfig({})", node_run_id)
-            }
             PendingOperation::RebuildNode(id) => write!(f, "RebuildNode({})", id),
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,

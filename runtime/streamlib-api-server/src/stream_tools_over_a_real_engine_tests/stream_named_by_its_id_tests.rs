@@ -102,7 +102,7 @@ async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
     assert!(
         refused_exposure
             .runtime_words
-            .contains("node `mixer` exposes frame_width"),
+            .contains("node `mixer` exposes `frame_width`"),
         "{refused_exposure:?}"
     );
     // Exposing an input of a node type that takes no config is checked and records no commit.

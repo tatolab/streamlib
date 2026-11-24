@@ -158,7 +158,7 @@ fn only_the_helper_of_the_node_set_on_is_handed_its_live_values_over_the_saved_o
         .v(&level_meter)
         .first_mut()
         .unwrap()
-        .pins
+        .input_values
         .insert("gain".to_owned(), json!(2.0));
     let node = the_uuid_of(&graph, &level_meter);
     let graph = RwLock::new(graph);
@@ -465,6 +465,52 @@ fn a_function_node_read_inside_an_island_hands_its_reader_the_live_value_then_th
     );
 }
 
+/// A setting its type's config schema lists, set on a function node read inside an island,
+/// hands its reader the island carrying it under the node's `config`, which the island's
+/// evaluation of the node reads.
+///
+/// Mental-revert: drawing the island's `config` from anything but the node's input values hands
+/// the reader the gain the node held before the set.
+#[test]
+fn a_setting_set_on_a_function_node_read_inside_an_island_hands_its_reader_the_island_holding_it() {
+    let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
+    let mut graph = crate::core::compiler::compiler_ops::function_node_island::tests::a_graph_resolving_these_function_node_types([
+        crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type(
+            "test_ops:scaled",
+            &["x"],
+            &["result"],
+        )
+        .with_config_schema(json!({
+            "type": "object",
+            "properties": {"gain": {"type": "number", "default": 1.0}},
+        })),
+    ]);
+    let scaled = add_a_node(&mut graph, "test_ops:scaled", json!({ "gain": 2.0 }));
+    let reader = a_helper_reader_before_its_setup(&mut graph);
+    the_link_wiring_of(&graph, &reader)
+        .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
+        .unwrap();
+    let into_the_reader = link(&mut graph, (&scaled, "result"), (&reader, "in1"));
+    wire_a_link_from_a_function_node_island_into_its_reader(
+        &mut graph,
+        &into_the_reader,
+        &Iceoryx2Node::for_this_test_process(),
+    )
+    .unwrap();
+    let graph = RwLock::new(graph);
+
+    set_the_saved_value_and_hand_it_over(&graph, &scaled, "gain", None, Some(json!(5.0)))
+        .expect("the setting is set");
+
+    let handed = delivery
+        .late_fed_function_node_islands
+        .lock()
+        .last()
+        .cloned()
+        .expect("the reader is handed the island again");
+    assert_eq!(handed["nodes"][0]["config"], json!({ "gain": 5.0 }));
+}
+
 /// A function node read inside an island, reading `remap`'s `x`, whose reader past its setup
 /// hands what it is handed to the delivery answered.
 fn a_function_node_read_inside_an_island()
@@ -489,7 +535,7 @@ fn a_function_node_read_inside_an_island()
 fn the_saved_values_of(node_run_id: &NodeRunId, pins: Value) -> SavedValuesOfAKeptNode {
     SavedValuesOfAKeptNode {
         node_run_id: node_run_id.clone(),
-        pins: pins.as_object().unwrap().clone(),
+        input_values: pins.as_object().unwrap().clone(),
         studio: serde_json::Map::new(),
         handed_over_now: true,
     }
@@ -552,7 +598,7 @@ fn a_reconcile_hands_each_kept_node_the_document_values_and_answers_a_refusal_af
             .v(node_run_id)
             .first()
             .unwrap()
-            .pins
+            .input_values
             .clone()
     };
     assert_eq!(
@@ -569,7 +615,7 @@ fn a_reconcile_hands_each_kept_node_the_document_values_and_answers_a_refusal_af
     let kept_nodes_whose_saved_values_change: Vec<SavedValuesOfAKeptNode> =
         the_document_sets_on_the_helpers()
             .into_iter()
-            .filter(|kept_node| the_pins_of(&kept_node.node_run_id) != kept_node.pins)
+            .filter(|kept_node| the_pins_of(&kept_node.node_run_id) != kept_node.input_values)
             .collect();
     assert_eq!(kept_nodes_whose_saved_values_change.len(), 1);
     set_the_saved_values_of_each_kept_node_and_hand_them_over(
@@ -643,7 +689,7 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
     assert!(refused.is_err());
     {
         let graph = graph.read();
-        assert!(graph.node_by_uuid(node).unwrap().pins.is_empty());
+        assert!(graph.node_by_uuid(node).unwrap().input_values.is_empty());
         assert_eq!(
             graph.live_input_values().value_of(node, "level"),
             Some(json!(0.25))
@@ -865,7 +911,7 @@ fn a_value_saved_on_one_island_member_feeds_one_island_and_its_cost_is_measured(
         .v(&remaps[1])
         .first_mut()
         .unwrap()
-        .pins
+        .input_values
         .insert("x".to_owned(), json!(0.5));
     let graph = RwLock::new(graph);
     let islands_fed_as_wired = the_islands_fed(&deliveries);
@@ -902,7 +948,7 @@ fn a_value_saved_on_one_island_member_feeds_one_island_and_its_cost_is_measured(
             .v(&remaps[0])
             .first_mut()
             .unwrap()
-            .pins
+            .input_values
             .insert("x".to_owned(), json!(1.0 + set_index as f64 / 1000.0));
         hand_each_reader_the_island_a_compile_changed(&mut graph, &[]).unwrap();
     }

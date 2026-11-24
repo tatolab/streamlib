@@ -1,22 +1,44 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What the node catalog says of the config of a node type not yet typed: each field its config
-//! schema lists is an input that takes no wire, read when the node is set up, with the default
-//! the schema states, a pin type only where the schema states one exactly, and the field's own
-//! schema as the schema of a value it takes.
+//! The settings a node type's config schema lists, a view's `settings` or a test's: each field is
+//! a setting of the type, an input that takes no wire, read when the node is set up, with the
+//! default the schema states, a pin type only where the schema states one exactly, and the
+//! field's own schema as the schema of a value it takes. A node holds each as one of its input
+//! values; `graph` still renders them under its `config`.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::{the_description_of, the_properties_of_a_config_schema};
 use crate::core::descriptors::{
     IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinNumberRange,
     PinProjectAssetAnnotation, PinType,
 };
 use crate::core::error::{Error, Result};
 use crate::core::nodes::is_a_natively_compiled_node_type;
+
+/// Each field `config_schema` lists, by name, with its schema; `None` for no schema, or one
+/// listing no `properties`.
+fn the_properties_of_a_config_schema(config_schema: Option<&Value>) -> Option<&Map<String, Value>> {
+    config_schema?.get("properties")?.as_object()
+}
+
+/// The name of each setting `config_schema` lists; none for no schema.
+pub(crate) fn the_settings_a_config_schema_lists(config_schema: Option<&Value>) -> HashSet<String> {
+    the_properties_of_a_config_schema(config_schema)
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// What `schema` says of what it describes, its `description`; empty when it says nothing.
+fn the_description_of(schema: &Value) -> &str {
+    schema
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
 
 /// The schema keyword a config field holding a project asset's UUID as a bare string carries;
 /// its value is the field's [`PinProjectAssetAnnotation`].

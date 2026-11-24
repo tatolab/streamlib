@@ -19,14 +19,12 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
     LinkSetAside,
 };
-use crate::core::graph::legacy_config_of_a_node::{
-    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
-};
 use crate::core::graph::{
     ALinkConnected, Graph, LinkUniqueId, NodeRunId, TheEndsALinkIsJudgedBy,
     a_link_made_now_would_be_refused, cast_exposed_name_to_url_safe, the_ends_a_link_is_judged_by,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
+use crate::core::nodes::NodeSpec;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
     ALinkConnectedOrSetAside, ConfigReferencesOfTheAddedNode, GraphEditsHeldForOneCommit,
@@ -133,10 +131,8 @@ pub(in crate::core::runtime) struct LiveNodeAsTheGraphHoldsIt {
     pub(in crate::core::runtime) node_uuid: Uuid,
     pub(in crate::core::runtime) display_name: String,
     pub(in crate::core::runtime) node_type: NodeClassImportPath,
-    pub(in crate::core::runtime) config: Value,
-    pub(in crate::core::runtime) pins: Map<String, Value>,
+    pub(in crate::core::runtime) input_values: Map<String, Value>,
     pub(in crate::core::runtime) studio: Map<String, Value>,
-    pub(in crate::core::runtime) exposed_config_fields: Vec<String>,
 }
 
 /// A graph document a reconcile accepted: resolved and validated, each node's index in the graph
@@ -371,15 +367,13 @@ impl LoadedStreamInThisRuntime {
                 ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
             )
             .await?;
-            let spec = node_spec_holding_the_input_values(
-                node_types,
-                document_node.node_type.clone(),
-                &document_node.input_values,
-                document_node.studio.clone(),
-            )
-            .with_display_name(document_node.name.clone())
-            .with_exposed_config_fields(document_node.exposed_config_fields.clone())
-            .with_node_uuid(node_uuid);
+            let spec = NodeSpec::of_the_type(document_node.node_type.clone())
+                .with_input_values_and_studio_fields(
+                    document_node.input_values.clone(),
+                    document_node.studio.clone(),
+                )
+                .with_display_name(document_node.name.clone())
+                .with_node_uuid(node_uuid);
             add_node_impl(
                 self.live_graph_change(),
                 Arc::clone(&self.node_interpreter_launch_record),
@@ -391,55 +385,42 @@ impl LoadedStreamInThisRuntime {
         }
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
-            let ConfigAndPinValues {
-                config: document_config,
-                pin_values: document_pins,
-            } = LegacyConfigOfANodeType::of(node_types, &document_node.node_type)
-                .split(&document_node.input_values);
+            let document_input_values = document_node.input_values.clone();
             let ports_of_a_view = node_types
                 .is_a_view_type_of_this_streams_project(&live_node.node_type)
                 .then(|| node_types.port_info(&live_node.node_type))
                 .flatten();
-            let document_pins = match ports_of_a_view {
+            let document_input_values = match ports_of_a_view {
                 Some(ports) => {
                     crate::core::nodes::the_saved_values_without_any_on_an_output_a_panel_writes(
                         node_types,
                         &live_node.node_type,
                         &ports,
                         &live_node.display_name,
-                        document_pins,
+                        document_input_values,
                     )
                 }
-                None => document_pins,
+                None => document_input_values,
             };
-            if live_node.config != document_config {
-                self.update_node_config_compiled_right_away(
-                    &live_node.node_run_id,
-                    &document_config,
-                )
-                .await?;
-            }
-            if live_node.exposed_config_fields != document_node.exposed_config_fields {
-                self.set_exposed_config_fields(
-                    &live_node.node_run_id,
-                    document_node.exposed_config_fields.clone(),
-                )?;
-            }
             let a_setting_read_at_setup_changes = live_node
-                .pins
+                .input_values
                 .keys()
-                .chain(document_pins.keys())
-                .filter(|input| live_node.pins.get(*input) != document_pins.get(*input))
+                .chain(document_input_values.keys())
+                .filter(|input| {
+                    live_node.input_values.get(*input) != document_input_values.get(*input)
+                })
                 .any(|input| {
                     self.is_a_setting_the_node_reads_at_setup(&live_node.node_run_id, input)
                 });
             if a_setting_read_at_setup_changes {
                 self.leave_the_node_to_rebuild(&live_node.node_run_id);
             }
-            if live_node.pins != document_pins || live_node.studio != document_node.studio {
+            if live_node.input_values != document_input_values
+                || live_node.studio != document_node.studio
+            {
                 kept_nodes_whose_saved_values_change.push(SavedValuesOfAKeptNode {
                     node_run_id: live_node.node_run_id.clone(),
-                    pins: document_pins,
+                    input_values: document_input_values,
                     studio: document_node.studio.clone(),
                     handed_over_now: left_to_rebuild
                         == KeptNodesLeftToRebuild::HandedTheirValuesLive
@@ -865,10 +846,8 @@ fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
             node_uuid: node.node_uuid,
             display_name: node.display_name.clone(),
             node_type: node.node_type.clone(),
-            config: node.config.clone().unwrap_or_default(),
-            pins: node.pins.clone(),
+            input_values: node.input_values.clone(),
             studio: node.studio.clone(),
-            exposed_config_fields: node.exposed_config_fields.clone(),
         })
         .collect()
 }
