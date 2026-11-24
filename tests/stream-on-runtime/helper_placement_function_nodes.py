@@ -30,7 +30,7 @@ def Lfo(  # noqa: N802
     return math.sin(2.0 * math.pi * cycles), LfoPhase(cycles, now, True)
 
 
-@node.function
+@node
 def Remap(  # noqa: N802
     x: float,
     from_low: float = -1.0,
@@ -44,7 +44,7 @@ def Remap(  # noqa: N802
     return to_low + (x - from_low) * (to_high - to_low) / (from_high - from_low)
 
 
-@node.function
+@node
 def Clamp(x: float, low: float = 0.0, high: float = 1.0) -> float:  # noqa: N802
     """`x` held between `low` and `high`."""
     return min(max(x, low), high)

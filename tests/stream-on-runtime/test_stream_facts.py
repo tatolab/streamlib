@@ -3,13 +3,12 @@
 
 """An output port's stream facts, end to end on a running stream.
 
-Each node runs in its own helper process. A Python node declares an Image
-frame rate and `graph` shows it as the port's stream facts, named by the
-port's pin type, a Texture, beside their family; a running node
-replaces a Packets port's facts over its bridge and the next `graph` shows the
+Each node runs in its own helper process. A Python node states a Texture
+frame rate on its first tick and `graph` shows it as the port's stream facts,
+named by the port's pin type beside their family; a running node replaces an
+Encoded video port's facts over its bridge and the next `graph` shows the
 replacement; a reader reads its upstream's current facts off its inbound link;
-facts of another family are refused naming the port; and a Records port
-renders `values_checked: false`. The engine seams under each are gated by the
+and facts of another type are refused naming the port. The engine seams under each are gated by the
 `output_port_stream_facts` and `port_stream_facts` tests.
 """
 
@@ -56,6 +55,7 @@ def test_declared_replaced_refused_and_read_downstream(
     local_api = tatolabd.local_api_client()
     local_api.await_every_node_running(stream=stream_id, timeout=GRAPH_READY_TIMEOUT_SECONDS)
 
+    tatolabd.await_marker("FRAME_RATE_STATED", timeout=MARKER_TIMEOUT_SECONDS)
     refusal = tatolabd.await_marker("STREAM_FACTS_REFUSED", timeout=MARKER_TIMEOUT_SECONDS)
     tatolabd.await_marker("STREAM_FACTS_REPLACED", timeout=MARKER_TIMEOUT_SECONDS)
     graph = local_api.graph(stream_id)
@@ -76,7 +76,6 @@ def test_declared_replaced_refused_and_read_downstream(
     video = output_port_rendered_under(graph, DECLARING_SOURCE_NAME, "video")
     assert video.get("stream_facts") == DECLARED_RENDERING
     records = output_port_rendered_under(graph, DECLARING_SOURCE_NAME, "records")
-    assert records.get("values_checked") is False
     assert "stream_facts" not in records
     encoded = output_port_rendered_under(graph, REPLACING_SOURCE_NAME, "encoded")
     assert encoded.get("stream_facts") == REPLACEMENT_RENDERING, (
@@ -88,12 +87,9 @@ def test_declared_replaced_refused_and_read_downstream(
         for entry in node_catalog["nodes"]
         if entry["type"].endswith(":DeclaresItsFrameRateAndWritesRecords")
     ]
-    (catalog_records,) = [port for port in declaring_type["outputs"] if port["name"] == "records"]
-    assert catalog_records["values_checked"] is False
-
     assert {(node["name"], node["kind"]) for node in graph["nodes"]} == {
         (node["name"], "process") for node in graph["nodes"]
-    }, "every `@node.process` class renders its kind on its graph node"
+    }, "every class node renders its kind on its graph node"
     assert declaring_type["kind"] == "process" and "language" not in declaring_type
 
     assert "encoded" in refusal and "Packets" in refusal and "Image" in refusal, (
