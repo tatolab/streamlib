@@ -15,19 +15,21 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
 from typing import Annotated
 
 from tatolab.stream import (
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
     NumberRange,
-    Output,
-    Records,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SettingOnly,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     log,
     node,
 )
@@ -37,6 +39,10 @@ from nodes.neon_world import (
     METRES_PER_WORLD_UNIT,
     RENDERED_FRAME_COLOUR,
     WORLD_SLANG,
+    SoundtrackPulseReading,
+    StageCamera,
+    StageLookValues,
+    StationReading,
     TakeClock,
     take_moment_at,
 )
@@ -201,35 +207,81 @@ def workgroups(items: int, size: int) -> int:
     return (items + size - 1) // size
 
 
-@dataclass
-class GulfStreamCurrentConfig:
-    """GulfStreamCurrent's settings."""
-
-    particle_count: int = 2_097_152
-    trail_decay: Annotated[float, NumberRange(minimum=0.0, maximum=0.99)] = 0.9273
-    turbulence: Annotated[float, NumberRange(minimum=0.0, maximum=5.0)] = 1.0
-    time_lapse: Annotated[float, NumberRange(minimum=0.0, maximum=40000.0)] = 9000.0
-    brightness: Annotated[float, NumberRange(minimum=0.0, maximum=4.0)] = 1.0
-    active_particles: Annotated[int, NumberRange(minimum=1024, maximum=4_194_304)] = 2_097_152
-    step_seconds: float = 1.0 / 60.0
-
-
 @node.meta(
     category="Gulf Stream Neon",
     description="A million GPU particles advected through a real HYCOM surface-current snapshot, with curl-noise eddies, the station's wind and streak trails.",
 )
-@node.process
+@node
 class GulfStreamCurrent:
     """Particles riding the real Florida Current north, with trails."""
 
-    def __init__(self, config: GulfStreamCurrentConfig) -> None:
-        self.config = config
-
-    soundtrack = Input(Records, delivery="newest", description="beat, energy: from SoundtrackPulse")
-    station = Input(Records, delivery="newest", description="wind_speed_mps, wind_from_degrees: from NoaaStationFeed")
-    stage = Input(Records, delivery="newest", description="The stage view: its camera, and where it was clicked to drop an eddy")
-    look = Input(Records, delivery="newest", description="The stage's smoothed look: current_speed scales the time-lapse")
-    trails = Output(Image, description="The particle trails in world space, HDR")
+    particle_count: Annotated[
+        int,
+        SettingOnly(),
+        NumberRange(minimum=1024),
+        Description("How many particles the buffer holds."),
+    ] = 2_097_152
+    trail_decay: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=0.99),
+        Description("How much of a trail is left after each step."),
+    ] = 0.9273
+    turbulence: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=5.0),
+        Description("How strongly the curl-noise eddies stir the flow."),
+    ] = 1.0
+    time_lapse: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=40000.0),
+        Description("How many times faster than real the current runs."),
+    ] = 9000.0
+    brightness: Annotated[
+        float, NumberRange(minimum=0.0, maximum=4.0), Description("How brightly the trails glow.")
+    ] = 1.0
+    active_particles: Annotated[
+        int,
+        NumberRange(minimum=1024, maximum=4_194_304),
+        Description("How many of the buffer's particles move and draw."),
+    ] = 2_097_152
+    step_seconds: Annotated[
+        float, NumberRange(minimum=0.0), Description("The stream time one step advances, in seconds.")
+    ] = 1.0 / 60.0
+    soundtrack: InputPin[
+        Annotated[
+            SoundtrackPulseReading,
+            StreamDelivery("newest"),
+            Description("beat, energy: from SoundtrackPulse"),
+        ]
+    ]
+    station: InputPin[
+        Annotated[
+            StationReading,
+            StreamDelivery("newest"),
+            Description("wind_speed_mps, wind_from_degrees: from NoaaStationFeed"),
+        ]
+    ]
+    stage: InputPin[
+        Annotated[
+            StageCamera,
+            StreamDelivery("newest"),
+            Description("The stage view: its camera, and where it was clicked to drop an eddy"),
+        ]
+    ]
+    look: InputPin[
+        Annotated[
+            StageLookValues,
+            StreamDelivery("newest"),
+            Description("The stage's smoothed look: current_speed scales the time-lapse"),
+        ]
+    ]
+    trails: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(HDR_LAYER_FORMAT),
+            Description("The particle trails in world space, HDR"),
+        ]
+    ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.take_clock = TakeClock()
@@ -241,82 +293,77 @@ class GulfStreamCurrent:
         self.field.lock(read_only=False)
         self.field.as_numpy().reshape(size * size, 4)[:] = baked_currents(size)
         self.field.unlock()
-        self.particles = gpu.acquire_storage_buffer((self.config.particle_count, 4), "float32")
+        self.particles = gpu.acquire_storage_buffer((self.particle_count, 4), "float32")
         self.trail_texture = gpu.acquire_texture(size, size, HDR_LAYER_FORMAT, LAYER_USAGE)
         self.output_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
         self.frame_index = 0
-        self.latest_soundtrack: dict = {}
-        self.latest_station: dict = {}
-        self.latest_stage: dict = {}
-        self.latest_look: dict = {}
-        self.bursts_seen: float | None = None
+        self.latest_soundtrack = SoundtrackPulseReading(beat=0.0, energy=0.0, glow=1.0)
+        self.latest_station: StationReading | None = None
+        self.latest_stage: StageCamera | None = None
+        self.latest_look: StageLookValues | None = None
+        self.bursts_seen: int | None = None
         self.eddy = (0.0, 0.0)
         self.eddy_age = 99.0
         self.eddy_strength = 0.0
         self.field_on_cpu = baked_currents(size).reshape(size, size, 4)
-        log.info("current snapshot uploaded", particles=self.config.particle_count)
-
-    def configure(self, config: GulfStreamCurrentConfig) -> None:
-        """A setting changed live: the stage's sliders land here. The particle buffer keeps its size."""
-        config.particle_count = self.config.particle_count
-        self.config = config
+        log.info("current snapshot uploaded", particles=self.particle_count)
 
     def _active(self) -> int:
-        return max(1024, min(self.config.active_particles, self.config.particle_count))
+        return max(1024, min(self.active_particles, self.particle_count))
 
     def _follow_the_eddy(self) -> bool:
         """Start an eddy where the stage was last clicked, and carry the one there is north on the real current."""
-        step = self.config.step_seconds
-        bursts = self.latest_stage.get("bursts")
+        step = self.step_seconds
+        stage = self.latest_stage
         started = False
-        if bursts is not None and self.bursts_seen is not None and float(bursts) > self.bursts_seen:
-            point = self.latest_stage.get("burst_x"), self.latest_stage.get("burst_y")
-            if point[0] is not None and point[1] is not None:
-                self.eddy = (float(point[0]), float(point[1]))
+        if stage is not None:
+            if self.bursts_seen is not None and stage.bursts > self.bursts_seen:
+                self.eddy = (stage.burst_x, stage.burst_y)
                 self.eddy_age = 0.0
                 self.eddy_strength = 1.0
                 started = True
-        if bursts is not None:
-            self.bursts_seen = float(bursts)
+            self.bursts_seen = stage.bursts
         size = self.field_on_cpu.shape[0]
         column = int(min(max((self.eddy[0] / 2.5 * 0.5 + 0.5) * size, 0), size - 1))
         row = int(min(max((0.5 - self.eddy[1] / 2.5 * 0.5) * size, 0), size - 1))
         east, north = self.field_on_cpu[row, column, 0], self.field_on_cpu[row, column, 1]
-        scale = self.config.time_lapse / METRES_PER_WORLD_UNIT
+        scale = self.time_lapse / METRES_PER_WORLD_UNIT
         self.eddy = (self.eddy[0] + float(east) * scale * step, self.eddy[1] + float(north) * scale * step)
         self.eddy_age += step
         return started
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        soundtrack = ctx.inputs.read(self.soundtrack)
+        soundtrack = self.soundtrack.read()
         if soundtrack is not None:
             self.latest_soundtrack = soundtrack
-        station = ctx.inputs.read(self.station)
+        station = self.station.read()
         if station is not None:
             self.latest_station = station
-        stage = ctx.inputs.read(self.stage)
+        stage = self.stage.read()
         if stage is not None:
             self.latest_stage = stage
-        look = ctx.inputs.read(self.look)
+        look = self.look.read()
         if look is not None:
             self.latest_look = look
         burst_now = self._follow_the_eddy()
         seconds = self.take_clock.seconds_at(ctx)
         moment = take_moment_at(seconds)
-        beat = float(self.latest_soundtrack.get("beat", 0.0))
-        energy = float(self.latest_soundtrack.get("energy", 0.0))
+        beat = self.latest_soundtrack.beat
+        energy = self.latest_soundtrack.energy
         speed = moment.current_speed * (1.0 + 0.3 * energy)
         # Wind is reported as where it blows from; the drift goes the other way.
-        wind_speed = float(self.latest_station.get("wind_speed_mps", 0.0))
-        wind_from = math.radians(float(self.latest_station.get("wind_from_degrees", 0.0)))
+        station = self.latest_station
+        wind_speed = station.wind_speed_mps if station is not None else 0.0
+        wind_from = math.radians(station.wind_from_degrees if station is not None else 0.0)
         wind_east = -wind_speed * math.sin(wind_from)
         wind_north = -wind_speed * math.cos(wind_from)
+        current_speed = self.latest_look.current_speed if self.latest_look is not None else 1.0
         size = WORLD_TEXTURE_SIZE
         gpu = ctx.gpu_limited_access
         self.fade_kernel.dispatch(
             bindings={"trails": self.trail_texture},
             group_count=(workgroups(size, 8), workgroups(size, 8), 1),
-            push_constants=FADE_DIALS.pack(size, self.config.trail_decay if self.frame_index else 0.0),
+            push_constants=FADE_DIALS.pack(size, self.trail_decay if self.frame_index else 0.0),
         )
         self.current_kernel.dispatch(
             bindings={"particles": self.particles, "trails": self.trail_texture, "field": self.field},
@@ -325,16 +372,16 @@ class GulfStreamCurrent:
                 size,
                 self._active(),
                 seconds,
-                self.config.step_seconds,
+                self.step_seconds,
                 speed,
-                self.config.turbulence,
+                self.turbulence,
                 beat,
                 self.frame_index,
-                self.config.time_lapse * float(self.latest_look.get("current_speed", 1.0)) / METRES_PER_WORLD_UNIT,
+                self.time_lapse * current_speed / METRES_PER_WORLD_UNIT,
                 wind_east,
                 wind_north,
                 # Light per step, so the trails glow the same at any frame rate.
-                self.config.brightness * self.config.step_seconds * 30.0,
+                self.brightness * self.step_seconds * 30.0,
                 self.eddy[0],
                 self.eddy[1],
                 self.eddy_age,
@@ -345,8 +392,7 @@ class GulfStreamCurrent:
         self.frame_index += 1
         texture = self.output_textures.next_texture_for_this_frame(gpu, size, size)
         gpu.copy_surface_to_surface(self.trail_texture.surface_id, texture)
-        ctx.outputs.write(
-            self.trails,
+        self.trails.write(
             ImageFrameToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )

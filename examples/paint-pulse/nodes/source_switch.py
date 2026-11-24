@@ -13,15 +13,18 @@ unbroken sample count across switches, so the listener downstream never sees a g
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
+    Audio,
     AudioWindowContract,
-    Channels,
-    Input,
-    Output,
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     node,
 )
 
@@ -30,57 +33,53 @@ BLOCK = AudioWindowContract(sample_rate=SAMPLE_RATE, channels=2, dtype="f32", wi
 SOURCE_NAMES = ("song", "computer", "mic")
 
 
-@dataclass
-class SourceSwitchConfig:
-    """Which source plays: 0 the song, 1 the computer's audio, 2 the mic."""
-
-    source: int = 0
-
-
 @node.meta(
     category="Paint Pulse",
     description="Pass on one of three sounds, the song, the computer's audio or a mic, chosen by `source`.",
 )
-@node.process
+@node
 class SourceSwitch:
     """Three sounds in, the chosen one out."""
 
-    song = Input(Channels, delivery="ordered", window=BLOCK, description="Source 0")
-    computer = Input(Channels, delivery="ordered", window=BLOCK, description="Source 1")
-    mic = Input(Channels, delivery="ordered", window=BLOCK, description="Source 2")
-    audio = Output(Channels, rate=SAMPLE_RATE, dtype="f32", description="The chosen source, for listening to")
-    monitor = Output(Channels, rate=SAMPLE_RATE, dtype="f32", description="The chosen source to play out loud: the song only")
+    source: Annotated[
+        int,
+        NumberRange(minimum=0, maximum=len(SOURCE_NAMES) - 1),
+        Description("Which source plays: 0 the song, 1 the computer's audio, 2 the mic."),
+    ] = 0
+    song: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 0")]]
+    computer: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 1")]]
+    mic: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 2")]]
+    audio: OutputPin[Annotated[Audio, Description("The chosen source, for listening to")]]
+    monitor: OutputPin[
+        Annotated[Audio, Description("The chosen source to play out loud: the song only")]
+    ]
 
-    def __init__(self, config: SourceSwitchConfig) -> None:
-        self.source = 0
+    def __init__(self) -> None:
         self.samples_written = 0
         self.samples_monitored = 0
-        self.configure(config)
-
-    def configure(self, config: SourceSwitchConfig) -> None:
-        self.source = min(len(SOURCE_NAMES) - 1, max(0, int(config.source)))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        for index, port in enumerate((self.song, self.computer, self.mic)):
+        chosen = min(len(SOURCE_NAMES) - 1, max(0, int(self.source)))
+        for index, pin in enumerate((self.song, self.computer, self.mic)):
             while True:
-                block = ctx.inputs.read(port)
+                block = pin.read()
                 if block is None:
                     break
-                if index != self.source:
+                if index != chosen:
                     continue
                 samples = numpy.ascontiguousarray(numpy.from_dlpack(block), dtype=numpy.float32)
-                ctx.outputs.write(
-                    self.audio,
+                self.audio.write(
                     samples,
+                    block.timestamp_ns,
                     start_sample=self.samples_written,
-                    timestamp_ns=block.timestamp_ns,
+                    sample_rate=SAMPLE_RATE,
                 )
                 self.samples_written += samples.shape[1]
                 if index == 0:
-                    ctx.outputs.write(
-                        self.monitor,
+                    self.monitor.write(
                         samples,
+                        block.timestamp_ns,
                         start_sample=self.samples_monitored,
-                        timestamp_ns=block.timestamp_ns,
+                        sample_rate=SAMPLE_RATE,
                     )
                     self.samples_monitored += samples.shape[1]

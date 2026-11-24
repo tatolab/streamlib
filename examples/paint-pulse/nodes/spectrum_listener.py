@@ -12,16 +12,19 @@ onset throws it outward at once and it falls back within a beat, so hits read as
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
+    Audio,
     AudioWindowContract,
-    Channels,
     ChannelsBlock,
-    Input,
-    Output,
-    Records,
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     node,
 )
 
@@ -44,7 +47,18 @@ BEAT_HIGH_HZ = 130.0
 FLOOR_DB = -72.0
 CEILING_DB = -12.0
 
-MOTION_RECORD_NAMES = ("clocks", "levels", "beat", "energy", "bass", "highs")
+
+@dataclass(frozen=True)
+class SpectrumMotion:
+    """The music as the ball moves to it: each band's scatter clock and level, the beat, the
+    energy, and the bass and highs levels."""
+
+    clocks: list[float]
+    levels: list[float]
+    beat: float
+    energy: float
+    bass: float
+    highs: float
 
 
 def smoothstep(edge0: float, edge1: float, x: float) -> float:
@@ -82,27 +96,36 @@ class BandState:
     punch: float = 0.0
 
 
-@dataclass
-class SpectrumListenerConfig:
-    """How strongly the music moves the ball."""
-
-    sensitivity: float = 0.5
-    spread: float = 0.65
-
-
 @node.meta(
     category="Paint Pulse",
     description="The one analysis step the runtime has no built-in for: an FFT into 24 bands, each with a scatter clock that onsets throw outward.",
 )
-@node.process
+@node
 class SpectrumListener:
     """Music in, a motion record per window out."""
 
-    music = Input(Channels, delivery="ordered", window=LISTENING_WINDOW, description="The music to listen to, mixed to mono")
-    motion = Output(Records, names=MOTION_RECORD_NAMES, description="Per-band clocks and levels, the beat, the energy, and the bass and highs levels")
+    sensitivity: Annotated[
+        float, NumberRange(minimum=0.1), Description("How strongly the music moves the ball.")
+    ] = 0.5
+    spread: Annotated[
+        float, NumberRange(minimum=0.0), Description("How far a hit throws its band outward.")
+    ] = 0.65
+    music: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            LISTENING_WINDOW,
+            Description("The music to listen to, mixed to mono"),
+        ]
+    ]
+    motion: OutputPin[
+        Annotated[
+            SpectrumMotion,
+            Description("Per-band clocks and levels, the beat, the energy, and the bass and highs levels"),
+        ]
+    ]
 
-    def __init__(self, config: SpectrumListenerConfig) -> None:
-        self.configure(config)
+    def __init__(self) -> None:
         edges = LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ) ** (numpy.arange(BAND_COUNT + 1) / BAND_COUNT)
         bin_hz = LISTENING_WINDOW.sample_rate / FFT_SIZE
         self.band_bins = []
@@ -121,18 +144,14 @@ class SpectrumListener:
         self.energy = 0.0
         self.loudness = 0.0
 
-    def configure(self, config: SpectrumListenerConfig) -> None:
-        self.sensitivity = max(0.1, float(config.sensitivity))
-        self.spread = max(0.0, float(config.spread))
-
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         while True:
-            block = ctx.inputs.read(self.music)
+            block = self.music.read()
             if block is None:
                 return
-            self.listen_to_one_window(ctx, block)
+            self.listen_to_one_window(block)
 
-    def listen_to_one_window(self, ctx: RuntimeContextLimitedAccess, block: ChannelsBlock) -> None:
+    def listen_to_one_window(self, block: ChannelsBlock) -> None:
         samples = numpy.from_dlpack(block)[0]
         hop = samples.shape[0]
         self.history = numpy.roll(self.history, -hop)
@@ -184,16 +203,15 @@ class SpectrumListener:
         levels = [
             (band.envelope / band.peak) * smoothstep(0.03, 0.12, band.envelope) for band in self.bands
         ]
-        ctx.outputs.write(
-            self.motion,
-            {
-                "clocks": [round(c, 4) for c in clocks],
-                "levels": [round(min(1.0, lv), 4) for lv in levels],
-                "beat": round(self.beat, 4),
-                "energy": round(self.energy, 4),
-                "bass": round(sum(levels[:6]) / 6.0, 4),
-                "highs": round(sum(levels[16:]) / 8.0, 4),
-            },
+        self.motion.write(
+            SpectrumMotion(
+                clocks=[round(c, 4) for c in clocks],
+                levels=[round(min(1.0, lv), 4) for lv in levels],
+                beat=round(self.beat, 4),
+                energy=round(self.energy, 4),
+                bass=round(sum(levels[:6]) / 6.0, 4),
+                highs=round(sum(levels[16:]) / 8.0, 4),
+            ),
             timestamp_ns=block.timestamp_ns,
         )
 

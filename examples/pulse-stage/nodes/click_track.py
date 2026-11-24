@@ -10,18 +10,22 @@ on, so what you hear follows the same beat the picture pulses to.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
-    Channels,
-    Input,
-    Output,
-    Records,
+    Audio,
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     log,
     node,
 )
+
+from nodes.beat import BeatCue
 
 SAMPLE_RATE = 48_000
 BLOCK_SIZE = 480
@@ -34,31 +38,25 @@ DOWNBEAT_HERTZ = 1_760.0
 MOST_BLOCKS_OF_CATCH_UP = 8
 
 
-@dataclass
-class ClickTrackConfig:
-    """How loud the click plays."""
-
-    volume: float = 0.4
-
-
 @node.meta(
     category="Pulse Stage",
     description="A click on every beat it is cued, higher on the first beat of a bar, played as stereo audio.",
 )
-@node.process(execution="continuous", interval_ms=5)
+@node(execution="continuous", interval_ms=5)
 class ClickTrack:
     """Stereo blocks of silence, with a short decaying tone from each new beat."""
 
-    cue = Input(
-        Records, delivery="newest", description="count and downbeat, from ClickCue"
-    )
-    audio = Output(
-        Channels, rate=SAMPLE_RATE, dtype="f32", description="The click, in stereo"
-    )
+    volume: Annotated[
+        float,
+        NumberRange(minimum=0.0, maximum=1.0),
+        Description("How loud the click plays."),
+    ] = 0.4
+    cue: InputPin[
+        Annotated[BeatCue, StreamDelivery("newest"), Description("The beat, from ClickCue")]
+    ]
+    audio: OutputPin[Annotated[Audio, Description("The click, in stereo")]]
 
-    def __init__(self, config: ClickTrackConfig) -> None:
-        self.volume = 0.4
-        self.configure(config)
+    def __init__(self) -> None:
         self.last_count: int | None = None
         self.click_hertz = BEAT_HERTZ
         self.samples_into_the_click = int(CLICK_SECONDS * SAMPLE_RATE)
@@ -66,12 +64,8 @@ class ClickTrack:
         self.samples_written = 0
         self.first_sample = 0
 
-    def configure(self, config: ClickTrackConfig) -> None:
-        """Take `volume` while it plays."""
-        self.volume = min(1.0, max(0.0, float(config.volume)))
-
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self._take_the_newest_cue(ctx)
+        self._take_the_newest_cue()
         if self.anchor_ns is None:
             self.anchor_ns = ctx.time
         samples_owed = (
@@ -87,20 +81,19 @@ class ClickTrack:
             self.samples_written = 0
             samples_owed = 0
         while self.samples_written + BLOCK_SIZE <= samples_owed:
-            self._write_one_block(ctx)
+            self._write_one_block()
 
-    def _take_the_newest_cue(self, ctx: RuntimeContextLimitedAccess) -> None:
-        cue = ctx.inputs.read(self.cue)
+    def _take_the_newest_cue(self) -> None:
+        cue = self.cue.read()
         if cue is None:
             return
-        count = int(cue["count"])
-        if count == self.last_count:
+        if cue.count == self.last_count:
             return
-        self.last_count = count
-        self.click_hertz = DOWNBEAT_HERTZ if cue["downbeat"] else BEAT_HERTZ
+        self.last_count = cue.count
+        self.click_hertz = DOWNBEAT_HERTZ if cue.downbeat else BEAT_HERTZ
         self.samples_into_the_click = 0
-        if cue["downbeat"]:
-            log.info("bar", beat=count)
+        if cue.downbeat:
+            log.info("bar", beat=cue.count)
 
     def _next_block(self) -> numpy.ndarray:
         sample_indices = self.samples_into_the_click + numpy.arange(BLOCK_SIZE)
@@ -109,23 +102,23 @@ class ClickTrack:
         tone = (
             numpy.sin(2.0 * numpy.pi * self.click_hertz * seconds)
             * envelope
-            * self.volume
+            * min(1.0, max(0.0, self.volume))
         )
         self.samples_into_the_click += BLOCK_SIZE
         return numpy.ascontiguousarray(
             numpy.tile(tone.astype(numpy.float32), (CHANNEL_COUNT, 1))
         )
 
-    def _write_one_block(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def _write_one_block(self) -> None:
         assert self.anchor_ns is not None
         timestamp_ns = (
             self.anchor_ns
             + (self.samples_written * NANOSECONDS_PER_SECOND) // SAMPLE_RATE
         )
-        ctx.outputs.write(
-            self.audio,
+        self.audio.write(
             self._next_block(),
+            timestamp_ns,
             start_sample=self.first_sample + self.samples_written,
-            timestamp_ns=timestamp_ns,
+            sample_rate=SAMPLE_RATE,
         )
         self.samples_written += BLOCK_SIZE

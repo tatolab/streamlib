@@ -11,40 +11,39 @@ at that instant. Everything downstream that pulses, pulses on this.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
-from tatolab.stream import Output, Records, RuntimeContextFullAccess, RuntimeContextLimitedAccess, log, node
+from tatolab.stream import (
+    Description,
+    OutputPin,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    SettingOnly,
+    log,
+    node,
+)
 
-from nodes.neon_world import TakeClock
+from nodes.neon_world import SoundtrackPulseReading, TakeClock
 from nodes.soundtrack_analysis import soundtrack_curves
-
-PULSE_RECORD_NAMES = ["beat", "energy", "glow"]
-
-
-@dataclass
-class SoundtrackPulseConfig:
-    """SoundtrackPulse's settings: the track, relative to the project."""
-
-    soundtrack_path: str = "media/soundtrack.wav"
 
 
 @node.meta(
     category="Gulf Stream Neon",
     description="The soundtrack heard: its kick envelope and loudness at stream time, as records every compute node pulses on.",
 )
-@node.process(execution="continuous", interval_ms=16)
+@node(execution="continuous", interval_ms=16)
 class SoundtrackPulse:
     """Publishes the soundtrack's kick envelope and loudness, step by step."""
 
-    def __init__(self, config: SoundtrackPulseConfig) -> None:
-        self.config = config
-
-    pulse = Output(Records, names=PULSE_RECORD_NAMES, description="beat 0-1, energy 0-1, glow")
+    soundtrack_path: Annotated[
+        str, SettingOnly(), Description("The track, relative to the project.")
+    ] = "media/soundtrack.wav"
+    pulse: OutputPin[Annotated[SoundtrackPulseReading, Description("beat 0-1, energy 0-1, glow")]]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.take_clock = TakeClock()
-        path = Path(self.config.soundtrack_path)
+        path = Path(self.soundtrack_path)
         if not path.is_absolute():
             path = Path(__file__).resolve().parent.parent / path
         self.curves = soundtrack_curves(str(path))
@@ -52,8 +51,9 @@ class SoundtrackPulse:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         beat, energy = self.curves.at(self.take_clock.seconds_at(ctx))
-        ctx.outputs.write(
-            self.pulse,
-            {"beat": round(beat, 4), "energy": round(energy, 4), "glow": round(1.0 + 0.5 * energy, 4)},
+        self.pulse.write(
+            SoundtrackPulseReading(
+                beat=round(beat, 4), energy=round(energy, 4), glow=round(1.0 + 0.5 * energy, 4)
+            ),
             timestamp_ns=ctx.time,
         )

@@ -20,22 +20,27 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
-from typing import Any
+from typing import Annotated
 
 import numpy
 from tatolab.stream import (
     ColorInfo,
-    Image,
+    Description,
     ImageFrameToWrite,
-    Input,
+    InputPin,
     NodeOutputTextureRing,
-    Output,
-    Records,
+    NumberRange,
+    OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
+    TexturePixelFormats,
     node,
 )
+
+from nodes.motion import OrbitView
+from nodes.spectrum_listener import SpectrumMotion
 
 BAND_COUNT = 24
 GRID_HALF = 20
@@ -49,8 +54,6 @@ NANOSECONDS_PER_SECOND = 1_000_000_000
 # time, yaw, pitch, aspect, beat, flow, burst, distance; then 24 (clock, level) half pairs.
 FRAME_PUSH_CONSTANT_FORMAT = "<8f24I"
 FRAME_PUSH_CONSTANT_SIZE = struct.calcsize(FRAME_PUSH_CONSTANT_FORMAT)
-MOTION_RECORD_NAMES = ("clocks", "levels", "beat", "energy")
-CAMERA_RECORD_NAMES = ("yaw", "pitch", "distance", "burst")
 BURST_SECONDS = 1.4
 # The camera rides a spring that each explosion throws outward: a stiff spring out, so it is
 # thrown back within a few frames, then a soft one that glides it home after a short hold.
@@ -275,55 +278,59 @@ def half_pair_word(clock: float, level: float) -> int:
     return int(halves[0]) | (int(halves[1]) << 16)
 
 
-@dataclass
-class PaintBallConfig:
-    """The frame's size, and whether flown cubes drift on a flow field."""
-
-    width: int = 1280
-    height: int = 720
-    flow: bool = True
-    pullback: float = 2.6
-    push_out: float = 60.0
-    spring_back: float = 5.0
-    hold: float = 0.35
-
-
 @node.meta(
     category="Paint Pulse",
     description="A ball of small cubes, coloured by the spectrum, that scatters and gathers with each band of the music.",
 )
-@node.process(execution="continuous", interval_ms=16)
+@node(execution="continuous", interval_ms=16)
 class PaintBall:
     """Motion in, a rendered frame of the ball out (transparent where there is no ball)."""
 
-    motion = Input(Records, delivery="newest", requires=MOTION_RECORD_NAMES, description="From SpectrumListener")
-    camera = Input(Records, delivery="newest", description="From OrbitCamera")
-    ball = Output(Image, description="The ball, on a transparent background")
+    width: Annotated[
+        int, NumberRange(minimum=64), Description("The frame's width, in pixels.")
+    ] = 1280
+    height: Annotated[
+        int, NumberRange(minimum=64), Description("The frame's height, in pixels.")
+    ] = 720
+    flow: Annotated[bool, Description("Whether flown cubes drift on a flow field.")] = True
+    pullback: Annotated[
+        float,
+        NumberRange(minimum=1.0),
+        Description("How far an explosion throws the camera back, as a share of its distance."),
+    ] = 2.6
+    push_out: Annotated[
+        float, NumberRange(minimum=1.0), Description("How hard the spring throws the camera out.")
+    ] = 60.0
+    spring_back: Annotated[
+        float, NumberRange(minimum=0.5), Description("How softly the spring brings the camera home.")
+    ] = 5.0
+    hold: Annotated[
+        float,
+        NumberRange(minimum=0.0),
+        Description("How long the camera holds its reach before it glides home, in seconds."),
+    ] = 0.35
+    motion: InputPin[
+        Annotated[SpectrumMotion, StreamDelivery("newest"), Description("From SpectrumListener")]
+    ]
+    camera: InputPin[Annotated[OrbitView, StreamDelivery("newest"), Description("From OrbitCamera")]]
+    ball: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(TEXTURE_FORMAT),
+            Description("The ball, on a transparent background"),
+        ]
+    ]
 
-    def __init__(self, config: PaintBallConfig) -> None:
-        self.configure(config)
-        self.latest_motion: dict[str, Any] | None = None
-        self.latest_camera: dict[str, Any] = {"yaw": 0.0, "pitch": 0.14, "distance": 11.5, "burst": 0}
+    def __init__(self) -> None:
+        self.latest_motion: SpectrumMotion | None = None
+        self.latest_camera = OrbitView(yaw=0.0, pitch=0.14, distance=11.5, burst=0)
         self.bursts_seen: int | None = None
         self.burst = 0.0
-        self.pullback = 1.0
-        self.pullback_speed = 0.0
+        self.camera_reach = 1.0
+        self.camera_reach_speed = 0.0
         self.held_scatter = 0.0
         self.last_scatter = 0.0
         self.last_time_ns: int | None = None
-
-    def configure(self, config: PaintBallConfig) -> None:
-        self.width = max(64, int(config.width))
-        self.height = max(64, int(config.height))
-        self.flow = 1.0 if config.flow else 0.0
-        # The camera spring: how far it is thrown, how hard, how softly it comes home and how long
-        # the reach holds. Each damping is set near critical for its stiffness.
-        self.most_pullback = max(1.0, float(config.pullback))
-        out = max(1.0, float(config.push_out))
-        back = max(0.5, float(config.spring_back))
-        self.spring_out = (out, 1.4 * out**0.5)
-        self.spring_in = (back, 1.6 * back**0.5)
-        self.hold_falls_per_second = 1.0 / max(0.05, float(config.hold) * 8.0)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(TEXTURE_FORMAT, RENDER_ATTACHMENT_AND_SAMPLED)
@@ -337,32 +344,32 @@ class PaintBall:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        motion = ctx.inputs.read(self.motion)
+        motion = self.motion.read()
         if motion is not None:
             self.latest_motion = motion
 
         now_ns = ctx.time
         dt = 0.0 if self.last_time_ns is None else (now_ns - self.last_time_ns) / NANOSECONDS_PER_SECOND
         self.last_time_ns = now_ns
-        camera = ctx.inputs.read(self.camera)
+        camera = self.camera.read()
         if camera is not None:
             self.latest_camera = camera
-        bursts = int(self.latest_camera.get("burst", 0))
+        bursts = self.latest_camera.burst
         if self.bursts_seen is not None and bursts != self.bursts_seen:
             self.burst = 1.0
         self.bursts_seen = bursts
         self.burst = max(0.0, self.burst - min(dt, 0.1) / BURST_SECONDS)
-        yaw = float(self.latest_camera.get("yaw", 0.0)) % math.tau
-        pitch = float(self.latest_camera.get("pitch", 0.14))
-        distance = max(4.0, float(self.latest_camera.get("distance", 11.5)))
+        yaw = self.latest_camera.yaw % math.tau
+        pitch = self.latest_camera.pitch
+        distance = max(4.0, self.latest_camera.distance)
 
         clocks = [0.0] * BAND_COUNT
         levels = [0.0] * BAND_COUNT
         beat = 0.0
         if self.latest_motion is not None:
-            clocks = list(self.latest_motion["clocks"])[:BAND_COUNT]
-            levels = list(self.latest_motion["levels"])[:BAND_COUNT]
-            beat = float(self.latest_motion["beat"])
+            clocks = list(self.latest_motion.clocks)[:BAND_COUNT]
+            levels = list(self.latest_motion.levels)[:BAND_COUNT]
+            beat = self.latest_motion.beat
         words = [half_pair_word(c, lv) for c, lv in zip(clocks, levels)]
 
         # The camera is blown back with the cubes: a jump in how far the widest bands have flown
@@ -371,23 +378,31 @@ class PaintBall:
         widest = sorted(clocks, reverse=True)[:6]
         scatter = max(sum(widest) / (len(widest) * 3.0), self.burst)
         step = min(dt, 0.05)
-        self.held_scatter = max(scatter, self.held_scatter - self.hold_falls_per_second * step)
+        # The camera spring: how far it is thrown, how hard, how softly it comes home and how long
+        # the reach holds. Each damping is set near critical for its stiffness.
+        most_reach = max(1.0, self.pullback)
+        out = max(1.0, self.push_out)
+        back = max(0.5, self.spring_back)
+        hold_falls_per_second = 1.0 / max(0.05, self.hold * 8.0)
+        self.held_scatter = max(scatter, self.held_scatter - hold_falls_per_second * step)
         reach = min(1.0, max(0.0, (self.held_scatter - PULLBACK_FROM_SCATTER) / (PULLBACK_FULL_AT_SCATTER - PULLBACK_FROM_SCATTER)))
-        target = 1.0 + (self.most_pullback - 1.0) * reach * reach * (3.0 - 2.0 * reach)
+        target = 1.0 + (most_reach - 1.0) * reach * reach * (3.0 - 2.0 * reach)
         jump = scatter - self.last_scatter
         self.last_scatter = scatter
         if jump > 0.02:
-            self.pullback_speed += THROW_PER_SCATTER_JUMP * jump
-        stiffness, damping = self.spring_out if target > self.pullback else self.spring_in
-        self.pullback_speed += (stiffness * (target - self.pullback) - damping * self.pullback_speed) * step
-        self.pullback = min(self.most_pullback + 0.4, max(0.85, self.pullback + self.pullback_speed * step))
-        distance *= self.pullback
+            self.camera_reach_speed += THROW_PER_SCATTER_JUMP * jump
+        stiffness, damping = (out, 1.4 * out**0.5) if target > self.camera_reach else (back, 1.6 * back**0.5)
+        self.camera_reach_speed += (stiffness * (target - self.camera_reach) - damping * self.camera_reach_speed) * step
+        self.camera_reach = min(most_reach + 0.4, max(0.85, self.camera_reach + self.camera_reach_speed * step))
+        distance *= self.camera_reach
 
-        texture = self.output_ring.next_texture_for_this_frame(ctx.gpu_limited_access, self.width, self.height)
+        width = max(64, self.width)
+        height = max(64, self.height)
+        texture = self.output_ring.next_texture_for_this_frame(ctx.gpu_limited_access, width, height)
         self.kernel.draw(
             bindings={},
             color_targets=[texture],
-            extent=(self.width, self.height),
+            extent=(width, height),
             vertex_count=CUBE_VERTEX_COUNT,
             instance_count=GRID_SIDE**3,
             push_constants=struct.pack(
@@ -395,16 +410,15 @@ class PaintBall:
                 (now_ns / NANOSECONDS_PER_SECOND) % 1000.0,
                 yaw,
                 pitch,
-                self.width / self.height,
+                width / height,
                 beat,
-                self.flow,
+                1.0 if self.flow else 0.0,
                 self.burst * self.burst * (3.0 - 2.0 * self.burst),
                 distance,
                 *words,
             ),
         )
-        ctx.outputs.write(
-            self.ball,
+        self.ball.write(
             ImageFrameToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=now_ns,
         )

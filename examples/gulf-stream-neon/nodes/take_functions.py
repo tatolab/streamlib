@@ -3,7 +3,7 @@
 
 """Number nodes that read the take and the soundtrack, so the graph can wire the lens to them.
 
-Each is a `@node.function`: the runtime evaluates it every step from the
+Each is a function node: the runtime evaluates it every step from the
 numbers wired into it, and its outputs are pins. Wire a Timer into `seconds`
 and the soundtrack's kick, the take's sections, where the sun sits in the
 frame and where the horizon falls all become numbers any knob can follow.
@@ -11,17 +11,29 @@ frame and where the horizon falls all become numbers any knob can follow.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
+from typing import Annotated, NamedTuple
 
-from tatolab.stream import State, Stateful, Time, node
+from tatolab.stream import Description, State, Stateful, Time, node
 
-from nodes.neon_world import STAGE_HOME, TakeMoment, camera_basis, project_to_frame, smoothstep, stage_moment, sun_direction, take_moment_at
+from nodes.neon_world import (
+    STAGE_HOME,
+    StageCamera,
+    StageLookValues,
+    TakeMoment,
+    camera_basis,
+    project_to_frame,
+    smoothstep,
+    stage_moment,
+    sun_direction,
+    take_moment_at,
+)
 from nodes.soundtrack_analysis import soundtrack_curves
 
 
-@dataclass(frozen=True)
-class SoundtrackReading:
+class SoundtrackReading(NamedTuple):
     """The soundtrack at one instant: how hard the kick hits and how loud the track is."""
 
     beat: float
@@ -32,15 +44,16 @@ class SoundtrackReading:
     category="Gulf Stream Neon",
     description="The soundtrack's kick envelope and loudness, both 0 to 1, at `seconds` into the track.",
 )
-@node.function
-def SoundtrackBeat(seconds: float = 0.0) -> SoundtrackReading:  # noqa: N802
+@node
+def SoundtrackBeat(
+    seconds: Annotated[float, Description("Seconds into the track.")] = 0.0,
+) -> SoundtrackReading:  # noqa: N802
     """The kick and the loudness of the take's soundtrack at `seconds`."""
     beat, energy = soundtrack_curves().at(seconds)
     return SoundtrackReading(beat, energy)
 
 
-@dataclass(frozen=True)
-class TakeReading:
+class TakeReading(NamedTuple):
     """Where the take is: its sections as 0-to-1 levels, and where the lens should focus."""
 
     drop: float
@@ -53,15 +66,16 @@ class TakeReading:
     category="Gulf Stream Neon",
     description="The take's sections as levels: `drop` is up from 10 s to 20 s, `sunset` rises over the build, `reveal` holds the real map; plus the focus distance.",
 )
-@node.function
-def TakeBeats(seconds: float = 0.0) -> TakeReading:  # noqa: N802
+@node
+def TakeBeats(
+    seconds: Annotated[float, Description("Seconds into the take.")] = 0.0,
+) -> TakeReading:  # noqa: N802
     """The take's drop, sunset and reveal levels at `seconds`, and the distance to focus at."""
     moment = take_moment_at(seconds)
     return TakeReading(moment.drop, smoothstep(7.5, 10.0, seconds), moment.reveal, moment.focus_distance)
 
 
-@dataclass(frozen=True)
-class ScreenPlacement:
+class ScreenPlacement(NamedTuple):
     """Where the sun and the horizon fall in the frame, from 0 to 1, and how much of the sun shows."""
 
     sun_x: float
@@ -74,9 +88,11 @@ class ScreenPlacement:
     category="Gulf Stream Neon",
     description="Where the take's camera sees the sun and the horizon, as frame positions from 0 to 1, for god rays, flares and heat haze.",
 )
-@node.function
+@node
 def SunOnScreen(  # noqa: N802
-    seconds: float = 0.0, aspect: float = 0.5625, vertical_fov_degrees: float = 62.0
+    seconds: Annotated[float, Description("Seconds into the take.")] = 0.0,
+    aspect: Annotated[float, Description("The frame's width over its height.")] = 0.5625,
+    vertical_fov_degrees: Annotated[float, Description("The lens's vertical field of view.")] = 62.0,
 ) -> ScreenPlacement:
     """The sun's and the horizon's place in the frame at `seconds`, for a frame of `aspect` and lens."""
     return _placement_of(take_moment_at(seconds, aspect), aspect, vertical_fov_degrees)
@@ -113,9 +129,12 @@ def _placement_of(moment: TakeMoment, aspect: float, vertical_fov_degrees: float
     category="Gulf Stream Neon",
     description="Where the stage view's camera sees the sun and the horizon, as frame positions from 0 to 1, for god rays, flares and heat haze while you fly it.",
 )
-@node.function
+@node
 def StageSunOnScreen(  # noqa: N802
-    stage: dict, time_of_day: float = 0.35, aspect: float = 1.7778, vertical_fov_degrees: float = 50.0
+    stage: Annotated[StageCamera | None, Description("The stage view's camera.")] = None,
+    time_of_day: Annotated[float, Description("0 golden hour to 1 night.")] = 0.35,
+    aspect: Annotated[float, Description("The frame's width over its height.")] = 1.7778,
+    vertical_fov_degrees: Annotated[float, Description("The lens's vertical field of view.")] = 50.0,
 ) -> ScreenPlacement:
     """The sun's and the horizon's place in the frame for the stage's camera at `time_of_day`."""
     return _placement_of(stage_moment(stage, time_of_day, 0.0), aspect, vertical_fov_degrees)
@@ -125,22 +144,16 @@ def StageSunOnScreen(  # noqa: N802
     category="Gulf Stream Neon",
     description="The stage's look as one record: the real map to neon morph, the time of day, the skyline, the neon and the current, each already smoothed upstream.",
 )
-@node.function
+@node
 def StageLook(  # noqa: N802
-    morph: float = 0.0,
-    time_of_day: float = 0.3,
-    skyline_height: float = 0.055,
-    neon: float = 1.0,
-    current_speed: float = 1.0,
-) -> dict:
+    morph: Annotated[float, Description("0 the real map to 1 neon.")] = 0.0,
+    time_of_day: Annotated[float, Description("0 golden hour to 1 night.")] = 0.3,
+    skyline_height: Annotated[float, Description("How tall the skyline stands.")] = 0.055,
+    neon: Annotated[float, Description("How brightly the neon glows.")] = 1.0,
+    current_speed: Annotated[float, Description("How fast the current's time-lapse runs.")] = 1.0,
+) -> StageLookValues:
     """The five stage values as one record, for the renderer and the current."""
-    return {
-        "morph": morph,
-        "time_of_day": time_of_day,
-        "skyline_height": skyline_height,
-        "neon": neon,
-        "current_speed": current_speed,
-    }
+    return StageLookValues(morph, time_of_day, skyline_height, neon, current_speed)
 
 
 @dataclass(frozen=True)
@@ -163,20 +176,24 @@ CAMERA_KEYS = ("target_x", "target_y", "distance", "yaw_degrees", "pitch_degrees
     category="Gulf Stream Neon",
     description="Glides the stage's camera after the hand: an exponential follow of orbit, zoom and fly that is the same at any frame rate. Clicks and eddy drops pass straight through.",
 )
-@node.function
+@node
 def SmoothCamera(  # noqa: N802
-    stage: dict, seconds: float = 0.18, *, now: Time, previous: State[FollowedCamera]
-) -> Stateful[dict, FollowedCamera]:
-    """The camera eased toward the stage's record, with `seconds` as the time constant."""
-    wanted = {key: float((stage or {}).get(key, getattr(previous, key))) for key in CAMERA_KEYS}
+    stage: Annotated[StageCamera | None, Description("The stage view's camera.")] = None,
+    seconds: Annotated[float, Description("The follow's time constant, in seconds.")] = 0.18,
+    *,
+    now: Time,
+    previous: State[FollowedCamera],
+) -> Stateful[StageCamera | None, FollowedCamera]:
+    """The camera eased toward the stage's, with `seconds` as the time constant; none until the stage sends one."""
+    if stage is None:
+        return None, previous
+    wanted = {key: float(getattr(stage, key)) for key in CAMERA_KEYS}
     if not previous.started or seconds <= 0.0:
         followed = wanted
     else:
         keep = math.exp(-max(now - previous.last_evaluated_at_ns, 0) * 1e-9 / seconds)
         followed = {key: wanted[key] + (getattr(previous, key) - wanted[key]) * keep for key in CAMERA_KEYS}
-    record = dict(stage or {})
-    record.update(followed)
-    return record, FollowedCamera(**followed, last_evaluated_at_ns=now, started=True)
+    return dataclasses.replace(stage, **followed), FollowedCamera(**followed, last_evaluated_at_ns=now, started=True)
 
 
 @dataclass(frozen=True)
@@ -193,9 +210,13 @@ class GlideState:
     category="Gulf Stream Neon",
     description="Glides after a number like a critically damped spring: no overshoot, no corners, the same at any frame rate. Put it between a slider and what it drives, so a few edits a second play out as a smooth 60 fps move.",
 )
-@node.function
+@node
 def Glide(  # noqa: N802
-    x: float = 0.0, seconds: float = 0.2, *, now: Time, previous: State[GlideState]
+    x: Annotated[float, Description("The number to glide after.")] = 0.0,
+    seconds: Annotated[float, Description("About how long the glide takes to settle.")] = 0.2,
+    *,
+    now: Time,
+    previous: State[GlideState],
 ) -> Stateful[float, GlideState]:
     """`x`, followed by a critically damped spring that settles in about `seconds`."""
     if not previous.started or seconds <= 0.0:

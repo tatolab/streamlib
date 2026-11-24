@@ -7,13 +7,14 @@ and the cue the click track plays.
 `Beat` turns the seconds a `Timer` counts into a pulse that falls away across each beat, the
 beat's count and whether it opens a bar. `Follow` eases toward its target by a share of the
 gap each evaluation; its `previous` is linked from a `PreviousValue` of its own result, so the
-stream closes a loop of function nodes. `ClickCue` packs a beat into the record `ClickTrack`
+stream closes a loop of function nodes. `ClickCue` packs a beat into the cue `ClickTrack`
 reads.
 """
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Annotated, NamedTuple
 
 from tatolab.stream import Description, NumberRange, NumberStep, node
@@ -77,11 +78,22 @@ def Follow(
     return previous + (target - previous) * rate
 
 
+@dataclass(frozen=True)
+class BeatCue:
+    """The beat the click track plays: which beat it is and whether that beat opens a bar."""
+
+    count: int
+    downbeat: bool
+
+
 @node.meta(
     category="Pulse Stage",
-    description="The beat as the record the click track plays: its count and whether it opens a bar.",
+    description="The beat as the cue the click track plays: its count and whether it opens a bar.",
 )
-@node.function
-def ClickCue(count: int = 0, downbeat: bool = False) -> dict:
-    """`count` and `downbeat` as one record."""
-    return {"count": count, "downbeat": downbeat}
+@node
+def ClickCue(
+    count: Annotated[int, Description("Which beat it is.")] = 0,
+    downbeat: Annotated[bool, Description("Whether the beat opens a bar.")] = False,
+) -> BeatCue:
+    """`count` and `downbeat` as one cue."""
+    return BeatCue(count, downbeat)

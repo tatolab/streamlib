@@ -38,6 +38,56 @@ METRES_PER_WORLD_UNIT = 333_000.0 / (2.0 * WORLD_HALF_EXTENT)
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 RENDERED_FRAME_COLOUR = ColorInfo(primaries="bt709", transfer="srgb", range="full")
+
+
+@dataclass(frozen=True)
+class SoundtrackPulseReading:
+    """The soundtrack at one instant: the kick's envelope, the loudness, both 0 to 1, and the glow they drive."""
+
+    beat: float
+    energy: float
+    glow: float
+
+
+@dataclass(frozen=True)
+class StationReading:
+    """One reading of NOAA tide station 8723214 Virginia Key; `live` is 1 for a polled reading, 0 for a replayed one."""
+
+    station: float
+    observed_at_unix: float
+    water_level_m: float
+    wind_speed_mps: float
+    wind_from_degrees: float
+    wind_gust_mps: float
+    air_temperature_c: float
+    water_temperature_c: float
+    air_pressure_hpa: float
+    live: float
+
+
+@dataclass(frozen=True)
+class StageCamera:
+    """Where the stage view has been orbited, zoomed and flown to, and where it was last clicked to drop an eddy."""
+
+    target_x: float
+    target_y: float
+    distance: float
+    yaw_degrees: float
+    pitch_degrees: float
+    bursts: int
+    burst_x: float
+    burst_y: float
+
+
+@dataclass(frozen=True)
+class StageLookValues:
+    """The stage's look: the real map to neon morph, the time of day, the skyline, the neon and the current."""
+
+    morph: float
+    time_of_day: float
+    skyline_height: float
+    neon: float
+    current_speed: float
 HDR_LAYER_FORMAT = "rgba16_float"
 
 
@@ -267,16 +317,17 @@ STAGE_HOME = {
 }
 
 
-def stage_moment(stage: dict | None, time_of_day: float, morph: float) -> TakeMoment:
+def stage_moment(stage: StageCamera | None, time_of_day: float, morph: float) -> TakeMoment:
     """The camera the stage view steers: an orbit around a point on the sea.
 
-    `stage` is the view's camera record: the point it orbits (`target_x`,
-    `target_y`, in world units), how far away (`distance`), and the heading and
-    tilt (`yaw_degrees` from north, `pitch_degrees` down). Missing keys keep
-    their home values.
+    `stage` is the view's camera: the point it orbits (`target_x`, `target_y`,
+    in world units), how far away (`distance`), and the heading and tilt
+    (`yaw_degrees` from north, `pitch_degrees` down). Before the view sends one,
+    the camera is at its home.
     """
     view = dict(STAGE_HOME)
-    view.update({key: float(value) for key, value in (stage or {}).items() if key in STAGE_HOME})
+    if stage is not None:
+        view.update({key: float(getattr(stage, key)) for key in STAGE_HOME})
     pitch = min(max(view["pitch_degrees"], 2.0), 89.9)
     distance = min(max(view["distance"], 0.02), 6.0)
     forward, _right, _up = camera_basis(view["yaw_degrees"], pitch)

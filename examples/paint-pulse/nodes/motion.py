@@ -11,12 +11,14 @@ drag and zoom into one camera record, adding the slow spin a Speed node accumula
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated, NamedTuple
 
-from tatolab.stream import node
+from tatolab.stream import Description, node
+
+from nodes.spectrum_listener import SpectrumMotion
 
 
-@dataclass(frozen=True)
-class MotionReading:
+class MotionReading(NamedTuple):
     """The music as numbers: the kick's pump, the overall energy, and the bass and highs levels."""
 
     beat: float
@@ -25,43 +27,65 @@ class MotionReading:
     highs: float
 
 
+@dataclass(frozen=True)
+class StageCamera:
+    """The stage view's drag and zoom, and how many bursts it has fired."""
+
+    yaw: float
+    pitch: float
+    zoom: float
+    burst: int
+
+
+@dataclass(frozen=True)
+class OrbitView:
+    """Where the ball is drawn from, and the burst count the ball tells a new burst by."""
+
+    yaw: float
+    pitch: float
+    distance: float
+    burst: int
+
+
 @node.meta(
     category="Paint Pulse",
     description="Unpack the listener's motion record into Float pins: beat, energy, bass and highs.",
 )
-@node.function
-def MotionReadout(motion: dict) -> MotionReading:
+@node
+def MotionReadout(
+    motion: Annotated[
+        SpectrumMotion | None, Description("The listener's motion record.")
+    ] = None,
+) -> MotionReading:
     """Each named number of `motion`, or 0 before the first record arrives."""
     if motion is None:
         return MotionReading(0.0, 0.0, 0.0, 0.0)
-    return MotionReading(
-        float(motion.get("beat", 0.0)),
-        float(motion.get("energy", 0.0)),
-        float(motion.get("bass", 0.0)),
-        float(motion.get("highs", 0.0)),
-    )
+    return MotionReading(motion.beat, motion.energy, motion.bass, motion.highs)
 
 
 @node.meta(
     category="Paint Pulse",
     description="The camera the ball is drawn from: the stage's drag and zoom, plus a slow spin.",
 )
-@node.function
+@node
 def OrbitCamera(
-    view: dict,
-    spin: float = 0.0,
-    tilt: float = 0.14,
-    distance: float = 11.5,
-) -> dict:
+    view: Annotated[
+        StageCamera | None, Description("The stage view's drag and zoom.")
+    ] = None,
+    spin: Annotated[float, Description("The slow spin added to the yaw.")] = 0.0,
+    tilt: Annotated[float, Description("The pitch before the stage's drag.")] = 0.14,
+    distance: Annotated[
+        float, Description("How far the camera sits before the stage's zoom.")
+    ] = 11.5,
+) -> OrbitView:
     """Yaw is the stage's drag plus `spin`; pitch is `tilt` plus the stage's drag; the stage's
     zoom scales `distance`. The burst count passes through, so the ball can tell a new burst."""
-    view = view or {}
-    yaw = float(view.get("yaw", 0.0)) + spin
-    pitch = max(-1.2, min(1.2, tilt + float(view.get("pitch", 0.0))))
-    zoom = max(0.4, min(2.5, float(view.get("zoom", 1.0))))
-    return {
-        "yaw": yaw,
-        "pitch": pitch,
-        "distance": distance * zoom,
-        "burst": int(view.get("burst", 0)),
-    }
+    view = view or StageCamera(yaw=0.0, pitch=0.0, zoom=1.0, burst=0)
+    pitch = max(-1.2, min(1.2, tilt + view.pitch))
+    zoom = max(0.4, min(2.5, view.zoom))
+    return OrbitView(
+        yaw=view.yaw + spin,
+        pitch=pitch,
+        distance=distance * zoom,
+        burst=view.burst,
+    )
