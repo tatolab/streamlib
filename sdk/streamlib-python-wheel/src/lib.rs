@@ -47,9 +47,9 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_node_link_data_access::PythonNodeLinkDataAccess>()?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
-    module.add_class::<python_port_family_read_types::PythonChannelsBlock>()?;
-    module.add_class::<python_port_family_read_types::PythonPacketsUnit>()?;
-    module.add_class::<python_port_family_read_types::PythonArrayFrameCpuAttribute>()?;
+    module.add_class::<python_port_family_read_types::PythonAudio>()?;
+    module.add_class::<python_port_family_read_types::PythonEncodedMedia>()?;
+    module.add_class::<python_port_family_read_types::PythonTensorCpuAttribute>()?;
     module.add_function(wrap_pyfunction!(
         python_node_link_data_access::open_node_link_data_access_for_helper_process,
         module

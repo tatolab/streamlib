@@ -40,7 +40,7 @@ fn a_message_written_on_a_wired_output_arrives_on_a_wired_input_as_the_same_byte
 /// `Audio` stating its shape, rate and first sample through a port
 /// attribute, and as the raw borrow by name.
 #[test]
-fn a_channels_block_written_from_a_planar_array_reads_back_as_a_channels_block() {
+fn a_channels_block_written_from_a_planar_array_reads_back_as_audio() {
     Python::initialize();
     Python::attach(|python| {
         let (source, destination) = one_wired_link(python, "channels-block");
@@ -67,7 +67,7 @@ fn a_channels_block_written_from_a_planar_array_reads_back_as_a_channels_block()
         }
 
         let received = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Channels);
-        assert!(received.cast::<PythonChannelsBlock>().is_ok());
+        assert!(received.cast::<PythonAudio>().is_ok());
         let attribute = |name: &str| received.getattr(name).unwrap();
         assert_eq!(attribute("channel_count").extract::<u32>().unwrap(), 2);
         assert_eq!(
@@ -323,7 +323,7 @@ fn a_packets_unit_reads_back_with_its_stamp_group_flag_and_codec() {
         }
         for (codec, starts_group) in [("h264", false), ("", true)] {
             let unit = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Packets);
-            assert!(unit.cast::<PythonPacketsUnit>().is_ok());
+            assert!(unit.cast::<PythonEncodedMedia>().is_ok());
             assert_eq!(
                 unit.getattr("codec").unwrap().extract::<String>().unwrap(),
                 codec

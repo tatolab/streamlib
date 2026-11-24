@@ -19,7 +19,7 @@ use streamlib::sdk::rhi::{TensorElementType, TensorStorageBufferLayout, TextureF
 use super::{PythonNodeLinkDataAccess, declared_port_name_the_spelling_names};
 use crate::python_bag_conversion::python_type_name_for_error_message;
 use crate::python_node_context::PythonGpuContextLimitedAccess;
-use crate::python_port_family_read_types::PythonArrayFrameCpuAttribute;
+use crate::python_port_family_read_types::PythonTensorCpuAttribute;
 
 impl PythonNodeLinkDataAccess {
     /// Publish `samples`, a `[channel][sample]` array, as one Channels block
@@ -151,7 +151,7 @@ impl PythonNodeLinkDataAccess {
         let mut cpu_data_held = Vec::new();
         for item in attributes.items()?.iter() {
             let (name, value): (String, Bound<'_, PyAny>) = item.extract()?;
-            if let Ok(read_attribute) = value.cast::<PythonArrayFrameCpuAttribute>() {
+            if let Ok(read_attribute) = value.cast::<PythonTensorCpuAttribute>() {
                 let byte_len = read_attribute.get().attribute_bytes().len() as u64;
                 rows.push(ArrayFrameAttributeRow {
                     name,
@@ -580,7 +580,7 @@ impl ArrayOutputPortDeclaredResidency {
 /// Python buffer, or an attribute a read of an Array port returned.
 enum ArrayAttributeCpuBytesHeldForOneWrite<'py> {
     PythonBuffer(PythonBufferHeldForOneWrite),
-    ReadAttribute(Bound<'py, PythonArrayFrameCpuAttribute>),
+    ReadAttribute(Bound<'py, PythonTensorCpuAttribute>),
 }
 
 impl ArrayAttributeCpuBytesHeldForOneWrite<'_> {

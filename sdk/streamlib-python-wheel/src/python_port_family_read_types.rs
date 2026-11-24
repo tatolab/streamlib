@@ -23,10 +23,10 @@ use crate::python_gpu_surface_pixel_exchange::{
 };
 use crate::python_port_payload::refuse_a_dlpack_request_a_cpu_payload_cannot_meet;
 
-/// A Channels block a read returned: `channel_count` runs of
+/// The `Audio` an Audio read returned, one Channels block: `channel_count` runs of
 /// `samples_per_channel` samples, borrowed in place.
 #[pyclass(name = "Audio", module = "tatolab.stream", frozen)]
-pub(crate) struct PythonChannelsBlock {
+pub(crate) struct PythonAudio {
     borrowed_payload: Arc<parking_lot::Mutex<InputPortMessagePayload>>,
     payload_base_address: usize,
     block: ChannelsBlockDescriptorBody,
@@ -34,7 +34,7 @@ pub(crate) struct PythonChannelsBlock {
     timestamp_ns: i64,
 }
 
-impl PythonChannelsBlock {
+impl PythonAudio {
     /// Hold `payload` as the block `block` describes, refused when the
     /// payload's length is not the planar length the body states. A rate of 0
     /// is a control value's, which has no regular rate.
@@ -79,7 +79,7 @@ impl PythonChannelsBlock {
 }
 
 #[pymethods]
-impl PythonChannelsBlock {
+impl PythonAudio {
     /// The stream-wide index of this block's first sample.
     #[getter]
     fn start_sample(&self) -> u64 {
@@ -155,16 +155,16 @@ impl PythonChannelsBlock {
     }
 }
 
-/// One CPU-resident attribute of an Array frame a read returned: a
+/// A `TensorCpuAttribute`, one CPU-resident attribute of an Array frame a read returned: a
 /// contiguous row-major tensor borrowed in the sample it arrived in.
 #[pyclass(name = "TensorCpuAttribute", module = "tatolab.stream", frozen)]
-pub(crate) struct PythonArrayFrameCpuAttribute {
+pub(crate) struct PythonTensorCpuAttribute {
     borrowed_payload: Arc<parking_lot::Mutex<InputPortMessagePayload>>,
     attribute_base_address: usize,
     tensor_layout: TensorStorageBufferLayout,
 }
 
-impl PythonArrayFrameCpuAttribute {
+impl PythonTensorCpuAttribute {
     /// The attribute `row` states, over `byte_len` bytes at `payload_byte_offset`
     /// of the shared payload; refused when its dtype is unknown or its shape
     /// does not span exactly those bytes.
@@ -201,7 +201,7 @@ impl PythonArrayFrameCpuAttribute {
     }
 }
 
-impl PythonArrayFrameCpuAttribute {
+impl PythonTensorCpuAttribute {
     /// The attribute's bytes, read where the sample holds them.
     pub(crate) fn attribute_bytes(&self) -> &[u8] {
         // SAFETY: the shared payload this attribute holds keeps the sample,
@@ -216,7 +216,7 @@ impl PythonArrayFrameCpuAttribute {
 }
 
 #[pymethods]
-impl PythonArrayFrameCpuAttribute {
+impl PythonTensorCpuAttribute {
     /// The element type's wire name, such as `"float32"`.
     #[getter]
     pub(crate) fn dtype(&self) -> &'static str {
@@ -257,11 +257,11 @@ impl PythonArrayFrameCpuAttribute {
     }
 }
 
-/// A Packets unit a read returned: its bytes borrowed in the sample they
+/// The `EncodedMedia` an encoded media read returned, one Packets unit: its bytes borrowed in the sample they
 /// arrived in, with its presentation stamp, whether a decoder may enter at
 /// it, and its codec.
 #[pyclass(name = "EncodedMedia", module = "tatolab.stream", frozen)]
-pub(crate) struct PythonPacketsUnit {
+pub(crate) struct PythonEncodedMedia {
     pub(crate) payload: Py<crate::python_port_payload::PythonPortPayloadBorrow>,
     pub(crate) pts: i64,
     pub(crate) starts_group: bool,
@@ -269,7 +269,7 @@ pub(crate) struct PythonPacketsUnit {
 }
 
 #[pymethods]
-impl PythonPacketsUnit {
+impl PythonEncodedMedia {
     /// The unit's bytes, a borrow of the sample.
     #[getter]
     fn payload(

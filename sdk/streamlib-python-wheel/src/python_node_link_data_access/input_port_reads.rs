@@ -25,7 +25,7 @@ use crate::python_bag_conversion::{
 };
 use crate::python_node_context::{PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess};
 use crate::python_port_family_read_types::{
-    PythonArrayFrameCpuAttribute, PythonChannelsBlock, PythonPacketsUnit,
+    PythonAudio, PythonEncodedMedia, PythonTensorCpuAttribute,
 };
 use crate::python_port_payload::PythonPortPayloadBorrow;
 
@@ -361,7 +361,7 @@ fn payload_read_as_its_shape<'py>(
                     ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
                 return Ok(Bound::new(
                     python,
-                    PythonChannelsBlock::holding(port_name, payload, block, timestamp_ns)?,
+                    PythonAudio::holding(port_name, payload, block, timestamp_ns)?,
                 )?
                 .into_any());
             }
@@ -394,7 +394,7 @@ fn payload_read_as_its_shape<'py>(
                     Bound::new(python, PythonPortPayloadBorrow::holding(payload, None))?;
                 return Ok(Bound::new(
                     python,
-                    PythonPacketsUnit {
+                    PythonEncodedMedia {
                         payload: payload_borrow.unbind(),
                         pts: timestamp_ns,
                         starts_group: group_boundary == MessageGroupBoundary::StartsGroup,
@@ -559,7 +559,7 @@ fn array_frame_of_the_read<'py>(
                 byte_len,
             } => Bound::new(
                 python,
-                PythonArrayFrameCpuAttribute::over(
+                PythonTensorCpuAttribute::over(
                     port_name,
                     &borrowed_payload,
                     payload_base_address,

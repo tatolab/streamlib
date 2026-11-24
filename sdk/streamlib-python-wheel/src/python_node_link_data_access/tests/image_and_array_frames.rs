@@ -55,7 +55,7 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
         ] {
             let attribute = received.get_item(name).unwrap();
             let attribute = attribute
-                .cast::<PythonArrayFrameCpuAttribute>()
+                .cast::<PythonTensorCpuAttribute>()
                 .expect("a CPU attribute reads as a TensorCpuAttribute");
             assert_eq!(attribute.get().dtype(), dtype);
             assert_eq!(attribute.get().shape(), shape);
@@ -80,9 +80,7 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
             .expect("a read Array frame relays unchanged");
         let relayed = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Array);
         let relayed_boxes = relayed.get_item("boxes").unwrap();
-        let relayed_boxes = relayed_boxes
-            .cast::<PythonArrayFrameCpuAttribute>()
-            .unwrap();
+        let relayed_boxes = relayed_boxes.cast::<PythonTensorCpuAttribute>().unwrap();
         assert_eq!(relayed_boxes.get().shape(), vec![2u64, 3]);
         assert_eq!(
             relayed_boxes.get().attribute_bytes(),

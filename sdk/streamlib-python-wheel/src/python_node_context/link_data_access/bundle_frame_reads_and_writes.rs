@@ -3,7 +3,7 @@
 
 //! The read and the write of a bundle holding a Texture, which travels as one Bundle frame: its
 //! small members in the frame's Records row, and each Texture by the pool slot it lives in, read
-//! as the `Texture` it is on a wire of its own, its slot claimed.
+//! on a wire of its own with its slot claimed.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -40,7 +40,7 @@ fn the_bundle_given_as_json(pin_type: &str, what_it_is: &str) -> PyResult<PinTyp
 
 /// Each member of the bundle holding a Texture `input_port` holds for this read, a value of
 /// `pin_type`, given as JSON, by name: each small member its stored JSON form, each one the
-/// frame leaves out its default, and each Texture the `Texture` it is, its pool slot claimed;
+/// frame leaves out its default, and each Texture member a `Texture`, its pool slot claimed;
 /// `None` when no message arrived since the last read. Any other message, and a frame missing a
 /// member the bundle declares, is refused by name.
 #[pyfunction]
