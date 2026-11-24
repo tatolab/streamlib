@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A node that crashes the runtime on demand, for the tests of the failed
-//! state. Its config's check — which every load of a stream naming it runs,
-//! before any GPU exists — crashes the process while the file the config
-//! names exists. Compiled into a test build alone.
+//! state. Building a node of it, which every load of a stream naming it does,
+//! takes its settings as its config, and that crashes the process while the
+//! file the config names exists. Compiled into a test build alone.
 
 use std::path::PathBuf;
 
