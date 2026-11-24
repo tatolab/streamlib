@@ -8,7 +8,6 @@
 use streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn;
 use tatolab_module_sdk::ModuleHost;
 
-use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_codec_host_protocol::{
@@ -20,6 +19,7 @@ use crate::video_codec_host_session_of_the_node::{
 use crate::video_codec_retry_gate::VideoCodecRefusal;
 use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
 use crate::video_encoder_settings::VideoEncoderSettings;
+use crate::{VideoCodecNodeIdentity, VideoFrameNotEncoded};
 
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
@@ -93,7 +93,7 @@ impl VulkanVideoEncoder {
         &mut self,
         frame: &ImageFrameReadByTheEncoder,
         encoded_video: &dyn EncodedVideoOutputPort,
-    ) -> Result<(), String> {
+    ) -> Result<(), VideoFrameNotEncoded> {
         let node_type_name = self.node.node_type_name;
         let opened_again =
             self.session.connected()? == VideoCodecHostSessionConnection::OpenedAgain;
@@ -107,6 +107,9 @@ impl VulkanVideoEncoder {
             VideoFrameEncodeOutcome::Encoded(encoded) => encoded,
             VideoFrameEncodeOutcome::NotCheckedOut
             | VideoFrameEncodeOutcome::DiscardedWithoutASession => return Ok(()),
+            VideoFrameEncodeOutcome::RefusedForItsFormat { refusal } => {
+                return Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(refusal));
+            }
         };
         self.next_frame_must_be_a_sync_point = false;
         if encoded.minted_a_session {

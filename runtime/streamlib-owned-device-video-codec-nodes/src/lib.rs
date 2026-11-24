@@ -73,6 +73,22 @@ pub const ENCODED_VIDEO_PORT: &str = "encoded_video";
 /// How long one wait for a message lasts before the stop flag is read again.
 const INPUT_PORT_WAIT: Duration = Duration::from_millis(100);
 
+/// Why an encoder did not encode a frame.
+#[derive(Debug, PartialEq, Eq)]
+pub enum VideoFrameNotEncoded {
+    /// This frame only; the next may encode.
+    ThisFrame(String),
+    /// The frame's producer sends what the encoder never reads, so every frame
+    /// after would be refused too and the node fails, naming why.
+    EveryFrameOfItsProducer(String),
+}
+
+impl From<String> for VideoFrameNotEncoded {
+    fn from(refusal: String) -> Self {
+        Self::ThisFrame(refusal)
+    }
+}
+
 /// Which node a codec body runs as: the type name its logs and refusals
 /// carry, and the elementary stream it codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,7 +316,7 @@ impl VideoEncoderOnThisPlatform {
         &mut self,
         _frame: &ImageFrameReadByTheEncoder,
         _encoded_video: &dyn EncodedVideoOutputPort,
-    ) -> Result<(), String> {
+    ) -> Result<(), VideoFrameNotEncoded> {
         match *self {}
     }
 }
@@ -365,11 +381,24 @@ fn encode_until_stopped(
                 continue;
             };
             let encoded = ImageFrameReadByTheEncoder::of_the_video_message(&message)
+                .map_err(VideoFrameNotEncoded::ThisFrame)
                 .and_then(|frame| encoder.encode_and_publish(&frame, &encoded_video));
-            if let Err(refusal) = encoded {
-                frames_refused += 1;
-                if frames_refused.is_power_of_two() {
-                    tracing::error!(frames_refused, "{refusal}");
+            match encoded {
+                Ok(()) => {}
+                Err(VideoFrameNotEncoded::ThisFrame(refusal)) => {
+                    frames_refused += 1;
+                    if frames_refused.is_power_of_two() {
+                        tracing::error!(frames_refused, "{refusal}");
+                    }
+                }
+                Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(refusal)) => {
+                    tracing::error!("{refusal}; the node fails");
+                    if let Err(failure) = module_host.fail_the_node_unrecoverably(&refusal) {
+                        tracing::error!(
+                            "{node_type_name}: the node could not be failed: {failure}"
+                        );
+                    }
+                    return;
                 }
             }
         }

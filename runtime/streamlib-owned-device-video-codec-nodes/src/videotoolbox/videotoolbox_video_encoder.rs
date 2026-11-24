@@ -21,10 +21,10 @@ use super::videotoolbox_compression_session::{
     COMPRESSION_SESSION_POOL_PIXEL_FORMAT_WIRE_NAME, VideoToolboxCompressionSession,
     VideoToolboxCompressionSessionRequest,
 };
-use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
 use crate::image_frame_on_the_video_port::{H273ColorVuiWireNames, ImageFrameReadByTheEncoder};
 use crate::video_encoder_settings::VideoEncoderSettings;
+use crate::{VideoCodecNodeIdentity, VideoFrameNotEncoded};
 
 /// Pool IOSurfaces kept adopted; the session's pool is far smaller.
 const MOST_ADOPTED_IOSURFACES_KEPT: usize = 32;
@@ -107,7 +107,7 @@ impl VideoToolboxVideoEncoder {
         &mut self,
         frame: &ImageFrameReadByTheEncoder,
         encoded_video: &dyn EncodedVideoOutputPort,
-    ) -> Result<(), String> {
+    ) -> Result<(), VideoFrameNotEncoded> {
         let node_type_name = self.node.node_type_name;
         if self.minted_session.is_none() && self.session_mint_already_failed {
             return Ok(());
