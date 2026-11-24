@@ -28,7 +28,7 @@ from tatolab.stream import (
     node,
 )
 
-from nodes.motion import BAND_COUNT, Motion
+from nodes.motion import BAND_COUNT, MusicMotion
 
 LOWEST_HZ = 40.0
 HIGHEST_HZ = 14_000.0
@@ -90,7 +90,7 @@ class BandState:
 )
 @node
 class SpectrumListener:
-    """Music in, one `Motion` per window out."""
+    """Music in, one `MusicMotion` per window out."""
 
     sensitivity: Annotated[
         float, NumberRange(minimum=0.1), Description("How strongly the music moves the ball.")
@@ -108,7 +108,7 @@ class SpectrumListener:
     ]
     motion: OutputPin[
         Annotated[
-            Motion,
+            MusicMotion,
             Description("Per-band clocks and levels, the beat, the energy, and the bass and highs levels"),
         ]
     ]
@@ -192,7 +192,7 @@ class SpectrumListener:
             (band.envelope / band.peak) * smoothstep(0.03, 0.12, band.envelope) for band in self.bands
         ]
         self.motion.write(
-            Motion(
+            MusicMotion(
                 clocks=[round(float(c), 4) for c in clocks],
                 levels=[round(float(min(1.0, lv)), 4) for lv in levels],
                 beat=round(float(self.beat), 4),

@@ -21,7 +21,7 @@ from tatolab.stream import State, Stateful, Time, node
 from nodes.neon_world import (
     STAGE_CAMERA_AT_HOME,
     STAGE_HOME,
-    Look,
+    StageLookReading,
     StageCamera,
     TakeMoment,
     camera_basis,
@@ -146,9 +146,9 @@ def StageLook(  # noqa: N802
     skyline_height: float = 0.055,
     neon: float = 1.0,
     current_speed: float = 1.0,
-) -> Look:
+) -> StageLookReading:
     """The five stage values as one bundle, for the renderer and the current."""
-    return Look(morph, time_of_day, skyline_height, neon, current_speed)
+    return StageLookReading(morph, time_of_day, skyline_height, neon, current_speed)
 
 
 @dataclass(frozen=True)

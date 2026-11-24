@@ -39,7 +39,7 @@ from nodes.neon_world import (
     METRES_PER_WORLD_UNIT,
     RENDERED_FRAME_COLOUR,
     WORLD_SLANG,
-    Look,
+    StageLookReading,
     SoundtrackPulseReading,
     StageCamera,
     StationReading,
@@ -219,7 +219,7 @@ class GulfStreamCurrent:
         int,
         SettingOnly(),
         NumberRange(minimum=1024, maximum=4_194_304),
-        Description("How many particles the buffer holds; set before the stream starts."),
+        Description("How many particles the buffer holds; a change rebuilds the node."),
     ] = 2_097_152
     trail_decay: Annotated[
         float, NumberRange(minimum=0.0, maximum=0.99), Description("How much of a trail each step keeps.")
@@ -264,7 +264,7 @@ class GulfStreamCurrent:
     ]
     look: InputPin[
         Annotated[
-            Look,
+            StageLookReading,
             StreamDelivery("newest"),
             Description("The stage's smoothed look: current_speed scales the time-lapse"),
         ]
@@ -287,25 +287,23 @@ class GulfStreamCurrent:
         self.field.lock(read_only=False)
         self.field.as_numpy().reshape(size * size, 4)[:] = baked_currents(size)
         self.field.unlock()
-        # The buffer keeps the size it is made at, whatever `particle_count` reads later.
-        self.particles_held = self.particle_count
-        self.particles = gpu.acquire_storage_buffer((self.particles_held, 4), "float32")
+        self.particles = gpu.acquire_storage_buffer((self.particle_count, 4), "float32")
         self.trail_texture = gpu.acquire_texture(size, size, HDR_LAYER_FORMAT, LAYER_USAGE)
         self.output_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
         self.frame_index = 0
         self.latest_soundtrack = SoundtrackPulseReading()
         self.latest_station: StationReading | None = None
         self.latest_stage: StageCamera | None = None
-        self.latest_look = Look()
+        self.latest_look = StageLookReading()
         self.bursts_seen: int | None = None
         self.eddy = (0.0, 0.0)
         self.eddy_age = 99.0
         self.eddy_strength = 0.0
         self.field_on_cpu = baked_currents(size).reshape(size, size, 4)
-        log.info("current snapshot uploaded", particles=self.particles_held)
+        log.info("current snapshot uploaded", particles=self.particle_count)
 
     def _active(self) -> int:
-        return max(1024, min(self.active_particles, self.particles_held))
+        return max(1024, min(self.active_particles, self.particle_count))
 
     def _follow_the_eddy(self) -> bool:
         """Start an eddy where the stage was last clicked, and carry the one there is north on the real current."""

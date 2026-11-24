@@ -39,7 +39,7 @@ from tatolab.stream import (
     node,
 )
 
-from nodes.motion import BAND_COUNT, SILENCE, BallCamera, Motion
+from nodes.motion import BAND_COUNT, SILENCE, BallCamera, MusicMotion
 
 GRID_HALF = 20
 GRID_SIDE = 2 * GRID_HALF + 1
@@ -300,7 +300,7 @@ class PaintBall:
         float, NumberRange(minimum=0.0), Description("How long the camera's reach holds.")
     ] = 0.35
     motion: InputPin[
-        Annotated[Motion, StreamDelivery("newest"), Description("From SpectrumListener")]
+        Annotated[MusicMotion, StreamDelivery("newest"), Description("From SpectrumListener")]
     ]
     camera: InputPin[
         Annotated[BallCamera, StreamDelivery("newest"), Description("From OrbitCamera")]

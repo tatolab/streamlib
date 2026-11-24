@@ -20,6 +20,7 @@ from tatolab.stream import (
     NumberRange,
     OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
     log,
     node,
 )
@@ -48,7 +49,9 @@ class ClickTrack:
     volume: Annotated[
         float, NumberRange(minimum=0.0, maximum=1.0), Description("How loud the click plays.")
     ] = 0.4
-    cue: InputPin[Annotated[BeatCue, Description("count and downbeat, from ClickCue")]]
+    cue: InputPin[
+        Annotated[BeatCue, StreamDelivery("newest"), Description("count and downbeat, from ClickCue")]
+    ]
     audio: OutputPin[Annotated[Audio, Description("The click, in stereo")]]
 
     def __init__(self) -> None:

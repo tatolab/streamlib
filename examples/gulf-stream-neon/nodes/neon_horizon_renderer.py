@@ -44,7 +44,7 @@ from nodes.neon_world import (
     LONGITUDE_WEST,
     RENDERED_FRAME_COLOUR,
     WORLD_SLANG,
-    Look,
+    StageLookReading,
     SoundtrackPulseReading,
     StageCamera,
     StationReading,
@@ -518,7 +518,7 @@ class NeonHorizonRenderer:
         Annotated[StageCamera, StreamDelivery("newest"), Description("The stage view's camera: orbit, zoom and fly")]
     ]
     look: InputPin[
-        Annotated[Look, StreamDelivery("newest"), Description("The stage's smoothed look: morph, time of day, skyline, neon")]
+        Annotated[StageLookReading, StreamDelivery("newest"), Description("The stage's smoothed look: morph, time of day, skyline, neon")]
     ]
     scene: OutputPin[
         Annotated[
@@ -538,7 +538,7 @@ class NeonHorizonRenderer:
         self.latest_soundtrack = SoundtrackPulseReading()
         self.latest_station: StationReading | None = None
         self.latest_stage = StageCamera()
-        self.latest_look: Look | None = None
+        self.latest_look: StageLookReading | None = None
         self.last_rendered_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -571,7 +571,7 @@ class NeonHorizonRenderer:
         width, height = self.width, self.height
         seconds = self.take_clock.seconds_at(ctx, frame_ns)
         # A wired look (smoothed in the graph) leads; the settings are the fallback.
-        look = self.latest_look or Look(
+        look = self.latest_look or StageLookReading(
             morph=self.morph,
             time_of_day=self.time_of_day,
             skyline_height=self.skyline_height,

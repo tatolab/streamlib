@@ -3,7 +3,7 @@
 
 """The bundles Paint Pulse's nodes pass, and the function nodes that turn them into pins.
 
-`MotionReadout` unpacks the listener's `Motion` into Float pins, so built-ins such as Lag,
+`MotionReadout` unpacks the listener's `MusicMotion` into Float pins, so built-ins such as Lag,
 Remap, RgbSplit and HsvAdjust can follow the music. `OrbitCamera` folds the stage view's drag
 and zoom into one `BallCamera`, adding the slow spin a Speed node accumulates.
 """
@@ -19,7 +19,7 @@ BAND_COUNT = 24
 
 
 @dataclass(frozen=True)
-class Motion:
+class MusicMotion:
     """The music as the ball moves to it, one per listening window: how far each of the 24
     bands has flown out (0 to 3) and how loud each is (0 to 1), the kick's pump (1 on a hit and
     falling away), the overall energy, and the levels of the lowest six and highest eight bands."""
@@ -33,7 +33,7 @@ class Motion:
 
 
 #: The music before the listener has heard any.
-SILENCE = Motion([0.0] * BAND_COUNT, [0.0] * BAND_COUNT, 0.0, 0.0, 0.0, 0.0)
+SILENCE = MusicMotion([0.0] * BAND_COUNT, [0.0] * BAND_COUNT, 0.0, 0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,7 @@ class MotionReading(NamedTuple):
 )
 @node
 def MotionReadout(
-    motion: Annotated[Motion, Description("From SpectrumListener")] = SILENCE,
+    motion: Annotated[MusicMotion, Description("From SpectrumListener")] = SILENCE,
 ) -> MotionReading:
     """Each named number of `motion`, or 0 before the listener has heard any."""
     return MotionReading(motion.beat, motion.energy, motion.bass, motion.highs)
