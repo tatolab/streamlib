@@ -1,59 +1,58 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A node not yet typed: a class in the old declaration form, its ports declared by family and
-its setting held in a config class.
+"""A class node that holds a setting: `report_every_frames`, a field of the class.
 
-Its picture input is a Texture, as every picture port is; its Records output names no pin
-type, and `report_every_frames` is a setting of a node type that is not typed.
+Its picture input is a Texture, and its `tally` output is a `Tally` bundle.
 """
 
 from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
-    Input,
-    Output,
-    Records,
+    Description,
+    InputPin,
+    NumberRange,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
     log,
     node,
 )
 
-TALLY_RECORD_NAMES = ("frames_seen", "width", "height")
 
+@dataclass(frozen=True)
+class Tally:
+    """How many pictures a `FrameTally` has seen, and the size of the latest."""
 
-@dataclass
-class FrameTallyConfig:
-    """FrameTally's settings, as its node's input values in the graph document spell them."""
-
-    report_every_frames: int = 30
+    frames_seen: int
+    width: int
+    height: int
 
 
 @node.meta(
     description="Counts the pictures it sees and reports the count and the picture's size every report_every_frames pictures",
 )
-@node.process
+@node
 class FrameTally:
-    """A count of the pictures that reach it, written as a record and logged."""
+    """A count of the pictures that reach it, written as a `Tally` and logged."""
 
-    picture = Input(Image, delivery="newest", description="The pictures to count")
-    tally = Output(
-        Records,
-        names=TALLY_RECORD_NAMES,
-        description="How many pictures it has seen, and the size of the latest",
-    )
+    report_every_frames: Annotated[
+        int, NumberRange(minimum=1), Description("How many pictures between two reports.")
+    ] = 30
+    picture: InputPin[
+        Annotated[Texture, StreamDelivery("newest"), Description("The pictures to count")]
+    ]
+    tally: OutputPin[
+        Annotated[Tally, Description("How many pictures it has seen, and the size of the latest")]
+    ]
 
-    def __init__(self, config: FrameTallyConfig) -> None:
+    def __init__(self) -> None:
         self.frames_seen = 0
-        self.configure(config)
-
-    def configure(self, config: FrameTallyConfig) -> None:
-        """Take `report_every_frames` while it runs, keeping the count it has seen."""
-        self.report_every_frames = max(1, int(config.report_every_frames))
 
     def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
-        frame = runtime_context.inputs.read(self.picture)
+        frame = self.picture.read()
         if frame is None:
             return
         self.frames_seen += 1
@@ -65,12 +64,7 @@ class FrameTally:
             width=frame.width,
             height=frame.height,
         )
-        runtime_context.outputs.write(
-            self.tally,
-            {
-                "frames_seen": self.frames_seen,
-                "width": frame.width,
-                "height": frame.height,
-            },
+        self.tally.write(
+            Tally(self.frames_seen, frame.width, frame.height),
             timestamp_ns=frame.timestamp_ns,
         )

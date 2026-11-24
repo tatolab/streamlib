@@ -6,7 +6,7 @@ from the copy the runtime unit carries, played, saved and opened again.
 
 `examples/every-pin-kind` holds typed function and shader nodes, a Graph Input of a family, one
 whose `pin_type` setting chooses Float, one choosing Integer that names a dial, as an input
-promoted from `Caption`'s `lines` does, one node not yet typed that holds a setting, a node type
+promoted from `Caption`'s `lines` does, a class node that holds a setting, a node type
 whose inputs each name the control the Studio draws, and two nodes whose Texture pins state
 different formats, which `connect` links through a `TextureFormatConvert`. Its `SweepPosition`
 states that it converts the sample's own `Sweep` to a Float, so a link from a `Sweep` into a
@@ -43,7 +43,7 @@ SAVED_DOCUMENT_TIMEOUT_SECONDS = 30.0
 
 POLL_INTERVAL_SECONDS = 0.5
 
-#: More than the first picture: pictures keep reaching the node not yet typed.
+#: More than the first picture: pictures keep reaching the tally.
 PICTURES_SHOWING_THE_STREAM_PLAYS = 2
 
 #: Each port of each node by name, and the pin type `graph` names on it: the `type` of a typed
@@ -66,7 +66,7 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
         "result": "float",
     },
     "glow": {"image": "texture", "glow": "float", "warmth": "float", "result": "texture"},
-    "tally": {"picture": "texture", "tally": None},
+    "tally": {"picture": "texture", "tally": "bundle"},
     "bars": {"bars": "texture"},
     "bars_check": {"bars": "texture"},
     "sweep": {"position": "float", "width": "float", "result": "named"},
@@ -137,7 +137,7 @@ VALUE_THE_DOCUMENT_HOLDS_BY_NODE_AND_INPUT = {
 }
 
 #: The values saved over the sample's: a typed input of a function node, and the setting of
-#: the node not yet typed.
+#: a class node.
 SAVED_VALUE_BY_NODE_AND_INPUT = {("beat", "beats_per_minute"): 100.0, ("tally", "report_every_frames"): 15}
 
 

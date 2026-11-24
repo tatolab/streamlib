@@ -5,16 +5,15 @@
 Boolean in and out.
 
 `Beat` turns stream time into a beat and `Warmth` reads the beat's count and accent, so a
-typed Integer and a typed Boolean link between them as well as Floats. `Beat` is declared in
-the family grammar of `@node.function` and `Warmth` in the typed grammar of bare `@node`, whose
-inputs state a range, a step and a meaning beside their type.
+typed Integer and a typed Boolean link between them as well as Floats. `Beat` gives its three
+outputs as a NamedTuple, and `Warmth`'s inputs state a range, a step and a meaning beside
+their type.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from tatolab.stream import Description, NumberRange, NumberStep, PinMeaning, Time, node
 
@@ -23,8 +22,7 @@ NANOSECONDS_PER_SECOND = 1_000_000_000
 SECONDS_PER_MINUTE = 60.0
 
 
-@dataclass(frozen=True)
-class BeatReading:
+class BeatReading(NamedTuple):
     """Where a `Beat` is: how bright its glow is, which beat it is on and whether that beat is accented."""
 
     glow: float
@@ -36,7 +34,7 @@ class BeatReading:
     category="Every pin kind",
     description="A glow that falls away after each beat, brighter on every accented beat.",
 )
-@node.function
+@node
 def Beat(
     level: float = 0.5,
     beats_per_minute: float = 90.0,
