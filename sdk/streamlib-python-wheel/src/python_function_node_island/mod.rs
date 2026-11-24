@@ -227,17 +227,13 @@ impl FunctionNodeValue {
 
 /// What holds a pooled GPU frame against its producer's reuse while a message
 /// an island holds names it; released as the message's last copy drops.
-pub(crate) type PooledGpuFrameClaimAnIslandHolds = Box<dyn std::any::Any + Send + Sync>;
+pub(crate) type PooledGpuFrameClaimAnIslandHolds =
+    streamlib::sdk::iceoryx2::PooledGpuFrameClaimAMessageHolds;
 
 /// Claims the pooled GPU frame a message names as an island reads it off its
 /// channel; `Ok(None)` where nothing in this helper covers the frame's pool.
-pub(crate) type ClaimOfThePooledGpuFrameAMessageNames = Box<
-    dyn Fn(
-            GpuPoolSlotFrameDescriptorBody,
-        ) -> std::result::Result<Option<PooledGpuFrameClaimAnIslandHolds>, String>
-        + Send
-        + Sync,
->;
+pub(crate) type ClaimOfThePooledGpuFrameAMessageNames =
+    streamlib::sdk::iceoryx2::ClaimOfThePooledGpuFrameAMessageNames;
 
 /// A message an island read off a channel to hand on unread, holding the
 /// pooled GPU frame it names, if any, for as long as any copy of it lives: in

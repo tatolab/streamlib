@@ -43,7 +43,7 @@ fn a_link_into_the_member(
 
 /// A link into `member` of port `in`, which reads `bundle` whole or as `put_into` says, and its
 /// publisher.
-fn a_link_into_a_member_of(
+pub(super) fn a_link_into_a_member_of(
     mailboxes: &InputMailboxesInner,
     bundle: &PinType,
     member: &str,
@@ -295,7 +295,7 @@ fn a_member_no_link_has_carried_reads_the_value_set_on_the_input() {
 }
 
 /// A picture with the level metered off it: a Texture beside a Float.
-fn a_metered_picture() -> PinType {
+pub(super) fn a_metered_picture() -> PinType {
     PinType::Bundle {
         name: None,
         members: vec![
@@ -305,14 +305,18 @@ fn a_metered_picture() -> PinType {
     }
 }
 
-fn publish_a_level(publisher: &TestChannelPublisherNumberingItsSends, level: f64, stamp: i64) {
+pub(super) fn publish_a_level(
+    publisher: &TestChannelPublisherNumberingItsSends,
+    level: f64,
+    stamp: i64,
+) {
     let packed = pack_pin_value(&PinType::Float { exact_size: None }, &json!(level), 0).unwrap();
     publish_a_message(publisher, packed.payload_descriptor, &packed.payload, stamp);
 }
 
 /// Each Bundle frame `in` hands its reader, read as `bundle`: its small members, each heavy
 /// member's descriptor and bytes by name, and its stamp.
-fn the_bundle_frames_read(
+pub(super) fn the_bundle_frames_read(
     mailboxes: &InputMailboxesInner,
     bundle: &PinType,
 ) -> Vec<(
@@ -344,7 +348,7 @@ fn the_bundle_frames_read(
         .collect()
 }
 
-fn the_picture(
+pub(super) fn the_picture(
     descriptor: DataChannelPayloadDescriptor,
 ) -> (String, DataChannelPayloadDescriptor, Vec<u8>) {
     ("picture".to_owned(), descriptor, Vec::new())

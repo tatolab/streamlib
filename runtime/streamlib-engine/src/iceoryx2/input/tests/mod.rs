@@ -17,6 +17,7 @@ mod listener_fan_in_and_link_losses;
 mod member_of_a_bundle_put_at_the_read;
 mod member_of_a_bundle_taken_at_the_read;
 mod reads_borrows_and_quotas;
+mod texture_member_held_claims_its_frame;
 mod trigger_fires_queued_while_unlinked;
 
 fn unique_suffix(tag: &str) -> String {

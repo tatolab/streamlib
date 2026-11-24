@@ -36,6 +36,24 @@ impl GpuContext {
 }
 
 impl GpuContext {
+    /// Claims, in this process, the pooled GPU frame a message names against its producer's
+    /// reuse, as a native reader of the frame claims it.
+    pub(crate) fn claim_of_a_pooled_gpu_frame_against_producer_reuse(
+        &self,
+    ) -> crate::iceoryx2::ClaimOfThePooledGpuFrameAMessageNames {
+        let gpu = self.clone();
+        Box::new(move |gpu_pool_slot_frame| {
+            gpu.published_frame_id_of_the_gpu_pool_slot_frame(&gpu_pool_slot_frame)
+                .and_then(|surface_id| gpu.claim_surface_against_producer_reuse(&surface_id))
+                .map(|claim| {
+                    Some(Box::new(claim) as crate::iceoryx2::PooledGpuFrameClaimAMessageHolds)
+                })
+                .map_err(|refusal| refusal.to_string())
+        })
+    }
+}
+
+impl GpuContext {
     /// The surface id of the frame `gpu_pool_slot_frame` names, read from its
     /// pool's claim table in this process: the slot's key at the frame's
     /// generation. Refused when no claim table here names the pool or leases

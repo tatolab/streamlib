@@ -72,8 +72,9 @@ pub use iceoryx2_domain_for_this_test_process::{
     iceoryx2_domain_for_this_test_process,
 };
 pub use input::{
-    BundleMembersAtTheRead, InputMailboxes, InputMailboxesInner, MemberPutAtTheRead,
-    MemberTakenAtTheRead, MessageReadFromInputPort, WhatTheMembersArePutInto,
+    BundleMembersAtTheRead, ClaimOfThePooledGpuFrameAMessageNames, InputMailboxes,
+    InputMailboxesInner, MemberPutAtTheRead, MemberTakenAtTheRead, MessageReadFromInputPort,
+    PooledGpuFrameClaimAMessageHolds, WhatTheMembersArePutInto,
 };
 pub use input_port_borrow_quota::{
     DEFAULT_INPUT_PORT_BORROW_QUOTA, MAX_INPUT_PORT_BORROW_QUOTA, input_port_borrow_quota,

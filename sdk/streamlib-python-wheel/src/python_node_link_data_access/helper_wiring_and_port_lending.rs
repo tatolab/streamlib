@@ -65,8 +65,9 @@ impl PythonNodeLinkDataAccess {
             .set(gpu_exchange_client);
     }
 
-    /// Claims the pooled GPU frame a message an island holds names, through
-    /// this helper's GPU exchange client; nothing is claimed before one opened.
+    /// Claims the pooled GPU frame a message an island or a bundle this
+    /// helper's mailboxes hold names, through this helper's GPU exchange
+    /// client; nothing is claimed before one opened.
     pub(crate) fn claim_of_the_pooled_gpu_frames_its_islands_hold(
         &self,
     ) -> crate::python_function_node_island::ClaimOfThePooledGpuFrameAMessageNames {
@@ -290,9 +291,11 @@ impl PythonNodeLinkDataAccess {
     pub(crate) fn over_helper_process_iceoryx2_node(node: Iceoryx2Node) -> Self {
         let wiring = Self::new();
         let _ = wiring.iceoryx2_node.set(node);
-        let _ = wiring
-            .input_mailboxes
-            .set(Arc::new(InputMailboxesInner::new()));
+        let input_mailboxes = Arc::new(InputMailboxesInner::new());
+        input_mailboxes.reach_the_claim_of_the_pooled_gpu_frames_its_bundles_hold(
+            wiring.claim_of_the_pooled_gpu_frames_its_islands_hold(),
+        );
+        let _ = wiring.input_mailboxes.set(input_mailboxes);
         let _ = wiring.output_writer.set(Arc::new(OutputWriterInner::new()));
         wiring
     }

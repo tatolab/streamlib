@@ -14,8 +14,9 @@ use crate::iceoryx2::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use crate::iceoryx2::read_mode::ReadMode;
 
 use super::{
-    InputMailboxesInner, InstalledInputPortAudioWindowing, NewestOfEachMemberPutAtTheRead,
-    PortConfig, SharedAudioWindowStage, WindowedPortInboundLink, WindowedPortStageInstallation,
+    ClaimOfThePooledGpuFrameAMessageNames, InputMailboxesInner, InstalledInputPortAudioWindowing,
+    NewestOfEachMemberPutAtTheRead, PortConfig, SharedAudioWindowStage, WindowedPortInboundLink,
+    WindowedPortStageInstallation,
 };
 
 /// One windowed port's mailbox, stage and read mode, built from the contract
@@ -75,6 +76,17 @@ fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled
 }
 
 impl InputMailboxesInner {
+    /// Reach `claim`, which the process reading these mailboxes claims a pooled GPU frame through,
+    /// so each Texture member of a bundle they hold keeps its frame; the first reached is kept.
+    pub fn reach_the_claim_of_the_pooled_gpu_frames_its_bundles_hold(
+        &self,
+        claim: ClaimOfThePooledGpuFrameAMessageNames,
+    ) {
+        let _ = self
+            .claim_of_the_pooled_gpu_frames_its_bundles_hold
+            .set(claim);
+    }
+
     /// Add a mailbox for the given port with the specified buffer
     /// size and read mode.
     pub fn add_port(&self, port: &str, buffer_size: usize, read_mode: ReadMode) {

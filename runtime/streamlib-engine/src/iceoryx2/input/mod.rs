@@ -44,7 +44,8 @@ mod queued_trigger_fires;
 
 use member_put_at_the_read::NewestOfEachMemberPutAtTheRead;
 pub use member_put_at_the_read::{
-    BundleMembersAtTheRead, MemberPutAtTheRead, WhatTheMembersArePutInto,
+    BundleMembersAtTheRead, ClaimOfThePooledGpuFrameAMessageNames, MemberPutAtTheRead,
+    PooledGpuFrameClaimAMessageHolds, WhatTheMembersArePutInto,
 };
 pub use member_taken_at_the_read::MemberTakenAtTheRead;
 
@@ -360,6 +361,10 @@ pub struct InputMailboxesInner {
     /// The clock of its stream, which stamps each read of an unlinked input's value; media time
     /// until it is reached.
     stream_clock: Arc<std::sync::OnceLock<Arc<crate::core::context::StreamClock>>>,
+    /// Claims, in the process reading these mailboxes, the frame each Texture member of a bundle
+    /// they hold names; unset until that process reaches it.
+    claim_of_the_pooled_gpu_frames_its_bundles_hold:
+        std::sync::OnceLock<ClaimOfThePooledGpuFrameAMessageNames>,
     queued_trigger_fires: parking_lot::Mutex<queued_trigger_fires::TriggerFiresQueuedByInput>,
     /// Made readable when a fire is queued or a listener is installed, so the reactive loop
     /// waiting on it reads the fire, or registers the listener, with or without a link.
@@ -386,6 +391,7 @@ impl InputMailboxesInner {
             input_ports_read_as_their_pin_value_while_unlinked: parking_lot::RwLock::default(),
             bundle_values_set_on_its_inputs: parking_lot::RwLock::default(),
             stream_clock: Arc::default(),
+            claim_of_the_pooled_gpu_frames_its_bundles_hold: std::sync::OnceLock::new(),
             queued_trigger_fires: parking_lot::Mutex::default(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             reactive_loop_wake: ReadableWakeDescriptor::create()
