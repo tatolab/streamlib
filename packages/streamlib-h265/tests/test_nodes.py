@@ -136,7 +136,15 @@ def test_each_setting_is_read_at_setup_and_takes_no_wire():
 def test_the_encoder_converts_a_texture_into_h265_and_the_decoder_back_into_rgba():
     assert the_port(H265Encoder, VIDEO_INPUT_PORT)["pin_declaration"]["pin_type"] == {
         "kind": "is",
-        "pin_type": {"type": "texture"},
+        "pin_type": {
+            "type": "texture",
+            "pixel_formats": [
+                "rgba8_unorm",
+                "rgba8_unorm_srgb",
+                "bgra8_unorm",
+                "bgra8_unorm_srgb",
+            ],
+        },
     }
     encoded_output = the_port(H265Encoder, ENCODED_VIDEO_OUTPUT_PORT)
     assert encoded_output["pin_declaration"]["pin_type"] == {
