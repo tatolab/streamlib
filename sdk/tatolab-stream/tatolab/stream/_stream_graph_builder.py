@@ -28,8 +28,6 @@ from ._stream_builder import (
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
-    NodeReferenceToNodeType,
-    SoleReferrerNodeReferenceToNodeType,
     StreamBuilder,
 )
 
@@ -39,8 +37,6 @@ __all__ = [
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
-    "NodeReferenceToNodeType",
-    "SoleReferrerNodeReferenceToNodeType",
     "StreamBuilder",
     "graph_generator",
     "is_graph_generator",

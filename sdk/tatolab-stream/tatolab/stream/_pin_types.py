@@ -545,10 +545,6 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("named_pin_type", "named"),
     PinTypeSpelling("connection_type", "connection"),
     PinTypeSpelling("NodeReference", "node_reference", _SETTING_TYPE_NOT_TAKEN),
-    PinTypeSpelling("NodeReferenceToNodeType", "node_reference", _SETTING_TYPE_NOT_TAKEN),
-    PinTypeSpelling(
-        "SoleReferrerNodeReferenceToNodeType", "node_reference", _SETTING_TYPE_NOT_TAKEN
-    ),
     PinTypeSpelling("PinTypeChoice", "pin_type_choice", _A_CHOICE_ONLY_A_CLASS_FIELD_DECLARES),
 )
 

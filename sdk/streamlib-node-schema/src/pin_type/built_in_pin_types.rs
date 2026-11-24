@@ -357,11 +357,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A setting naming another node of the graph. It never takes a wire.",
             VALUE_ONLY,
             &[],
-            &[
-                "NodeReference",
-                "NodeReferenceToNodeType",
-                "SoleReferrerNodeReferenceToNodeType",
-            ],
+            &["NodeReference"],
             "\"node_reference\"",
         ),
         BuiltInPinTypeName::PinTypeChoice => row(

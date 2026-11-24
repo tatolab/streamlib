@@ -242,7 +242,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     documentation: "A setting naming another node of the graph. It never takes a wire.",
     flows: Object.freeze(["value"]),
     annotations: Object.freeze([]),
-    python_forms: Object.freeze(["NodeReference", "NodeReferenceToNodeType", "SoleReferrerNodeReferenceToNodeType"]),
+    python_forms: Object.freeze(["NodeReference"]),
     typescript_form: "\"node_reference\"",
     value_component: "NodeReferenceInConfig",
     since: 3,

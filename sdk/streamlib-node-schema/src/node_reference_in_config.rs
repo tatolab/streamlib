@@ -6,33 +6,23 @@
 //! marks a config key as holding one.
 
 use std::borrow::Cow;
-use std::marker::PhantomData;
 
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::descriptors::PortDescriptor;
 use crate::pin_type::{DeclaredPinType, PinType};
 
-/// The schema keyword a config key holding a node reference carries. Its value
-/// is an object; its `node_type` key, when present, is the import path the
-/// referenced node must be, and its `one_referrer_per_referenced_node` key,
-/// when `true`, refuses a second node whose key names the same node.
+/// The schema keyword a config key holding a node reference carries, of an
+/// empty object. Such a key takes a node of any type; an input declaring a
+/// `NodeReference` names the type and whether one node at most names a node.
 pub const NODE_REFERENCE_SCHEMA_KEYWORD: &str = "x-tatolab-node-reference";
 
 /// The key of the object a node reference is written as.
 pub const NODE_REFERENCE_NODE_KEY: &str = "node";
-
-/// The keyword's key naming the node type a reference must name.
-const NODE_REFERENCE_SCHEMA_NODE_TYPE_KEY: &str = "node_type";
-
-/// The keyword's key that, when `true`, lets one node at most name a given
-/// node under the config key.
-pub const NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: &str =
-    "one_referrer_per_referenced_node";
 
 /// A config value naming another node of the graph, of any type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,103 +51,11 @@ impl JsonSchema for NodeReferenceInConfig {
     }
 
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        node_reference_schema(generator, None)
+        node_reference_schema(generator)
     }
 }
 
-/// A node type a typed node reference may name, by its import path.
-pub trait NodeTypeANodeReferenceNames {
-    /// The import path of the node type, as a graph's `type` names it.
-    fn node_type_import_path() -> &'static str;
-}
-
-/// A config value naming another node of the graph, which must be of type `T`.
-pub struct NodeReferenceToNodeType<T: NodeTypeANodeReferenceNames> {
-    /// The referenced node's name, as `add` gave it.
-    pub node: String,
-    referenced_node_type: PhantomData<fn() -> T>,
-}
-
-impl<T: NodeTypeANodeReferenceNames> NodeReferenceToNodeType<T> {
-    /// A reference to the node named `node`.
-    pub fn new(node: impl Into<String>) -> Self {
-        Self {
-            node: node.into(),
-            referenced_node_type: PhantomData,
-        }
-    }
-}
-
-impl<T: NodeTypeANodeReferenceNames> std::fmt::Debug for NodeReferenceToNodeType<T> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("NodeReferenceToNodeType")
-            .field("node", &self.node)
-            .field("node_type", &T::node_type_import_path())
-            .finish()
-    }
-}
-
-impl<T: NodeTypeANodeReferenceNames> Clone for NodeReferenceToNodeType<T> {
-    fn clone(&self) -> Self {
-        Self::new(self.node.clone())
-    }
-}
-
-impl<T: NodeTypeANodeReferenceNames> PartialEq for NodeReferenceToNodeType<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.node == other.node
-    }
-}
-
-impl<T: NodeTypeANodeReferenceNames> Serialize for NodeReferenceToNodeType<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        NodeReferenceInConfig {
-            node: self.node.clone(),
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de, T: NodeTypeANodeReferenceNames> Deserialize<'de> for NodeReferenceToNodeType<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        NodeReferenceInConfig::deserialize(deserializer).map(|untyped| Self::new(untyped.node))
-    }
-}
-
-impl<T: NodeTypeANodeReferenceNames> JsonSchema for NodeReferenceToNodeType<T> {
-    fn is_referenceable() -> bool {
-        false
-    }
-
-    fn schema_name() -> String {
-        format!("NodeReferenceTo_{}", T::node_type_import_path())
-    }
-
-    fn schema_id() -> Cow<'static, str> {
-        Cow::Owned(format!(
-            "{}::NodeReferenceToNodeType<{}>",
-            module_path!(),
-            T::node_type_import_path()
-        ))
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        node_reference_schema(generator, Some(T::node_type_import_path()))
-    }
-}
-
-fn node_reference_schema(
-    generator: &mut SchemaGenerator,
-    referenced_node_type: Option<&str>,
-) -> Schema {
-    let mut keyword = serde_json::Map::new();
-    if let Some(node_type) = referenced_node_type {
-        keyword.insert(
-            NODE_REFERENCE_SCHEMA_NODE_TYPE_KEY.to_string(),
-            Value::String(node_type.to_string()),
-        );
-    }
+fn node_reference_schema(generator: &mut SchemaGenerator) -> Schema {
     let mut object_validation = ObjectValidation::default();
     object_validation.properties.insert(
         NODE_REFERENCE_NODE_KEY.to_string(),
@@ -174,19 +72,19 @@ fn node_reference_schema(
     };
     schema_object.extensions.insert(
         NODE_REFERENCE_SCHEMA_KEYWORD.to_string(),
-        Value::Object(keyword),
+        Value::Object(serde_json::Map::new()),
     );
     Schema::Object(schema_object)
 }
 
-/// One top-level config key a node type's config schema marks as holding a
-/// node reference.
+/// One config key holding a node reference: a top-level key a node type's config
+/// schema marks, or an input declaring a `NodeReference` or a `Connection`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigKeyHoldingANodeReference {
     /// The config key.
     pub config_key: String,
-    /// The import path of the type the referenced node must be, as the
-    /// schema writes it; `None` takes a node of any type.
+    /// The import path of the type the referenced node must be, as the input's
+    /// `NodeReference` names it; `None` takes a node of any type.
     pub referenced_node_type_import_path: Option<String>,
     /// Whether the key's schema also takes a value that is neither a node
     /// reference nor `null`, as `NodeReference | str` does.
@@ -213,17 +111,11 @@ pub fn config_keys_holding_a_node_reference(
                 document: config_schema,
             };
             schema_walk
-                .node_reference_keyword_in(property_schema, &mut Vec::new())
-                .map(|keyword| ConfigKeyHoldingANodeReference {
+                .marks_a_node_reference(property_schema, &mut Vec::new())
+                .then(|| ConfigKeyHoldingANodeReference {
                     config_key: config_key.clone(),
-                    referenced_node_type_import_path: keyword
-                        .get(NODE_REFERENCE_SCHEMA_NODE_TYPE_KEY)
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    one_referrer_per_referenced_node: keyword
-                        .get(NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY)
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
+                    referenced_node_type_import_path: None,
+                    one_referrer_per_referenced_node: false,
                     takes_a_value_other_than_a_node_reference: schema_walk
                         .takes_a_value_other_than_a_node_reference_or_null(
                             property_schema,
@@ -300,29 +192,29 @@ impl<'schema> SchemaDocumentWalk<'schema> {
             .flatten()
     }
 
-    fn node_reference_keyword_in(
+    fn marks_a_node_reference(
         &self,
         schema: &'schema Value,
         refs_followed_on_this_path: &mut Vec<&'schema str>,
-    ) -> Option<&'schema serde_json::Map<String, Value>> {
-        if let Some(keyword) = schema
+    ) -> bool {
+        if schema
             .get(NODE_REFERENCE_SCHEMA_KEYWORD)
-            .and_then(Value::as_object)
+            .is_some_and(Value::is_object)
         {
-            return Some(keyword);
+            return true;
         }
         if let Some((pointer, definition)) =
             self.definition_a_ref_names(schema, refs_followed_on_this_path)
         {
             refs_followed_on_this_path.push(pointer);
-            let found = self.node_reference_keyword_in(definition, refs_followed_on_this_path);
+            let found = self.marks_a_node_reference(definition, refs_followed_on_this_path);
             refs_followed_on_this_path.pop();
-            if found.is_some() {
-                return found;
+            if found {
+                return true;
             }
         }
         Self::combinator_branches(schema)
-            .find_map(|branch| self.node_reference_keyword_in(branch, refs_followed_on_this_path))
+            .any(|branch| self.marks_a_node_reference(branch, refs_followed_on_this_path))
     }
 
     /// Whether `schema` takes a value that is neither a node reference nor
@@ -389,49 +281,20 @@ mod tests {
     use super::*;
     use crate::NodeConfigJsonSchema;
 
-    #[test]
-    fn a_key_whose_keyword_takes_one_referrer_per_referenced_node_says_so() {
-        let schema = serde_json::json!({
-            "properties": {
-                "track": {NODE_REFERENCE_SCHEMA_KEYWORD: {
-                    "node_type": "tatolab.moq:MoqTrack",
-                    NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
-                }},
-            }
-        });
-        assert_eq!(
-            config_keys_holding_a_node_reference(&schema),
-            vec![ConfigKeyHoldingANodeReference {
-                config_key: "track".to_string(),
-                referenced_node_type_import_path: Some("tatolab.moq:MoqTrack".to_string()),
-                takes_a_value_other_than_a_node_reference: false,
-                one_referrer_per_referenced_node: true,
-            }]
-        );
-    }
-
-    struct GatewayNodeTypeForTheTest;
-
-    impl NodeTypeANodeReferenceNames for GatewayNodeTypeForTheTest {
-        fn node_type_import_path() -> &'static str {
-            "tatolab.moq:MoqGateway"
-        }
-    }
-
     #[derive(JsonSchema, Serialize, Deserialize)]
     #[allow(
         dead_code,
         reason = "the struct exists only for its derived JSON schema"
     )]
-    struct ConfigNamingAGatewayAndAnyNode {
-        gateway: NodeReferenceToNodeType<GatewayNodeTypeForTheTest>,
+    struct ConfigNamingARequiredAndAnOptionalNode {
+        gateway: NodeReferenceInConfig,
         anything: Option<NodeReferenceInConfig>,
         track: String,
     }
 
     #[test]
     fn a_derived_config_schema_marks_each_key_holding_a_node_reference() {
-        let document = ConfigNamingAGatewayAndAnyNode::node_config_schema_document();
+        let document = ConfigNamingARequiredAndAnOptionalNode::node_config_schema_document();
         assert_eq!(
             config_keys_holding_a_node_reference(&document),
             vec![
@@ -443,7 +306,7 @@ mod tests {
                 },
                 ConfigKeyHoldingANodeReference {
                     config_key: "gateway".to_string(),
-                    referenced_node_type_import_path: Some("tatolab.moq:MoqGateway".to_string()),
+                    referenced_node_type_import_path: None,
                     takes_a_value_other_than_a_node_reference: false,
                     one_referrer_per_referenced_node: false,
                 },
@@ -473,7 +336,7 @@ mod tests {
         let document = serde_json::json!({
             "properties": {"gateway": {
                 "$ref": "#/$defs/Described",
-                "allOf": [{NODE_REFERENCE_SCHEMA_KEYWORD: {"node_type": "tatolab.moq:MoqGateway"}}]
+                "allOf": [{NODE_REFERENCE_SCHEMA_KEYWORD: {}}]
             }},
             "$defs": {"Described": {"description": "the gateway"}}
         });
@@ -481,7 +344,7 @@ mod tests {
             config_keys_holding_a_node_reference(&document),
             vec![ConfigKeyHoldingANodeReference {
                 config_key: "gateway".to_string(),
-                referenced_node_type_import_path: Some("tatolab.moq:MoqGateway".to_string()),
+                referenced_node_type_import_path: None,
                 takes_a_value_other_than_a_node_reference: false,
                 one_referrer_per_referenced_node: false,
             }]
@@ -549,12 +412,13 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_reference_round_trips_as_the_node_object() {
-        let reference = NodeReferenceToNodeType::<GatewayNodeTypeForTheTest>::new("cloudflare");
+    fn a_reference_round_trips_as_the_node_object() {
+        let reference = NodeReferenceInConfig {
+            node: "cloudflare".to_string(),
+        };
         let written = serde_json::to_value(&reference).unwrap();
         assert_eq!(written, serde_json::json!({"node": "cloudflare"}));
-        let read: NodeReferenceToNodeType<GatewayNodeTypeForTheTest> =
-            serde_json::from_value(written).unwrap();
+        let read: NodeReferenceInConfig = serde_json::from_value(written).unwrap();
         assert_eq!(read, reference);
     }
 

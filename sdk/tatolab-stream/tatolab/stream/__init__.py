@@ -156,10 +156,6 @@ from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
-from ._stream_graph_builder import (
-    NodeReferenceToNodeType as NodeReferenceToNodeType,
-    SoleReferrerNodeReferenceToNodeType as SoleReferrerNodeReferenceToNodeType,
-)
 from ._stream_graph_builder import StreamBuilder as StreamBuilder
 from ._stream_graph_builder import graph_generator as graph_generator
 from ._stream_graph_builder import run_graph_generator as run_graph_generator
@@ -252,7 +248,6 @@ __all__ = [
     "NodeOutputPortReference",
     "NodeOutputTextureRing",
     "NodeReference",
-    "NodeReferenceToNodeType",
     "FormerlyNamed",
     "FlowsAsValue",
     "AssetMedia",
@@ -305,7 +300,6 @@ __all__ = [
     "ShaderNode",
     "cast_exposed_name_to_url_safe",
     "SoleReferrer",
-    "SoleReferrerNodeReferenceToNodeType",
     "State",
     "Stateful",
     "OpaqueFdAllocationExport",

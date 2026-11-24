@@ -595,26 +595,11 @@ def test_a_fixed_length_tuple_states_its_length_not_only_its_positions():
 # ---------------------------------------------------------------------------
 
 
-def test_a_key_holding_a_sole_referrer_reference_says_one_node_at_most_names_the_node() -> None:
-    from stream_graph_builder_nodes import FrameInverter
-    from tatolab.stream import SoleReferrerNodeReferenceToNodeType
-
-    class SendConfig(TypedDict):
-        track: SoleReferrerNodeReferenceToNodeType[FrameInverter]
-
-    document = derive_config_class_json_schema(SendConfig)
-    assert document["properties"]["track"]["x-tatolab-node-reference"] == {
-        "node_type": "stream_graph_builder_nodes:FrameInverter",
-        "one_referrer_per_referenced_node": True,
-    }
-
-
-def test_a_key_holding_a_typed_node_reference_carries_the_type_it_names() -> None:
-    from stream_graph_builder_nodes import FrameInverter
-    from tatolab.stream import NodeReference, NodeReferenceToNodeType
+def test_a_key_holding_a_node_reference_is_marked_as_one_optional_or_not() -> None:
+    from tatolab.stream import NodeReference
 
     class TrackConfig(TypedDict):
-        gateway: NodeReferenceToNodeType[FrameInverter]
+        gateway: NodeReference
         anything: NotRequired[Optional[NodeReference]]
 
     document = derive_config_class_json_schema(TrackConfig)
@@ -623,16 +608,10 @@ def test_a_key_holding_a_typed_node_reference_carries_the_type_it_names() -> Non
         "properties": {"node": {"type": "string"}},
         "required": ["node"],
         "additionalProperties": False,
+        "x-tatolab-node-reference": {},
     }
-    assert document["properties"]["gateway"] == {
-        **node_object,
-        "x-tatolab-node-reference": {
-            "node_type": "stream_graph_builder_nodes:FrameInverter"
-        },
-    }
-    assert document["properties"]["anything"] == {
-        "anyOf": [{**node_object, "x-tatolab-node-reference": {}}, {"type": "null"}]
-    }
+    assert document["properties"]["gateway"] == node_object
+    assert document["properties"]["anything"] == {"anyOf": [node_object, {"type": "null"}]}
 
 
 # ---------------------------------------------------------------------------

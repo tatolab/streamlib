@@ -191,13 +191,6 @@ class GraphFragmentReference(NodeReference):
         return cast
 
 
-type NodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeReference
-"""A config field holding a reference to a node of `NodeClassTheReferenceNames`, checked at load."""
-
-type SoleReferrerNodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeReference
-"""A config field holding a reference to a node of `NodeClassTheReferenceNames` that no other node names under the same key, checked at load."""
-
-
 @dataclass(frozen=True)
 class _RecordedNode:
     name: str
