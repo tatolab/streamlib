@@ -257,9 +257,9 @@ impl PythonTensorCpuAttribute {
     }
 }
 
-/// The `EncodedMedia` an encoded media read returned, one Packets unit: its bytes borrowed in the sample they
-/// arrived in, with its presentation stamp, whether a decoder may enter at
-/// it, and its codec.
+/// The `EncodedMedia` an encoded media read returned, one Packets unit: its
+/// bytes borrowed in the sample they arrived in, with its presentation stamp,
+/// whether a decoder may enter at it, and its codec.
 #[pyclass(name = "EncodedMedia", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonEncodedMedia {
     pub(crate) payload: Py<crate::python_port_payload::PythonPortPayloadBorrow>,
