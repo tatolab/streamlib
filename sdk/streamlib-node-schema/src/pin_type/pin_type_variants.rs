@@ -353,6 +353,20 @@ pub struct BundleMember {
     pub default_value: Option<serde_json::Value>,
 }
 
+impl BundleMember {
+    /// Whether only a link carries the member: a heavy member, which a stored value of its
+    /// bundle leaves out.
+    pub fn is_carried_only_by_a_link(&self) -> bool {
+        self.member_type.is_a_heavy_type()
+    }
+
+    /// Whether a stored value of its bundle must name the member: one a link does not carry
+    /// alone and that declares no default.
+    pub(crate) fn a_stored_value_must_name_it(&self) -> bool {
+        self.default_value.is_none() && !self.is_carried_only_by_a_link()
+    }
+}
+
 /// The class that declares a named pin type, `module:QualifiedClassName`.
 // Every inhabitant names one: the inner string is private, `new` is the only constructor, and
 // `Deserialize` validates rather than inheriting `String`'s.

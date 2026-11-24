@@ -242,12 +242,11 @@ pub fn unpack_pin_value(
 }
 
 /// Why a value of `pin_type`, a List or a bundle holding a Texture, Audio or an encoded unit,
-/// has no JSON form to pack or unpack: it holds no stored value, and travels only as the Bundle
-/// frame a node sends.
+/// has no JSON message to pack or unpack: it travels only as the Bundle frame a node sends.
 fn a_bundle_frame_holds_no_json_value(pin_type: &PinType) -> String {
     format!(
         "a {pin_type} holds a Texture, Audio or encoded member, so it travels only as the Bundle \
-         frame a node sends and has no stored value to pack or unpack"
+         frame a node sends and has no JSON message of its own to pack or unpack"
     )
 }
 

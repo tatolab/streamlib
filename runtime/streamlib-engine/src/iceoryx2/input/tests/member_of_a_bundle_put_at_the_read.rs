@@ -398,6 +398,32 @@ fn a_texture_and_a_number_wired_into_members_arrive_as_one_bundle_frame() {
     assert_eq!(dropped_bag_counts_of(&mailboxes).get("L-picture"), Some(&0));
 }
 
+/// A number set on the input, beside a picture wired into its member, rides each Bundle frame
+/// the picture's messages make, as the value a member no link has carried reads.
+#[test]
+fn a_number_set_beside_a_wired_texture_rides_each_bundle_frame() {
+    let mailboxes = InputMailboxesInner::new();
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+    let set = json!({ "in": { "level": 0.4 } });
+    mailboxes.read_each_unlinked_input_as_its_value(set.as_object().unwrap());
+
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 5);
+
+    assert_eq!(
+        the_bundle_frames_read(&mailboxes, &a_metered_picture()),
+        vec![(
+            json!({ "level": 0.4 }),
+            vec![the_picture(an_image_frame(4, 19))],
+            5
+        )]
+    );
+}
+
 /// A newer picture replaces the one the port holds, so the bundle never names a slot its
 /// producer has since handed out again, and the port holds one picture however many arrive.
 ///

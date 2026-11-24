@@ -21,6 +21,9 @@ TEST_PATTERN_HEIGHT = 480
 #: The label set on `MakeBundle`'s `members`, which no wire reaches.
 LABEL_SET_ON_MAKE_BUNDLE = "set-on-make"
 
+#: The level set on `MakeBundle`'s `members` beside a wired picture, which no wire reaches.
+LEVEL_SET_BESIDE_THE_PICTURE = 0.625
+
 
 @graph_generator
 def a_number_into_one_member_and_each_member_out(stream_builder: StreamBuilder) -> None:
@@ -68,6 +71,38 @@ def a_picture_and_a_number_into_members_and_each_member_out(stream_builder: Stre
     reporter = stream_builder.add(ReportsThePictureAndTheLevelItReads, name="reporter")
     stream_builder.connect(pattern.output("video"), make.input("members", member="picture"))
     stream_builder.connect(source.output("level"), make.input("members", member="level"))
+    stream_builder.connect(make.output("bundle"), take_apart.input("bundle"))
+    stream_builder.connect(
+        take_apart.output("members", member="picture"), reporter.input("picture")
+    )
+    stream_builder.connect(take_apart.output("members", member="level"), reporter.input("level"))
+
+
+@graph_generator
+def a_picture_wired_and_a_number_set_into_members_and_each_member_out(
+    stream_builder: StreamBuilder,
+) -> None:
+    """The test pattern wired into `MakeBundle`'s `picture` member and its `level` member set,
+    reached by no wire, the bundle through `BreakBundle` and each member wired out of it into
+    one reporter."""
+    pattern = stream_builder.add(
+        TestPatternSource,
+        name="pattern",
+        input_values={"width": TEST_PATTERN_WIDTH, "height": TEST_PATTERN_HEIGHT},
+    )
+    make = stream_builder.add(
+        MakeBundle,
+        name="make",
+        input_values={
+            "bundle_type": PinTypeChoice(MeteredPicture),
+            "members": {"level": LEVEL_SET_BESIDE_THE_PICTURE},
+        },
+    )
+    take_apart = stream_builder.add(
+        BreakBundle, name="take-apart", input_values={"bundle_type": PinTypeChoice(MeteredPicture)}
+    )
+    reporter = stream_builder.add(ReportsThePictureAndTheLevelItReads, name="reporter")
+    stream_builder.connect(pattern.output("video"), make.input("members", member="picture"))
     stream_builder.connect(make.output("bundle"), take_apart.input("bundle"))
     stream_builder.connect(
         take_apart.output("members", member="picture"), reporter.input("picture")

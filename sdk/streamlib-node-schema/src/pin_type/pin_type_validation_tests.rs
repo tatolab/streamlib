@@ -98,11 +98,11 @@ fn a_list_of_a_heavy_type_is_a_pin_type_and_of_a_trigger_or_tensor_is_refused_na
     }
 }
 
-/// A bundle may hold a Texture, Audio or encoded member beside its small members, and holds no
-/// stored value then; a List of such bundles is still refused, as only a heavy element rides
-/// an indexed row.
+/// A bundle may hold a Texture, Audio or encoded member beside its small members, and holds
+/// the values of its small members then; a List of such bundles is still refused, as only a
+/// heavy element rides an indexed row.
 #[test]
-fn a_bundle_with_a_heavy_member_is_a_pin_type_that_holds_no_stored_value() {
+fn a_bundle_with_a_heavy_member_is_a_pin_type_holding_the_values_of_its_small_members() {
     for member_type in every_heavy_type() {
         let frame_with_metadata = PinType::Bundle {
             name: None,
@@ -113,7 +113,7 @@ fn a_bundle_with_a_heavy_member_is_a_pin_type_that_holds_no_stored_value() {
         };
         assert_eq!(frame_with_metadata.validate(), Ok(()), "{member_type}");
         assert!(frame_with_metadata.holds_a_heavy_member(), "{member_type}");
-        assert!(!frame_with_metadata.holds_a_stored_value(), "{member_type}");
+        assert!(frame_with_metadata.holds_a_stored_value(), "{member_type}");
         assert!(
             a_list_of(frame_with_metadata).validate().is_err(),
             "{member_type}"

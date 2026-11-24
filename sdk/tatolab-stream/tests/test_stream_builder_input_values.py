@@ -18,9 +18,11 @@ from stream_graph_builder_nodes import TintedLevel
 from stream_graph_builder_streams import StandInMarker
 from tatolab.stream import (
     Color,
+    MakeBundle,
     InputPin,
     OutputPin,
     PinGroup,
+    PinTypeChoice,
     StreamBuilder,
     Texture,
     graph_generator,
@@ -243,3 +245,34 @@ def test_a_value_on_a_port_no_slot_holds_or_on_a_slots_stream_is_refused(set_on:
 def test_a_refusal_lists_a_groups_slot_ports_among_the_inputs() -> None:
     with pytest.raises(ValueError, match=r"`layers\.<slot>\.opacity`, `layers\.<slot>\.picture`"):
         StreamBuilder("rig").add(_LayeredOver).input("level")
+
+
+@dataclass(frozen=True)
+class MeteredPicture:
+    """A picture with the level metered off it."""
+
+    picture: Texture
+    level: float
+    label: str = "unnamed"
+
+
+def test_a_bundle_holding_a_texture_is_set_as_a_mapping_of_its_other_members() -> None:
+    """`MakeBundle` choosing a bundle that holds a Texture takes its other members as a mapping,
+    which leaves the picture to its link; one setting the picture, or leaving out a member with
+    no default, is refused.
+
+    Fail-without-fix: a bundle is taken only as its dataclass, which cannot be built without a
+    picture, so `{"level": 0.5}` is refused as not a Bundle.
+    """
+    chosen = PinTypeChoice(MeteredPicture)
+
+    recorded = the_values_recorded_for(
+        MakeBundle, input_values={"bundle_type": chosen, "members": {"level": 0.5}}
+    )
+
+    assert recorded["members"] == {"level": 0.5}
+    for members in ({"level": 0.5, "picture": None}, {"label": "kitchen"}):
+        with pytest.raises((TypeError, ValueError), match="members other than a Texture"):
+            StreamBuilder("rig").add(
+                MakeBundle, input_values={"bundle_type": chosen, "members": members}
+            )

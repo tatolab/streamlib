@@ -67,10 +67,14 @@ impl PinDeclaration {
 impl PinType {
     /// Whether an input of this type holds a value while no link feeds it. A type that carries
     /// only messages, such as a Texture, an Audio stream or a Trigger, holds none, nor does a
-    /// List or a bundle holding one.
+    /// List of one. A bundle holding one holds the values of its other members, while a link
+    /// carries the heavy member.
     pub fn holds_a_stored_value(&self) -> bool {
         match self {
-            Self::ListOf { .. } | Self::Bundle { .. } if self.holds_a_heavy_member() => false,
+            Self::ListOf { .. } if self.holds_a_heavy_member() => false,
+            Self::Bundle { members, .. } if self.holds_a_heavy_member() => members
+                .iter()
+                .any(|member| !member.is_carried_only_by_a_link()),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
@@ -151,13 +155,14 @@ impl PinType {
                     .iter()
                     .all(|element| element_type.is_a_stored_value(element))
             }),
+            Self::Bundle { .. } if !self.holds_a_stored_value() => false,
             Self::Bundle { members, .. } => value.as_object().is_some_and(|stored| {
                 stored
                     .keys()
                     .all(|key| members.iter().any(|member| &member.name == key))
                     && members.iter().all(|member| match stored.get(&member.name) {
                         Some(member_value) => member.member_type.is_a_stored_value(member_value),
-                        None => member.default_value.is_some(),
+                        None => !member.a_stored_value_must_name_it(),
                     })
             }),
             Self::NodeReference { .. } => reads_as::<NodeReferenceInConfig>(value),
@@ -214,14 +219,30 @@ impl PinType {
             Self::ListOf { element_type } => {
                 format!("a list, each element {}", element_type.what_it_takes())
             }
-            Self::Bundle { members, .. } => format!(
-                "an object of the members {}",
-                members
-                    .iter()
-                    .map(|member| format!("`{}`", member.name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            Self::Bundle { .. } if !self.holds_a_stored_value() => {
+                "no value, only a link".to_owned()
+            }
+            Self::Bundle { members, .. } => {
+                let names = |carried_only_by_a_link: bool| {
+                    members
+                        .iter()
+                        .filter(|member| {
+                            member.is_carried_only_by_a_link() == carried_only_by_a_link
+                        })
+                        .map(|member| format!("`{}`", member.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let carried_only_by_a_link = names(true);
+                if carried_only_by_a_link.is_empty() {
+                    format!("an object of the members {}", names(false))
+                } else {
+                    format!(
+                        "an object of the members {}, as {carried_only_by_a_link} takes only a link",
+                        names(false)
+                    )
+                }
+            }
             Self::NodeReference { .. } => "a node reference, `{\"node\": \"<name>\"}`".to_owned(),
             Self::PinTypeChoice { .. } => match self.the_pin_types_a_choice_takes() {
                 Some(PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares([])) => {
@@ -275,6 +296,7 @@ impl PinType {
             Self::Bundle { members, .. } => Value::Object(
                 members
                     .iter()
+                    .filter(|member| !member.is_carried_only_by_a_link())
                     .map(|member| (member.name.clone(), member.member_type.an_example_value()))
                     .collect(),
             ),

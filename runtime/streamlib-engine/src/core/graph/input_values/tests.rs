@@ -376,3 +376,72 @@ fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
         InputValueRefusalCode::InputTakesNoValue
     );
 }
+
+/// Make Bundle's `members`, its setting choosing a bundle that holds a Texture beside a Float
+/// `level`, takes a value of `level` alone, and refuses one setting the picture, which only a
+/// wire carries.
+///
+/// Mental-revert: judging a bundle holding a Texture wire-only as a whole refuses
+/// `{"level": 0.5}` as taking no value.
+#[test]
+fn an_input_reading_a_bundle_holding_a_texture_takes_a_value_of_its_small_members() {
+    use crate::core::descriptors::{
+        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, PortFamilyDeclaration,
+        TexturePixelFormat,
+    };
+    use crate::core::graph::PinTypeAsDeclared;
+    let members = PortInfo {
+        name: "members".to_owned(),
+        pin: None,
+        declared_pin_type: Some(PinTypeAsDeclared {
+            pin_type: DeclaredPinType::SetByInput {
+                input_name: "kind".to_owned(),
+            },
+            flow: PinFlow::Value,
+        }),
+        input_mode: Some(NodeInputMode::WireOrValue),
+        family: PortFamilyDeclaration::of_family(PortFamily::Records),
+        ..a_channels_input_typed(PinType::String {})
+    };
+    let kind = PortInfo {
+        name: "kind".to_owned(),
+        ..a_channels_input_typed(PinType::a_choice_of_any())
+    };
+    let inputs = [members.clone(), kind];
+    let a_member = |name: &str, member_type: PinType| BundleMember {
+        name: name.to_owned(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    };
+    let metered_picture = PinType::Bundle {
+        name: None,
+        members: vec![
+            a_member(
+                "picture",
+                PinType::Texture {
+                    pixel_formats: vec![TexturePixelFormat::Rgba8Unorm],
+                },
+            ),
+            a_member("level", PinType::Float { exact_size: None }),
+        ],
+    };
+    let mut holding = Map::new();
+    holding.insert("kind".to_owned(), json!(metered_picture));
+    let refusal_of = |value: Value| {
+        refuse_a_value_the_input_port_does_not_take(
+            "makebundle",
+            Some(NodeKind::Process),
+            &members.typed_by_its_setting_in(&inputs, &holding),
+            &value,
+        )
+    };
+
+    assert_eq!(refusal_of(json!({"level": 0.5})), Ok(()));
+    assert_eq!(
+        refusal_of(json!({"level": 0.5, "picture": {"surface_id": 1}}))
+            .expect_err("the picture takes only a wire")
+            .code,
+        InputValueRefusalCode::InputValueNotValid
+    );
+}
