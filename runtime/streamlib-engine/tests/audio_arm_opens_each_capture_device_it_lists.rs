@@ -43,18 +43,25 @@ fn a_real_audio_arm_or_skip() -> Option<SharedAudioDeviceBackend> {
     Some(backend)
 }
 
-/// Open `device_id` the way Microphone Source does and wait for its first block.
-fn the_first_block_of(backend: &SharedAudioDeviceBackend, device_id: &str) -> Result<(), String> {
-    let request = AudioDeviceStreamRequest {
+/// A capture request on `device_id` as Microphone Source makes one.
+fn a_capture_request_for(device_id: &str) -> AudioDeviceStreamRequest {
+    AudioDeviceStreamRequest {
         device_id: Some(device_id.to_owned()),
         deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
             48_000, 512,
         ))),
         capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         requested_format: RequestedAudioStreamFormat::default(),
-    };
-    let mut capture_stream = open_capture_stream_in_requested_format(backend.as_ref(), &request)
-        .map_err(|refusal| format!("did not open: {refusal}"))?;
+    }
+}
+
+/// Open `device_id` the way Microphone Source does and wait for its first block.
+fn the_first_block_of(backend: &SharedAudioDeviceBackend, device_id: &str) -> Result<(), String> {
+    let mut capture_stream = open_capture_stream_in_requested_format(
+        backend.as_ref(),
+        &a_capture_request_for(device_id),
+    )
+    .map_err(|refusal| format!("did not open: {refusal}"))?;
     let (delivered_sender, delivered_receiver) = mpsc::channel();
     capture_stream
         .start_delivering_to(Box::new(move |block: CapturedAudioBlockFromDevice<'_>| {
@@ -138,8 +145,8 @@ fn a_capture_device_id_the_arm_does_not_list_is_refused_at_open_rather_than_open
         "refused at open, naming the id: {refusal}"
     );
     if backend.backend_name() == "pipewire" {
-        let listed = list_audio_capture_devices(backend.as_ref()).expect("the arm lists");
-        for device in &listed {
+        let listed = backend.list_capture_devices().expect("the arm lists");
+        for device in &listed.devices {
             assert!(
                 refusal.contains(&device.id),
                 "the refusal names each listed id, '{}' among them: {refusal}",
@@ -170,9 +177,53 @@ fn the_virtual_audio_device_fixture(verb: &str) -> Result<String, String> {
     }
 }
 
+/// The fixture's null sink, removed when this drops unless `remove` already removed it, so a
+/// failed test leaves no sink in the session.
+#[cfg(target_os = "linux")]
+struct FixtureNullSinkInTheSession {
+    sink_name: String,
+    removed: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl FixtureNullSinkInTheSession {
+    fn add() -> Result<Self, String> {
+        Ok(Self {
+            sink_name: the_virtual_audio_device_fixture("start")?,
+            removed: false,
+        })
+    }
+
+    fn remove(&mut self) -> Result<(), String> {
+        self.removed = true;
+        the_virtual_audio_device_fixture("stop").map(|_| ())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for FixtureNullSinkInTheSession {
+    fn drop(&mut self) {
+        if !self.removed {
+            let _ = the_virtual_audio_device_fixture("stop");
+        }
+    }
+}
+
 /// How long the session has to end a stream whose device it removed.
 #[cfg(target_os = "linux")]
 const REMOVED_DEVICE_FAILURE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long a stream whose device went away is watched for a block from another device.
+#[cfg(target_os = "linux")]
+const AFTER_REMOVAL_DELIVERY_WATCH: Duration = Duration::from_secs(2);
+
+/// What the arm's recorder prefixes to every reason the shim reports.
+#[cfg(target_os = "linux")]
+const PIPEWIRE_STREAM_FAILURE_PREFIX: &str = "the PipeWire stream stopped serving its device";
+
+/// What the shim records when the session unlinks a named device's stream.
+#[cfg(target_os = "linux")]
+const PIPEWIRE_DEVICE_WENT_AWAY_REASON: &str = "its device went away";
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -188,24 +239,12 @@ fn a_capture_stream_whose_device_goes_away_fails_rather_than_moving_to_the_defau
         skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
         return;
     }
-    let sink = the_virtual_audio_device_fixture("start").expect("the fixture adds its null sink");
-    let monitor = format!("{sink}.monitor");
-    let request = AudioDeviceStreamRequest {
-        device_id: Some(monitor.clone()),
-        deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
-            48_000, 512,
-        ))),
-        capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
-        requested_format: RequestedAudioStreamFormat::default(),
-    };
-    let opened = open_capture_stream_in_requested_format(backend.as_ref(), &request);
-    let mut capture_stream = match opened {
-        Ok(capture_stream) => capture_stream,
-        Err(refusal) => {
-            let _ = the_virtual_audio_device_fixture("stop");
-            panic!("'{monitor}' did not open: {refusal}");
-        }
-    };
+    let mut fixture_sink =
+        FixtureNullSinkInTheSession::add().expect("the fixture adds its null sink");
+    let monitor = format!("{}.monitor", fixture_sink.sink_name);
+    let mut capture_stream =
+        open_capture_stream_in_requested_format(backend.as_ref(), &a_capture_request_for(&monitor))
+            .unwrap_or_else(|refusal| panic!("'{monitor}' did not open: {refusal}"));
     let liveness_report = capture_stream.liveness_report();
     let (delivered_sender, delivered_receiver) = mpsc::channel();
     capture_stream
@@ -213,14 +252,13 @@ fn a_capture_stream_whose_device_goes_away_fails_rather_than_moving_to_the_defau
             let _ = delivered_sender.send(block.sample_count);
         }))
         .expect("the monitor delivers");
-    let first_block = delivered_receiver.recv_timeout(FIRST_BLOCK_DEADLINE);
-    let stopped = the_virtual_audio_device_fixture("stop");
-    assert!(
-        first_block.is_ok(),
-        "'{monitor}' delivered no block in {FIRST_BLOCK_DEADLINE:?}"
-    );
-    stopped.expect("the fixture removes its null sink");
+    delivered_receiver
+        .recv_timeout(FIRST_BLOCK_DEADLINE)
+        .unwrap_or_else(|_| panic!("'{monitor}' delivered no block in {FIRST_BLOCK_DEADLINE:?}"));
 
+    fixture_sink
+        .remove()
+        .expect("the fixture removes its null sink");
     let removed_at = std::time::Instant::now();
     while liveness_report.failure_that_ended_the_stream().is_none()
         && removed_at.elapsed() < REMOVED_DEVICE_FAILURE_DEADLINE
@@ -228,14 +266,35 @@ fn a_capture_stream_whose_device_goes_away_fails_rather_than_moving_to_the_defau
         std::thread::sleep(Duration::from_millis(50));
     }
     let failure = liveness_report.failure_that_ended_the_stream();
+    let _ = delivered_receiver.try_iter().count();
+    std::thread::sleep(AFTER_REMOVAL_DELIVERY_WATCH);
+    let blocks_after_the_failure = delivered_receiver.try_iter().count();
     capture_stream.stop_delivering().expect("the stream stops");
-    let failure = failure.unwrap_or_else(|| {
-        panic!(
-            "'{monitor}' went away and the stream reported no failure in \
-             {REMOVED_DEVICE_FAILURE_DEADLINE:?}: it lives on, on another device or none"
-        )
-    });
-    eprintln!("'{monitor}' went away: {failure}");
+
+    let reason = failure
+        .unwrap_or_else(|| {
+            panic!(
+                "'{monitor}' went away and the stream reported no failure in \
+                 {REMOVED_DEVICE_FAILURE_DEADLINE:?}"
+            )
+        })
+        .to_string();
+    eprintln!(
+        "'{monitor}' went away, recorded by the shim's {} path: {reason}",
+        if reason.contains(PIPEWIRE_DEVICE_WENT_AWAY_REASON) {
+            "unconnected-after-negotiation"
+        } else {
+            "error-state"
+        }
+    );
+    assert!(
+        reason.contains(PIPEWIRE_STREAM_FAILURE_PREFIX),
+        "the reason is the PipeWire arm's: {reason}"
+    );
+    assert_eq!(
+        blocks_after_the_failure, 0,
+        "'{monitor}' went away and the stream went on delivering from another device"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -322,25 +381,21 @@ fn the_alias_captures_what_the_default_output_plays() {
         skip_because_this_machine_lacks(RigOnlyCapability::AudioDevice);
         return;
     }
-    let a_request_for = |device_id: Option<&str>, requested_format| AudioDeviceStreamRequest {
-        device_id: device_id.map(str::to_owned),
-        deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
-            48_000, 512,
-        ))),
-        capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
-        requested_format,
-    };
 
     let mut playback_stream = open_playback_stream_in_requested_format(
         backend.as_ref(),
-        &a_request_for(
-            None,
-            RequestedAudioStreamFormat {
+        &AudioDeviceStreamRequest {
+            device_id: None,
+            deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
+                48_000, 512,
+            ))),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            requested_format: RequestedAudioStreamFormat {
                 sample_rate: Some(48_000),
                 channels: Some(1),
                 sample_format: Some(AudioSampleFormat::F32),
             },
-        ),
+        },
     )
     .expect("the default output opens");
     let samples_played = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -370,10 +425,7 @@ fn the_alias_captures_what_the_default_output_plays() {
 
     let mut capture_stream = open_capture_stream_in_requested_format(
         backend.as_ref(),
-        &a_request_for(
-            Some(DEFAULT_OUTPUT_MONITOR_DEVICE_ID),
-            RequestedAudioStreamFormat::default(),
-        ),
+        &a_capture_request_for(DEFAULT_OUTPUT_MONITOR_DEVICE_ID),
     )
     .expect("the default output's monitor opens through the alias");
     let sample_format = capture_stream.stream_format().sample_format;

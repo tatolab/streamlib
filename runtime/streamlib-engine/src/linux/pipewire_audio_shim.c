@@ -42,6 +42,8 @@ struct StreamLibPipeWireAudioStream {
     struct pw_thread_loop *thread_loop;
     struct pw_stream *stream;
     enum StreamLibPipeWireStreamDirection direction;
+    /// Whether the stream was opened on a named device rather than the session default.
+    bool names_a_device;
 
     /// Filled by the format callback on the loop thread, read by `open` once
     /// negotiation has been signalled.
@@ -183,7 +185,7 @@ static void on_stream_state_changed(void *data, enum pw_stream_state old_state,
 {
     struct StreamLibPipeWireAudioStream *audio_stream = data;
     if (state == PW_STREAM_STATE_UNCONNECTED && old_state != PW_STREAM_STATE_UNCONNECTED &&
-        audio_stream->format_was_negotiated) {
+        audio_stream->names_a_device && audio_stream->format_was_negotiated) {
         // A stream opened with `PW_STREAM_FLAG_DONT_RECONNECT` has its node destroyed by the
         // session when its device goes away, rather than being moved to the default.
         fail_the_stream(audio_stream, "the session removed the stream: its device went away");
@@ -512,9 +514,10 @@ uint32_t streamlib_pipewire_stream_properties(struct StreamLibPipeWireStreamProp
     items[count++] = (struct StreamLibPipeWireStreamProperty){PW_KEY_MEDIA_ROLE, "Production"};
     if (device_id_or_null == NULL)
         return count;
-    // WirePlumber's key, absent from libpipewire's headers: without it a target the session
-    // cannot find is answered with the session default.
-    items[count++] = (struct StreamLibPipeWireStreamProperty){"node.dont-fallback", "true"};
+    // WirePlumber's key, absent from libpipewire's headers: without it a capture target the
+    // session cannot find is answered with the session's default source.
+    if (!is_playback)
+        items[count++] = (struct StreamLibPipeWireStreamProperty){"node.dont-fallback", "true"};
 
     // A sink's monitor is a *capture* endpoint the session already routes, and
     // `stream.capture.sink` is the only way to reach one: targeting a sink
@@ -640,6 +643,7 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     }
     streamlib_pipewire_copy_entry_points(&audio_stream->entry_points, entry_points);
     audio_stream->direction = direction;
+    audio_stream->names_a_device = device_id_or_null != NULL;
     resolved = &audio_stream->entry_points;
 
     audio_stream->thread_loop = resolved->pw_thread_loop_new(thread_loop_name, NULL);

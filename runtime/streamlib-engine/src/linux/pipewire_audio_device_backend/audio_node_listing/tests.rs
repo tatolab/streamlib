@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::context::DEFAULT_OUTPUT_MONITOR_DEVICE_ID;
+use crate::linux::pipewire_audio_device_backend::refuse_a_capture_device_id_the_session_does_not_list;
 
 fn a_node(node_name: &str, node_description: Option<&str>, media_class: &str) -> PipeWireAudioNode {
     PipeWireAudioNode {
@@ -293,24 +295,28 @@ fn a_node_the_session_removes_before_the_listing_ends_is_dropped_and_the_rest_ke
 }
 
 fn the_capture_refusal_for(device_id: &str) -> Option<String> {
-    super::super::refuse_a_capture_device_id_the_session_does_not_list(
+    refuse_a_capture_device_id_the_session_does_not_list(
         device_id,
-        a_session().capture_device_listing(),
+        &a_session().capture_device_listing(),
     )
     .err()
     .map(|refusal| refusal.to_string())
 }
 
 #[test]
-fn a_source_a_sinks_monitor_and_the_default_output_monitor_alias_open_for_capture() {
+fn a_source_and_a_sinks_monitor_open_for_capture() {
     for device_id in [
         "alsa_input.usb-mic.mono",
         "virtual-source",
         "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
-        crate::core::context::DEFAULT_OUTPUT_MONITOR_DEVICE_ID,
     ] {
         assert_eq!(the_capture_refusal_for(device_id), None, "{device_id}");
     }
+}
+
+#[test]
+fn the_default_output_monitor_alias_reaching_the_arm_unresolved_is_refused() {
+    assert!(the_capture_refusal_for(DEFAULT_OUTPUT_MONITOR_DEVICE_ID).is_some());
 }
 
 #[test]
@@ -324,6 +330,21 @@ fn a_source_the_session_does_not_hold_is_refused_naming_the_ones_it_does() {
     ] {
         assert!(refusal.contains(expected), "{expected} in: {refusal}");
     }
+}
+
+#[test]
+fn a_capture_device_id_in_a_session_listing_nothing_is_refused_saying_so() {
+    let refusal = refuse_a_capture_device_id_the_session_does_not_list(
+        "alsa_input.usb-gone.mono",
+        &PipeWireAudioNodesListed::default().capture_device_listing(),
+    )
+    .expect_err("nothing is listed")
+    .to_string();
+    assert!(refusal.contains("'alsa_input.usb-gone.mono'"), "{refusal}");
+    assert!(
+        refusal.contains("lists no capture device at all"),
+        "{refusal}"
+    );
 }
 
 #[test]

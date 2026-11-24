@@ -159,33 +159,5 @@ fn the_default_output_monitor_or_its_refusal(
     })
 }
 
-/// Refused by name, with every id `listed` holds, unless `device_id` is one of them: a backend
-/// asked for a device it does not list may open another one in its place.
-pub(crate) fn refuse_a_capture_device_id_that_is_not_listed(
-    backend_name: &str,
-    device_id: &str,
-    listed: &[AudioCaptureDevice],
-) -> Result<()> {
-    if listed.iter().any(|device| device.id == device_id) {
-        return Ok(());
-    }
-    if listed.is_empty() {
-        return Err(crate::core::Error::Configuration(format!(
-            "audio device '{device_id}' cannot be opened for capture: the {backend_name} \
-             backend lists no capture device at all."
-        )));
-    }
-    let listed = listed
-        .iter()
-        .map(|device| format!("{} ({})", device.id, device.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(crate::core::Error::Configuration(format!(
-        "audio device '{device_id}' cannot be opened for capture: the {backend_name} backend \
-         lists no capture device by that id. Capture devices it lists: {listed}. Fix device_id, \
-         or omit it to use the default input."
-    )))
-}
-
 #[cfg(test)]
 mod tests;

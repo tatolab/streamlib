@@ -17,7 +17,6 @@ use crate::core::context::{
     AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
     DeviceStreamLivenessReport, RequestedAudioStreamFormat,
-    refuse_a_capture_device_id_that_is_not_listed,
 };
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
@@ -162,8 +161,6 @@ mod audio_shim {
     }
 }
 
-const PIPEWIRE_AUDIO_BACKEND_NAME: &str = "pipewire";
-
 /// Audio over a PipeWire session, with libpipewire bound at runtime.
 pub(crate) struct PipeWireAudioDeviceBackend {
     entry_points: Arc<PipeWireLibraryEntryPoints>,
@@ -198,7 +195,7 @@ impl PipeWireAudioDeviceBackend {
 
 impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     fn backend_name(&self) -> &'static str {
-        PIPEWIRE_AUDIO_BACKEND_NAME
+        "pipewire"
     }
 
     fn list_capture_devices(&self) -> Result<AudioCaptureDeviceListing> {
@@ -212,12 +209,89 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         &self,
         request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>> {
-        if let Some(device_id) = request.device_id.as_deref() {
-            refuse_a_capture_device_id_the_session_does_not_list(
-                device_id,
-                self.list_capture_devices()?,
-            )?;
+        open_only_a_capture_device_the_session_lists(
+            request,
+            || self.list_capture_devices(),
+            |request| self.open_listed_capture_stream(request),
+        )
+    }
+
+    fn open_playback_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioPlaybackStream>> {
+        let (opened, playback_stream_format) = self.open_audio_stream(
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            request,
+            request.requested_format,
+        )?;
+        let (failure_recorder, liveness_report) =
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
+        let playback_stream = PipeWireAudioPlaybackStream {
+            opened,
+            playback_stream_format,
+            installed_hand_off: None,
+            failure_recorder: Box::new(failure_recorder),
+            liveness_report,
+        };
+        // SAFETY: as for the capture stream `open_listed_capture_stream` opens.
+        unsafe {
+            install_the_shims_failure_hand_off_pointing_at(
+                playback_stream.opened.audio_stream,
+                &playback_stream.failure_recorder,
+            );
         }
+        Ok(Box::new(playback_stream))
+    }
+}
+
+/// Open a capture stream with `open_listed_capture_stream` only where `request` names no device or
+/// a device `list_capture_devices` holds: the session links a capture stream whose target it
+/// cannot find to its default source.
+fn open_only_a_capture_device_the_session_lists<OpenedCaptureStream>(
+    request: &AudioDeviceStreamRequest,
+    list_capture_devices: impl FnOnce() -> Result<AudioCaptureDeviceListing>,
+    open_listed_capture_stream: impl FnOnce(&AudioDeviceStreamRequest) -> Result<OpenedCaptureStream>,
+) -> Result<OpenedCaptureStream> {
+    if let Some(device_id) = request.device_id.as_deref() {
+        refuse_a_capture_device_id_the_session_does_not_list(device_id, &list_capture_devices()?)?;
+    }
+    open_listed_capture_stream(request)
+}
+
+/// Refused by name, with every id `listing` holds, unless `device_id` is one of them.
+fn refuse_a_capture_device_id_the_session_does_not_list(
+    device_id: &str,
+    listing: &AudioCaptureDeviceListing,
+) -> Result<()> {
+    if listing.devices.iter().any(|device| device.id == device_id) {
+        return Ok(());
+    }
+    if listing.devices.is_empty() {
+        return Err(Error::Configuration(format!(
+            "audio device '{device_id}' cannot be opened for capture: the PipeWire session lists \
+             no capture device at all."
+        )));
+    }
+    let listed = listing
+        .devices
+        .iter()
+        .map(|device| format!("{} ({})", device.id, device.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(Error::Configuration(format!(
+        "audio device '{device_id}' cannot be opened for capture: the PipeWire session lists no \
+         capture device by that id. Capture devices it lists: {listed}. Fix device_id, or omit it \
+         to use the default input."
+    )))
+}
+
+impl PipeWireAudioDeviceBackend {
+    /// Open a capture stream on the device `request` names, which the caller has found listed.
+    fn open_listed_capture_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioCaptureStream>> {
         let (opened, capture_stream_format) = self.open_audio_stream(
             audio_shim::STREAM_DIRECTION_CAPTURE,
             request,
@@ -244,49 +318,6 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         Ok(Box::new(capture_stream))
     }
 
-    fn open_playback_stream(
-        &self,
-        request: &AudioDeviceStreamRequest,
-    ) -> Result<Box<dyn AudioPlaybackStream>> {
-        let (opened, playback_stream_format) = self.open_audio_stream(
-            audio_shim::STREAM_DIRECTION_PLAYBACK,
-            request,
-            request.requested_format,
-        )?;
-        let (failure_recorder, liveness_report) =
-            DeviceStreamFailureRecorder::recording_into_a_new_report();
-        let playback_stream = PipeWireAudioPlaybackStream {
-            opened,
-            playback_stream_format,
-            installed_hand_off: None,
-            failure_recorder: Box::new(failure_recorder),
-            liveness_report,
-        };
-        // SAFETY: as for the capture stream above.
-        unsafe {
-            install_the_shims_failure_hand_off_pointing_at(
-                playback_stream.opened.audio_stream,
-                &playback_stream.failure_recorder,
-            );
-        }
-        Ok(Box::new(playback_stream))
-    }
-}
-
-/// Refused by name unless `listing` holds `device_id`: the session links a capture stream whose
-/// target it cannot find to its default source.
-fn refuse_a_capture_device_id_the_session_does_not_list(
-    device_id: &str,
-    listing: AudioCaptureDeviceListing,
-) -> Result<()> {
-    refuse_a_capture_device_id_that_is_not_listed(
-        PIPEWIRE_AUDIO_BACKEND_NAME,
-        device_id,
-        &listing.devices_with_the_default_output_monitor_alias(),
-    )
-}
-
-impl PipeWireAudioDeviceBackend {
     /// Open one stream in either direction toward `requested_format` and read
     /// back what PipeWire settled on. A capture stream asks for nothing but the
     /// scalar encoding, so it settles on the device's own rate and channels.

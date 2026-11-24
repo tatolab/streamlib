@@ -292,41 +292,99 @@ fn an_over_long_monitor_device_id_composes_nothing_rather_than_a_plain_target() 
     );
 }
 
-/// WirePlumber links a stream whose `target.object` it cannot find to the session default
-/// unless the stream sets `node.dont-fallback`, so every named device carries it, in both
-/// directions and on the monitor path, and the default carries none.
+/// WirePlumber links a capture stream whose `target.object` it cannot find to the session's
+/// default source unless the stream sets `node.dont-fallback`, so every named capture device
+/// carries it, on the monitor path too; the default and playback streams carry none.
 #[test]
-fn a_named_device_asks_the_session_not_to_fall_back_to_its_default() {
+fn a_named_capture_device_asks_the_session_not_to_fall_back_to_its_default() {
     let dont_fallback = ("node.dont-fallback".to_string(), "true".to_string());
-    for (direction, device_id) in [
-        (
-            audio_shim::STREAM_DIRECTION_CAPTURE,
-            "alsa_input.usb-gone.mono",
-        ),
-        (
-            audio_shim::STREAM_DIRECTION_CAPTURE,
-            "streamlib-fixture-audio-sink.monitor",
-        ),
-        (
-            audio_shim::STREAM_DIRECTION_PLAYBACK,
-            "streamlib-fixture-audio-sink",
-        ),
+    for device_id in [
+        "alsa_input.usb-gone.mono",
+        "streamlib-fixture-audio-sink.monitor",
     ] {
-        let properties = composed_stream_properties(direction, Some(device_id))
-            .expect("a named device composes properties");
+        let properties =
+            composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, Some(device_id))
+                .expect("a named device composes properties");
         assert!(
             properties.contains(&dont_fallback),
             "{device_id}: {properties:?}"
         );
     }
-    let properties = composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
-        .expect("the default composes");
+    for (direction, device_id) in [
+        (audio_shim::STREAM_DIRECTION_CAPTURE, None),
+        (
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            Some("streamlib-fixture-audio-sink"),
+        ),
+    ] {
+        let properties = composed_stream_properties(direction, device_id)
+            .expect("the stream composes properties");
+        assert!(
+            !properties
+                .iter()
+                .any(|(key, _)| key == "node.dont-fallback"),
+            "{device_id:?}: {properties:?}"
+        );
+    }
+}
+
+fn a_capture_request_for(device_id: Option<&str>) -> AudioDeviceStreamRequest {
+    AudioDeviceStreamRequest {
+        device_id: device_id.map(str::to_owned),
+        deviceless_pacing_clock: Arc::new(crate::core::context::SoftwareAudioClock::with_defaults()),
+        capture_device_access_prompting: Default::default(),
+        requested_format: Default::default(),
+    }
+}
+
+fn a_session_listing_one_source() -> AudioCaptureDeviceListing {
+    AudioCaptureDeviceListing {
+        devices: vec![crate::core::context::AudioCaptureDevice {
+            id: "alsa_input.usb-mic.mono".to_owned(),
+            name: "USB Microphone".to_owned(),
+            kind: crate::core::context::AudioCaptureDeviceKind::Input,
+        }],
+        default_output_monitor_device_id: None,
+    }
+}
+
+/// Whether the capture open went on to open a stream, and on which device.
+fn the_device_a_capture_open_reached(device_id: Option<&str>) -> Result<Option<String>> {
+    open_only_a_capture_device_the_session_lists(
+        &a_capture_request_for(device_id),
+        || Ok(a_session_listing_one_source()),
+        |request| Ok(request.device_id.clone()),
+    )
+}
+
+#[test]
+fn a_capture_open_on_a_device_the_session_does_not_list_is_refused_before_opening() {
+    let refusal = the_device_a_capture_open_reached(Some("alsa_input.usb-gone.mono"))
+        .expect_err("the device is not listed")
+        .to_string();
     assert!(
-        !properties
-            .iter()
-            .any(|(key, _)| key == "node.dont-fallback"),
-        "{properties:?}"
+        refusal.contains("'alsa_input.usb-gone.mono'")
+            && refusal.contains("alsa_input.usb-mic.mono (USB Microphone)"),
+        "{refusal}"
     );
+}
+
+#[test]
+fn a_capture_open_on_a_listed_device_opens_it() {
+    assert_eq!(
+        the_device_a_capture_open_reached(Some("alsa_input.usb-mic.mono")).unwrap(),
+        Some("alsa_input.usb-mic.mono".to_owned())
+    );
+}
+
+#[test]
+fn a_capture_open_on_the_default_device_opens_without_asking_for_the_listing() {
+    let opened = open_only_a_capture_device_the_session_lists(
+        &a_capture_request_for(None),
+        || panic!("the default device needs no listing"),
+        |request| Ok(request.device_id.clone()),
+    );
+    assert_eq!(opened.unwrap(), None);
 }
 
 /// The direction the monitor convention does *not* apply to: a speaker

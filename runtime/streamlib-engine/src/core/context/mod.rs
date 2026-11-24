@@ -12,7 +12,6 @@ pub(crate) mod surfaces_and_their_stores;
 pub(crate) mod texture_pools_and_rings;
 pub use texture_pools_and_rings::texture_pool;
 
-pub(crate) use capture_and_playback_devices::audio_capture_device_listing::refuse_a_capture_device_id_that_is_not_listed;
 pub use capture_and_playback_devices::audio_capture_device_listing::{
     AudioCaptureDevice, AudioCaptureDeviceKind, AudioCaptureDeviceListing,
     DEFAULT_OUTPUT_MONITOR_DEVICE_ID, list_audio_capture_devices, moved_to_the_front,
