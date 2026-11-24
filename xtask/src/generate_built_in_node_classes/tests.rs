@@ -8,6 +8,16 @@ fn descriptor_from(descriptor: Value) -> BuiltInNodeDescriptor {
     serde_json::from_value(descriptor).unwrap()
 }
 
+fn rendered_of(descriptor: Value) -> String {
+    render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap()
+}
+
+fn refusal_of(descriptor: Value) -> String {
+    render_built_in_node_classes_module(&[descriptor_from(descriptor)])
+        .unwrap_err()
+        .to_string()
+}
+
 /// A built-in taking no config whose every port states one pin type, as the runtime describes
 /// it: a Stream input, two settings read at setup, a Menu among them, and an output.
 fn texture_tinter_descriptor_with_settings() -> Value {
@@ -50,10 +60,7 @@ fn texture_tinter_descriptor_with_settings() -> Value {
 /// settings fields with their types and defaults.
 #[test]
 fn a_built_in_renders_its_fields_and_pins() {
-    let rendered = render_built_in_node_classes_module(&[descriptor_from(
-        texture_tinter_descriptor_with_settings(),
-    )])
-    .unwrap();
+    let rendered = rendered_of(texture_tinter_descriptor_with_settings());
     let golden = format!(
         "{GENERATED_MODULE_HEADER}{}",
         r#"
@@ -120,9 +127,7 @@ fn a_typed_built_ins_setting_with_no_default_is_refused_naming_it() {
         .as_object_mut()
         .unwrap()
         .remove("default_value");
-    let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
-        .unwrap_err()
-        .to_string();
+    let refusal = refusal_of(descriptor);
     assert!(
         refusal.contains("input `strength` holds no default"),
         "{refusal}"
@@ -159,7 +164,7 @@ fn an_image_outputs_frame_rate_renders_under_the_port() {
             }
         }]
     });
-    let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
+    let rendered = rendered_of(descriptor);
     assert!(
         rendered.contains(
             "        `video`: Frames.\n            Frame rate: \
@@ -257,11 +262,9 @@ fn a_built_in_that_takes_a_config_is_refused_by_name() {
         "type": "object",
         "properties": {"path": {"description": "The file.", "type": "string", "default": "out"}}
     });
-    let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
-        .unwrap_err()
-        .to_string();
+    let refusal = refusal_of(descriptor);
     assert!(
-        refusal.contains("built-in `TextureTinter` takes a config"),
+        refusal.contains("built-in `TextureTinter` takes a config of `path`"),
         "{refusal}"
     );
 }
@@ -274,11 +277,9 @@ fn a_built_in_with_a_port_of_no_pin_type_is_refused_by_name() {
         .as_object_mut()
         .unwrap()
         .remove("pin_type");
-    let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
-        .unwrap_err()
-        .to_string();
+    let refusal = refusal_of(descriptor);
     assert!(
-        refusal.contains("a port that states no one pin type"),
+        refusal.contains("built-in `TextureTinter`'s port `tinted` states no one pin type"),
         "{refusal}"
     );
 }
@@ -287,7 +288,7 @@ fn a_built_in_with_a_port_of_no_pin_type_is_refused_by_name() {
 fn a_test_named_class_opts_out_of_pytest() {
     let mut descriptor = texture_tinter_descriptor_with_settings();
     descriptor["type"] = json!("tatolab.stream:TestTinter");
-    let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
+    let rendered = rendered_of(descriptor);
     assert!(
         rendered.contains("class TestTinter(BuiltInNode):"),
         "{rendered}"
@@ -302,10 +303,7 @@ fn a_test_named_class_opts_out_of_pytest() {
 /// name only the pins.
 #[test]
 fn a_setting_the_catalog_lists_among_the_inputs_is_no_input_of_the_docstring() {
-    let rendered = render_built_in_node_classes_module(&[descriptor_from(
-        texture_tinter_descriptor_with_settings(),
-    )])
-    .unwrap();
+    let rendered = rendered_of(texture_tinter_descriptor_with_settings());
     assert!(
         rendered.contains("    Inputs:\n        `image` (newest): The textures to tint.\n\n"),
         "{rendered}"
@@ -317,9 +315,7 @@ fn a_setting_the_catalog_lists_among_the_inputs_is_no_input_of_the_docstring() {
 fn a_description_linking_a_rust_path_is_refused_by_name() {
     let mut descriptor = texture_tinter_descriptor_with_settings();
     descriptor["description"] = json!("Absent means [`TextureTint::Warm`].");
-    let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
-        .unwrap_err()
-        .to_string();
+    let refusal = refusal_of(descriptor);
     assert!(refusal.contains("`TextureTint::Warm`"), "{refusal}");
     assert!(refusal.contains("built-in `TextureTinter`"), "{refusal}");
 }
@@ -328,8 +324,6 @@ fn a_description_linking_a_rust_path_is_refused_by_name() {
 fn a_type_outside_the_stream_package_is_refused() {
     let mut descriptor = texture_tinter_descriptor_with_settings();
     descriptor["type"] = json!("streamlib_media_builtins::TextureTinter");
-    let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
-        .unwrap_err()
-        .to_string();
+    let refusal = refusal_of(descriptor);
     assert!(refusal.contains("tatolab.stream:"), "{refusal}");
 }

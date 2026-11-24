@@ -3,8 +3,8 @@
 
 //! A typed built-in, rendered as a class node is declared: each value input a field with its
 //! type and default, each stream a pin, each described, so `stream_builder.add` checks the
-//! values it is given against them. A built-in is typed when it takes no config and every port
-//! states exactly one pin type, or carries the type one of its settings chooses.
+//! values it is given against them. A built-in takes no config, and each of its ports states
+//! exactly one pin type or carries the type one of its settings chooses.
 
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -23,23 +23,41 @@ const INPUT_DECLARATION_ANNOTATIONS: &str = "._input_declaration_annotations";
 const PIN_TYPES: &str = "._pin_types";
 const PIN_TYPE_CHOICE: &str = "._pin_type_choice";
 
-/// Whether `descriptor` is a typed built-in: its config schema lists no key, and each of its
-/// ports states exactly one pin type or carries the type a setting chooses.
-pub(super) fn is_a_typed_built_in(descriptor: &BuiltInNodeDescriptor) -> bool {
-    let lists_a_config_key = descriptor
+/// Refuse a built-in `descriptor` declaring what a class node cannot: a config schema listing
+/// a key, or a port that states neither one pin type nor the setting choosing its type.
+pub(super) fn refuse_what_a_class_node_cannot_declare(
+    descriptor: &BuiltInNodeDescriptor,
+    refused_item_label: &str,
+) -> Result<()> {
+    if let Some(config_keys) = descriptor
         .config_schema
         .as_ref()
         .and_then(|config_schema| config_schema.get("properties"))
         .and_then(Value::as_object)
-        .is_some_and(|properties| !properties.is_empty());
-    !lists_a_config_key
-        && descriptor
-            .inputs
-            .iter()
-            .chain(&descriptor.outputs)
-            .all(|port| {
-                port.exact_pin_type().is_some() || port.the_setting_choosing_its_type().is_some()
-            })
+        .filter(|properties| !properties.is_empty())
+    {
+        let config_keys: Vec<&str> = config_keys.keys().map(String::as_str).collect();
+        bail!(
+            "{refused_item_label} takes a config of `{}`, and a built-in declares each value it \
+             takes as a setting, as a class node does",
+            config_keys.join("`, `")
+        );
+    }
+    if let Some(port) = descriptor
+        .inputs
+        .iter()
+        .chain(&descriptor.outputs)
+        .find(|port| {
+            port.exact_pin_type().is_none() && port.the_setting_choosing_its_type().is_none()
+        })
+    {
+        bail!(
+            "{refused_item_label}'s port `{}` states no one pin type, and a built-in declares \
+             each port by its pin type, as a class node does",
+            port.name
+        );
+    }
+    Ok(())
 }
 
 /// The fields and pins of the typed built-in `descriptor`, each as the class body declares it,

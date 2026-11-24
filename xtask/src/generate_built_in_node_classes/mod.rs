@@ -20,7 +20,9 @@ use std::path::Path;
 
 mod typed_built_in_node;
 
-use typed_built_in_node::{ImportedName, is_a_typed_built_in, render_fields_and_pins};
+use typed_built_in_node::{
+    ImportedName, refuse_what_a_class_node_cannot_declare, render_fields_and_pins,
+};
 
 /// One built-in's catalog entry, as the descriptor example prints it. The
 /// config schema stays a JSON value, read only to refuse a built-in that takes one.
@@ -295,13 +297,7 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
         bail!("built-in `{built_in_node_type}` does not name a Python class");
     }
     let refused_item_label = format!("built-in `{class_name}`");
-    if !is_a_typed_built_in(descriptor) {
-        bail!(
-            "{refused_item_label} takes a config, or has a port that states no one pin type, and \
-             a built-in declares each value it takes as a setting and each port by its pin type, \
-             as a class node does"
-        );
-    }
+    refuse_what_a_class_node_cannot_declare(descriptor, &refused_item_label)?;
     let mut imports = BTreeSet::from([("typing", "ClassVar"), ("._built_in_node", "BuiltInNode")]);
 
     let mut text = String::new();
