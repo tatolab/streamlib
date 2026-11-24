@@ -54,12 +54,10 @@ class OrbitView:
 @node
 def MotionReadout(
     motion: Annotated[
-        SpectrumMotion | None, Description("The listener's motion record.")
-    ] = None,
+        SpectrumMotion, Description("The listener's motion record.")
+    ] = SpectrumMotion(clocks=[], levels=[], beat=0.0, energy=0.0, bass=0.0, highs=0.0),
 ) -> MotionReading:
-    """Each named number of `motion`, or 0 before the first record arrives."""
-    if motion is None:
-        return MotionReading(0.0, 0.0, 0.0, 0.0)
+    """Each named number of `motion`, all 0 before the first record arrives."""
     return MotionReading(motion.beat, motion.energy, motion.bass, motion.highs)
 
 
@@ -70,8 +68,8 @@ def MotionReadout(
 @node
 def OrbitCamera(
     view: Annotated[
-        StageCamera | None, Description("The stage view's drag and zoom.")
-    ] = None,
+        StageCamera, Description("The stage view's drag and zoom.")
+    ] = StageCamera(yaw=0.0, pitch=0.0, zoom=1.0, burst=0),
     spin: Annotated[float, Description("The slow spin added to the yaw.")] = 0.0,
     tilt: Annotated[float, Description("The pitch before the stage's drag.")] = 0.14,
     distance: Annotated[
@@ -80,7 +78,6 @@ def OrbitCamera(
 ) -> OrbitView:
     """Yaw is the stage's drag plus `spin`; pitch is `tilt` plus the stage's drag; the stage's
     zoom scales `distance`. The burst count passes through, so the ball can tell a new burst."""
-    view = view or StageCamera(yaw=0.0, pitch=0.0, zoom=1.0, burst=0)
     pitch = max(-1.2, min(1.2, tilt + view.pitch))
     zoom = max(0.4, min(2.5, view.zoom))
     return OrbitView(

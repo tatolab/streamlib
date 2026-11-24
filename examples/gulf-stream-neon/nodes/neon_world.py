@@ -317,6 +317,8 @@ STAGE_HOME = {
     "yaw_degrees": -22.0,
     "pitch_degrees": 16.0,
 }
+# The stage view's camera before the view sends one: at home, with no eddy dropped.
+STAGE_CAMERA_AT_HOME = StageCamera(**STAGE_HOME, bursts=0, burst_x=0.0, burst_y=0.0)
 
 
 def stage_moment(stage: StageCamera | None, time_of_day: float, morph: float) -> TakeMoment:

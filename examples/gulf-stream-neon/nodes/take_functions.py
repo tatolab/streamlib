@@ -19,6 +19,7 @@ from typing import Annotated, NamedTuple
 from tatolab.stream import Description, State, Stateful, Time, node
 
 from nodes.neon_world import (
+    STAGE_CAMERA_AT_HOME,
     STAGE_HOME,
     StageCamera,
     StageLookValues,
@@ -131,7 +132,7 @@ def _placement_of(moment: TakeMoment, aspect: float, vertical_fov_degrees: float
 )
 @node
 def StageSunOnScreen(  # noqa: N802
-    stage: Annotated[StageCamera | None, Description("The stage view's camera.")] = None,
+    stage: Annotated[StageCamera, Description("The stage view's camera.")] = STAGE_CAMERA_AT_HOME,
     time_of_day: Annotated[float, Description("0 golden hour to 1 night.")] = 0.35,
     aspect: Annotated[float, Description("The frame's width over its height.")] = 1.7778,
     vertical_fov_degrees: Annotated[float, Description("The lens's vertical field of view.")] = 50.0,
@@ -178,15 +179,13 @@ CAMERA_KEYS = ("target_x", "target_y", "distance", "yaw_degrees", "pitch_degrees
 )
 @node
 def SmoothCamera(  # noqa: N802
-    stage: Annotated[StageCamera | None, Description("The stage view's camera.")] = None,
+    stage: Annotated[StageCamera, Description("The stage view's camera.")] = STAGE_CAMERA_AT_HOME,
     seconds: Annotated[float, Description("The follow's time constant, in seconds.")] = 0.18,
     *,
     now: Time,
     previous: State[FollowedCamera],
-) -> Stateful[StageCamera | None, FollowedCamera]:
-    """The camera eased toward the stage's, with `seconds` as the time constant; none until the stage sends one."""
-    if stage is None:
-        return None, previous
+) -> Stateful[StageCamera, FollowedCamera]:
+    """The camera eased toward the stage's, with `seconds` as the time constant."""
     wanted = {key: float(getattr(stage, key)) for key in CAMERA_KEYS}
     if not previous.started or seconds <= 0.0:
         followed = wanted
