@@ -7,19 +7,12 @@ import dataclasses
 import json
 import os
 import time
-
-import numpy
-
 from typing import Annotated
 
 from tatolab.stream import (
-    Channels,
     EncodedVideo,
-    Input,
     InputPin,
-    Output,
     OutputPin,
-    Records,
     SettingOnly,
     State,
     Stateful,
@@ -281,24 +274,18 @@ class ReportsTheFunctionNodeValuesItReadSink:
 FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH = 120
 
 
-@node.process(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfFunctionNodeValuesItReadSink:
-    """Reads the value an island feeds `brightness`, and reports the range of
-    each batch of reads with its own pid and when the batch started."""
+class BatchesOfValuesReported:
+    """Gathers the values a sink reads into batches, and reports the range of
+    each batch with the sink's pid and when the batch started."""
 
     def __init__(self) -> None:
         self.values_in_this_batch: "list[float]" = []
         self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
 
-    brightness = Input(Channels, delivery="newest")
-
-    def process(self, ctx) -> None:
-        block = ctx.inputs.read(self.brightness)
-        if block is None:
-            return
+    def add(self, value: float) -> None:
         if not self.values_in_this_batch:
             self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
-        self.values_in_this_batch.append(float(numpy.from_dlpack(block)[0][0]))
+        self.values_in_this_batch.append(float(value))
         if len(self.values_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
             report(
                 "FUNCTION_NODE_VALUE_BATCH_READ",
@@ -312,47 +299,48 @@ class ReportsEachBatchOfFunctionNodeValuesItReadSink:
             self.values_in_this_batch = []
 
 
-@dataclasses.dataclass
-class ReportsEachBatchOfItsConfiguredLevelConfig:
-    level: float = 0.25
+@node(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfFunctionNodeValuesItReadSink:
+    """Reads the value an island feeds `brightness`, and reports the range of
+    each batch of reads with its own pid and when the batch started."""
 
+    brightness: InputPin[Annotated[float, StreamDelivery("newest")]]
 
-@node.process(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfItsConfiguredLevel:
-    """Reads the `level` of the config it was last handed at each run, a field a
-    link can drive once it is exposed, and reports the range of each batch."""
-
-    def __init__(self, config: ReportsEachBatchOfItsConfiguredLevelConfig) -> None:
-        self.level = config.level
-        self.levels_in_this_batch: "list[float]" = []
-        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
-
-    def configure(self, config: ReportsEachBatchOfItsConfiguredLevelConfig) -> None:
-        self.level = config.level
+    def __init__(self) -> None:
+        self._batches = BatchesOfValuesReported()
 
     def process(self, ctx) -> None:
-        if not self.levels_in_this_batch:
-            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
-        self.levels_in_this_batch.append(float(self.level))
-        if len(self.levels_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
-            report(
-                "FUNCTION_NODE_VALUE_BATCH_READ",
-                {
-                    "sink_pid": os.getpid(),
-                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
-                    "lowest": min(self.levels_in_this_batch),
-                    "highest": max(self.levels_in_this_batch),
-                },
-            )
-            self.levels_in_this_batch = []
+        brightness = self.brightness.read()
+        if brightness is not None:
+            self._batches.add(brightness)
 
 
-@node.process(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfPinValuesItReadSink(ReportsEachBatchOfFunctionNodeValuesItReadSink):
+@node(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfItsLevel:
+    """Reads its `level` setting at each run, which a live set or a link changes,
+    and reports the range of each batch."""
+
+    level: float = 0.25
+
+    def __init__(self) -> None:
+        self._batches = BatchesOfValuesReported()
+
+    def process(self, ctx) -> None:
+        self._batches.add(self.level)
+
+
+@node(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfPinValuesItReadSink:
     """Reads `brightness`, which nothing is linked into and which declares 0.25,
     and reports the range of each batch of reads."""
 
-    brightness = Input(Channels, delivery="newest", default=0.25)
+    brightness: float = 0.25
+
+    def __init__(self) -> None:
+        self._batches = BatchesOfValuesReported()
+
+    def process(self, ctx) -> None:
+        self._batches.add(self.brightness)
 
 
 @node
@@ -378,22 +366,9 @@ def CountsItsOwnCalls(  # noqa: N802
     return calls, CallsCountedSoFar(calls)
 
 
-@dataclasses.dataclass(frozen=True)
-class LevelScaledByItsGainConfig:
-    gain: float = 0.25
-
-
-@node.function
-def LevelScaledByItsGain(  # noqa: N802
-    level: float = 1.0, *, config: LevelScaledByItsGainConfig
-) -> float:
-    """Its level scaled by the `gain` of its config, a field a link can drive once it is exposed."""
-    return level * config.gain
-
-
 @node
-def LevelScaledByItsTypedGain(level: float = 1.0, gain: float = 0.25) -> float:  # noqa: N802
-    """A typed node: its level scaled by its `gain` input."""
+def LevelScaledByItsGain(level: float = 1.0, gain: float = 0.25) -> float:  # noqa: N802
+    """Its level scaled by its `gain` input."""
     return level * gain
 
 
@@ -410,18 +385,13 @@ class ReportsTheLevelItIsBuiltWith:
         pass
 
 
-@dataclasses.dataclass(frozen=True)
-class HeldLevelConfig:
-    level: float = 0.25
-
-
-@node.function
-def HoldsItsConfiguredLevelCountingItsCalls(  # noqa: N802
-    step: float = 1.0, *, config: HeldLevelConfig, previous: State[CallsCountedSoFar]
+@node
+def HoldsItsLevelCountingItsCalls(  # noqa: N802
+    step: float = 1.0, level: float = 0.25, *, previous: State[CallsCountedSoFar]
 ) -> Stateful[float, CallsCountedSoFar]:
-    """The `level` of its config, a field a link can drive once it is exposed;
-    stateful, so two readers move it into a helper of its own."""
-    return config.level, CallsCountedSoFar(previous.calls + step)
+    """Its `level` input, which a link can drive; stateful, so two readers move
+    it into a helper of its own."""
+    return level, CallsCountedSoFar(previous.calls + step)
 
 
 #: The count at which a sink whose count started fresh takes its own helper down.
@@ -491,22 +461,22 @@ class ReportsTheLfoValueOfEachStepSink:
 COUNTS_READ_IN_ORDER_BEFORE_REPORTING = 20
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsTheCountsItReadInOrderSink:
     """Reads every count written on `count`, in order, and reports the first
     `COUNTS_READ_IN_ORDER_BEFORE_REPORTING` with its own pid."""
 
+    count: InputPin[Annotated[float, StreamDelivery("ordered")]]
+
     def __init__(self) -> None:
         self.counts_read: "list[float]" = []
 
-    count = Input(Channels, delivery="ordered")
-
     def process(self, ctx) -> None:
         while len(self.counts_read) < COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
-            block = ctx.inputs.read(self.count)
-            if block is None:
+            count = self.count.read()
+            if count is None:
                 return
-            self.counts_read.append(float(numpy.from_dlpack(block)[0][0]))
+            self.counts_read.append(float(count))
             if len(self.counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
                 report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": self.counts_read})
 
@@ -616,23 +586,18 @@ class CountsEachTickRecordsSource:
         self.counts_to_downstream.write(Count(count=self._count))
 
 
-@node.process(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class CountsEachTickAsALevelSource:
-    """Writes the count every tick as the control value of one `level` channel, counting from 1."""
+    """Writes the count every tick as a level, counting from 1."""
+
+    level_to_downstream: OutputPin[float]
 
     def __init__(self) -> None:
         self.count = 0
 
-    level_to_downstream = Output(Channels, names=("level",), dtype="f64")
-
     def process(self, ctx) -> None:
         self.count += 1
-        ctx.outputs.write_channels_block(
-            "level_to_downstream",
-            numpy.array([[float(self.count)]], dtype=numpy.float64),
-            start_sample=self.count - 1,
-            sample_rate=0,
-        )
+        self.level_to_downstream.write(float(self.count))
 
 
 #: How many reads a gated sink makes into each batch it reports.
@@ -672,12 +637,12 @@ class ReportsEachBatchOfGatedCountsItReadSink:
             self._reads_in_this_batch = 0
 
 
-@node.process(execution="manual")
+@node(execution="manual")
 class LendsTheLabelToItsNativeHalf:
     """Lends `label` to native code at setup, as a module's native half does,
     and reports whether the lend was taken."""
 
-    label = Input(Records, delivery="newest")
+    label: InputPin[Annotated[LevelLabel, StreamDelivery("newest")]]
 
     def setup(self, ctx) -> None:
         try:

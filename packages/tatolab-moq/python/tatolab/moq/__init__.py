@@ -60,7 +60,6 @@ __all__ = [
 ]
 
 GATEWAY_SETTINGS_INPUT_PORT = "settings"
-SEND_CONTENT_INPUT_PORT = "content"
 RECEIVE_CONTENT_OUTPUT_PORT = "content"
 
 #: How long `stop()` waits for a native thread. Each thread's own wait is
@@ -429,9 +428,7 @@ class MoqTrackSend:
         publisher = self._publisher
         if publisher is None:
             return
-        # Read by its port's name, which hands each message's payload bytes as they arrived,
-        # whichever of its types it carries.
-        while (message := ctx.inputs.read_message(SEND_CONTENT_INPUT_PORT)) is not None:
+        while (message := self.content.read_message_as_sent()) is not None:
             upstream_stream_facts = self.content.upstream_stream_facts(inbound_link=message.inbound_link)
             publisher.send_the_upstream_stream_facts_when_they_changed(
                 None if upstream_stream_facts is None else upstream_stream_facts.to_wire()

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Publishes the known signal as Channels blocks, for a speaker to play.
+"""Publishes the known signal as Audio blocks, for a speaker to play.
 
 The signal itself is `known_audio_signal.generate_signal()` — the same samples
 `e2e_audio_loopback.sh` plays through `pw-play`, `afplay` or a Core Audio
@@ -34,14 +34,13 @@ import os
 import numpy
 
 import known_audio_signal
-from tatolab.stream import Channels, Output, RuntimeContextLimitedAccess, monotonic_now_ns, node
+from tatolab.stream import Audio, OutputPin, RuntimeContextLimitedAccess, monotonic_now_ns, node
 
 # PipeWire's fixture sink is created with `audio.position=[FL FR]` and its arm
 # asks for `F32_LE`; a Mac's built-in speakers are two channels, and the
 # CoreAudio arm opens every device as interleaved `f32`.
 SAMPLE_RATE = known_audio_signal.SAMPLE_RATE
 CHANNELS = 2
-DTYPE = "f32"
 
 # 10 ms at 48 kHz. Independent of the device's own quantum: the speaker's ring
 # re-slices whatever arrives into device periods, so a block is only a unit of
@@ -77,11 +76,11 @@ def _stereo_planar_f32(mono_samples):
     )
 
 
-@node.process(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class KnownAudioSignalSource:
     """Plays the known signal once, then silence — or over and over."""
 
-    audio = Output(Channels, names=("left", "right"), rate=SAMPLE_RATE, dtype=DTYPE)
+    audio: OutputPin[Audio]
 
     def __init__(self) -> None:
         signal = known_audio_signal.generate_signal()
@@ -123,13 +122,13 @@ class KnownAudioSignalSource:
         # Derived from the samples before it rather than read fresh, so the
         # stamps describe one gapless stream even though the publishing runs
         # ahead of the device.
-        ctx.outputs.write(
-            self.audio,
+        self.audio.write(
             _stereo_planar_f32(block),
             timestamp_ns=(
                 self._first_sample_timestamp_ns
                 + self._samples_published * 1_000_000_000 // SAMPLE_RATE
             ),
             start_sample=self._samples_published,
+            sample_rate=SAMPLE_RATE,
         )
         self._samples_published += len(block)

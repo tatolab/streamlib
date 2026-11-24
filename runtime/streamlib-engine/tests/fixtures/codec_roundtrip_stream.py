@@ -83,7 +83,7 @@ def test_pattern_through_the_encoder_sent_to_the_relay(stream_builder: StreamBui
     encoder = stream_builder.add(
         encoder_marker,
         name="encoder",
-        config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
+        input_values={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
     gateway = stream_builder.add(
         MoqGateway,

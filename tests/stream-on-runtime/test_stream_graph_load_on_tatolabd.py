@@ -27,9 +27,7 @@ from node_module_whose_describe_holds_the_load import (
     NodeModuleWhoseDescribeHoldsTheLoad,
 )
 from runtime_load_streams import (
-    config_nesting_containers_deep,
     named_pattern_into_a_named_sink,
-    open_config_sink_with_the_deepest_config_the_builder_compiles,
     pattern_linked_from_a_port_it_lacks_into_an_encoder,
 )
 from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT
@@ -54,7 +52,7 @@ EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
     and exported is not BuiltInNode
 ]
 
-OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
+VALUE_SINK_TYPE = "runtime_load_value_sink_nodes:ValueSink"
 
 DESCRIBED_NODE_MODULE = "runtime_load_nodes"
 DESCRIBED_NODE_TYPE = f"{DESCRIBED_NODE_MODULE}:LoadedFrameRelay"
@@ -63,9 +61,31 @@ DESCRIBED_NODE_TYPE = f"{DESCRIBED_NODE_MODULE}:LoadedFrameRelay"
 GRAPH_DOCUMENT_NESTED_PAST_THE_MAXIMUM = "recursion limit exceeded"
 #: How the runtime names a graph document that is not JSON.
 A_GRAPH_DOCUMENT_THAT_DOES_NOT_PARSE = "does not parse"
-#: The deepest config a graph document's parser reads: 127 containers from the document's
-#: root, less the document, its `nodes` list and the node enclosing the config.
-CONTAINERS_A_GRAPH_DOCUMENTS_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 124
+#: The deepest map a graph document's parser reads on a node, its `studio` map counted: 127
+#: containers from the document's root, less the document, its `nodes` list and the node.
+CONTAINERS_A_NODES_MAP_NESTS_AT_MOST_COUNTING_ITSELF = 124
+
+
+def nesting_containers_deep(containers_counting_the_map: int) -> "dict[str, Any]":
+    """`{"nested": [[...]]}`, `containers_counting_the_map` containers deep in all."""
+    nested: "list[Any]" = []
+    for _ in range(containers_counting_the_map - 2):
+        nested = [nested]
+    return {"nested": nested}
+
+
+def a_value_sink_whose_studio_map_nests(containers_counting_the_map: int) -> "dict[str, Any]":
+    """A stream of one `ValueSink` whose `studio` map is `containers_counting_the_map` deep."""
+    return {
+        "stream": "deep",
+        "nodes": [
+            {
+                "name": "valuesink",
+                "type": VALUE_SINK_TYPE,
+                "studio": nesting_containers_deep(containers_counting_the_map),
+            }
+        ],
+    }
 
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
@@ -155,34 +175,21 @@ def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(
     )
 
 
-def test_the_deepest_config_the_builder_compiles_loads(
+def test_the_deepest_map_a_graph_document_reads_on_a_node_loads(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        open_config_sink_with_the_deepest_config_the_builder_compiles
+        a_value_sink_whose_studio_map_nests(CONTAINERS_A_NODES_MAP_NESTS_AT_MOST_COUNTING_ITSELF)
     )
 
     assert loaded_with(run_outcome) == 1
 
 
-def test_a_config_one_container_deeper_than_a_graph_document_reads_is_refused_by_load(
+def test_a_map_one_container_deeper_than_a_graph_document_reads_is_refused_by_load(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """A graph document's parser reads a config deeper than the deepest the builder
-    compiles, and one container past its own limit, written by hand, is refused."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        {
-            "stream": "deep",
-            "nodes": [
-                {
-                    "name": "openconfigsink",
-                    "type": OPEN_CONFIG_SINK_TYPE,
-                    "config": config_nesting_containers_deep(
-                        CONTAINERS_A_GRAPH_DOCUMENTS_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
-                    ),
-                }
-            ],
-        }
+        a_value_sink_whose_studio_map_nests(CONTAINERS_A_NODES_MAP_NESTS_AT_MOST_COUNTING_ITSELF + 1)
     )
 
     refusal = refused_naming(run_outcome)
@@ -191,15 +198,15 @@ def test_a_config_one_container_deeper_than_a_graph_document_reads_is_refused_by
 
 
 @pytest.mark.parametrize("not_a_number", ["NaN", "Infinity"], ids=["nan", "infinity"])
-def test_nan_and_infinity_in_a_compiled_config_are_refused_as_not_json(
+def test_nan_and_infinity_in_a_compiled_graph_are_refused_as_not_json(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     not_a_number: str,
 ):
     """JSON carries neither, so a graph document holding one is not one; the
     builder refuses both before a document is written."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        '{"stream": "nan", "nodes": [{"name": "openconfigsink", "type": "%s", "config": {"value": %s}}]}'
-        % (OPEN_CONFIG_SINK_TYPE, not_a_number)
+        '{"stream": "nan", "nodes": [{"name": "valuesink", "type": "%s", "input_values": {"value": %s}}]}'
+        % (VALUE_SINK_TYPE, not_a_number)
     )
 
     refusal = refused_naming(run_outcome)
@@ -215,12 +222,12 @@ def test_a_compiled_graph_that_is_a_list_rather_than_a_graph_is_refused_naming_i
     assert "names no stream asset" in refusal
 
 
-def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
+def test_a_lone_surrogate_escape_in_a_compiled_graph_is_refused_naming_it(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        '{"stream": "surrogate", "nodes": [{"name": "openconfigsink", "type": "%s", '
-        '"config": {"title": "\\udc80"}}]}' % OPEN_CONFIG_SINK_TYPE
+        '{"stream": "surrogate", "nodes": [{"name": "valuesink", "type": "%s", '
+        '"input_values": {"title": "\\udc80"}}]}' % VALUE_SINK_TYPE
     )
 
     refusal = refused_naming(run_outcome)
@@ -228,14 +235,14 @@ def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
     assert "lone leading surrogate" in refusal
 
 
-def test_a_config_integer_wider_than_64_bits_in_a_compiled_graph_is_refused_naming_it(
+def test_an_integer_wider_than_64_bits_in_a_compiled_graph_is_refused_naming_it(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """The builder refuses one before a document is written; a graph document
     written any other way must not reach a node carrying a different number."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        '{"stream": "wide", "nodes": [{"name": "openconfigsink", "type": "%s", "config": {"value": %d}}]}'
-        % (OPEN_CONFIG_SINK_TYPE, 2**64)
+        '{"stream": "wide", "nodes": [{"name": "valuesink", "type": "%s", "input_values": {"value": %d}}]}'
+        % (VALUE_SINK_TYPE, 2**64)
     )
 
     refusal = refused_naming(run_outcome)
@@ -359,8 +366,8 @@ def test_a_graph_document_nested_far_past_the_maximum_is_refused_rather_than_cra
 ):
     nested_far_past_the_maximum = "[" * 100_000 + "]" * 100_000
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
-        '{"stream": "nested", "nodes": [{"name": "openconfigsink", "type": "%s", '
-        '"config": {"nested": %s}}]}' % (OPEN_CONFIG_SINK_TYPE, nested_far_past_the_maximum)
+        '{"stream": "nested", "nodes": [{"name": "valuesink", "type": "%s", '
+        '"studio": {"nested": %s}}]}' % (VALUE_SINK_TYPE, nested_far_past_the_maximum)
     )
 
     refusal = refused_naming(run_outcome)

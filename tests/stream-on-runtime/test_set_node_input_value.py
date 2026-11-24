@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`set_node_input_value` on a running stream: one operation sets an input's
-value on a Python class and a setting a Python class holds in its config, live
-or saved, and refuses a value its input does not take.
+value on a Python class and a setting a Python class holds, live or saved, and
+refuses a value its input does not take.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from helper_placement_observation import (
     the_first_value_batch_read_after,
 )
 from helper_placement_streams import (
-    python_class_reporting_its_configured_level,
+    python_class_reporting_its_level,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
 )
 
@@ -75,13 +75,13 @@ def test_a_python_class_reads_each_input_value_set_live_then_saved(
     )
 
 
-def test_a_setting_a_python_class_holds_in_its_config_is_set_live_and_a_bad_one_refused(
+def test_a_setting_a_python_class_holds_is_set_live_and_a_bad_one_refused(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`ReportsEachBatchOfItsConfiguredLevel` reads its config's `level`; a live
+    """`ReportsEachBatchOfItsLevel` reads its `level` setting; a live
     set of `level` is what it reads next, and text for `level` is refused as a
     value the input does not take, naming the node and the input."""
-    tatolabd = start_tatolabd_running_stream(python_class_reporting_its_configured_level)
+    tatolabd = start_tatolabd_running_stream(python_class_reporting_its_level)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)

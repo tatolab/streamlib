@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""What a Python node reads from an unlinked input's pin value, and from a
-config field a link drives, while its stream runs.
+"""What a Python node reads from an unlinked input's pin value, and from an
+input a link made live drives, while its stream runs.
 """
 
 from __future__ import annotations
@@ -16,11 +16,9 @@ from helper_placement_observation import (
     the_first_value_batch_read_after,
 )
 from helper_placement_streams import (
-    clamp_with_its_input_linked_to_nothing_into_python_sink,
     held_level_read_by_two_python_sinks,
     level_scaled_by_its_gain_into_python_sink,
-    lfo_into_python_sink_reporting_each_batch_it_reads,
-    python_class_reporting_its_configured_level,
+    python_class_reporting_its_level,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
     one_width_source_alone,
     typed_level_scaled_by_the_gain_its_input_values_hold_into_python_sink,
@@ -103,113 +101,20 @@ def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_se
     )
 
 
-def test_a_function_node_input_no_value_reaches_waits_on_its_node_and_the_stream_plays(
+def test_a_function_node_input_reads_its_pin_value_until_a_link_made_live_drives_it(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`Clamp`'s `x` is linked to nothing, unpinned, and declares no default: the
-    stream plays, and `graph` names `x` as the input `clamp` waits on."""
-    tatolabd = start_tatolabd_running_stream(clamp_with_its_input_linked_to_nothing_into_python_sink)
-    assert tatolabd.stream_runs[-1].failed_stream() is None, "the stream is not failed"
-    stream_id = tatolabd.await_the_latest_stream_loaded()
-    (clamp,) = [
-        node
-        for node in tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})["nodes"]
-        if node["name"] == "clamp"
-    ]
-    assert clamp.get("inputs_waiting_for_a_value") == ["x"], clamp
-
-
-def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_its_pin_is_set(
-    start_tatolabd_running_stream: StartTatolabdRunningStream,
-):
-    """`Clamp` linked live into a running Python class with its `x` linked to
-    nothing holds: `graph` names `x` as waiting, and the class reads nothing
-    from it. Setting `x`'s pin live is what the class reads next, and linking
-    the `Lfo` into `x` takes the waiting input off `graph`.
-    """
-    tatolabd = start_tatolabd_running_stream(lfo_into_python_sink_reporting_each_batch_it_reads)
-    stream_id = tatolabd.await_the_latest_stream_loaded()
-    local_api = tatolabd.local_api_client()
-    _, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
-    uuid_of = {
-        node["name"]: node["id"]
-        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
-    }
-
-    def end_of(node_uuid: str, port: str) -> "dict[str, str]":
-        return {"node": node_uuid, "port": port}
-
-    def edit_live(tool: str, arguments: dict) -> dict:
-        return local_api.call_tool(
-            tool, {**arguments, "stream": stream_id, "mode": "live"}
-        )
-
-    def the_clamp_node() -> dict:
-        (clamp_node,) = [
-            node
-            for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
-            if node["name"] == "clamp"
-        ]
-        return clamp_node
-
-    (clamp,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Clamp", "name": "clamp"})[
-        "added_nodes"
-    ]
-    edit_live(
-        "disconnect",
-        {
-            "source": end_of(uuid_of["lfo"], "result"),
-            "target": end_of(uuid_of["sink"], "brightness"),
-        },
-    )
-    edit_live(
-        "connect",
-        {
-            "source": end_of(clamp["node"], "result"),
-            "target": end_of(uuid_of["sink"], "brightness"),
-        },
-    )
-    assert the_clamp_node().get("inputs_waiting_for_a_value") == ["x"], (
-        f"`graph` names the input the held node waits on: {the_clamp_node()}"
-    )
-
-    pinned_from_ns = time.monotonic_ns()
-    edit_live("set_pin_value", {"node": clamp["node"], "input": "x", "value": 0.3})
-    pinned, occurrence = the_first_value_batch_read_after(
-        tatolabd, pinned_from_ns, from_occurrence=occurrence + 1
-    )
-    assert pinned["lowest"] == pinned["highest"] == pytest.approx(0.3), (
-        f"the held node evaluates once its input has a value, and the class read {pinned}"
-    )
-    assert "inputs_waiting_for_a_value" not in the_clamp_node()
-
-    edit_live(
-        "connect",
-        {"source": end_of(uuid_of["lfo"], "result"), "target": end_of(clamp["node"], "x")},
-    )
-    clamped, _ = the_first_value_batch_read_after(
-        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
-    )
-    assert 0.0 <= clamped["lowest"] and clamped["highest"] <= 1.0 and (
-        clamped["highest"] - clamped["lowest"] > 0.5
-    ), f"a link into `x` wins over its pin, clamped to 0..1, and the class read {clamped}"
-
-
-def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
-    start_tatolabd_running_stream: StartTatolabdRunningStream,
-):
-    """`LevelScaledByItsGain`, its config's `gain` 0.25, read by a running Python
-    class. Exposing `gain` live adds a `gain` input that `graph` shows, and with
-    nothing linked into it the node still reads the config. Linking an `Lfo` into
-    `gain` drives the field, so the class reads the level scaled by the `Lfo`'s
-    -1..1 in place of 0.25, and disconnecting it reads the config's 0.25 again.
+    """`LevelScaledByItsGain`, its `gain` input 0.25, read by a running Python
+    class. With nothing linked into `gain` the node reads its pin value. Linking
+    an `Lfo` into `gain` live drives it, so the class reads the level scaled by
+    the `Lfo`'s -1..1 in place of 0.25, and disconnecting it reads 0.25 again.
     """
     tatolabd = start_tatolabd_running_stream(level_scaled_by_its_gain_into_python_sink)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
     assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), (
-        f"the level 1.0 scaled by the config's gain 0.25, and the class read {configured}"
+        f"the level 1.0 scaled by the gain 0.25, and the class read {configured}"
     )
 
     def edit_live(tool: str, arguments: dict) -> dict:
@@ -225,21 +130,10 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
         ]
         return scaled_node
 
-    edit_live(
-        "set_exposed_config_fields",
-        {"node": the_scaled_node()["id"], "exposed_config_fields": ["gain"]},
-    )
     scaled_node = the_scaled_node()
-    assert scaled_node.get("exposed_config_fields") == ["gain"], scaled_node
     assert "gain" in [port["name"] for port in scaled_node["ports"]["inputs"]], scaled_node
     assert "inputs_waiting_for_a_value" not in scaled_node, (
-        f"an exposed field no link drives reads the config, so nothing waits: {scaled_node}"
-    )
-    exposed_unlinked, occurrence = the_first_value_batch_read_after(
-        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
-    )
-    assert exposed_unlinked["lowest"] == exposed_unlinked["highest"] == pytest.approx(0.25), (
-        f"an exposed field no link drives reads the config, and the class read {exposed_unlinked}"
+        f"an input no link drives reads its pin value, so nothing waits: {scaled_node}"
     )
 
     (lfo,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Lfo", "name": "lfo"})["added_nodes"]
@@ -254,7 +148,7 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
         tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
     )
     assert driven["highest"] - driven["lowest"] > 0.5, (
-        f"the `Lfo` linked into `gain` drives the field in place of 0.25, and the class read {driven}"
+        f"the `Lfo` linked into `gain` drives it in place of 0.25, and the class read {driven}"
     )
 
     edit_live(
@@ -268,29 +162,24 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
         tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
     )
     assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
-        f"a field its link stops driving reads the config again, and the class read {unlinked_again}"
+        f"an input its link stops driving reads its pin value again, and the class read {unlinked_again}"
     )
 
 
-def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_a_link_drives_it(
+def test_an_input_of_a_promoted_function_node_reads_its_pin_value_until_a_link_made_live_drives_it(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`HoldsItsConfiguredLevelCountingItsCalls`, its config's `level` 0.25, is
-    stateful and read by two Python classes, so it runs in a helper of its own.
-    Exposing `level` live with nothing linked into it leaves the node reading the
-    config. Linking an `Lfo` into `level` drives the field, so the classes read
-    the `Lfo`'s -1..1 in place of 0.25, and disconnecting it reads the config's
-    0.25 again.
-
-    Fail-without-fix: the promoted node keeps its config's 0.25 with the `Lfo`
-    linked, and its helper logs that it cannot be reconfigured while running.
+    """`HoldsItsLevelCountingItsCalls`, its `level` input 0.25, is stateful and
+    read by two Python classes, so it runs in a helper of its own. Linking an
+    `Lfo` into `level` live drives it, so the classes read the `Lfo`'s -1..1 in
+    place of 0.25, and disconnecting it reads 0.25 again.
     """
     tatolabd = start_tatolabd_running_stream(held_level_read_by_two_python_sinks)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
     assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), (
-        f"the config's level 0.25, and a class read {configured}"
+        f"the level 0.25, and a class read {configured}"
     )
     assert len(set(helper_process_ids_started_in(tatolabd.stderr_text))) == 3, (
         f"the two readers and the held node each get a helper:\n{tatolabd.recent_stderr()}"
@@ -306,17 +195,6 @@ def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_
         for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
         if node["name"] == "held"
     ]
-    edit_live(
-        "set_exposed_config_fields",
-        {"node": held_node["id"], "exposed_config_fields": ["level"]},
-    )
-    exposed_unlinked, occurrence = the_first_value_batch_read_after(
-        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
-    )
-    assert exposed_unlinked["lowest"] == exposed_unlinked["highest"] == pytest.approx(0.25), (
-        f"an exposed field no link drives reads the config, and a class read {exposed_unlinked}"
-    )
-
     (lfo,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Lfo", "name": "lfo"})["added_nodes"]
     edit_live(
         "connect",
@@ -342,26 +220,23 @@ def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_
     tatolabd.await_clean_exit()
 
     assert driven["highest"] - driven["lowest"] > 0.5, (
-        f"the `Lfo` linked into `level` drives the field in place of 0.25, and a class read {driven}"
+        f"the `Lfo` linked into `level` drives it in place of 0.25, and a class read {driven}"
     )
     assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
-        f"a field its link stops driving reads the config again, and a class read {unlinked_again}"
-    )
-    assert "cannot be reconfigured while running" not in tatolabd.stderr_text, (
-        f"the promoted node takes the linked value as its config:\n{tatolabd.recent_stderr()}"
+        f"an input its link stops driving reads its pin value again, and a class read {unlinked_again}"
     )
 
 
-def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_link_is_removed(
+def test_a_setting_a_python_class_holds_reads_its_value_again_once_its_link_is_removed(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A Python class taking live config updates, its config's `level` 0.25.
-    Exposing `level` live and linking an `Lfo` into it drives the field, and
-    disconnecting the `Lfo` hands the class its config's 0.25 again.
+    """A Python class holding its `level` setting, 0.25. Linking an `Lfo` into
+    `level` live drives it, and disconnecting the `Lfo` hands the class its
+    0.25 again.
 
     Fail-without-fix: the class keeps the last value the `Lfo` gave it.
     """
-    tatolabd = start_tatolabd_running_stream(python_class_reporting_its_configured_level)
+    tatolabd = start_tatolabd_running_stream(python_class_reporting_its_level)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
@@ -377,10 +252,6 @@ def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_l
         for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
         if node["name"] == "configured"
     ]
-    edit_live(
-        "set_exposed_config_fields",
-        {"node": configured_node["id"], "exposed_config_fields": ["level"]},
-    )
     (lfo,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Lfo", "name": "lfo"})["added_nodes"]
     lfo_into_the_level = {
         "source": {"node": lfo["node"], "port": "result"},
@@ -398,10 +269,10 @@ def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_l
     tatolabd.await_clean_exit()
 
     assert driven["highest"] - driven["lowest"] > 0.5, (
-        f"the `Lfo` linked into `level` drives the field in place of 0.25, and the class read {driven}"
+        f"the `Lfo` linked into `level` drives it in place of 0.25, and the class read {driven}"
     )
     assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
-        f"a field its link stops driving reads the config again, and the class read {unlinked_again}"
+        f"a setting its link stops driving reads its value again, and the class read {unlinked_again}"
     )
 
 

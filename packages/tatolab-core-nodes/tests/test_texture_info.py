@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Texture Info hands on each picture's size, pixel format and stated frame rate as values,
-writing an output again only when its value changes or a reader connected after its last write."""
+writing an output again only when its value changes."""
 
 from __future__ import annotations
 
@@ -45,16 +45,6 @@ class PictureInputPin:
         return self.stream_facts
 
 
-class OutputsOfTheContext:
-    """`ctx.outputs`, reporting the ports whose last write a reader that connected since missed."""
-
-    def __init__(self) -> None:
-        self.ports_a_reader_missed: "set[str]" = set()
-
-    def has_a_reader_the_last_write_missed(self, port: str) -> bool:
-        return port in self.ports_a_reader_missed
-
-
 def a_frame(width: int, height: int, texture_format: str = "rgba8_unorm") -> Any:
     return SimpleNamespace(width=width, height=height, format=texture_format)
 
@@ -66,7 +56,7 @@ def a_texture_info() -> "tuple[Any, PictureInputPin, dict[str, RecordingOutputPi
     return node, picture, outputs
 
 
-A_CONTEXT_NO_READER_MISSED = SimpleNamespace(outputs=OutputsOfTheContext())
+A_CONTEXT = SimpleNamespace()
 
 
 def the_writes(outputs: "dict[str, RecordingOutputPin]") -> "dict[str, list[Any]]":
@@ -90,7 +80,7 @@ def test_the_first_picture_writes_its_size_format_and_stated_frame_rate():
     node, picture, outputs = a_texture_info()
     picture.next_frame = a_frame(1280, 720)
     picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(30_000, 1_001))
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     assert the_writes(outputs) == {
         "width": [1280],
         "height": [720],
@@ -104,7 +94,7 @@ def test_a_picture_with_the_same_facts_writes_nothing_again():
     node, picture, outputs = a_texture_info()
     for _ in range(3):
         picture.next_frame = a_frame(640, 480)
-        node.process(A_CONTEXT_NO_READER_MISSED)
+        node.process(A_CONTEXT)
     assert the_writes(outputs) == {
         "width": [640],
         "height": [480],
@@ -118,9 +108,9 @@ def test_a_change_of_size_writes_the_size_again_and_nothing_else():
     node, picture, outputs = a_texture_info()
     picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(60))
     picture.next_frame = a_frame(1920, 1080)
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     picture.next_frame = a_frame(1280, 720)
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     assert the_writes(outputs) == {
         "width": [1920, 1280],
         "height": [1080, 720],
@@ -133,9 +123,9 @@ def test_a_change_of_size_writes_the_size_again_and_nothing_else():
 def test_a_change_of_format_writes_only_the_format_again():
     node, picture, outputs = a_texture_info()
     picture.next_frame = a_frame(320, 240)
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     picture.next_frame = a_frame(320, 240, "rgba16_float")
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     assert outputs["pixel_format"].writes == ["rgba8_unorm", "rgba16_float"]
     assert outputs["width"].writes == [320]
 
@@ -145,39 +135,22 @@ def test_no_frame_rate_is_written_while_the_stream_states_none():
     for stream_facts in (None, ImageStreamFacts(), PacketsStreamFacts(rfc6381_codec="avc1.64001f")):
         picture.stream_facts = stream_facts
         picture.next_frame = a_frame(320, 240)
-        node.process(A_CONTEXT_NO_READER_MISSED)
+        node.process(A_CONTEXT)
     assert outputs["frame_rate"].writes == []
 
 
 def test_a_frame_rate_stated_later_is_written_when_it_arrives():
     node, picture, outputs = a_texture_info()
     picture.next_frame = a_frame(320, 240)
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(25))
     picture.next_frame = a_frame(320, 240)
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     assert outputs["frame_rate"].writes == [25.0]
 
 
 def test_a_look_with_no_picture_waiting_writes_nothing():
     node, _, outputs = a_texture_info()
-    node.process(A_CONTEXT_NO_READER_MISSED)
+    node.process(A_CONTEXT)
     assert all(writes == [] for writes in the_writes(outputs).values())
 
-
-def test_a_reader_that_connected_after_a_write_gets_that_value_again():
-    node, picture, outputs = a_texture_info()
-    picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(30))
-    picture.next_frame = a_frame(1280, 720)
-    node.process(A_CONTEXT_NO_READER_MISSED)
-    late_reader_on_width_and_rate = OutputsOfTheContext()
-    late_reader_on_width_and_rate.ports_a_reader_missed = {"width", "frame_rate"}
-    picture.next_frame = a_frame(1280, 720)
-    node.process(SimpleNamespace(outputs=late_reader_on_width_and_rate))
-    assert the_writes(outputs) == {
-        "width": [1280, 1280],
-        "height": [720],
-        "size": [Vector2(1280.0, 720.0)],
-        "pixel_format": ["rgba8_unorm"],
-        "frame_rate": [30.0, 30.0],
-    }

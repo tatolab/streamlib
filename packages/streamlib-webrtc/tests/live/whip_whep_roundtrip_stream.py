@@ -93,12 +93,12 @@ def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilde
     )
     video_encoder = stream_builder.add(
         H264Encoder,
-        config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
+        input_values={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
         name="video_encoder",
     )
     microphone = stream_builder.add(
         MicrophoneSource,
-        config={"device_id": audio_capture_device} if audio_capture_device else {},
+        input_values={"device_id": audio_capture_device} if audio_capture_device else {},
         name="microphone",
     )
     audio_encoder = stream_builder.add(OpusEncoder, name="audio_encoder")

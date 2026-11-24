@@ -9,14 +9,17 @@ the test suite.
 """
 
 import json
+from dataclasses import dataclass
+from typing import Annotated
 
 from tatolab.stream import (
-    Image,
-    Input,
-    Output,
-    Packets,
-    Records,
+    Description,
+    EncodedVideo,
+    InputPin,
+    OutputPin,
     RuntimeContextLimitedAccess,
+    StreamDelivery,
+    Texture,
     log,
     node,
 )
@@ -28,56 +31,73 @@ REPLACEMENT_STREAM_FACTS = PacketsStreamFacts(
 )
 
 
-@node.process(execution="continuous", interval_ms=50)
-class DeclaresItsFrameRateAndWritesRecords:
-    """Declares an Image frame rate it never replaces, and writes a record every tick."""
+@dataclass(frozen=True)
+class Kept:
+    """A record that says it was kept."""
 
-    video = Output(Image, rate=DECLARED_FRAMES_PER_SECOND, description="Frames, never written")
-    records = Output(Records, description="Records")
+    kept: bool
+
+
+@node(execution="continuous", interval_ms=50)
+class DeclaresItsFrameRateAndWritesRecords:
+    """States a Texture frame rate on its first tick and never replaces it, reporting
+    `MARKER:FRAME_RATE_STATED`, and writes a bundle every tick."""
+
+    video: OutputPin[Annotated[Texture, Description("Frames, never written")]]
+    records: OutputPin[Annotated[Kept, Description("Records")]]
+
+    def __init__(self) -> None:
+        self.stated = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.outputs.write(self.records, {"kept": True})
+        if not self.stated:
+            self.stated = True
+            self.video.set_stream_facts(
+                ImageStreamFacts(frame_rate=ImageStreamFrameRate(DECLARED_FRAMES_PER_SECOND, 1))
+            )
+            log.info("MARKER:FRAME_RATE_STATED")
+        self.records.write(Kept(True))
 
 
-@node.process(execution="continuous", interval_ms=50)
+@node(execution="continuous", interval_ms=50)
 class ReplacesItsStreamFactsOnItsFirstTick:
-    """Replaces its port's stream facts on its first tick, after trying another family's.
+    """Replaces its port's stream facts on its first tick, after trying another type's.
 
     Reports `MARKER:STREAM_FACTS_REFUSED <message>` and then
     `MARKER:STREAM_FACTS_REPLACED`, so a reader of `graph` knows the
     replacement has landed before it looks.
     """
 
+    encoded: OutputPin[Annotated[EncodedVideo, Description("Encoded units")]]
+
     def __init__(self) -> None:
         self.replaced = False
-
-    encoded = Output(Packets, codec="h264", description="Encoded units")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if not self.replaced:
             self.replaced = True
             try:
-                ctx.outputs.set_stream_facts(
-                    "encoded", ImageStreamFacts(frame_rate=ImageStreamFrameRate(30, 1))
+                self.encoded.set_stream_facts(
+                    ImageStreamFacts(frame_rate=ImageStreamFrameRate(30, 1))
                 )
             except Exception as refusal:
                 log.info("MARKER:STREAM_FACTS_REFUSED " + json.dumps(str(refusal)))
-            ctx.outputs.set_stream_facts("encoded", REPLACEMENT_STREAM_FACTS)
+            self.encoded.set_stream_facts(REPLACEMENT_STREAM_FACTS)
             log.info("MARKER:STREAM_FACTS_REPLACED")
-        ctx.outputs.write("encoded", b"\x00\x00\x00\x01\x65")
+        self.encoded.write(b"\x00\x00\x00\x01\x65")
 
 
-@node.process
+@node
 class ReportsItsUpstreamsStreamFacts:
     """Reports the stream facts its one upstream port carries, every message, as
     `MARKER:UPSTREAM_STREAM_FACTS <json>`."""
 
-    encoded_from_upstream = Input(Packets, delivery="newest")
+    encoded_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if ctx.inputs.read("encoded_from_upstream") is None:
+        if self.encoded_from_upstream.read() is None:
             return
-        upstream_stream_facts = ctx.inputs.upstream_stream_facts("encoded_from_upstream")
+        upstream_stream_facts = self.encoded_from_upstream.upstream_stream_facts()
         log.info(
             "MARKER:UPSTREAM_STREAM_FACTS "
             + json.dumps(None if upstream_stream_facts is None else upstream_stream_facts.to_wire())

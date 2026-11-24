@@ -498,7 +498,7 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
                 "\n"
                 "@graph_generator\n"
                 "def main(stream_builder: StreamBuilder) -> None:\n"
-                '    stream_builder.add(TensorToAudioByItsType, config={"widht": 640})\n'
+                '    stream_builder.add(TensorToAudioByItsType, input_values={"widht": 640})\n'
             )
         }
     )
