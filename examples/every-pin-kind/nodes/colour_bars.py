@@ -95,6 +95,7 @@ class BgraColourBars:
         self._frame_ring = NodeOutputTextureRing("bgra8_unorm", ["texture_binding"])
 
     def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
+        refuse_a_width_narrower_than_the_colour_bars(self.width)
         try:
             frame_texture = self._frame_ring.next_texture_for_this_frame(
                 runtime_context.gpu_limited_access, self.width, self.height
@@ -162,7 +163,7 @@ class ColourBarsCheck:
                 f"{read_back}, written {list(COLOUR_BARS_RGBA)}"
             )
         self.frames_checked += 1
-        if self.frames_checked % self.report_every_frames == 0:
+        if self.frames_checked % max(1, self.report_every_frames) == 0:
             log.info(
                 "colour bars read back right",
                 format=frame.format,

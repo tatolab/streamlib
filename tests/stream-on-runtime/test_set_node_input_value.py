@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`set_node_input_value` on a running stream: one operation sets an input's
-value on a Python class and a setting a Python class holds, live or saved, and refuses a value its input does not take.
+value on a Python class and a setting a Python class holds, live or saved, and
+refuses a value its input does not take.
 """
 
 from __future__ import annotations

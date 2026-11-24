@@ -377,19 +377,22 @@ async fn a_node_types_port_that_is_no_port_is_answered_refused() {
 /// The import path of a node type a project's `nodes/watcher.py` declares, which nothing places.
 const WATCHER_TYPE: &str = "nodes.watcher:Watcher";
 
-/// The source of `nodes/watcher.py`: one process node taking each Image frame.
+/// The source of `nodes/watcher.py`: one class node taking each Texture.
 const WATCHER_SOURCE: &str = "\
-from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
+from typing import Annotated
+
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 
-@node.process
+@node
 class Watcher:
     \"\"\"Takes each frame and keeps nothing.\"\"\"
 
-    video = Input(Image, delivery=\"newest\")
+    video: InputPin[Annotated[Texture, StreamDelivery(\"newest\")]]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        ctx.inputs.read(self.video)
+        del ctx
+        self.video.read()
 ";
 
 /// A project's own node type, in its `nodes/watcher.py`, that nothing has placed is listed under

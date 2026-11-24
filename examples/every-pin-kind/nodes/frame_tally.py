@@ -56,7 +56,7 @@ class FrameTally:
         if frame is None:
             return
         self.frames_seen += 1
-        if self.frames_seen % self.report_every_frames != 0:
+        if self.frames_seen % max(1, self.report_every_frames) != 0:
             return
         log.info(
             "frames tallied",

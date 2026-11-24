@@ -18,7 +18,6 @@ from helper_placement_observation import (
 from helper_placement_streams import (
     held_level_read_by_two_python_sinks,
     level_scaled_by_its_gain_into_python_sink,
-    lfo_into_python_sink_reporting_each_batch_it_reads,
     python_class_reporting_its_level,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
     one_width_source_alone,

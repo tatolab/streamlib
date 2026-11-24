@@ -196,6 +196,11 @@ class JudgeACheckAnswerTest(unittest.TestCase):
 
 
 class ReportTest(unittest.TestCase):
+    def test_the_report_names_a_retired_declaration_among_its_projects_failures(self) -> None:
+        failed = ProjectCheckOutcome(A_PROJECT, failed_because=["nodes/a.py:4: declaration_retired: Hum"])
+        report = the_report([failed], [])
+        self.assertIn("examples/a: failed: nodes/a.py:4: declaration_retired: Hum\n", report)
+
     def test_a_failure_outranks_an_unfinished_run(self) -> None:
         passed = ProjectCheckOutcome(A_PROJECT)
         failed = ProjectCheckOutcome(A_PROJECT, failed_because=["x"])

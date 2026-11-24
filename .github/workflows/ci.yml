@@ -849,6 +849,27 @@ jobs:
           grep -q 'nodes/planted_level.py:[0-9]*: value_input_has_no_default' "$RUNNER_TEMP/planted-report.txt" \
             || { echo "the report does not name the planted refusal" >&2; exit 1; }
 
+      # A node declared in a retired form fails too, or a green run below lets one land.
+      - name: A planted retired declaration fails the check
+        env:
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
+        run: |
+          planted="$RUNNER_TEMP/planted-retired-declaration"
+          mkdir -p "$planted/nodes"
+          printf '%s\n' '{"dependencies": [], "description": "A node in a retired form", "name": "planted-retired-declaration", "project": "8d2e4a61-3f7b-4c09-b1e5-2a6c9d0f7e38"}' \
+            > "$planted/tatolab-project.json"
+          printf '%s\n' '[project]' 'name = "planted-retired-declaration"' 'version = "0.1.0"' \
+            'requires-python = ">=3.12"' 'dependencies = ["tatolab-stream"]' > "$planted/pyproject.toml"
+          printf '%s\n' 'from tatolab.stream import node' '' '' '@node.function' \
+            'def PlantedLevel(level: float = 0.0) -> float:' '    return level' > "$planted/nodes/planted_level.py"
+          exit_code=0
+          python3 scripts/ci/check_in_tree_projects_node_code.py --runtime-unit target/tatolab-runtime \
+            --project "$planted" > "$RUNNER_TEMP/planted-retired-report.txt" || exit_code=$?
+          cat "$RUNNER_TEMP/planted-retired-report.txt"
+          [ "$exit_code" -eq 1 ] || { echo "the planted retired declaration exited $exit_code, not 1" >&2; exit 1; }
+          grep -q 'nodes/planted_level.py:[0-9]*: declaration_retired' "$RUNNER_TEMP/planted-retired-report.txt" \
+            || { echo "the report does not name the planted retired declaration" >&2; exit 1; }
+
       - name: Check the node code of every in-tree project
         env:
           UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist

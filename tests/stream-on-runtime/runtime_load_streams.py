@@ -4,8 +4,6 @@
 """The `@graph_generator` functions `test_stream_graph_load_on_tatolabd.py` runs,
 each run as a one-stream project whose `stream.py` delegates to it."""
 
-from typing import Any
-
 from runtime_load_served_graph_nodes import LoadedFrameSink
 from tatolab.h264 import H264Encoder
 from tatolab.stream import NodeOutputPortReference, StreamBuilder, graph_generator
