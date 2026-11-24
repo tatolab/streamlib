@@ -21,7 +21,7 @@ from ._pin_types import Audio, EncodedAudio, EncodedVideo, Tensor, Texture, Trig
 
 if TYPE_CHECKING:
     from ._message import Message
-    from ._node_context_protocols import ChannelsBlock, PacketsUnit, PortPayloadLoan
+    from ._node_context_protocols import ChannelsBlock, PacketsUnit, PortPayloadBorrow, PortPayloadLoan
     from .array_frame import ArrayFrame
     from .image_frame import ImageFrame, ImageFrameToWrite
     from .stream_facts import PortStreamFacts
@@ -102,6 +102,11 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
         Its payload is what `read()` gives. A value carried as its parts or as a number is read
         with `read()`, which gives its newest value.
         """
+        raise NotImplementedError
+
+    def read_message_as_sent(self) -> Message[PortPayloadBorrow] | None:
+        """The next message waiting at this pin with its payload's bytes as they were sent,
+        whichever of the pin's types it carries, or `None`: what a gateway hands on unread."""
         raise NotImplementedError
 
     def has_data(self) -> bool:

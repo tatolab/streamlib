@@ -261,6 +261,15 @@ class BoundInputPin:
             return message
         return dataclasses.replace(message, payload=True)
 
+    def read_message_as_sent(self) -> Any:
+        """The next message waiting at this pin with its payload's bytes as they were sent, or `None`."""
+        if self._read_a_value is not None:
+            raise TypeError(
+                f"`{self._node_id}`'s pin `{self._port}` carries a value, which arrives as its "
+                f"newest. To fix: read it with `read()`"
+            )
+        return self._inputs.read_message(self._port)
+
     def has_data(self) -> bool:
         """Whether a message is waiting at this pin."""
         return self._inputs.has_data(self._port)
