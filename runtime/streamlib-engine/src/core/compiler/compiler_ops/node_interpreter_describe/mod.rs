@@ -195,15 +195,16 @@ pub(crate) fn describe_and_register_node_types_in_a_node_interpreter(
     if import_paths.is_empty() {
         return Ok(());
     }
-    let declarations = describe_node_types_in_a_node_interpreter_within(
-        import_paths,
-        stream_environment,
-        lend_directory,
-        NODE_INTERPRETER_DESCRIBE_BOUND,
-        the_stream_the_describe_belongs_to,
-        is_interrupted_by_the_host,
-    )?;
-    for declaration in declarations {
+    let NodeTypesOneDescribeAnswered { described, refused } =
+        describe_node_types_in_a_node_interpreter_within(
+            import_paths,
+            stream_environment,
+            lend_directory,
+            NODE_INTERPRETER_DESCRIBE_BOUND,
+            the_stream_the_describe_belongs_to,
+            is_interrupted_by_the_host,
+        )?;
+    for declaration in described {
         register_the_described_node_type(
             node_types_of_the_stream,
             declaration,
@@ -213,7 +214,7 @@ pub(crate) fn describe_and_register_node_types_in_a_node_interpreter(
             the_stream_the_describe_belongs_to,
         )?;
     }
-    Ok(())
+    refused.map_or(Ok(()), Err)
 }
 
 /// Register `declaration` into `node_types_of_the_stream`: as a type `installed_module`
@@ -364,10 +365,29 @@ fn register_the_function_node_pool_once(
     )
 }
 
+/// What one describe answered of the types it was asked for: the declaration of each it
+/// described, in the order asked, and the refusal naming each it did not.
+#[must_use]
+pub(crate) struct NodeTypesOneDescribeAnswered {
+    pub(crate) described: Vec<PythonNodeDeclaration>,
+    /// An [`Error::NodeTypesNotDescribed`] naming each type the describe refused or left
+    /// unanswered; `None` when it described every one.
+    pub(crate) refused: Option<Error>,
+}
+
+impl NodeTypesOneDescribeAnswered {
+    /// The declaration of every type asked for, or the refusal of the ones it did not describe.
+    #[cfg(test)]
+    pub(crate) fn every_one_described(self) -> Result<Vec<PythonNodeDeclaration>> {
+        self.refused.map_or(Ok(self.described), Err)
+    }
+}
+
 /// Describe `import_paths` in one start of the stream's interpreter, bounded
 /// by `describe_bound` and cut short by the shutdown of the stream it belongs
-/// to or by `is_interrupted_by_the_host` reporting true, returning their
-/// declarations in the order asked.
+/// to or by `is_interrupted_by_the_host` reporting true. A run that does not
+/// answer refuses every type; one that answers keeps each type it described
+/// beside the refusal of each it did not.
 pub(crate) fn describe_node_types_in_a_node_interpreter_within(
     import_paths: &[NodeClassImportPath],
     stream_environment: &StreamEnvironment,
@@ -375,7 +395,7 @@ pub(crate) fn describe_node_types_in_a_node_interpreter_within(
     describe_bound: Duration,
     the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
-) -> Result<Vec<PythonNodeDeclaration>> {
+) -> Result<NodeTypesOneDescribeAnswered> {
     let refuse_every_requested_type = |refusal: String| Error::NodeTypesNotDescribed {
         node_types: import_paths.to_vec(),
         refusal,
@@ -392,63 +412,75 @@ pub(crate) fn describe_node_types_in_a_node_interpreter_within(
             &A_DESCRIBE,
         )?;
 
-    let refused_node_types: Vec<(NodeClassImportPath, &str)> = import_paths
-        .iter()
-        .filter_map(|import_path| {
-            describe_document
-                .refused_node_types
-                .iter()
-                .find(|refused| refused.import_path == import_path.as_str())
-                .map(|refused| (import_path.clone(), refused.refusal.trim_end()))
-        })
-        .collect();
-    if !refused_node_types.is_empty() {
-        let refusal = match refused_node_types.as_slice() {
-            [(_, the_only_refusal)] => {
-                format!("the stream's interpreter `{interpreter}` refused it: {the_only_refusal}")
-            }
-            several_refused_node_types => format!(
-                "the stream's interpreter `{interpreter}` refused them:\n{}",
-                several_refused_node_types
-                    .iter()
-                    .map(|(import_path, refusal)| format!("`{}`: {refusal}", import_path.as_str()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
+    let mut described = Vec::new();
+    let mut refused: Vec<(NodeClassImportPath, String)> = Vec::new();
+    for import_path in import_paths {
+        if let Some(refused_by_the_interpreter) = describe_document
+            .refused_node_types
+            .iter()
+            .find(|refused_type| refused_type.import_path == import_path.as_str())
+        {
+            refused.push((
+                import_path.clone(),
+                refused_by_the_interpreter.refusal.trim_end().to_owned(),
+            ));
+            continue;
+        }
+        let described_node_type = describe_document
+            .described_node_types
+            .iter()
+            .find(|described| {
+                described.get("import_path").and_then(|path| path.as_str())
+                    == Some(import_path.as_str())
+            });
+        let Some(described_node_type) = described_node_type else {
+            refused.push((
+                import_path.clone(),
+                format!("it gave no answer for it. {quoted_standard_error}"),
+            ));
+            continue;
         };
-        return Err(Error::NodeTypesNotDescribed {
-            node_types: refused_node_types
-                .into_iter()
-                .map(|(import_path, _)| import_path)
-                .collect(),
-            refusal,
-        });
+        match PythonNodeDeclaration::read_from_described_node_type(described_node_type, import_path)
+        {
+            Ok(declaration) => described.push(declaration),
+            Err(unreadable) => refused.push((import_path.clone(), unreadable)),
+        }
     }
+    Ok(NodeTypesOneDescribeAnswered {
+        described,
+        refused: the_refusal_of_the_types_a_describe_did_not_describe(&interpreter, refused),
+    })
+}
 
-    import_paths
-        .iter()
-        .map(|import_path| {
-            let refuse_this_type = |refusal: String| Error::NodeTypesNotDescribed {
-                node_types: vec![import_path.clone()],
-                refusal,
-            };
-            let described_node_type = describe_document
-                .described_node_types
+/// One [`Error::NodeTypesNotDescribed`] naming each of `refused` with the words the stream's
+/// interpreter `interpreter` gave for it; `None` when it refused none.
+fn the_refusal_of_the_types_a_describe_did_not_describe(
+    interpreter: &impl std::fmt::Display,
+    refused: Vec<(NodeClassImportPath, String)>,
+) -> Option<Error> {
+    let refusal = match refused.as_slice() {
+        [] => return None,
+        [(_, the_only_refusal)] => {
+            format!(
+                "the stream's interpreter `{interpreter}` did not describe it: {the_only_refusal}"
+            )
+        }
+        several_refused_node_types => format!(
+            "the stream's interpreter `{interpreter}` did not describe them:\n{}",
+            several_refused_node_types
                 .iter()
-                .find(|described| {
-                    described.get("import_path").and_then(|path| path.as_str())
-                        == Some(import_path.as_str())
-                })
-                .ok_or_else(|| {
-                    refuse_this_type(format!(
-                        "the stream's interpreter `{interpreter}` neither described nor \
-                         refused it. {quoted_standard_error}"
-                    ))
-                })?;
-            PythonNodeDeclaration::read_from_described_node_type(described_node_type, import_path)
-                .map_err(refuse_this_type)
-        })
-        .collect()
+                .map(|(import_path, refusal)| format!("`{}`: {refusal}", import_path.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    Some(Error::NodeTypesNotDescribed {
+        node_types: refused
+            .into_iter()
+            .map(|(import_path, _)| import_path)
+            .collect(),
+        refusal,
+    })
 }
 
 /// What one out-of-stream run of the stream's node interpreter does, in the words its refusals

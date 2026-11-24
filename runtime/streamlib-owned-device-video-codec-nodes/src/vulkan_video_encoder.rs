@@ -8,7 +8,6 @@
 use streamlib_consumer_rhi::runtime_vulkan_device_uuid_named_at_spawn;
 use tatolab_module_sdk::ModuleHost;
 
-use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_publication::{EncodedVideoOutputPort, EncodedVideoPublication};
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_codec_host_protocol::{
@@ -18,8 +17,11 @@ use crate::video_codec_host_session_of_the_node::{
     VideoCodecHostSessionConnection, VideoCodecHostSessionOfTheNode, VideoCodecHostSessionOpening,
 };
 use crate::video_codec_retry_gate::VideoCodecRefusal;
-use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
+use crate::video_encode_on_a_device::{
+    VideoFrameEncodeOutcome, VideoFrameEncoded, VideoFrameToEncode,
+};
 use crate::video_encoder_settings::VideoEncoderSettings;
+use crate::{VideoCodecNodeIdentity, VideoFrameNotEncoded};
 
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
@@ -93,7 +95,7 @@ impl VulkanVideoEncoder {
         &mut self,
         frame: &ImageFrameReadByTheEncoder,
         encoded_video: &dyn EncodedVideoOutputPort,
-    ) -> Result<(), String> {
+    ) -> Result<(), VideoFrameNotEncoded> {
         let node_type_name = self.node.node_type_name;
         let opened_again =
             self.session.connected()? == VideoCodecHostSessionConnection::OpenedAgain;
@@ -102,11 +104,8 @@ impl VulkanVideoEncoder {
             as_a_sync_point: self.next_frame_must_be_a_sync_point || opened_again,
         };
         let (reply, _) = self.session.ask(&request, 0)?;
-        let outcome = reply.into_the_encode()?;
-        let encoded = match outcome {
-            VideoFrameEncodeOutcome::Encoded(encoded) => encoded,
-            VideoFrameEncodeOutcome::NotCheckedOut
-            | VideoFrameEncodeOutcome::DiscardedWithoutASession => return Ok(()),
+        let Some(encoded) = the_frame_encoded_or_why_not(reply.into_the_encode()?)? else {
+            return Ok(());
         };
         self.next_frame_must_be_a_sync_point = false;
         if encoded.minted_a_session {
@@ -146,5 +145,20 @@ impl VulkanVideoEncoder {
             );
         }
         Ok(())
+    }
+}
+
+/// The frame `outcome` encoded, `None` for one only skipped, and a refusal that fails the node
+/// for a frame of a format the encoder never reads.
+pub fn the_frame_encoded_or_why_not(
+    outcome: VideoFrameEncodeOutcome,
+) -> Result<Option<VideoFrameEncoded>, VideoFrameNotEncoded> {
+    match outcome {
+        VideoFrameEncodeOutcome::Encoded(encoded) => Ok(Some(encoded)),
+        VideoFrameEncodeOutcome::NotCheckedOut
+        | VideoFrameEncodeOutcome::DiscardedWithoutASession => Ok(None),
+        VideoFrameEncodeOutcome::RefusedForItsFormat { refusal } => {
+            Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(refusal))
+        }
     }
 }

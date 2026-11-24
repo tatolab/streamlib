@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -296,10 +297,13 @@ impl NodeInterpreterLaunchRecordOfOneStream {
             stream_environment,
             lend_directory,
         );
+        // Each folder is described whatever another refused, so a type one interpreter
+        // refuses leaves every other type registered and only its own node held.
+        let mut refusal_of_each_folder: Vec<(Vec<NodeClassImportPath>, String)> = Vec::new();
         for node_types_of_one_import_folder in
             node_types_grouped_by_the_import_folder_holding_their_code(node_types)
         {
-            describe_and_register_node_types_in_a_node_interpreter(
+            match describe_and_register_node_types_in_a_node_interpreter(
                 &self.node_types_this_stream_resolves,
                 &node_types_of_one_import_folder,
                 stream_environment,
@@ -309,16 +313,35 @@ impl NodeInterpreterLaunchRecordOfOneStream {
                     self.runs_out_of_stream_interrupted_by_the_host
                         .load(Ordering::SeqCst)
                 },
-            )?;
+            ) {
+                Ok(()) => {}
+                Err(Error::NodeTypesNotDescribed {
+                    node_types,
+                    refusal,
+                }) => refusal_of_each_folder.push((node_types, refusal)),
+                Err(refusal) => return Err(refusal),
+            }
         }
+        let not_described: HashSet<&NodeClassImportPath> = refusal_of_each_folder
+            .iter()
+            .flat_map(|(node_types, _)| node_types)
+            .collect();
         for node_type in node_types {
-            self.stream_identity.publish_on_this_streams_topic(
-                RuntimeEvent::RuntimeDidRegisterNodeType {
-                    node_type: node_type.clone(),
-                },
-            );
+            if !not_described.contains(&node_type) {
+                self.stream_identity.publish_on_this_streams_topic(
+                    RuntimeEvent::RuntimeDidRegisterNodeType {
+                        node_type: node_type.clone(),
+                    },
+                );
+            }
         }
-        Ok(())
+        if refusal_of_each_folder.is_empty() {
+            Ok(())
+        } else {
+            Err(node_types_not_described_each_with_its_refusal(
+                refusal_of_each_folder,
+            ))
+        }
     }
 }
 

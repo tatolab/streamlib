@@ -110,6 +110,9 @@ fn an_encode_comes_back_as_the_host_coded_it() {
         Ok(encoded),
         Ok(VideoFrameEncodeOutcome::NotCheckedOut),
         Ok(VideoFrameEncodeOutcome::DiscardedWithoutASession),
+        Ok(VideoFrameEncodeOutcome::RefusedForItsFormat {
+            refusal: "H264Encoder: surface \"s\" is a rgba16_float texture".to_string(),
+        }),
         Err("H264Encoder: encode failed: device lost".to_string()),
     ];
     let replies: Vec<VideoCodecHostReply> = outcomes
