@@ -316,6 +316,20 @@ impl DataChannelPayloadDescriptor {
             DataChannelSamplePayloadRefusal::UnknownPayloadDescriptorKind { kind: self.kind },
         )
     }
+
+    /// The pooled GPU frame a message of this descriptor names: a pool slot frame, or an Image
+    /// frame's slot; `None` for any other message.
+    pub fn pooled_gpu_frame_it_names(&self) -> Option<GpuPoolSlotFrameDescriptorBody> {
+        match self.known_kind() {
+            Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame) => Some(
+                GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&self.body),
+            ),
+            Ok(DataChannelPayloadDescriptorKind::ImageFrame) => {
+                Some(ImageFrameDescriptorBody::from_descriptor_body(&self.body).slot)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Default for DataChannelPayloadDescriptor {

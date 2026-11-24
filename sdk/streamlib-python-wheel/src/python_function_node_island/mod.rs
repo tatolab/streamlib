@@ -17,8 +17,8 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     ChannelsBlockDescriptorBody, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputValue,
-    GpuPoolSlotFrameDescriptorBody, HelperProcessLossCountBoardWriter, ImageFrameDescriptorBody,
-    InputMailboxesInner, MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
+    HelperProcessLossCountBoardWriter, InputMailboxesInner,
+    MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
 };
 
 use streamlib::sdk::pin_value_packing::{
@@ -225,22 +225,16 @@ impl FunctionNodeValue {
     }
 }
 
-/// What holds a pooled GPU frame against its producer's reuse while a message
-/// an island holds names it; released as the message's last copy drops.
-pub(crate) type PooledGpuFrameClaimAnIslandHolds =
-    streamlib::sdk::iceoryx2::PooledGpuFrameClaimAMessageHolds;
-
-/// Claims the pooled GPU frame a message names as an island reads it off its
-/// channel; `Ok(None)` where nothing in this helper covers the frame's pool.
-pub(crate) type ClaimOfThePooledGpuFrameAMessageNames =
-    streamlib::sdk::iceoryx2::ClaimOfThePooledGpuFrameAMessageNames;
+pub(crate) use streamlib::sdk::iceoryx2::{
+    ClaimOfThePooledGpuFrameAMessageNames, PooledGpuFrameClaimAMessageHolds,
+};
 
 /// A message an island read off a channel to hand on unread, holding the
 /// pooled GPU frame it names, if any, for as long as any copy of it lives: in
 /// an input, an output, or a node's state.
 pub(crate) struct MessageAFunctionNodeIslandHolds {
     message: MessageAFunctionNodeIslandHandsOnUnread,
-    _claim_of_its_pooled_gpu_frame: Option<PooledGpuFrameClaimAnIslandHolds>,
+    _claim_of_its_pooled_gpu_frame: Option<PooledGpuFrameClaimAMessageHolds>,
 }
 
 impl std::fmt::Debug for MessageAFunctionNodeIslandHolds {
@@ -264,39 +258,25 @@ impl MessageAFunctionNodeIslandHolds {
         claim_the_pooled_gpu_frame_a_message_names: &ClaimOfThePooledGpuFrameAMessageNames,
         input_port_it_was_read_at: &str,
     ) -> Self {
-        let claim_of_its_pooled_gpu_frame = the_pooled_gpu_frame_a_message_names(
-            &message.payload_descriptor,
-        )
-        .and_then(|pooled_gpu_frame| {
-            claim_the_pooled_gpu_frame_a_message_names(pooled_gpu_frame).unwrap_or_else(|refusal| {
-                tracing::warn!(
-                    input_port = %input_port_it_was_read_at,
-                    "the pooled GPU frame a message names could not be claimed, so \
-                     its producer may reuse it while the message is held: {refusal}"
-                );
-                None
-            })
-        });
+        let claim_of_its_pooled_gpu_frame = message
+            .payload_descriptor
+            .pooled_gpu_frame_it_names()
+            .and_then(|pooled_gpu_frame| {
+                claim_the_pooled_gpu_frame_a_message_names(pooled_gpu_frame).unwrap_or_else(
+                    |refusal| {
+                        tracing::warn!(
+                            input_port = %input_port_it_was_read_at,
+                            "the pooled GPU frame a message names could not be claimed, so \
+                             its producer may reuse it while the message is held: {refusal}"
+                        );
+                        None
+                    },
+                )
+            });
         Self {
             message: MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(message),
             _claim_of_its_pooled_gpu_frame: claim_of_its_pooled_gpu_frame,
         }
-    }
-}
-
-/// The pooled GPU frame a message names: an Image frame's slot, or a pooled
-/// frame's; `None` for a message whose payload is its bytes.
-fn the_pooled_gpu_frame_a_message_names(
-    payload_descriptor: &DataChannelPayloadDescriptor,
-) -> Option<GpuPoolSlotFrameDescriptorBody> {
-    match DataChannelPayloadDescriptorKind::from_wire(payload_descriptor.kind)? {
-        DataChannelPayloadDescriptorKind::ImageFrame => {
-            Some(ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body).slot)
-        }
-        DataChannelPayloadDescriptorKind::GpuPoolSlotFrame => Some(
-            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
-        ),
-        _ => None,
     }
 }
 
@@ -759,7 +739,7 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                 values_last_read_off_links_from_outside_islands: link_data_access
                     .values_last_read_off_links_into_its_function_node_islands(),
                 claim_the_pooled_gpu_frame_a_message_names: link_data_access
-                    .claim_of_the_pooled_gpu_frames_its_islands_hold(),
+                    .claim_of_the_pooled_gpu_frames_this_helper_holds(),
             },
             WhereAnIslandNotesTheRaisesOfItsFunctionNodes {
                 function_node_raises_in_this_helper: link_data_access

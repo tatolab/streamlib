@@ -14,8 +14,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use streamlib_ipc_types::{
-    DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, DataChannelSampleUserHeader,
-    GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody,
+    DataChannelPayloadDescriptor, DataChannelSampleUserHeader, GpuPoolSlotFrameDescriptorBody,
 };
 
 use super::MemberTakenAtTheRead;
@@ -28,7 +27,7 @@ use crate::core::pin_value_packing::{
 
 /// What holds a pooled GPU frame against its producer's reuse while a message held names it;
 /// the frame is let go as it drops.
-pub type PooledGpuFrameClaimAMessageHolds = Box<dyn std::any::Any + Send + Sync>;
+pub type PooledGpuFrameClaimAMessageHolds = Box<dyn Send + Sync>;
 
 /// Claims the pooled GPU frame a message names, in the process that reads it; `Ok(None)` where
 /// nothing in that process covers the frame's pool.
@@ -46,14 +45,28 @@ pub type ClaimOfThePooledGpuFrameAMessageNames = Box<
 /// forgotten. A Texture held here keeps a claim on its frame, so every bundle re-sent with it
 /// names a frame its producer has not handed out again, however long its link is quiet; its
 /// reader's own claim, when it reads the bundle, lands on that one.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct NewestOfEachMemberPutAtTheRead {
     /// Each small member's newest value, by name.
     pub(crate) small_members: Map<String, Value>,
     /// Each Texture, Audio or encoded member's newest message, by name.
-    pub(crate) heavy_members: BTreeMap<String, PackedPinValue>,
-    /// The claim on the frame each Texture member's newest message names, by name.
-    claims_on_the_frames_held: BTreeMap<String, PooledGpuFrameClaimAMessageHolds>,
+    heavy_members: BTreeMap<String, HeldHeavyMember>,
+}
+
+/// A Texture, Audio or encoded member's newest message, and the claim on the frame it names.
+struct HeldHeavyMember {
+    message: PackedPinValue,
+    claim_on_its_frame: Option<PooledGpuFrameClaimAMessageHolds>,
+}
+
+impl std::fmt::Debug for HeldHeavyMember {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HeldHeavyMember")
+            .field("message", &self.message)
+            .field("its_frame_is_claimed", &self.claim_on_its_frame.is_some())
+            .finish()
+    }
 }
 
 impl NewestOfEachMemberPutAtTheRead {
@@ -61,68 +74,55 @@ impl NewestOfEachMemberPutAtTheRead {
     pub(crate) fn forget_the_member(&mut self, member: &str) {
         self.small_members.remove(member);
         self.heavy_members.remove(member);
-        self.claims_on_the_frames_held.remove(member);
     }
 
-    /// Hold a claim on the frame `descriptor`, the newest message of the member `member`, names,
-    /// in place of the one held on the frame before, which is let go; nothing is held for a
-    /// message naming no pooled frame, before the reading process can claim one, or when the
-    /// claim is refused, which is warned of.
-    fn claim_the_frame_named_by_the_newest_message_of(
+    /// Hold `payload`, the newest message of the heavy member `member`, of `descriptor`, over
+    /// the one held before: its bytes moved in when owned, else copied into the buffer held
+    /// before, and the frame it names claimed through `claim_of_a_pooled_gpu_frame` before the
+    /// one held on the frame before is let go. No claim is held for a message naming no pooled
+    /// frame, before the reading process can claim one, or when the claim is refused, which is
+    /// warned of.
+    fn hold_a_heavy_members_message(
         &mut self,
         member: &str,
-        descriptor: &DataChannelPayloadDescriptor,
+        descriptor: DataChannelPayloadDescriptor,
+        payload: Cow<'_, [u8]>,
         claim_of_a_pooled_gpu_frame: Option<&ClaimOfThePooledGpuFrameAMessageNames>,
     ) {
-        let claimed = match (
-            the_pooled_gpu_frame_a_message_names(descriptor),
-            claim_of_a_pooled_gpu_frame,
-        ) {
-            (Some(frame), Some(claim)) => claim(frame).unwrap_or_else(|refusal| {
-                tracing::warn!(
-                    member,
-                    "the frame a bundle member holds could not be claimed, so the bundles re-sent                      with it may name a frame its producer has handed out again: {refusal}"
+        let claim_on_its_frame = descriptor
+            .pooled_gpu_frame_it_names()
+            .zip(claim_of_a_pooled_gpu_frame)
+            .and_then(|(frame, claim)| {
+                claim(frame).unwrap_or_else(|refusal| {
+                    tracing::warn!(
+                        member,
+                        "the frame a bundle member holds could not be claimed, so the bundles \
+                         re-sent with it may name a frame its producer has handed out again: \
+                         {refusal}"
+                    );
+                    None
+                })
+            });
+        match (self.heavy_members.get_mut(member), payload) {
+            (Some(held), Cow::Borrowed(bytes)) => {
+                held.message.payload_descriptor = descriptor;
+                held.message.payload.clear();
+                held.message.payload.extend_from_slice(bytes);
+                held.claim_on_its_frame = claim_on_its_frame;
+            }
+            (_, payload) => {
+                self.heavy_members.insert(
+                    member.to_owned(),
+                    HeldHeavyMember {
+                        message: PackedPinValue {
+                            payload_descriptor: descriptor,
+                            payload: payload.into_owned(),
+                        },
+                        claim_on_its_frame,
+                    },
                 );
-                None
-            }),
-            _ => None,
-        };
-        match claimed {
-            Some(claim) => self
-                .claims_on_the_frames_held
-                .insert(member.to_owned(), claim),
-            None => self.claims_on_the_frames_held.remove(member),
-        };
-    }
-}
-
-impl std::fmt::Debug for NewestOfEachMemberPutAtTheRead {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("NewestOfEachMemberPutAtTheRead")
-            .field("small_members", &self.small_members)
-            .field("heavy_members", &self.heavy_members)
-            .field(
-                "members_whose_frame_is_claimed",
-                &self.claims_on_the_frames_held.keys().collect::<Vec<_>>(),
-            )
-            .finish()
-    }
-}
-
-/// The pooled GPU frame a message of `descriptor` names: a pool slot frame, or the slot of an
-/// Image frame; `None` for any other message.
-fn the_pooled_gpu_frame_a_message_names(
-    descriptor: &DataChannelPayloadDescriptor,
-) -> Option<GpuPoolSlotFrameDescriptorBody> {
-    match descriptor.known_kind() {
-        Ok(DataChannelPayloadDescriptorKind::GpuPoolSlotFrame) => Some(
-            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&descriptor.body),
-        ),
-        Ok(DataChannelPayloadDescriptorKind::ImageFrame) => {
-            Some(ImageFrameDescriptorBody::from_descriptor_body(&descriptor.body).slot)
+            }
         }
-        _ => None,
     }
 }
 
@@ -231,27 +231,12 @@ impl MemberPutAtTheRead {
             &header.payload_descriptor,
             "the message",
         )?;
-        newest.claim_the_frame_named_by_the_newest_message_of(
+        newest.hold_a_heavy_members_message(
             &self.member.name,
-            &header.payload_descriptor,
+            header.payload_descriptor,
+            payload,
             claim_of_a_pooled_gpu_frame,
         );
-        match (newest.heavy_members.get_mut(&self.member.name), payload) {
-            (Some(held), Cow::Borrowed(bytes)) => {
-                held.payload_descriptor = header.payload_descriptor;
-                held.payload.clear();
-                held.payload.extend_from_slice(bytes);
-            }
-            (_, payload) => {
-                newest.heavy_members.insert(
-                    self.member.name.clone(),
-                    PackedPinValue {
-                        payload_descriptor: header.payload_descriptor,
-                        payload: payload.into_owned(),
-                    },
-                );
-            }
-        }
         Ok(())
     }
 
@@ -271,8 +256,8 @@ impl MemberPutAtTheRead {
             .iter()
             .map(|(name, held)| HeavyMemberOfABundleFrame {
                 name,
-                descriptor: held.payload_descriptor,
-                payload: &held.payload,
+                descriptor: held.message.payload_descriptor,
+                payload: &held.message.payload,
             })
             .collect();
         the_bundle_frame_of_a_bundle(&self.bundle, &Value::Object(small_members), &heavy_members)

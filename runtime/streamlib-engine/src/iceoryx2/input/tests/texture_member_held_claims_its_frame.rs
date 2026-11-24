@@ -118,3 +118,39 @@ fn a_picture_whose_frame_cannot_be_claimed_is_still_handed_on_in_the_bundle() {
         )]
     );
 }
+
+/// A picture whose frame is refused a claim lets go of the claim on the frame the picture before
+/// it named, which no bundle names any more.
+///
+/// Mental-revert: keeping the claim held before over a refused one pins a slot no bundle names.
+#[test]
+fn a_picture_refused_a_claim_lets_go_of_the_claim_on_the_one_before() {
+    let mailboxes = InputMailboxesInner::new();
+    let frames_claimed = FramesClaimed::default();
+    let recorded_in = Arc::clone(&frames_claimed);
+    mailboxes.reach_the_claim_of_the_pooled_gpu_frames_its_bundles_hold(Box::new(move |frame| {
+        if frame.generation > 19 {
+            return Err("its slot moved on".to_owned());
+        }
+        let claimed = (frame.slot, frame.generation);
+        recorded_in.lock().push(claimed);
+        Ok(Some(Box::new(ClaimOnOneFrame {
+            frame: claimed,
+            frames_claimed: Arc::clone(&recorded_in),
+        }) as PooledGpuFrameClaimAMessageHolds))
+    }));
+    let into_picture = a_link_into_a_member_of(
+        &mailboxes,
+        &a_metered_picture(),
+        "picture",
+        WhatTheMembersArePutInto::TheWholeBundle,
+    );
+
+    publish_a_message(&into_picture, an_image_frame(4, 19), &[], 3);
+    the_bundle_frames_read(&mailboxes, &a_metered_picture());
+    assert_eq!(*frames_claimed.lock(), vec![(4, 19)]);
+    publish_a_message(&into_picture, an_image_frame(4, 20), &[], 5);
+    the_bundle_frames_read(&mailboxes, &a_metered_picture());
+
+    assert_eq!(*frames_claimed.lock(), Vec::new());
+}

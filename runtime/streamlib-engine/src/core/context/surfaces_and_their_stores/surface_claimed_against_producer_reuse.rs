@@ -37,13 +37,18 @@ impl GpuContext {
 
 impl GpuContext {
     /// Claims, in this process, the pooled GPU frame a message names against its producer's
-    /// reuse, as a native reader of the frame claims it.
+    /// reuse, as a native reader of the frame claims it; nothing for a frame of a pool no claim
+    /// table in this process names, as one another runtime published.
     pub(crate) fn claim_of_a_pooled_gpu_frame_against_producer_reuse(
         &self,
     ) -> crate::iceoryx2::ClaimOfThePooledGpuFrameAMessageNames {
         let gpu = self.clone();
         Box::new(move |gpu_pool_slot_frame| {
-            gpu.published_frame_id_of_the_gpu_pool_slot_frame(&gpu_pool_slot_frame)
+            let Some(claim_table) = gpu.the_claim_table_in_this_process_of(&gpu_pool_slot_frame)
+            else {
+                return Ok(None);
+            };
+            published_frame_id_in(&claim_table, &gpu_pool_slot_frame)
                 .and_then(|surface_id| gpu.claim_surface_against_producer_reuse(&surface_id))
                 .map(|claim| {
                     Some(Box::new(claim) as crate::iceoryx2::PooledGpuFrameClaimAMessageHolds)
@@ -56,50 +61,63 @@ impl GpuContext {
 impl GpuContext {
     /// The surface id of the frame `gpu_pool_slot_frame` names, read from its
     /// pool's claim table in this process: the slot's key at the frame's
-    /// generation. Refused when no claim table here names the pool or leases
-    /// the row, as for a frame another runtime published.
+    /// generation. Refused when no claim table here names the pool, as for a
+    /// frame another runtime published, or the table leases the row to no slot.
     pub(crate) fn published_frame_id_of_the_gpu_pool_slot_frame(
         &self,
         gpu_pool_slot_frame: &streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody,
     ) -> Result<String> {
-        let pool_wire_name =
-            streamlib_surface_client::gpu_pool_uuid_wire_name(&gpu_pool_slot_frame.pool);
-        let surface_store = self.surface_store().ok_or_else(|| {
-            Error::GpuError(format!(
-                "GPU pool {pool_wire_name}'s frames cannot be read in this process: it shares \
-                 no surface store"
-            ))
-        })?;
-        let claim_table = surface_store
-            .check_out_leases()
-            .and_then(|check_out_leases| {
-                check_out_leases
-                    .gpu_pool_claim_tables()
-                    .table_named(&gpu_pool_slot_frame.pool)
-            })
+        let claim_table = self
+            .the_claim_table_in_this_process_of(gpu_pool_slot_frame)
             .ok_or_else(|| {
+                let pool_wire_name =
+                    streamlib_surface_client::gpu_pool_uuid_wire_name(&gpu_pool_slot_frame.pool);
                 Error::GpuError(format!(
                     "no claim table in this process names GPU pool {pool_wire_name}, so its \
                      frames are not this runtime's"
                 ))
             })?;
-        let pool_slot_key = claim_table
-            .rows_leased_to_slots()
-            .into_iter()
-            .find(|leased_row| leased_row.row_index == gpu_pool_slot_frame.slot)
-            .map(|leased_row| leased_row.pool_slot_key)
-            .ok_or_else(|| {
-                Error::GpuError(format!(
-                    "GPU pool {pool_wire_name} leases row {} to no slot, so the frame it named \
-                     at generation {} is gone",
-                    gpu_pool_slot_frame.slot, gpu_pool_slot_frame.generation
-                ))
-            })?;
-        Ok(crate::core::rhi::published_frame_id_of_pool_slot(
-            &pool_slot_key,
-            gpu_pool_slot_frame.generation,
-        ))
+        published_frame_id_in(&claim_table, gpu_pool_slot_frame)
     }
+
+    /// The claim table in this process naming the pool of `gpu_pool_slot_frame`; `None` when
+    /// this process shares no surface store or no table here names the pool.
+    fn the_claim_table_in_this_process_of(
+        &self,
+        gpu_pool_slot_frame: &streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody,
+    ) -> Option<std::sync::Arc<crate::core::context::GpuPoolClaimTable>> {
+        self.surface_store()?
+            .check_out_leases()?
+            .gpu_pool_claim_tables()
+            .table_named(&gpu_pool_slot_frame.pool)
+    }
+}
+
+/// The surface id of the frame `gpu_pool_slot_frame` names in `claim_table`, its pool's:
+/// the slot's key at the frame's generation. Refused when the table leases the row to no
+/// slot.
+fn published_frame_id_in(
+    claim_table: &crate::core::context::GpuPoolClaimTable,
+    gpu_pool_slot_frame: &streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody,
+) -> Result<String> {
+    let pool_wire_name =
+        streamlib_surface_client::gpu_pool_uuid_wire_name(&gpu_pool_slot_frame.pool);
+    let pool_slot_key = claim_table
+        .rows_leased_to_slots()
+        .into_iter()
+        .find(|leased_row| leased_row.row_index == gpu_pool_slot_frame.slot)
+        .map(|leased_row| leased_row.pool_slot_key)
+        .ok_or_else(|| {
+            Error::GpuError(format!(
+                "GPU pool {pool_wire_name} leases row {} to no slot, so the frame it named \
+                 at generation {} is gone",
+                gpu_pool_slot_frame.slot, gpu_pool_slot_frame.generation
+            ))
+        })?;
+    Ok(crate::core::rhi::published_frame_id_of_pool_slot(
+        &pool_slot_key,
+        gpu_pool_slot_frame.generation,
+    ))
 }
 
 impl GpuContextLimitedAccess {
