@@ -10,7 +10,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from conftest import NO_VULKAN_DRIVER_REFUSAL, StreamRunWithNoVulkanDriverOutcome
-from node_run_identity_streams import two_identity_stable_nodes
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 
 # The engine's own registration record. Asserting on `__module__` from the test
@@ -22,6 +21,7 @@ NODE_TYPE_REGISTERED_LOG_LINE_FRAGMENT = (
 )
 
 IDENTITY_STABLE_NODE_FILE = Path(__file__).with_name("identity_stable_node.py")
+SECOND_IDENTITY_STABLE_NODE_FILE = Path(__file__).with_name("second_identity_stable_node.py")
 
 IDENTITY_STABILITY_STREAM_SOURCE = '''\
 """One stream, adding one class."""
@@ -34,6 +34,21 @@ from tatolab.stream import StreamBuilder, graph_generator
 def identity_stability(stream_builder: StreamBuilder) -> None:
     """The stream the project loads."""
     stream_builder.add(IdentityStableNode)
+'''
+
+TWO_IDENTITY_STABLE_NODES_STREAM_SOURCE = '''\
+"""One stream, adding both classes."""
+
+from identity_stable_node import IdentityStableNode
+from second_identity_stable_node import SecondIdentityStableNode
+from tatolab.stream import StreamBuilder, graph_generator
+
+
+@graph_generator
+def two_identity_stable_nodes(stream_builder: StreamBuilder) -> None:
+    """Both nodes, in one stream."""
+    stream_builder.add(IdentityStableNode)
+    stream_builder.add(SecondIdentityStableNode)
 '''
 
 IMPORTABLE_NODE_STREAM_SOURCE = '''\
@@ -70,14 +85,18 @@ NODE_TYPES_INSTALLED_MODULES_DECLARE = frozenset(
 
 def identities_the_engine_logged(stderr_text: str) -> "list[str]":
     """Every identity the engine derived for the stream's own Python node types, off
-    its own registration records, in order; installed modules' types are left out."""
-    return [
-        found.group(1)
-        for line in stderr_text.splitlines()
-        if NODE_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
-        and (found := DERIVED_IDENTITY_PATTERN.search(line))
-        and found.group(1) not in NODE_TYPES_INSTALLED_MODULES_DECLARE
-    ]
+    its own registration records, once each in the order first registered; installed
+    modules' types are left out. A project's own type is registered at load and again
+    when the graph places it, so each appears twice in the records."""
+    return list(
+        dict.fromkeys(
+            found.group(1)
+            for line in stderr_text.splitlines()
+            if NODE_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
+            and (found := DERIVED_IDENTITY_PATTERN.search(line))
+            and found.group(1) not in NODE_TYPES_INSTALLED_MODULES_DECLARE
+        )
+    )
 
 
 def run_the_stream_entry(
@@ -146,6 +165,7 @@ def test_a_class_imported_by_the_stream_entry_identifies_by_its_module(
 
 
 def test_two_classes_in_one_graph_register_under_two_distinct_paths(
+    make_tatolab_project: MakeTatolabProject,
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     """A graph is keyed per class, not per app.
@@ -154,9 +174,18 @@ def test_two_classes_in_one_graph_register_under_two_distinct_paths(
     two classes could share; it is now each class's own module path, which they
     cannot. Asserted as an ordered pair of literals: comparing the two to each
     other would pass on any pair of distinct strings, including two the engine
-    derived the same wrong way.
+    derived the same wrong way. The project holds only the two classes' modules,
+    because a load registers every class its project's own code declares.
     """
-    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(two_identity_stable_nodes)
+    run_outcome = run_the_stream_entry(
+        make_tatolab_project,
+        run_stream_on_tatolabd_with_no_vulkan_driver,
+        {
+            "stream.py": TWO_IDENTITY_STABLE_NODES_STREAM_SOURCE,
+            "identity_stable_node.py": IDENTITY_STABLE_NODE_FILE.read_text(),
+            "second_identity_stable_node.py": SECOND_IDENTITY_STABLE_NODE_FILE.read_text(),
+        },
+    )
     assert run_outcome.loaded, run_outcome.tatolabd_stderr_text_during_the_run
     assert identities_the_engine_logged(run_outcome.tatolabd_stderr_text_during_the_run) == [
         "identity_stable_node:IdentityStableNode",
