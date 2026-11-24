@@ -9,7 +9,9 @@ use crate::stage_runtime_client_package::stage_the_runtime_client_package;
 use crate::stage_runtime_unit_carried_packages::stage_the_carried_packages;
 use crate::stage_runtime_unit_code_checkers::stage_the_runtime_unit_code_checkers;
 use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
-use crate::stage_sample_projects::stage_the_sample_projects;
+use crate::stage_sample_projects::{
+    WhereASamplesFirstPartyModulesComeFrom, stage_the_sample_projects,
+};
 use anyhow::{Context, Result, bail};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
@@ -240,7 +242,10 @@ pub fn run(
     stage_the_browser_host(workspace_root)?;
     stage_the_first_party_modules(workspace_root)?;
     stage_the_core_nodes_project(workspace_root)?;
-    stage_the_sample_projects(workspace_root)?;
+    stage_the_sample_projects(
+        workspace_root,
+        WhereASamplesFirstPartyModulesComeFrom::of_a_unit_keeping(machine_directories),
+    )?;
     stage_the_runtime_client_package(workspace_root)?;
     stage_the_carried_packages(workspace_root, macos_developer_id_application_identity)?;
 
