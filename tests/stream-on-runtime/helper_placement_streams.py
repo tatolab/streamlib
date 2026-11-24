@@ -47,6 +47,7 @@ from helper_placement_nodes import (
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
     SpinsForever,
+    WritesOneWidthSource,
     WritesRawMessagePayloadSource,
 )
 
@@ -417,3 +418,9 @@ def held_level_into_a_setting_and_read_by_a_python_sink(stream_builder: StreamBu
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(held.output("result"), reader.input("level"))
     stream_builder.connect(held.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def one_width_source_alone(stream_builder: StreamBuilder) -> None:
+    """A Python class writing a width, read by nothing until a reader is added while it plays."""
+    stream_builder.add(WritesOneWidthSource, name="widths")

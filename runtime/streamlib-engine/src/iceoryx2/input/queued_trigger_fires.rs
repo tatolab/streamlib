@@ -82,7 +82,7 @@ impl InputMailboxesInner {
         };
         let Some(fired_at_ns) = queued.fired_at_ns.pop_front() else {
             drop(queued_trigger_fires);
-            return if self.ports.lock().contains_key(port) {
+            return if self.has_a_mailbox(port) {
                 QueuedTriggerFire::NeverFired
             } else {
                 QueuedTriggerFire::NoneWaitsOnAnInputWithNoLinkYet

@@ -446,9 +446,18 @@ impl InputMailboxesInner {
             .stream_facts_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str))
     }
 
-    /// Check if a port has already been configured.
-    pub fn has_port(&self, port: &str) -> bool {
+    /// Whether `port` has a mailbox a link's messages land in. A port that only reads its value
+    /// while unlinked, an island's output or a fired trigger has none, so a link wired into it
+    /// adds one.
+    pub fn has_a_mailbox(&self, port: &str) -> bool {
         self.ports.lock().contains_key(port)
+    }
+
+    /// Whether a read of `port` has something to read from: a mailbox, a fired trigger, an
+    /// island feeding it, or the value it reads while unlinked. Wiring a link asks
+    /// [`Self::has_a_mailbox`] instead.
+    pub fn has_port(&self, port: &str) -> bool {
+        self.has_a_mailbox(port)
             || self.was_ever_fired(port)
             || self
                 .input_ports_fed_by_function_node_islands
