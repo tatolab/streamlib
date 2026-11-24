@@ -24,11 +24,6 @@ pytestmark = pytest.mark.requires_gpu
 
 PICTURES_READ_TIMEOUT_SECONDS = 180.0
 
-#: Slots the ring may turn over through for its one `newest` link besides the held picture:
-#: its depth of 2, the link's mailbox and the default borrow quota, with headroom. A ring that
-#: grew past it would be pinning more than the one held slot.
-MOST_CHURN_SLOTS = 8
-
 
 def ring_reports_written_so_far(tatolabd: TatolabdUnderTest) -> int:
     """How many `RING_TURNED_OVER` reports standard error holds, so the next one awaited is
@@ -46,7 +41,8 @@ def test_a_held_picture_keeps_its_pixels_while_its_ring_turns_over(
     """Each of `BUNDLES_TO_READ` pictures taken off the bundle is the one picture written,
     every pixel `HELD_PICTURE_VALUE`, under one surface id. The ring never rewrites its slot,
     keeps turning over to the end of the read without refusing a frame, and turns over
-    through a bounded set of other slots.
+    through the same set of other slots throughout: holding the picture grows the ring by
+    nothing past the one slot it pins.
 
     Fail-without-fix: the held picture claims nothing, so the ring rewrites its slot with the
     churn value and the pictures taken off later bundles read the churn's pixels.
@@ -84,4 +80,7 @@ def test_a_held_picture_keeps_its_pixels_while_its_ring_turns_over(
         turned_over,
     )
     assert turned_over["acquires_refused"] == 0, turned_over
-    assert len(turned_over["churn_slots"]) <= MOST_CHURN_SLOTS, turned_over
+    assert turned_over["churn_slots"] == first_turned_over["churn_slots"], (
+        first_turned_over,
+        turned_over,
+    )
