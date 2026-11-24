@@ -3,7 +3,7 @@
 # no-print-in-python ignores this file: the findings are the command's report on stdout,
 # not log events.
 
-"""The description lint: which node types, ports and config keys have no description.
+"""The description lint: which node types and ports have no description.
 
 Off unless a project runs it, and the runtime refuses nothing it finds. Run it as
 `python -m tatolab.stream.description_lint nodes`, naming the packages or modules that
@@ -25,7 +25,6 @@ from types import ModuleType
 from typing import Any, Optional
 
 from ._node_declaration import (
-    NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DECLARED_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -84,7 +83,7 @@ def writes_raw_html(markdown: str) -> bool:
 
 
 def lint_the_descriptions_of_a_node_type(declared_node: Any) -> "list[DescriptionLintFinding]":
-    """Every finding on one declared node: its description, each port's and each top-level config key's."""
+    """Every finding on one declared node: its description and each port's."""
     node_type = f"{declared_node.__module__}:{declared_node.__qualname__}"
     described: list[tuple[str, Optional[str]]] = [
         ("the node type", getattr(declared_node, NODE_DECLARATION_DESCRIPTION_STAMP, None))
@@ -95,9 +94,6 @@ def lint_the_descriptions_of_a_node_type(declared_node: Any) -> "list[Descriptio
     ):
         for port in getattr(declared_node, stamp, None) or []:
             described.append((f"{direction} port `{port['name']}`", port.get("description")))
-    config_schema = getattr(declared_node, NODE_DECLARATION_CONFIG_SCHEMA_STAMP, None) or {}
-    for config_key, key_schema in (config_schema.get("properties") or {}).items():
-        described.append((f"config key `{config_key}`", key_schema.get("description")))
 
     findings: list[DescriptionLintFinding] = []
     for declaration, description in described:

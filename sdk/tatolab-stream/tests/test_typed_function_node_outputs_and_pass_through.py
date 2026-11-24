@@ -253,8 +253,8 @@ def test_a_parameter_typed_texture_directly_is_refused_naming_the_type_parameter
             f"`{function.__name__}`'s input `frame` is typed `Texture`, a Texture, which holds no "
             f"stored value, so a function under bare `@node` takes it only through a type "
             f"parameter bound to it, whose value its body hands on unread. To fix: "
-            f"`def {function.__name__}[Carried: Texture](frame: Carried, ...) -> Carried`, keep "
-            f"this node on `@node.function`, or declare a class node with "
+            f"`def {function.__name__}[Carried: Texture](frame: Carried, ...) -> Carried`, or "
+            f"declare a class node with "
             f"`frame: InputPin[Texture]`."
         )
 
@@ -271,7 +271,7 @@ def test_an_output_typed_texture_directly_is_refused_naming_the_input_it_would_h
         "`MakesAPicture`'s output `result` is typed `Texture`, a Texture, which holds no stored "
         "value, so a function's output carries it only as the type linked into the input it "
         "hands on. To fix: type that input and this output by one type parameter bound to it, "
-        "`[Carried: Texture]`, keep this node on `@node.function`, or declare a class node with "
+        "`[Carried: Texture]`, or declare a class node with "
         "`result: OutputPin[Texture]`."
     )
 

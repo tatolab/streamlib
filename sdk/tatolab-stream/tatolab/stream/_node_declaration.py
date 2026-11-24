@@ -1,37 +1,29 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@node` grammar of every node kind, and the `@node.process` grammar of a class's execution mode and ports.
+"""The `@node` grammar of every node kind.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working node. `@node.process` validates the declaration and stamps it on the class as
+a working node. `@node` validates the declaration and stamps it on the class or function as
 `__tatolab_node_*__` attributes; it registers nothing. The runtime reads exactly
-that set when a stream naming the class loads, so the set is the contract between
+that set when a stream naming the node loads, so the set is the contract between
 this module and the runtime's reader, and the two move together.
-Ports are declared as `Input` and `Output` class attributes, one family each.
 
-A node is named by its class's import path, derived from `__module__` and
+A node is named by its import path, derived from `__module__` and
 `__qualname__` by the runtime. Identity is never authored here.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import sys
-import typing
 from collections.abc import Mapping
 from typing import Any, Callable, Literal, NoReturn, Optional, ParamSpec, TypeVar, overload
 
-from ._exposed_name_cast import (
-    ExposedNameCastsToNothingError,
-    cast_exposed_name_to_url_safe,
-)
 from ._class_node_declaration import read_class_node_ports_members_and_pin_groups
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._node_meta_declaration import (
     PROCESS_NODE_KIND,
-    NodeDeclaredBy,
     hold_node_meta_for_the_kind_decorator,
     read_node_meta,
     take_node_meta_held_for_the_kind_decorator,
@@ -39,10 +31,12 @@ from ._node_meta_declaration import (
 )
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
 from ._shader_node_declaration import ShaderNode, declare_shader_node
-from ._port_family_declaration import Input, Output
-from ._node_config_schema import (
-    derive_node_config_json_schema_refusing_a_key_with_no_default,
-    json_schema_for_a_node_declaring_no_config,
+from ._pin_declaration import NodeDeclarationRefusal
+from ._retired_declarations import (
+    RETIRED_DECLARATION_FINDING_CODE,
+    RETIRED_DECLARATIONS,
+    RetiredDeclaration,
+    the_words_refusing_a_retired_declaration,
 )
 
 
@@ -51,12 +45,10 @@ __all__ = [
     "node",
 ]
 
-# The stamps `@node.process` writes and the runtime reads. The runtime's Rust reader
+# The stamps `@node` writes and the runtime reads. The runtime's Rust reader
 # spells them too, and its tests run this decorator against it.
 NODE_DECLARATION_DECLARED_STAMP = "__tatolab_node_declared__"
 NODE_DECLARATION_KIND_STAMP = "__tatolab_node_kind__"
-NODE_DECLARATION_CONFIG_CLASS_STAMP = "__tatolab_node_config_class__"
-NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
 NODE_DECLARATION_CATEGORY_STAMP = "__tatolab_node_category__"
 NODE_DECLARATION_CONVERSION_STAMP = "__tatolab_node_conversion__"
@@ -78,8 +70,6 @@ NODE_DECLARATION_CLASS_NODE_PIN_GROUPS_STAMP = "__tatolab_class_node_pin_groups_
 _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
     "declared": NODE_DECLARATION_DECLARED_STAMP,
     "kind": NODE_DECLARATION_KIND_STAMP,
-    "config_class": NODE_DECLARATION_CONFIG_CLASS_STAMP,
-    "config_schema": NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     "description": NODE_DECLARATION_DESCRIPTION_STAMP,
     "category": NODE_DECLARATION_CATEGORY_STAMP,
     "conversion": NODE_DECLARATION_CONVERSION_STAMP,
@@ -103,31 +93,12 @@ The same word Rust renders, so `graph` shows one spelling whichever language
 declared the port."""
 
 
-class AudioWindowMatchDeviceSentinel:
-    """The type of [`AUDIO_WINDOW_MATCH_DEVICE`] — never constructed by an author."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "AUDIO_WINDOW_MATCH_DEVICE"
-
-
-AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
-"""The engine-side spelling for a contract resolved at `setup()` from a device
-stream — reachable here only so an `Input`'s `window=` can recognise and refuse it.
-
-It is on no public surface: only a native node declares it, in
-Rust, where a node opens the device stream that settles it. A Python node
-never holds one.
-"""
-
-
 class AudioWindowContract:
     """The rate, dtype, window size and hop an audio input port wants, and the
     channel count only if it needs a particular one.
 
-    Declared as a Channels input's `window=`, whose delivery must be
-    `"ordered"`. Every argument is keyword-only. `window_size` counts
+    Written beside an `Audio` pin's type, `InputPin[Annotated[Audio, StreamDelivery("ordered"),
+    AudioWindowContract(...)]]`, whose delivery must be `"ordered"`. Every argument is keyword-only. `window_size` counts
     per-channel samples — the unit `ChannelsBlock.samples_per_channel` uses —
     so one window carries `window_size * channels` samples. `hop` may be omitted and
     then resolves to `window_size`: contiguous, non-overlapping windows by
@@ -265,17 +236,6 @@ def _audio_window_declaration(
     delivery_profile: Optional[str],
 ) -> "dict[str, Any]":
     """Validate a declared window contract and render it for the native half."""
-    if isinstance(audio_window, AudioWindowMatchDeviceSentinel):
-        raise TypeError(
-            f"input port {port_name!r} declares audio_window="
-            f"AUDIO_WINDOW_MATCH_DEVICE, which no Python node can resolve. The "
-            f"sentinel settles at setup() from the device stream the declaring node "
-            f"opened, and a Python node runs in its own helper process — it opens no device "
-            f"stream, and its window is its model's compile-time knowledge, not a "
-            f"machine-varying device format. Declare an AudioWindowContract with the "
-            f"values the model wants and the engine converts every block to them"
-        )
-
     if delivery_profile == "newest":
         raise ValueError(
             f"input port {port_name!r} declares an audio_window, so it must declare "
@@ -349,8 +309,8 @@ class NodeDeclarationDecorator:
         `T | None = None` is an input that may be unset and reads `None`. A renamed pin writes
         the names it had beside it, `FormerlyNamed("frequency_hz")`, and a project saved under
         one of them opens with its value and links on the pin. The return annotation is the
-        output `result`. `Time`, `State[...]` and `Stateful[...]` are read as under
-        `@node.function`. A function takes `@node` bare.
+        output `result`. `Time`, `State[...]` and `Stateful[...]` are found by type and
+        are never pins. A function takes `@node` bare.
 
         On a class, each value input is an annotated field with its default, `radius: float =
         4.0`, each Stream or Trigger input `video: InputPin[Texture]`, and each output
@@ -359,7 +319,7 @@ class NodeDeclarationDecorator:
         states how long its value lasts; `StreamDelivery(...)` inside an `InputPin` states how
         it reads its messages. `__init__` takes no parameters, and state the node keeps is
         `_private` or a `ClassVar`. A class takes `@node` bare or with `execution`,
-        `interval_ms`, `scheduling` and `paced_by_real_time`, as `@node.process` does.
+        `interval_ms`, `scheduling` and `paced_by_real_time`.
 
         What describes the node is `@node.meta`. A mistake is refused at decoration as a
         `NodeDeclarationRefusal`, and a pin type the runtime does not carry yet is refused by
@@ -386,11 +346,9 @@ class NodeDeclarationDecorator:
             setattr(class_under_decoration, NODE_DECLARATION_CLASS_NODE_PIN_GROUPS_STAMP, pin_groups)
             return _stamp_a_class_node(
                 class_under_decoration,
-                declared_by="@node",
                 input_ports=input_ports,
                 output_ports=output_ports,
                 pin_groups=[pin_group.declared for pin_group in pin_groups],
-                config_class=None,
                 **class_keywords,  # pyright: ignore[reportArgumentType]
             )
 
@@ -407,7 +365,6 @@ class NodeDeclarationDecorator:
         return declare_function_node(
             node,
             declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
-            reads_pin_types=True,
         )
 
     def meta(
@@ -463,45 +420,9 @@ class NodeDeclarationDecorator:
 
         return apply_to_node
 
-    @overload
-    def function(
-        self,
-        node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]",
-    ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
-
-    @overload
-    def function(
-        self, node_function: None = None
-    ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]]": ...
-
-    def function(self, node_function: "Optional[Callable[..., Any]]" = None) -> Any:
-        """Mark a function as a function node: one that computes its outputs from its inputs.
-
-        It takes only the function; what describes the node is `@node.meta`. The signature is
-        the node: each plain parameter is an input pin, its default the pin's
-        value when nothing is wired, and `T | None = None` an optional input.
-        The return annotation is the output `result`, or one output per field
-        of a returned dataclass. `float`, `int` and `bool` are one-channel
-        Channels, `dict` is Records, and a read type is its family. `config`
-        names the node's one config dataclass. A parameter typed `Time` is
-        handed the stream time of the read; one typed `State[Record]` the state
-        the last call returned in its `Stateful[Output, Record]`. A port is
-        described on its annotation, `Annotated[float, Description("…")]`, and the
-        function's docstring is never the node's description. The decorated
-        function is still called as itself.
-        """
-
-        def apply_to_function(
-            function_under_decoration: "Callable[..., Any]",
-        ) -> "FunctionNode[..., Any]":
-            return declare_function_node(
-                function_under_decoration,
-                declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
-            )
-
-        if node_function is None:
-            return apply_to_function
-        return apply_to_function(node_function)
+    def function(self, *_arguments: object, **_keyword_arguments: object) -> NoReturn:
+        """Refuse the retired `@node.function` with what replaces it: bare `@node`."""
+        _refuse_the_retired(_RETIRED_FUNCTION_NODE_FORM, _arguments)
 
     def shader(
         self, shader_source: str
@@ -550,147 +471,65 @@ class NodeDeclarationDecorator:
             declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
         )
 
-    def process(
-        self,
-        node_class: Optional[type] = None,
-        *,
-        execution: Optional[str] = None,
-        interval_ms: int = 0,
-        scheduling: Optional[str] = None,
-        paced_by_real_time: bool = False,
-    ) -> Any:
-        """Mark a class as a process node: one that runs in a process of its own.
-
-        Usable bare (`@node.process`) or with keyword arguments; its ports are `Input`
-        and `Output` class attributes, each of one family. It declares execution,
-        interval and scheduling priority — never identity: a node is
-        named by the import path of the class it is, derived from `__module__` and
-        `__qualname__`.
-
-        Port names are cast to lowercase URL-safe characters, the way every exposed
-        name is, so an attribute `Video` declares the port `video` and a lookup of
-        either spelling finds it. Two ports casting alike are refused here.
-
-        `execution` defaults to `"reactive"` for a class that declares at least one
-        input port, and is required for one that declares none — a source has
-        nothing to react to, so defaulting it there would produce a node that
-        silently never runs.
-
-        Configuration is one class, named by the annotation on the `config`
-        parameter of `__init__` — a TypedDict, a dataclass or a model. A class
-        whose `__init__` takes nothing beyond `self` declares no config and refuses
-        one. Any other signature is refused here, at decoration. The class's JSON
-        Schema is derived from its annotations and defaults and published in the
-        node catalog, which is how an agent learns the keys before adding the
-        node.
-
-        Decorating registers nothing: it stamps the declaration on the class, and
-        the class reaches the node catalog when a stream that uses it loads. What
-        describes the node type, its `category` and `description`, is `@node.meta`.
-
-        `paced_by_real_time=True` declares a node that paces itself on real time,
-        as a live device does. It loads in a stream on any clock: what it writes
-        is stamped with stream time, and in a stepped stream it stands outside
-        the step barrier, which never waits for it.
-        """
-
-        def apply_to_class(class_under_decoration: NodeClassUnderDeclaration) -> NodeClassUnderDeclaration:
-            return _declare_node(
-                class_under_decoration,
-                execution=execution,
-                interval_ms=interval_ms,
-                scheduling=scheduling,
-                paced_by_real_time=paced_by_real_time,
-            )
-
-        if isinstance(node_class, type):
-            return apply_to_class(node_class)
-
-        if node_class is not None:
-            raise TypeError(
-                f"@node.process() takes no positional argument; got "
-                f"{type(node_class).__name__}. A node is named by the import path "
-                f"of the class it is — `my_app.filters:BlurEffect` — derived from "
-                f"`__module__` and `__qualname__` and never authored. Use `@node.process` bare, "
-                f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-                f"`paced_by_real_time`)."
-            )
-
-        return apply_to_class
+    def process(self, *_arguments: object, **_keyword_arguments: object) -> NoReturn:
+        """Refuse the retired `@node.process` with what replaces it: bare `@node` on a class of typed pins."""
+        _refuse_the_retired(_RETIRED_PROCESS_NODE_FORM, _arguments)
 
     def __repr__(self) -> str:
         return "node"
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node by its kind: bare `@node` for a function or a class whose pins each state their pin type, `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports, `@node.shader` for a Slang function over Images. `@node.meta` declares what describes it."""
+"""Declares a node by its kind: bare `@node` for a function or a class whose pins each state their pin type, `@node.shader` for a Slang function over Images, `node.rust_function` for a function a module wrote in Rust. `@node.meta` declares what describes it."""
+
+_RETIRED_FORMS_BY_DECORATOR: "dict[str, RetiredDeclaration]" = {
+    retired.decorator: retired for retired in RETIRED_DECLARATIONS
+}
+_RETIRED_FUNCTION_NODE_FORM = _RETIRED_FORMS_BY_DECORATOR["tatolab.stream.node.function"]
+_RETIRED_PROCESS_NODE_FORM = _RETIRED_FORMS_BY_DECORATOR["tatolab.stream.node.process"]
 
 
-def _declare_node(
-    node_class: NodeClassUnderDeclaration,
-    *,
-    execution: Optional[str],
-    interval_ms: int,
-    scheduling: Optional[str],
-    paced_by_real_time: bool,
-) -> NodeClassUnderDeclaration:
-    input_ports, output_ports = _collect_declared_ports(node_class)
-    return _stamp_a_class_node(
-        node_class,
-        declared_by="@node.process",
-        input_ports=input_ports,
-        output_ports=output_ports,
-        config_class=_config_class_named_by_the_init_annotation(node_class),
-        execution=execution,
-        interval_ms=interval_ms,
-        scheduling=scheduling,
-        paced_by_real_time=paced_by_real_time,
+def _refuse_the_retired(retired: RetiredDeclaration, arguments: "tuple[object, ...]") -> NoReturn:
+    """Refuse a node declared in the `retired` form, naming it when the form was applied to it."""
+    declared = arguments[0] if arguments else None
+    node_type = getattr(declared, "__name__", None) if declared is not None else None
+    raise NodeDeclarationRefusal(
+        the_words_refusing_a_retired_declaration(node_type, retired),
+        finding_code=RETIRED_DECLARATION_FINDING_CODE,
+        node=node_type or retired.spelling,
     )
 
 
 def _stamp_a_class_node(
     node_class: NodeClassUnderDeclaration,
     *,
-    declared_by: NodeDeclaredBy,
     input_ports: "list[dict[str, Any]]",
     output_ports: "list[dict[str, Any]]",
-    config_class: "Optional[type]",
+    pin_groups: "list[dict[str, Any]]",
     execution: Optional[str],
     interval_ms: int,
     scheduling: Optional[str],
     paced_by_real_time: bool,
-    pin_groups: "Optional[list[dict[str, Any]]]" = None,
 ) -> NodeClassUnderDeclaration:
     """Stamp `node_class` as a class node of `input_ports`, `output_ports` and `pin_groups`, which
-    runs in a process of its own, under the grammar of `declared_by`, the decorator that read its
-    ports."""
+    runs in a process of its own."""
     declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
     conversion = the_conversion_a_node_states(
         node_class.__name__,
         declared_meta,
-        declared_by=declared_by,
+        declared_by="@node",
         kind=PROCESS_NODE_KIND,
         input_ports=input_ports,
         output_ports=output_ports,
-        pin_groups=pin_groups or [],
+        pin_groups=pin_groups,
     )
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)
     setattr(node_class, NODE_DECLARATION_KIND_STAMP, PROCESS_NODE_KIND)
-    setattr(node_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
-    setattr(
-        node_class,
-        NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
-        json_schema_for_a_node_declaring_no_config()
-        if config_class is None
-        else derive_node_config_json_schema_refusing_a_key_with_no_default(
-            config_class, f"@node.process on {node_class.__name__}"
-        ),
-    )
     setattr(node_class, NODE_DECLARATION_DESCRIPTION_STAMP, declared_meta.get("description", ""))
     setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, declared_meta.get("category"))
     setattr(node_class, NODE_DECLARATION_CONVERSION_STAMP, conversion)
-    setattr(node_class, NODE_DECLARATION_DECLARED_BY_STAMP, declared_by)
+    setattr(node_class, NODE_DECLARATION_DECLARED_BY_STAMP, "@node")
     setattr(
         node_class,
         NODE_DECLARATION_EXECUTION_STAMP,
@@ -699,7 +538,7 @@ def _stamp_a_class_node(
             interval_ms,
             node_class,
             has_input_ports=bool(input_ports)
-            or any(pin_group["inputs"] for pin_group in pin_groups or ()),
+            or any(pin_group["inputs"] for pin_group in pin_groups),
         ),
     )
     setattr(
@@ -714,181 +553,9 @@ def _stamp_a_class_node(
     )
     setattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports)
     setattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
-    setattr(node_class, NODE_DECLARATION_PIN_GROUPS_STAMP, pin_groups or [])
+    setattr(node_class, NODE_DECLARATION_PIN_GROUPS_STAMP, pin_groups)
 
     return node_class
-
-
-def _config_class_named_by_the_init_annotation(
-    node_class: type,
-) -> "Optional[type]":
-    """The config class `node_class.__init__` names, or `None` for no config.
-
-    Every other signature is refused here rather than when a graph holding the
-    class loads: the decorator runs at import, which is the last moment an
-    author is still looking at the class.
-    """
-    # A class defining no `__init__` inherits `object`'s, whose signature is
-    # `(self, /, *args, **kwargs)` — a shape that would otherwise be refused.
-    if node_class.__init__ is object.__init__:
-        return None
-
-    parameters = [
-        parameter
-        for name, parameter in inspect.signature(node_class.__init__).parameters.items()
-        if name != "self"
-    ]
-    if not parameters:
-        return None
-
-    how_to_declare_a_config_class = (
-        f"declare one parameter named `config`, annotated with the class its settings "
-        f"live on — `def __init__(self, config: {node_class.__name__}Config) -> "
-        f"None` — where that class is a TypedDict, a dataclass or a model. "
-        f"`stream_builder.add(cls, config={{...}})` still passes a dict; the helper constructs the "
-        f"class from it and hands the object in."
-    )
-
-    if len(parameters) > 1:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ takes {len(parameters)} parameters "
-            f"besides `self` ({', '.join(parameter.name for parameter in parameters)}); "
-            f"a node's config is one class, not a parameter list. To fix: {how_to_declare_a_config_class}"
-        )
-
-    parameter = parameters[0]
-    if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ takes `**{parameter.name}`; "
-            f"keyword-argument configuration is not how a node is configured. "
-            f"To fix: {how_to_declare_a_config_class}"
-        )
-    if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ takes `*{parameter.name}`; a "
-            f"node's config is one object, not a variadic. To fix: {how_to_declare_a_config_class}"
-        )
-    if parameter.name != "config":
-        raise TypeError(
-            f"{node_class.__name__}.__init__ takes `{parameter.name}`, but a "
-            f"node's config parameter must be named `config`. To fix: {how_to_declare_a_config_class}"
-        )
-    if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ takes `config` positionally only, but "
-            f"the helper constructs a node as `cls(config=...)`. To fix: drop the "
-            f"`/` so `config` can be passed by name."
-        )
-
-    annotation = _resolved_init_annotations(node_class).get("config")
-    if annotation is None:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ takes `config` with no annotation, so "
-            f"nothing names its config class and no schema can be derived. "
-            f"To fix: {how_to_declare_a_config_class}"
-        )
-    if annotation is Any:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ annotates `config` as `Any`, which "
-            f"names no class, so the helper has nothing to construct and no schema can "
-            f"be derived. To fix: {how_to_declare_a_config_class}"
-        )
-    if typing.get_origin(annotation) is not None or not isinstance(annotation, type):
-        raise TypeError(
-            f"{node_class.__name__}.__init__ annotates `config` as {annotation!r}, "
-            f"which is not a class. A node's config is one class the helper "
-            f"constructs. To fix: {how_to_declare_a_config_class}"
-        )
-    return annotation
-
-
-def _resolved_init_annotations(node_class: type) -> "dict[str, Any]":
-    try:
-        return typing.get_type_hints(node_class.__init__, include_extras=True)
-    except Exception as unresolvable:
-        raise TypeError(
-            f"{node_class.__name__}.__init__ carries an annotation that cannot be "
-            f"resolved, so its config class cannot be read: {unresolvable}. The config "
-            f"class must be importable at run time, not only under `TYPE_CHECKING`."
-        ) from unresolvable
-
-
-def _collect_declared_ports(
-    node_class: type,
-) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
-    """Every `Input` / `Output` declaration, as the dicts the engine reads,
-    each port under its cast name."""
-    input_ports: "list[dict[str, Any]]" = []
-    output_ports: "list[dict[str, Any]]" = []
-    port_spelling_by_cast_name: "dict[str, str]" = {}
-    for port_attribute in _declared_port_attributes(node_class):
-        marker = port_attribute._as_port_marker()
-        port_spelling = marker["name"]
-        try:
-            port_name = cast_exposed_name_to_url_safe(port_spelling)
-        except ExposedNameCastsToNothingError as names_nothing:
-            raise ValueError(
-                f"{node_class.__name__} declares a port {port_spelling!r}: "
-                f"{names_nothing}"
-            ) from names_nothing
-        first_spelling = port_spelling_by_cast_name.get(port_name)
-        if first_spelling == port_spelling:
-            raise ValueError(
-                f"{node_class.__name__} declares the port name {port_name!r} more "
-                f"than once — every port, input or output, needs its own name"
-            )
-        if first_spelling is not None:
-            raise ValueError(
-                f"{node_class.__name__} declares the ports {first_spelling!r} and "
-                f"{port_spelling!r}, which both cast to {port_name!r} — a port name is "
-                f"lowercased with its accents dropped and anything outside "
-                f"a-z 0-9 - . _ ~ turned into '-', so two ports need names that stay "
-                f"apart once cast"
-            )
-        port_spelling_by_cast_name[port_name] = port_spelling
-        if isinstance(port_attribute, Input):
-            declared_input: "dict[str, Any]" = {
-                "name": port_name,
-                "description": marker["description"],
-            }
-            if "delivery_profile" in marker:
-                declared_input["delivery_profile"] = marker["delivery_profile"]
-            if "borrow_quota" in marker:
-                declared_input["borrow_quota"] = marker["borrow_quota"]
-            if "audio_window" in marker:
-                declared_input["audio_window"] = marker["audio_window"]
-            if "family" in marker:
-                declared_input["family"] = marker["family"]
-            if "pin_default" in marker:
-                declared_input["pin_default"] = marker["pin_default"]
-            input_ports.append(declared_input)
-        else:
-            declared_output: "dict[str, Any]" = {
-                "name": port_name,
-                "description": marker["description"],
-            }
-            if "family" in marker:
-                declared_output["family"] = marker["family"]
-            output_ports.append(declared_output)
-    return input_ports, output_ports
-
-
-def _declared_port_attributes(node_class: type) -> "list[Input[Any] | Output[Any]]":
-    """Every `Input` and `Output` class attribute declared on the class or
-    inherited, in declaration order.
-
-    Walks the MRO in reverse so a subclass's redeclaration of an inherited
-    attribute wins, a base class's ports are inherited rather than lost, and a
-    port a subclass shadows with anything else is no longer declared.
-    """
-    port_attributes_by_name: "dict[str, Input[Any] | Output[Any]]" = {}
-    for ancestor in reversed(node_class.__mro__):
-        for attribute_name, attribute in vars(ancestor).items():
-            if isinstance(attribute, (Input, Output)):
-                port_attributes_by_name[attribute_name] = attribute
-            else:
-                port_attributes_by_name.pop(attribute_name, None)
-    return list(port_attributes_by_name.values())
 
 
 def _resolve_execution(
@@ -902,7 +569,7 @@ def _resolve_execution(
         if not has_input_ports:
             raise ValueError(
                 f"{node_class.__name__} declares no input ports, so it must declare "
-                f"an execution mode: `@node.process(execution=\"continuous\", interval_ms=…)` "
+                f"an execution mode: `@node(execution=\"continuous\", interval_ms=…)` "
                 f"for a source that produces on its own schedule, or "
                 f"`execution=\"manual\"` for one driven by a callback it owns. Only a "
                 f"node with an input port can default to \"reactive\"."

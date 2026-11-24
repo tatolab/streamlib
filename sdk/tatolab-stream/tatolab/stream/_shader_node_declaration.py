@@ -23,7 +23,11 @@ import re
 from collections.abc import Callable
 from typing import Any, Final, NoReturn, ParamSpec, TypeVar
 
-from ._function_node_declaration import FunctionNode, _FunctionNodeSignatureReading
+from ._function_node_declaration import (
+    SHADER_IMAGE_VALUE_TYPE,
+    FunctionNode,
+    _FunctionNodeSignatureReading,
+)
 from ._node_meta_declaration import (
     take_node_meta_held_for_the_kind_decorator,
     the_conversion_a_node_states,
@@ -41,7 +45,6 @@ SHADER_NODE_KIND: Final = "shader"
 NODE_DECLARATION_SHADER_SOURCE_STAMP = "__tatolab_node_shader_source__"
 NODE_DECLARATION_SHADER_SIGNATURE_STAMP = "__tatolab_node_shader_signature__"
 
-IMAGE_VALUE_TYPE = "image_frame"
 
 # The value types a shader takes beside its Images, each read in Slang as the type named.
 _SLANG_TYPE_OF_EACH_VALUE_TYPE: "dict[str, str]" = {
@@ -78,18 +81,14 @@ def declare_shader_node(
     _refuse_what_is_not_a_plain_module_level_function(function)
     declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     name = function.__name__
-    signature_reading = _FunctionNodeSignatureReading(
-        function, reads_pin_types=False, reads_values_typed_beside_images=True
-    )
+    signature_reading = _FunctionNodeSignatureReading(function, reads_shader_images=True)
     signature = signature_reading.function_signature
-    _refuse_a_signature_a_shader_cannot_take(name, signature, signature_reading.config_class)
+    _refuse_a_signature_a_shader_cannot_take(name, signature)
     _refuse_a_source_that_defines_no_function_named(name, shader_source)
     shader_node = ShaderNode(function)
     stamps: dict[str, Any] = {
         declaration_stamps["declared"]: True,
         declaration_stamps["kind"]: SHADER_NODE_KIND,
-        declaration_stamps["config_class"]: None,
-        declaration_stamps["config_schema"]: _json_schema_for_a_shader_node(),
         declaration_stamps["description"]: declared_meta.get("description", ""),
         declaration_stamps["category"]: declared_meta.get("category"),
         declaration_stamps["conversion"]: the_conversion_a_node_states(
@@ -123,12 +122,6 @@ def _shader_signature_input(signature_input: dict[str, Any]) -> dict[str, Any]:
     return shader_input
 
 
-def _json_schema_for_a_shader_node() -> dict[str, Any]:
-    from ._node_config_schema import json_schema_for_a_node_declaring_no_config
-
-    return json_schema_for_a_node_declaring_no_config()
-
-
 def _refuse_what_is_not_a_plain_module_level_function(function: object) -> None:
     if isinstance(function, type) or not inspect.isfunction(function):
         raise TypeError(
@@ -142,14 +135,7 @@ def _refuse_what_is_not_a_plain_module_level_function(function: object) -> None:
         )
 
 
-def _refuse_a_signature_a_shader_cannot_take(
-    name: str, signature: dict[str, Any], config_class: type | None
-) -> None:
-    if config_class is not None or signature["config_parameter"] is not None:
-        raise TypeError(
-            f"{name} takes `config`, and a shader's settings are its value inputs, each held "
-            f"in push constants. To fix: take each setting as `name: float = default`."
-        )
+def _refuse_a_signature_a_shader_cannot_take(name: str, signature: dict[str, Any]) -> None:
     if signature["time_parameter"] is not None or signature["state_parameter"] is not None:
         raise TypeError(
             f"{name} takes `Time` or `State[...]`, which a shader is never handed: it computes "
@@ -162,13 +148,13 @@ def _refuse_a_signature_a_shader_cannot_take(
                 f"of a shader is read on each frame. To fix: drop `| None`."
             )
         value_type = signature_input["value_type"]
-        if value_type != IMAGE_VALUE_TYPE and value_type not in _SLANG_TYPE_OF_EACH_VALUE_TYPE:
+        if value_type != SHADER_IMAGE_VALUE_TYPE and value_type not in _SLANG_TYPE_OF_EACH_VALUE_TYPE:
             raise TypeError(
                 f"{name}'s input `{signature_input['parameter']}` is a {value_type}, and a "
                 f"shader takes `Texture` inputs and `float`, `Color`, `Vector2`, `Vector3` "
                 f"and `Vector4` values only. To fix: type it as one of them."
             )
-    if not any(each["value_type"] == IMAGE_VALUE_TYPE for each in signature["inputs"]):
+    if not any(each["value_type"] == SHADER_IMAGE_VALUE_TYPE for each in signature["inputs"]):
         raise TypeError(
             f"{name} takes no `Texture`, so nothing sets the extent of the Texture it "
             f"returns. To fix: take at least one `Texture` input."
@@ -176,7 +162,7 @@ def _refuse_a_signature_a_shader_cannot_take(
     outputs = signature["outputs"]
     if (
         len(outputs) != 1
-        or outputs[0]["value_type"] != IMAGE_VALUE_TYPE
+        or outputs[0]["value_type"] != SHADER_IMAGE_VALUE_TYPE
         or outputs[0]["may_hand_out_nothing"]
     ):
         raise TypeError(

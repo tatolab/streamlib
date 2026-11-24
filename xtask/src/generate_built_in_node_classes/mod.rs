@@ -3,9 +3,9 @@
 
 //! Renders `tatolab.stream`'s built-in node classes from the runtime's own
 //! descriptors: one class per built-in, whose `type` is the path the runtime
-//! registers it under. A typed built-in declares its fields and pins as a class
-//! node does; a built-in that takes a config has one `TypedDict`, rendered from
-//! the config's JSON Schema. The Rust declaration is the only one; `--check` is the
+//! registers it under, declaring its fields and pins as a class node does. A built-in that
+//! takes a config, or has a port stating no one pin type, is refused by name. The Rust
+//! declaration is the only one; `--check` is the
 //! CI gate that fails when the checked-in module drifts from it.
 //!
 //! The descriptors come from `streamlib-media-builtins`' example
@@ -23,7 +23,7 @@ mod typed_built_in_node;
 use typed_built_in_node::{ImportedName, is_a_typed_built_in, render_fields_and_pins};
 
 /// One built-in's catalog entry, as the descriptor example prints it. The
-/// config schema stays a JSON value: it is open-ended JSON Schema.
+/// config schema stays a JSON value, read only to refuse a built-in that takes one.
 #[derive(Debug, Deserialize)]
 pub struct BuiltInNodeDescriptor {
     #[serde(rename = "type")]
@@ -44,8 +44,8 @@ struct BuiltInNodePortDescriptor {
     delivery_profile: Option<String>,
     #[serde(default)]
     family: Option<BuiltInNodePortFamilyDeclaration>,
-    /// How the input takes its value, tagged by `mode`; present on a setting, which a field or
-    /// the config renders, so the docstring's inputs leave it out.
+    /// How the input takes its value, tagged by `mode`; present on a setting, which a field
+    /// renders, so the docstring's inputs leave it out.
     #[serde(default)]
     input_mode: Option<BuiltInNodeInputMode>,
     /// The pin type the port declares, or how it is found, tagged by `kind`; absent on a port
@@ -73,7 +73,7 @@ struct BuiltInNodeInputMode {
 }
 
 impl BuiltInNodePortDescriptor {
-    /// Whether the catalog lists this input as a setting, which a field or the config renders.
+    /// Whether the catalog lists this input as a setting, which a field renders.
     fn is_a_setting(&self) -> bool {
         self.input_mode
             .as_ref()
@@ -113,21 +113,20 @@ enum BuiltInNodeImageOutputFrameRate {
     FromConfig { config_key: String },
 }
 
-/// How a Python author spells an Image output's declared frame rate:
-/// `rate=30`, `rate=ImageStreamFrameRate(30000, 1001)` or
-/// `rate=from_config("key")`.
+/// How an Image output's declared frame rate reads: `rate=30`,
+/// `rate=ImageStreamFrameRate(30000, 1001)`, or the setting it is read from.
 fn python_spelling_of_a_frame_rate(frame_rate: &BuiltInNodeImageOutputFrameRate) -> String {
     match frame_rate {
         BuiltInNodeImageOutputFrameRate::Stated {
             numerator,
             denominator: 1,
-        } => format!("rate={numerator}"),
+        } => format!("`rate={numerator}`"),
         BuiltInNodeImageOutputFrameRate::Stated {
             numerator,
             denominator,
-        } => format!("rate=ImageStreamFrameRate({numerator}, {denominator})"),
+        } => format!("`rate=ImageStreamFrameRate({numerator}, {denominator})`"),
         BuiltInNodeImageOutputFrameRate::FromConfig { config_key } => {
-            format!("rate=from_config({})", Value::from(config_key.as_str()))
+            format!("its `{config_key}` setting")
         }
     }
 }
@@ -149,7 +148,7 @@ const GENERATED_MODULE_HEADER: &str = r#"# Copyright (c) 2025 Tatolab LLC
 # built-in descriptors. Do not edit: CI fails when this file differs from a
 # regeneration.
 
-"""The runtime's built-in nodes, each with its fields and pins, or the shape of its config."""
+"""The runtime's built-in nodes, each with its fields and pins."""
 
 from __future__ import annotations
 "#;
@@ -231,13 +230,10 @@ pub fn render_built_in_node_classes_module(
     }
     rendered_classes.sort_by(|left, right| left.class_name.cmp(&right.class_name));
 
-    let mut exported_names: Vec<String> = rendered_classes
+    let exported_names: Vec<&str> = rendered_classes
         .iter()
-        .flat_map(|rendered| {
-            std::iter::once(rendered.class_name.clone()).chain(rendered.config_name())
-        })
+        .map(|rendered| rendered.class_name.as_str())
         .collect();
-    exported_names.sort();
     let imports: BTreeSet<ImportedName> = rendered_classes
         .iter()
         .flat_map(|rendered| rendered.imports.iter().copied())
@@ -285,22 +281,9 @@ fn render_imports(imports: &BTreeSet<ImportedName>) -> Result<String> {
 
 struct RenderedBuiltInNode {
     class_name: String,
-    /// Whether it takes a config, rendered as a `TypedDict` of its own.
-    takes_a_config: bool,
     /// Each name its text imports.
     imports: BTreeSet<ImportedName>,
     text: String,
-}
-
-impl RenderedBuiltInNode {
-    fn config_name(&self) -> Option<String> {
-        self.takes_a_config
-            .then(|| config_name_of(&self.class_name))
-    }
-}
-
-fn config_name_of(class_name: &str) -> String {
-    format!("{class_name}Config")
 }
 
 fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<RenderedBuiltInNode> {
@@ -312,27 +295,17 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
         bail!("built-in `{built_in_node_type}` does not name a Python class");
     }
     let refused_item_label = format!("built-in `{class_name}`");
-    let typed = is_a_typed_built_in(descriptor);
+    if !is_a_typed_built_in(descriptor) {
+        bail!(
+            "{refused_item_label} takes a config, or has a port that states no one pin type, and \
+             a built-in declares each value it takes as a setting and each port by its pin type, \
+             as a class node does"
+        );
+    }
     let mut imports = BTreeSet::from([("typing", "ClassVar"), ("._built_in_node", "BuiltInNode")]);
 
     let mut text = String::new();
-    let input_values_type = if typed {
-        imports.insert(("._built_in_node", "InputValuesOfATypedBuiltInNode"));
-        "InputValuesOfATypedBuiltInNode".to_owned()
-    } else {
-        text.push_str(&render_config_typed_dict(
-            class_name,
-            descriptor.config_schema.as_ref(),
-            &refused_item_label,
-            &mut imports,
-        )?);
-        config_name_of(class_name)
-    };
-
-    write!(
-        text,
-        "\n\nclass {class_name}(BuiltInNode[{input_values_type}]):\n"
-    )?;
+    write!(text, "\n\nclass {class_name}(BuiltInNode):\n")?;
     let mut class_doc_paragraphs = vec![python_prose(
         &sentence(&descriptor.description),
         &refused_item_label,
@@ -348,9 +321,6 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
             class_doc_paragraphs.push(render_port_paragraph(heading, ports, &refused_item_label)?);
         }
     }
-    if !typed {
-        class_doc_paragraphs.push(format!("Config: `{input_values_type}`."));
-    }
     text.push_str(&render_docstring(&class_doc_paragraphs, 4));
     writeln!(
         text,
@@ -363,16 +333,13 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
              __test__: ClassVar[bool] = False\n",
         );
     }
-    if typed {
-        text.push_str(&render_fields_and_pins(
-            descriptor,
-            &refused_item_label,
-            &mut imports,
-        )?);
-    }
+    text.push_str(&render_fields_and_pins(
+        descriptor,
+        &refused_item_label,
+        &mut imports,
+    )?);
     Ok(RenderedBuiltInNode {
         class_name: class_name.to_owned(),
-        takes_a_config: !typed,
         imports,
         text,
     })
@@ -402,281 +369,12 @@ fn render_port_paragraph(
         {
             write!(
                 paragraph,
-                "\n        Frame rate: `{}`.",
+                "\n        Frame rate: {}.",
                 python_spelling_of_a_frame_rate(frame_rate)
             )?;
         }
     }
     Ok(paragraph)
-}
-
-fn render_config_typed_dict(
-    class_name: &str,
-    config_schema: Option<&Value>,
-    refused_item_label: &str,
-    imports: &mut BTreeSet<ImportedName>,
-) -> Result<String> {
-    let config_name = config_name_of(class_name);
-    let empty_properties = Map::new();
-    let empty_definitions = Map::new();
-    let (properties, required_keys, definitions) = match config_schema {
-        None | Some(Value::Null) => (&empty_properties, Vec::new(), &empty_definitions),
-        Some(config_schema) => {
-            if config_schema.get("type").and_then(Value::as_str) != Some("object") {
-                bail!("{refused_item_label}'s config schema is not an object");
-            }
-            let required_keys: Vec<&str> = config_schema
-                .get("required")
-                .and_then(Value::as_array)
-                .map(|required| required.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
-            (
-                config_schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .unwrap_or(&empty_properties),
-                required_keys,
-                config_schema
-                    .get("$defs")
-                    .and_then(Value::as_object)
-                    .unwrap_or(&empty_definitions),
-            )
-        }
-    };
-
-    if let Some(key_with_no_default) = required_keys.first() {
-        bail!(
-            "{refused_item_label}'s config key `{key_with_no_default}` has no default; every key a \
-             built-in's config takes has one, so a node placed with no config runs"
-        );
-    }
-    let mut optional_fields = String::new();
-    for (key, property_schema) in properties {
-        let config_key_refused_item_label = format!("{refused_item_label}'s config key `{key}`");
-        optional_fields.push_str(&render_config_field(
-            key,
-            property_schema,
-            definitions,
-            &config_key_refused_item_label,
-        )?);
-    }
-    imports.insert(("typing", "TypedDict"));
-    if optional_fields.contains("Literal[") {
-        imports.insert(("typing", "Literal"));
-    }
-
-    let config_doc = format!("`{class_name}`'s config: the keys `stream_builder.add` takes.");
-    let mut text = String::new();
-    write!(text, "\n\nclass {config_name}(TypedDict, total=False):\n")?;
-    text.push_str(&render_docstring(&[config_doc], 4));
-    text.push_str(&optional_fields);
-    Ok(text)
-}
-
-fn render_config_field(
-    key: &str,
-    property_schema: &Value,
-    definitions: &Map<String, Value>,
-    refused_item_label: &str,
-) -> Result<String> {
-    if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        || key.starts_with(|c: char| c.is_ascii_digit())
-    {
-        bail!("{refused_item_label} is not a Python identifier");
-    }
-    let python_type = python_type_of(property_schema, definitions, refused_item_label)?;
-    let mut paragraphs = Vec::new();
-    if let Some(description) = property_schema
-        .get("description")
-        .and_then(Value::as_str)
-        .filter(|description| !description.trim().is_empty())
-    {
-        paragraphs.push(python_prose(description, refused_item_label)?);
-    }
-    let enumerated_values =
-        enumerated_string_values(property_schema, definitions, refused_item_label)?;
-    if enumerated_values
-        .iter()
-        .any(|(_, description)| description.is_some())
-    {
-        let mut values_paragraph = String::from("Values:");
-        for (value, description) in &enumerated_values {
-            write!(values_paragraph, "\n    `{value}`")?;
-            if let Some(description) = description {
-                write!(
-                    values_paragraph,
-                    ": {}",
-                    python_prose(description, refused_item_label)?
-                )?;
-            }
-        }
-        paragraphs.push(values_paragraph);
-    }
-    match property_schema.get("default") {
-        None | Some(Value::Null) => {}
-        Some(default) => paragraphs.push(format!(
-            "Default: `{}`.",
-            python_default_literal(default, refused_item_label)?
-        )),
-    }
-
-    let mut text = format!("\n    {key}: {python_type}\n");
-    if !paragraphs.is_empty() {
-        text.push_str(&render_docstring(&paragraphs, 4));
-    }
-    Ok(text)
-}
-
-fn resolve_reference<'schema>(
-    schema: &'schema Value,
-    definitions: &'schema Map<String, Value>,
-    refused_item_label: &str,
-) -> Result<&'schema Value> {
-    let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
-        return Ok(schema);
-    };
-    let Some(definition_name) = reference.strip_prefix("#/$defs/") else {
-        bail!("{refused_item_label} refers to `{reference}`, outside the schema's `$defs`");
-    };
-    definitions.get(definition_name).with_context(|| {
-        format!("{refused_item_label} refers to `{reference}`, which `$defs` lacks")
-    })
-}
-
-fn single_all_of_member<'schema>(
-    schema: &'schema Value,
-    refused_item_label: &str,
-) -> Result<Option<&'schema Value>> {
-    match schema.get("allOf") {
-        None => Ok(None),
-        Some(Value::Array(members)) => match members.as_slice() {
-            [only_member] => Ok(Some(only_member)),
-            _ => bail!("{refused_item_label} has an `allOf` of more than one schema"),
-        },
-        Some(_) => bail!("{refused_item_label} has an `allOf` that is not a list"),
-    }
-}
-
-fn python_type_of(
-    schema: &Value,
-    definitions: &Map<String, Value>,
-    refused_item_label: &str,
-) -> Result<String> {
-    let schema = resolve_reference(schema, definitions, refused_item_label)?;
-    if let Some(member) = single_all_of_member(schema, refused_item_label)? {
-        return python_type_of(member, definitions, refused_item_label);
-    }
-    if let Some(Value::Array(members)) = schema.get("anyOf") {
-        let mut alternatives = Vec::new();
-        for member in members {
-            push_unique(
-                &mut alternatives,
-                python_type_of(member, definitions, refused_item_label)?,
-            );
-        }
-        return Ok(union_of(alternatives));
-    }
-    let enumerated_values = enumerated_string_values(schema, definitions, refused_item_label)?;
-    if !enumerated_values.is_empty() {
-        let literals: Vec<String> = enumerated_values
-            .iter()
-            .map(|(value, _)| python_string_literal(value, refused_item_label))
-            .collect::<Result<_>>()?;
-        return Ok(format!("Literal[{}]", literals.join(", ")));
-    }
-    let json_types: Vec<&str> = match schema.get("type") {
-        Some(Value::String(json_type)) => vec![json_type.as_str()],
-        Some(Value::Array(json_types)) => json_types.iter().filter_map(Value::as_str).collect(),
-        _ => bail!(
-            "{refused_item_label} has a schema with no `type` this generator renders: {schema}"
-        ),
-    };
-    let mut alternatives = Vec::new();
-    for json_type in json_types {
-        let python_type = match json_type {
-            "string" => "str",
-            "integer" => "int",
-            "number" => "float",
-            "boolean" => "bool",
-            "null" => "None",
-            "array" => {
-                let items = schema.get("items").with_context(|| {
-                    format!("{refused_item_label} is a JSON `array` with no `items` schema")
-                })?;
-                push_unique(
-                    &mut alternatives,
-                    format!(
-                        "list[{}]",
-                        python_type_of(items, definitions, refused_item_label)?
-                    ),
-                );
-                continue;
-            }
-            other => {
-                bail!(
-                    "{refused_item_label} has the JSON type `{other}`, which this generator does not render"
-                )
-            }
-        };
-        push_unique(&mut alternatives, python_type.to_owned());
-    }
-    Ok(union_of(alternatives))
-}
-
-/// The string values `schema` is limited to, each with its description, or none
-/// when it is not a string enumeration.
-fn enumerated_string_values(
-    schema: &Value,
-    definitions: &Map<String, Value>,
-    refused_item_label: &str,
-) -> Result<Vec<(String, Option<String>)>> {
-    let schema = resolve_reference(schema, definitions, refused_item_label)?;
-    if let Some(member) = single_all_of_member(schema, refused_item_label)? {
-        return enumerated_string_values(member, definitions, refused_item_label);
-    }
-    if let Some(Value::Array(members)) = schema.get("anyOf") {
-        let mut values = Vec::new();
-        for member in members {
-            values.extend(enumerated_string_values(
-                member,
-                definitions,
-                refused_item_label,
-            )?);
-        }
-        return Ok(values);
-    }
-    if let Some(Value::Array(members)) = schema.get("oneOf") {
-        let mut values = Vec::new();
-        for member in members {
-            let member_values = enumerated_string_values(member, definitions, refused_item_label)?;
-            if member_values.is_empty() {
-                bail!(
-                    "{refused_item_label} has a `oneOf` member that is not a string value: {member}"
-                );
-            }
-            let member_description = member
-                .get("description")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            values.extend(
-                member_values.into_iter().map(|(value, description)| {
-                    (value, description.or(member_description.clone()))
-                }),
-            );
-        }
-        return Ok(values);
-    }
-    match schema.get("enum") {
-        None => Ok(Vec::new()),
-        Some(Value::Array(values)) => values
-            .iter()
-            .map(|value| match value {
-                Value::String(value) => Ok((value.clone(), None)),
-                other => bail!("{refused_item_label} enumerates the non-string value {other}"),
-            })
-            .collect(),
-        Some(other) => bail!("{refused_item_label} has an `enum` that is not a list: {other}"),
-    }
 }
 
 pub(crate) fn push_unique(alternatives: &mut Vec<String>, alternative: String) {
@@ -744,29 +442,6 @@ pub(crate) fn python_string_literal(value: &str, refused_item_label: &str) -> Re
 }
 
 /// `value` as Python: a scalar, or a list of scalars.
-fn python_default_literal(value: &Value, refused_item_label: &str) -> Result<String> {
-    let Value::Array(items) = value else {
-        return python_scalar_literal(value, refused_item_label);
-    };
-    let item_literals = items
-        .iter()
-        .map(|item| python_scalar_literal(item, refused_item_label))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(format!("[{}]", item_literals.join(", ")))
-}
-
-fn python_scalar_literal(value: &Value, refused_item_label: &str) -> Result<String> {
-    match value {
-        Value::Bool(true) => Ok("True".to_owned()),
-        Value::Bool(false) => Ok("False".to_owned()),
-        Value::Number(number) => Ok(number.to_string()),
-        Value::String(string) => python_string_literal(string, refused_item_label),
-        other => bail!(
-            "{refused_item_label} has the default {other}, which is neither a scalar nor a list of scalars"
-        ),
-    }
-}
-
 /// A docstring of `paragraphs` at `indent`, each wrapped to
 /// [`DOCSTRING_WRAP_COLUMN`]. Within a paragraph a line indented past the
 /// paragraph's first is a list item: it starts its own line, and its wrapped

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, ClassVar, Literal
 
-from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
+from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin
 from ._description import Description
 from ._formerly_named import FormerlyNamed
@@ -21,7 +21,7 @@ __all__ = [
 ]
 
 
-class GraphOutput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class GraphOutput(BuiltInNode):
     """Declares one Output of the graph: the port linked into `value`. A stream's top-level
     Outputs are what Tato Studio displays. It runs nothing and sends nothing off the machine.
     """
@@ -51,7 +51,7 @@ class GraphOutput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     ]
 
 
-class GraphInput(BuiltInNode[InputValuesOfATypedBuiltInNode]):
+class GraphInput(BuiltInNode):
     """Declares one Input of the graph: every port `value` is linked to reads what enters it.
     A stream's top-level Input of a type that holds a value, or of the Array, Channels or
     Records family, runs, and carries the value a client sets with `set_node_input_value`

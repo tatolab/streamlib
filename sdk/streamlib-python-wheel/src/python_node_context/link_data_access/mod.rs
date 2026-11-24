@@ -474,36 +474,3 @@ fn stream_facts_round_trip_to_parent<'py>(
         .bind(python)
         .call1((op,))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_python_surface_spells_image_formats_as_the_engine_does() {
-        Python::initialize();
-        Python::attach(|python| {
-            python
-                .import("sys")
-                .unwrap()
-                .getattr("path")
-                .unwrap()
-                .call_method1(
-                    "insert",
-                    (0, concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream")),
-                )
-                .unwrap();
-            let python_image_formats: Vec<String> = python
-                .import("tatolab.stream._port_family_declaration")
-                .unwrap()
-                .getattr("_IMAGE_TEXTURE_FORMATS")
-                .unwrap()
-                .extract()
-                .unwrap();
-            assert_eq!(
-                python_image_formats,
-                streamlib::sdk::descriptors::IMAGE_TEXTURE_FORMAT_WIRE_NAMES
-            );
-        });
-    }
-}

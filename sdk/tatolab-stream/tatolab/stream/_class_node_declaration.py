@@ -52,7 +52,6 @@ from ._pin_family import (
     family_declaration_of_a_typed_output,
     family_declaration_of_an_input_of_several_types,
 )
-from ._port_family_declaration import Input, Output
 
 __all__ = [
     "ClassNodeMember",
@@ -105,9 +104,8 @@ def read_class_node_ports(
 ) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
     """The input and output ports `node_class`'s fields and pins declare, as the engine reads them.
 
-    Refuses, as a `NodeDeclarationRefusal`, a port declared with `Input(...)` or `Output(...)`,
-    an `__init__` that takes a parameter when the class is `constructed_in_python`, and each field
-    or pin `read_pin_declaration` refuses. A built-in node, which the runtime implements, is never
+    Refuses, as a `NodeDeclarationRefusal`, an `__init__` that takes a parameter when the class
+    is `constructed_in_python`, and each field or pin `read_pin_declaration` refuses. A built-in node, which the runtime implements, is never
     constructed in Python, so its `__init__` is not read, and its fields say what the runtime
     declares: a setting with no default, which a graph must set, a `PinTypeChoice` setting, a
     pin typed `Annotated[object, PinTypeFromSetting("...")]`, a setting read each run, and a field
@@ -161,7 +159,6 @@ class _ClassNodeReading:
     def ports(
         self, *, constructed_in_python: bool
     ) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
-        self._refuse_a_port_declared_in_the_retired_form()
         if constructed_in_python:
             self._refuse_an_init_taking_parameters()
         input_ports: list[DeclaredPort] = []
@@ -234,23 +231,6 @@ class _ClassNodeReading:
         self, words: str, finding_code: NodeDeclarationFindingCode, pin: Optional[str] = None
     ) -> NodeDeclarationRefusal:
         return NodeDeclarationRefusal(words, finding_code=finding_code, node=self._node, pin=pin)
-
-    def _refuse_a_port_declared_in_the_retired_form(self) -> None:
-        for ancestor in reversed(self._node_class.__mro__):
-            for attribute_name, attribute in vars(ancestor).items():
-                if isinstance(attribute, (Input, Output)):
-                    kind = "Input" if isinstance(attribute, Input) else "Output"
-                    pin_form = "InputPin" if kind == "Input" else "OutputPin"
-                    raise self._refusal(
-                        f"`{self._node}` declares `{attribute_name}` as `{kind}(...)`, and a "
-                        f"class under bare `@node` declares each stream, trigger and output as "
-                        f"a pin and each value input as a field. To fix: "
-                        f"`{attribute_name}: {pin_form}[Texture]` for a stream of pictures, or "
-                        f"`{attribute_name}: float = 0.0` for a value; keep `@node.process` to "
-                        f"keep `{kind}(...)`.",
-                        "class_declares_a_retired_port",
-                        pin=attribute_name,
-                    )
 
     def _refuse_an_init_taking_parameters(self) -> None:
         if self._node_class.__init__ is object.__init__:

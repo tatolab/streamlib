@@ -24,7 +24,6 @@ from tatolab.stream import (
     node,
 )
 from tatolab.stream._node_declaration import (
-    NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_KIND_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -99,8 +98,12 @@ def test_a_texture_reads_as_the_image_an_image_frame_does():
     )
 
 
-def test_a_shader_node_declares_no_config():
-    assert getattr(blend, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)["additionalProperties"] is False
+def test_a_shader_node_stamps_no_config():
+    """A shader takes each value as an input, so it stamps no config schema.
+
+    Mental-revert: stamping the empty config again sets the attribute on every shader node.
+    """
+    assert not hasattr(blend, "__tatolab_node_config_schema__")
 
 
 def test_a_shader_node_is_never_called_in_python():
@@ -147,7 +150,7 @@ def test_a_shader_with_no_image_input_is_refused():
 
 
 def test_an_input_that_is_neither_an_image_nor_a_float_is_refused_naming_it():
-    with pytest.raises(TypeError, match="input `level` is a channels_block"):
+    with pytest.raises(TypeError, match="input `level` is typed `ChannelsBlock`"):
         node.shader("float4 levels(ImageInput image) { return image.pixel; }")(levels)
 
 
@@ -162,7 +165,7 @@ def test_time_and_state_are_refused():
 
 
 def test_a_config_is_refused_pointing_at_value_inputs():
-    with pytest.raises(TypeError, match="push constants"):
+    with pytest.raises(TypeError, match="takes `config`, and a node takes each setting as an input"):
         node.shader("float4 configured(ImageInput image) { return image.pixel; }")(configured)
 
 

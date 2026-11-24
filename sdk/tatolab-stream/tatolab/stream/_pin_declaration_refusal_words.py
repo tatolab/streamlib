@@ -45,21 +45,20 @@ def words_refusing_a_function_pin_of(
     if "value" not in row.flows:
         return (
             f"{typed}, which a function under bare `@node` does not take: it holds no stored "
-            f"value, so only a class node's pin carries it. To fix: keep this node on "
-            f"`@node.function`, or {class_node}."
+            f"value, so only a class node's pin carries it. To fix: {class_node}."
         )
     if direction == "input":
         return (
             f"{typed}, which holds no stored value, so a function under bare `@node` takes it "
             f"only through a type parameter bound to it, whose value its body hands on unread. "
             f"To fix: `def {node}[Carried: {written_form}]({pin_name}: Carried, ...) -> "
-            f"Carried`, keep this node on `@node.function`, or {class_node}."
+            f"Carried`, or {class_node}."
         )
     return (
         f"{typed}, which holds no stored value, so a function's output carries it only as the "
         f"type linked into the input it hands on. To fix: type that input and this output by "
-        f"one type parameter bound to it, `[Carried: {written_form}]`, keep this node on "
-        f"`@node.function`, or {class_node}."
+        f"one type parameter bound to it, `[Carried: {written_form}]`, or "
+        f"{class_node}."
     )
 
 

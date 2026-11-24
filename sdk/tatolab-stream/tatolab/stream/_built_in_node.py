@@ -7,18 +7,12 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NoReturn, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 from ._class_node_declaration import read_class_node_ports
 from ._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP, NODE_DECLARATION_OUTPUT_PORTS_STAMP
 
-__all__ = ["BuiltInNode", "ConfigTypeOfTheBuiltInNode", "InputValuesOfATypedBuiltInNode"]
-
-# Contravariant so that pyright, solving a config's type from the class a call
-# passes, reports a wrong config key against the config rather than the class.
-ConfigTypeOfTheBuiltInNode = TypeVar(
-    "ConfigTypeOfTheBuiltInNode", bound=Mapping[str, Any], contravariant=True
-)
+__all__ = ["BuiltInNode", "InputValuesOfATypedBuiltInNode"]
 
 
 # How an annotation names a class variable, a string under `from __future__ import annotations`.
@@ -28,12 +22,12 @@ InputValuesOfATypedBuiltInNode = Mapping[str, Any]
 """The input values a typed built-in takes, each checked against the field or pin it names."""
 
 
-class BuiltInNode(Generic[ConfigTypeOfTheBuiltInNode]):
+class BuiltInNode:
     """A node the runtime implements: passed to `stream_builder.add`, never built.
 
     A typed built-in declares each of its inputs and outputs as a class node does, each value
     input a field with its default and each stream a pin, so `stream_builder.add` checks the
-    values it is given against them. A built-in that still takes a config declares neither.
+    values it is given against them.
     """
 
     type: ClassVar[str]
@@ -49,7 +43,7 @@ class BuiltInNode(Generic[ConfigTypeOfTheBuiltInNode]):
 
     if TYPE_CHECKING:
         # Uncallable, so a built-in never matches `add`'s overload for a node
-        # class Python constructs, and a wrong config cannot fall through to it.
+        # class Python constructs, and wrong values cannot fall through to it.
         def __init__(self, *, a_built_in_node_is_never_constructed: NoReturn) -> None: ...
 
     else:
