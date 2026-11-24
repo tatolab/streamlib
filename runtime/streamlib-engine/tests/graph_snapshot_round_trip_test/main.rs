@@ -119,8 +119,26 @@ fn the_refusal_of(
     }
 }
 
-/// Register a gateway type and a track type whose config key `gateway` takes
-/// a reference to a gateway.
+/// An input of `name` holding a reference to a node of `referenced_node_type`.
+fn an_input_holding_a_reference_to(
+    name: &str,
+    referenced_node_type: &NodeClassImportPath,
+) -> PortDescriptor {
+    use streamlib::sdk::descriptors::{PinDeclaration, PinType, PortFamily, PortFamilyDeclaration};
+    PortDescriptor::new(
+        name,
+        "",
+        false,
+        PortFamilyDeclaration::of_family(PortFamily::Records),
+    )
+    .with_pin_declaration(PinDeclaration::exactly(PinType::NodeReference {
+        referenced_node_type: Some(referenced_node_type.clone()),
+        one_referrer_per_referenced_node: false,
+    }))
+}
+
+/// Register a gateway type and a track type whose input `gateway` takes a
+/// reference to a gateway.
 fn register_a_gateway_and_a_track_naming_one() -> (NodeClassImportPath, NodeClassImportPath) {
     let gateway = register_test_type("ReferenceEdgeGateway", "_unused_in", "_unused_out");
     let track_import_path =
@@ -131,15 +149,7 @@ fn register_a_gateway_and_a_track_naming_one() -> (NodeClassImportPath, NodeClas
             track_import_path.clone(),
             "graph round-trip test",
         )
-        .with_config_schema(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "gateway": {
-                    streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD:
-                        {"node_type": gateway.as_str()}
-                }
-            }
-        })),
+        .with_input(an_input_holding_a_reference_to("gateway", &gateway)),
     );
     (gateway, track_import_path)
 }

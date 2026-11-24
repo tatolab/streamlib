@@ -11,22 +11,49 @@ const TRACK_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Tr
 
 const SEND_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_reference_tests:Send";
 
-/// A stream that described a gateway type and a track type whose config
-/// key `gateway` takes a reference to a gateway.
+/// An input of `name` holding a reference to a node of `referenced_node_type`.
+fn an_input_holding_a_node_reference(
+    name: &str,
+    referenced_node_type: &str,
+    one_referrer_per_referenced_node: bool,
+) -> crate::core::descriptors::PortDescriptor {
+    use crate::core::descriptors::{PinDeclaration, PinType};
+    use crate::core::descriptors::{PortDescriptor, PortFamily, PortFamilyDeclaration};
+    PortDescriptor::new(
+        name,
+        "",
+        false,
+        PortFamilyDeclaration::of_family(PortFamily::Records),
+    )
+    .with_pin_declaration(PinDeclaration::exactly(PinType::NodeReference {
+        referenced_node_type: Some(NodeClassImportPath::new(referenced_node_type).unwrap()),
+        one_referrer_per_referenced_node,
+    }))
+}
+
+/// A stream that described a gateway type, a track type whose input `gateway` takes a reference
+/// to a gateway, and a send type whose input `track` takes a reference to a track no other send
+/// names.
 fn node_types_with_a_track_naming_its_gateway_by_reference() -> NodeTypesOneStreamResolves {
     let node_types = NodeTypesOneStreamResolves::new();
-    for (short_name, import_path, config_schema) in [
-        ("Gateway", GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS, None),
-        (
-            "Track",
-            TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-            Some(serde_json::json!({
+    let descriptor_of = |short_name: &str, import_path: &str| {
+        crate::core::descriptors::NodeDescriptor::new(
+            crate::core::descriptors::NodeClassShortName::new(short_name).unwrap(),
+            NodeClassImportPath::new(import_path).unwrap(),
+            "graph snapshot reference test",
+        )
+    };
+    for descriptor in [
+        descriptor_of("Gateway", GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS),
+        descriptor_of("Track", TRACK_CLASS_FOR_THE_REFERENCE_TESTS)
+            .with_input(an_input_holding_a_node_reference(
+                "gateway",
+                GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS,
+                false,
+            ))
+            .with_config_schema(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "gateway": {
-                        streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD:
-                            {"node_type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}
-                    },
                     "track": {"type": "string"},
                     "gateway_or_its_name": {"anyOf": [
                         {streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
@@ -34,31 +61,10 @@ fn node_types_with_a_track_naming_its_gateway_by_reference() -> NodeTypesOneStre
                     ]}
                 }
             })),
-        ),
-        (
-            "Send",
-            SEND_CLASS_FOR_THE_REFERENCE_TESTS,
-            Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "track": {
-                        streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {
-                            "node_type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-                            streamlib_node_schema::NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
-                        }
-                    }
-                }
-            })),
+        descriptor_of("Send", SEND_CLASS_FOR_THE_REFERENCE_TESTS).with_input(
+            an_input_holding_a_node_reference("track", TRACK_CLASS_FOR_THE_REFERENCE_TESTS, true),
         ),
     ] {
-        let mut descriptor = crate::core::descriptors::NodeDescriptor::new(
-            crate::core::descriptors::NodeClassShortName::new(short_name).unwrap(),
-            NodeClassImportPath::new(import_path).unwrap(),
-            "graph snapshot reference test",
-        );
-        if let Some(config_schema) = config_schema {
-            descriptor = descriptor.with_config_schema(config_schema);
-        }
         node_types
             .register_a_type_described_in_this_streams_node_interpreter(
                 descriptor,

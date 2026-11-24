@@ -918,11 +918,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         ),
         flows=("value",),
         annotations=(),
-        python_forms=(
-            "NodeReference",
-            "NodeReferenceToNodeType",
-            "SoleReferrerNodeReferenceToNodeType",
-        ),
+        python_forms=("NodeReference",),
         value_component="NodeReferenceInConfig",
         since=3,
         stability="experimental",

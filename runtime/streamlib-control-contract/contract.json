@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 48
+    "x-contract-revision": 49
   },
   "methods": [
     {
@@ -7832,9 +7832,7 @@
       ],
       "annotations": [],
       "python_forms": [
-        "NodeReference",
-        "NodeReferenceToNodeType",
-        "SoleReferrerNodeReferenceToNodeType"
+        "NodeReference"
       ],
       "typescript_form": "\"node_reference\"",
       "x-since": 3,

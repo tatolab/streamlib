@@ -437,44 +437,23 @@ def _refuse_a_project_asset_uuid_on_a_schema_that_admits_no_string(
 
 
 # The keyword a config key holding a node reference carries, as the engine's
-# `NODE_REFERENCE_SCHEMA_KEYWORD` reads it; its `node_type` names the type the
-# referenced node must be, and its `one_referrer_per_referenced_node` lets one
-# node at most name a given node under the key.
+# `NODE_REFERENCE_SCHEMA_KEYWORD` reads it.
 _NODE_REFERENCE_SCHEMA_KEYWORD = "x-tatolab-node-reference"
-_NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY = "one_referrer_per_referenced_node"
 
 
 def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | None":
     # Imported here: the builder imports node declaration, which imports this
     # module, and every annotation is read after the package has loaded.
-    from ._stream_builder import (
-        NodeReference,
-        NodeReferenceToNodeType,
-        SoleReferrerNodeReferenceToNodeType,
-        _node_type_of,
-    )
+    from ._stream_builder import NodeReference
 
-    if annotation is NodeReference or annotation is NodeReferenceToNodeType:
-        keyword: "dict[str, Any]" = {}
-    elif annotation is SoleReferrerNodeReferenceToNodeType:
-        keyword = {_NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY: True}
-    elif typing.get_origin(annotation) is NodeReferenceToNodeType:
-        (node_class_the_reference_names,) = typing.get_args(annotation)
-        keyword = {"node_type": _node_type_of(node_class_the_reference_names)}
-    elif typing.get_origin(annotation) is SoleReferrerNodeReferenceToNodeType:
-        (node_class_the_reference_names,) = typing.get_args(annotation)
-        keyword = {
-            "node_type": _node_type_of(node_class_the_reference_names),
-            _NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY: True,
-        }
-    else:
+    if annotation is not NodeReference:
         return None
     return {
         "type": "object",
         "properties": {"node": {"type": "string"}},
         "required": ["node"],
         "additionalProperties": False,
-        _NODE_REFERENCE_SCHEMA_KEYWORD: keyword,
+        _NODE_REFERENCE_SCHEMA_KEYWORD: {},
     }
 
 

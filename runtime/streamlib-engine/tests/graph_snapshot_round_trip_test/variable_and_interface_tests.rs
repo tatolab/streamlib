@@ -165,10 +165,7 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
         .with_config_schema(serde_json::json!({
             "type": "object",
             "properties": {
-                "gateway": {
-                    streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD:
-                        {"node_type": gateway.as_str()}
-                }
+                "gateway": {streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD: {}}
             }
         })),
     );
@@ -204,32 +201,6 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
     let second_runner = Runner::new().unwrap();
     load(&second_runner, project_directory.path(), rendered)
         .expect("a rendered gateway variable loads back");
-
-    let wrong_type = serde_json::json!({
-        "stream": "gateway-variable-of-the-wrong-type",
-        "nodes": [
-            {"name": "cloudflare", "type": track_import_path.as_str()},
-            {"name": "set-connection", "type": "tatolab.stream:SetVariable",
-             "input_values": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
-            {"name": "get-connection", "type": "tatolab.stream:GetVariable",
-             "input_values": {"variable": "connection"}},
-            {"name": "camera-track", "type": track_import_path.as_str(),
-             "input_values": {"gateway": {"node": "get-connection"}}}
-        ]
-    });
-    let refusal = the_refusal_of(
-        load(
-            &Runner::new().unwrap(),
-            project_directory.path(),
-            wrong_type,
-        ),
-        "a variable naming a track where a gateway is taken must be refused",
-    )
-    .to_string();
-    assert!(
-        refusal.contains(&format!("takes a `{}`", gateway.as_str())),
-        "{refusal}"
-    );
 }
 
 #[test]
