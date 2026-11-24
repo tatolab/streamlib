@@ -117,6 +117,7 @@ _CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
 _UNREAD_MESSAGE_ANNOTATION = "UnreadMessage"
 _SINGLE_OUTPUT_PORT_NAME = "result"
+_DATACLASS_DECORATOR = "dataclass"
 
 
 def module_name_of_a_source_path(relative_path: str) -> Optional[str]:
@@ -472,15 +473,14 @@ class _ModuleDeclarationReading:
                 return None
             output_annotation = stateful_arguments[0]
         # Under the family grammar a returned dataclass is one output per field; under bare
-        # `@node` a returned `NamedTuple` is, unless it is a named pin type, and a dataclass is
-        # one bundle pin.
+        # `@node` a returned `NamedTuple` is, and a dataclass is one bundle pin. A named pin
+        # type is one pin under either.
         record_of_outputs = self._the_record_an_annotation_names(output_annotation)
-        if record_of_outputs is not None and reads_pin_types:
-            record_of_outputs = (
-                record_of_outputs
-                if record_of_outputs.is_a_named_tuple and not record_of_outputs.is_a_named_pin_type
-                else None
-            )
+        if record_of_outputs is not None and not (
+            (record_of_outputs.is_a_named_tuple if reads_pin_types else record_of_outputs.is_a_dataclass)
+            and not record_of_outputs.is_a_named_pin_type
+        ):
+            record_of_outputs = None
         if record_of_outputs is not None:
             return [
                 field.typed_in._function_port(field.name, field.annotation)
@@ -502,12 +502,19 @@ class _ModuleDeclarationReading:
         if dotted_name is None:
             return None
         owner, _, name = dotted_name.rpartition(".")
-        if owner:
-            owner_module = self._the_module_a_name_binds(owner)
-            names = None if owner_module is None else self._names_bound_by(owner_module)
-            if names is not None:
-                return names._the_record_named(name, frozenset())
-        return self._the_record_named(name, frozenset())
+        return self._the_record_a_dotted_name_names(dotted_name, frozenset())
+
+    def _the_record_a_dotted_name_names(
+        self, dotted_name: str, seen: frozenset[tuple[str, str]]
+    ) -> Optional[RecordOfOutputs]:
+        """The record `dotted_name` names here: a name this module binds, or a name of a module of
+        its source this module imports; `None` for a module the source does not hold."""
+        owner, _, name = dotted_name.rpartition(".")
+        if not owner:
+            return self._the_record_named(name, seen)
+        owner_module = self._the_module_a_name_binds(owner)
+        reading = None if owner_module is None else self._reading_of(owner_module)
+        return None if reading is None else reading._the_record_named(name, seen)
 
     def _the_record_named(
         self, name: str, seen: frozenset[tuple[str, str]]
@@ -529,14 +536,15 @@ class _ModuleDeclarationReading:
                     for field_name, field_annotation in named_tuple_fields
                 ],
                 is_a_named_tuple=True,
+                is_a_dataclass=False,
                 is_a_named_pin_type=False,
             )
         imported = self._imported_names.get(name)
         if imported is None:
             return None
         relative_level, from_module, imported_name = imported
-        names = self._names_bound_by(self._the_module_imported_from(relative_level, from_module))
-        return None if names is None else names._the_record_named(imported_name, seen)
+        reading = self._reading_of(self._the_module_imported_from(relative_level, from_module))
+        return None if reading is None else reading._the_record_named(imported_name, seen)
 
     def _the_record_a_class_defines(
         self, record_class: ast.ClassDef, seen: frozenset[tuple[str, str]]
@@ -544,28 +552,29 @@ class _ModuleDeclarationReading:
         """The record `record_class` is: a `NamedTuple` of the fields it annotates, or of those of
         the `NamedTuple` it subclasses; else a record of the fields it annotates."""
         is_a_named_pin_type = self._decorated_with(record_class, NAMED_PIN_TYPE_DECORATOR) is not None
+        is_a_dataclass = any(
+            _annotated_type_name(
+                decorator.func if isinstance(decorator, ast.Call) else decorator
+            )
+            == _DATACLASS_DECORATOR
+            for decorator in record_class.decorator_list
+        )
         own_fields = [
             FieldOfARecord(field.target.id, field.annotation, self)
             for field in record_class.body
             if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
         ]
         if any(_annotated_type_name(base) == NAMED_TUPLE_BASE for base in record_class.bases):
-            return RecordOfOutputs(own_fields, True, is_a_named_pin_type)
+            return RecordOfOutputs(own_fields, True, False, is_a_named_pin_type)
         for base in record_class.bases:
             base_name = _dotted_name_of(base)
-            base_record = None
-            if base_name is not None:
-                owner, _, name = base_name.rpartition(".")
-                if owner:
-                    owner_module = self._the_module_a_name_binds(owner)
-                    names = None if owner_module is None else self._names_bound_by(owner_module)
-                    base_record = None if names is None else names._the_record_named(name, seen)
-                else:
-                    base_record = self._the_record_named(name, seen)
+            base_record = (
+                None if base_name is None else self._the_record_a_dotted_name_names(base_name, seen)
+            )
             if base_record is not None and base_record.is_a_named_tuple:
                 # A class subclassing a `NamedTuple` holds the fields that `NamedTuple` names.
-                return RecordOfOutputs(base_record.fields, True, is_a_named_pin_type)
-        return RecordOfOutputs(own_fields, False, is_a_named_pin_type)
+                return RecordOfOutputs(base_record.fields, True, False, is_a_named_pin_type)
+        return RecordOfOutputs(own_fields, False, is_a_dataclass, is_a_named_pin_type)
 
     def _the_module_a_name_binds(self, local_name: str) -> Optional[str]:
         """The module `local_name` binds by an import: `import a.b as c` binds `c` to `a.b`, and
@@ -592,12 +601,13 @@ class _ModuleDeclarationReading:
         package_parts = package_parts[: len(package_parts) - (relative_level - 1)]
         return ".".join([*package_parts, *([from_module] if from_module else [])])
 
-    def _names_bound_by(self, module_name: str) -> Optional["_ModuleDeclarationReading"]:
+    def _reading_of(self, module_name: str) -> Optional["_ModuleDeclarationReading"]:
+        """The reading of `module_name`, this module or another of its source."""
         if module_name == self._module_name:
             return self
         if self._modules_of_its_source is None:
             return None
-        return self._modules_of_its_source.names_bound_by(module_name)
+        return self._modules_of_its_source.reading_of(module_name)
 
     def _function_port(
         self,

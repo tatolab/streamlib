@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """What the source reader follows to a record a function node returns: the modules of one source,
-each parsed at most once, the names each binds by its imports, and the `NamedTuple`s it calls
-into being, read from source alone.
+each read for the names it binds when another first refers to it, the names each binds by its
+imports, and the `NamedTuple`s it calls into being, read from source alone.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from ._node_type_source_reader import _ModuleDeclarationReading as ModuleNames
+    from ._node_type_source_reader import _ModuleDeclarationReading
 
 __all__ = [
     "NAMED_TUPLE_BASE",
@@ -36,45 +36,46 @@ class FieldOfARecord:
 
     name: str
     annotation: Optional[ast.expr]
-    typed_in: "ModuleNames"
+    typed_in: "_ModuleDeclarationReading"
 
 
 @dataclass(frozen=True)
 class RecordOfOutputs:
-    """A class a function node may return: its fields, whether it is a `NamedTuple` and whether
-    `@named_pin_type` declares it, which makes it one pin."""
+    """A class a function node may return: its fields, whether it is a `NamedTuple` or a
+    `@dataclass`, and whether `@named_pin_type` declares it, which makes it one pin."""
 
     fields: list[FieldOfARecord]
     is_a_named_tuple: bool
+    is_a_dataclass: bool
     is_a_named_pin_type: bool
 
 
 class ModulesOfOneSource:
-    """The modules one source hands the reader, by module name, each parsed at most once and read
-    for the names it binds alone, so a module finds a record another of them defines."""
+    """The modules one source hands the reader, by module name, each read for the names it binds
+    when another first refers to it and kept, so a module finds a record another of them defines."""
 
     def __init__(
         self,
-        names_read_by: "Callable[[str, str, ast.Module, ModulesOfOneSource], ModuleNames]",
+        module_reading_of: "Callable[[str, str, ast.Module, ModulesOfOneSource], _ModuleDeclarationReading]",
         sources_by_module_name: dict[str, tuple[str, str]],
     ) -> None:
-        self._names_read_by = names_read_by
+        self._module_reading_of = module_reading_of
         self._sources_by_module_name = sources_by_module_name
-        self._names_of_each_module: dict[str, Optional[ModuleNames]] = {}
+        self._reading_of_each_module: dict[str, Optional["_ModuleDeclarationReading"]] = {}
 
     def is_a_package(self, module_name: str) -> bool:
         """Whether `module_name` is a package's `__init__`, which its relative imports start from."""
         source = self._sources_by_module_name.get(module_name)
         return source is not None and PurePosixPath(source[0]).stem == "__init__"
 
-    def names_bound_by(self, module_name: str) -> Optional["ModuleNames"]:
-        """The names `module_name` binds, or `None` for a module the source does not hold or that
-        does not parse."""
-        if module_name not in self._names_of_each_module:
-            self._names_of_each_module[module_name] = self._the_names_read_from(module_name)
-        return self._names_of_each_module[module_name]
+    def reading_of(self, module_name: str) -> Optional["_ModuleDeclarationReading"]:
+        """The reading of the names `module_name` binds, or `None` for a module the source does not
+        hold or that does not parse."""
+        if module_name not in self._reading_of_each_module:
+            self._reading_of_each_module[module_name] = self._the_reading_read_from(module_name)
+        return self._reading_of_each_module[module_name]
 
-    def _the_names_read_from(self, module_name: str) -> Optional["ModuleNames"]:
+    def _the_reading_read_from(self, module_name: str) -> Optional["_ModuleDeclarationReading"]:
         source = self._sources_by_module_name.get(module_name)
         if source is None:
             return None
@@ -83,7 +84,7 @@ class ModulesOfOneSource:
             module_tree = ast.parse(source_text, filename=listed_path)
         except (SyntaxError, ValueError):
             return None
-        return self._names_read_by(module_name, listed_path, module_tree, self)
+        return self._module_reading_of(module_name, listed_path, module_tree, self)
 
 
 def imported_names_by_local_name(module_tree: ast.Module) -> dict[str, tuple[int, str, str]]:
