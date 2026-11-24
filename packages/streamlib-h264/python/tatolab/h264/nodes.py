@@ -35,6 +35,14 @@ VIDEO_INPUT_PORT = "video"
 ENCODED_VIDEO_OUTPUT_PORT = "encoded_video"
 CODEC = "h264"
 DECODED_PICTURE_TEXTURE_FORMAT = "rgba8_unorm"
+#: The 8-bit formats the encoder reads a picture in, so a link from an output of any other,
+#: such as an HDR `rgba16_float`, is refused when it is made, not frame by frame.
+ENCODED_PICTURE_TEXTURE_FORMATS = (
+    "rgba8_unorm",
+    "rgba8_unorm_srgb",
+    "bgra8_unorm",
+    "bgra8_unorm_srgb",
+)
 
 #: How long `stop()` waits for the coding thread. Its own wait for a message
 #: is bounded at a tenth of a second; an encode or decode in flight finishes
@@ -118,7 +126,12 @@ class H264Encoder:
         ),
     ] = None
     video: InputPin[
-        Annotated[Texture, StreamDelivery("ordered"), Description("Video frames to encode")]
+        Annotated[
+            Texture,
+            TexturePixelFormats(*ENCODED_PICTURE_TEXTURE_FORMATS),
+            StreamDelivery("ordered"),
+            Description("Video frames to encode"),
+        ]
     ]
     encoded_video: OutputPin[
         Annotated[
