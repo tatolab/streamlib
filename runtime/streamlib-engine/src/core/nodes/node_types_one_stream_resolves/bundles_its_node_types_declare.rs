@@ -40,9 +40,9 @@ impl NodeTypesOneStreamResolves {
         }
     }
 
-    /// Every bundle a pin of a node type its project brings or its interpreter described
-    /// declares, a List's element among them, each once by
-    /// [`PinType::is_the_same_bundle_as`], in the order of their names.
+    /// Every bundle a pin of a node type this stream resolves declares, a view its project
+    /// brings or a type its interpreter described that no such view shadows, a List's element
+    /// among them, each once by [`PinType::is_the_same_bundle_as`], in the order of their names.
     fn the_bundles_its_node_types_declare(&self) -> Vec<PinType> {
         let mut bundles_in_order = BTreeMap::<OrderOfAnOfferedBundle, Vec<PinType>>::new();
         let mut offer_each_bundle_of = |descriptor: &NodeDescriptor| {
@@ -63,15 +63,13 @@ impl NodeTypesOneStreamResolves {
                 }
             }
         };
-        for view_type in self.view_types_this_streams_project_brings.read().values() {
+        let view_types = self.view_types_this_streams_project_brings.read();
+        let described = self.described_in_this_streams_node_interpreter.read();
+        for view_type in view_types.values() {
             offer_each_bundle_of(&view_type.descriptor);
         }
-        for described in self
-            .described_in_this_streams_node_interpreter
-            .read()
-            .values()
-        {
-            if !is_the_function_node_pool_type(&described.descriptor.node_class_import_path) {
+        for (node_type, described) in described.iter() {
+            if !is_the_function_node_pool_type(node_type) && !view_types.contains_key(node_type) {
                 offer_each_bundle_of(&described.descriptor);
             }
         }

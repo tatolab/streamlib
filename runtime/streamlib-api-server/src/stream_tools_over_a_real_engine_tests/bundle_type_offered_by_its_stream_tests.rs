@@ -81,11 +81,21 @@ fn the_stream_describing_three_node_types_of_two_bundles(
 async fn a_stream_holding_a_make_and_a_break_bundle(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
 ) -> (String, ProjectWithGraphDocuments, String, String) {
-    streamlib_media_builtins::register_media_builtin_node_types();
     let project = ProjectWithGraphDocuments::holding(json!({
         "stream": "main", "nodes": [], "links": [],
     }));
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let (stream_id, make, break_) = a_make_and_a_break_bundle_placed_in(engine, &project).await;
+    (stream_id, project, make, break_)
+}
+
+/// `project`'s stream `main`, loaded holding a `make` of `MakeBundle` and a `break` of
+/// `BreakBundle`; its id and the two nodes' UUIDs.
+async fn a_make_and_a_break_bundle_placed_in(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    project: &ProjectWithGraphDocuments,
+) -> (String, String, String) {
+    streamlib_media_builtins::register_media_builtin_node_types();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(project, "main");
     let added = engine
         .the_answer_or_the_refusal_of(
             "transact",
@@ -107,8 +117,7 @@ async fn a_stream_holding_a_make_and_a_break_bundle(
             .expect("an added node's UUID")
             .to_owned()
     };
-    let (make, break_) = (the_uuid_of(0), the_uuid_of(1));
-    (stream_id, project, make, break_)
+    (stream_id, the_uuid_of(0), the_uuid_of(1))
 }
 
 /// The pin type `graph` serves on the `bundle_type` of the node `node_name` of `stream_id`.
@@ -165,6 +174,63 @@ async fn a_placed_make_or_break_bundle_offers_exactly_the_bundles_its_stream_dec
         assert_eq!(served, both_on_offer, "{node}");
         assert_eq!(served["among"][0]["name"], "Reading", "{served}");
     }
+}
+
+/// A bundle only a described class declares whose name a view of the project also has is not
+/// offered, since the stream resolves that name as the view; the view's own bundle, and those of
+/// classes no view shadows, are.
+///
+/// Mental-revert: listing every described class's bundles offers `Tone`, which no node type the
+/// stream resolves declares.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bundle_only_a_class_a_view_shadows_declares_is_not_offered() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main", "nodes": [], "links": [],
+    }));
+    let a_gauge = a_bundle_named("Gauge", &["needle"]);
+    let folder = project.path().join("views/synth");
+    std::fs::create_dir_all(&folder).expect("the view's folder");
+    std::fs::write(
+        folder.join("tatolab_view.json"),
+        json!({ "contract": "1.1", "title": "Synth", "entry": "index.html", "placement": "node",
+                "outputs": [{ "name": "gauge", "pin_type": a_gauge }] })
+        .to_string(),
+    )
+    .expect("its manifest");
+    let (stream_id, _, _) = a_make_and_a_break_bundle_placed_in(&engine, &project).await;
+    let loaded = engine
+        .engine
+        .loaded_stream_of_the_id(&stream_id)
+        .expect("the stream is loaded");
+    let node_types = loaded.node_types_this_stream_resolves();
+    let the_view_type = format!("{TEST_PROJECT_NAME}:synth");
+    for descriptor in [
+        a_python_function_node_type(
+            THERMOMETER_TYPE,
+            Vec::new(),
+            vec![a_typed_port("reading", a_reading())],
+        ),
+        a_python_function_node_type(
+            &the_view_type,
+            vec![a_typed_port("tone", a_tone())],
+            Vec::new(),
+        ),
+    ] {
+        node_types
+            .register_a_described_type_that_runs_no_node_for_a_test(descriptor, None)
+            .expect("the stream resolves the node type");
+    }
+
+    let offered = the_bundle_type_served_on(&engine, &stream_id, "make").await;
+    assert_eq!(
+        offered,
+        json!({
+            "type": "pin_type_choice",
+            "among": [a_gauge, a_reading()],
+            "among_the_bundles_its_stream_declares": true,
+        })
+    );
 }
 
 /// A bundle the stream's node types do not declare is refused naming the bundles on offer, and
