@@ -67,10 +67,14 @@ impl PinDeclaration {
 impl PinType {
     /// Whether an input of this type holds a value while no link feeds it. A type that carries
     /// only messages, such as a Texture, an Audio stream or a Trigger, holds none, nor does a
-    /// List or a bundle holding one.
+    /// List of one. A bundle holding one holds the values of its other members, while a link
+    /// carries the heavy member.
     pub fn holds_a_stored_value(&self) -> bool {
         match self {
-            Self::ListOf { .. } | Self::Bundle { .. } if self.holds_a_heavy_member() => false,
+            Self::ListOf { .. } if self.holds_a_heavy_member() => false,
+            Self::Bundle { members, .. } if self.holds_a_heavy_member() => members
+                .iter()
+                .any(|member| member.member_type.holds_a_stored_value()),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
@@ -157,7 +161,9 @@ impl PinType {
                     .all(|key| members.iter().any(|member| &member.name == key))
                     && members.iter().all(|member| match stored.get(&member.name) {
                         Some(member_value) => member.member_type.is_a_stored_value(member_value),
-                        None => member.default_value.is_some(),
+                        None => {
+                            member.default_value.is_some() || member.member_type.is_a_heavy_type()
+                        }
                     })
             }),
             Self::NodeReference { .. } => reads_as::<NodeReferenceInConfig>(value),
@@ -275,6 +281,7 @@ impl PinType {
             Self::Bundle { members, .. } => Value::Object(
                 members
                     .iter()
+                    .filter(|member| !member.member_type.is_a_heavy_type())
                     .map(|member| (member.name.clone(), member.member_type.an_example_value()))
                     .collect(),
             ),

@@ -785,3 +785,75 @@ fn a_declaration_of_several_types_takes_a_value_any_of_them_takes() {
     assert_eq!(refused.takes, "true or false, or text");
     assert_eq!(refused.example, json!(true));
 }
+
+/// A picture with a level and a label beside it: a Texture member beside two small ones, the
+/// label holding a default.
+fn a_labelled_metered_picture() -> PinType {
+    PinType::Bundle {
+        name: None,
+        members: vec![
+            BundleMember {
+                name: "picture".into(),
+                member_type: a_pin_type_named(BuiltInPinTypeName::Texture),
+                meaning: None,
+                default_value: None,
+            },
+            BundleMember {
+                name: "level".into(),
+                member_type: PinType::Float { exact_size: None },
+                meaning: None,
+                default_value: None,
+            },
+            BundleMember {
+                name: "label".into(),
+                member_type: PinType::String {},
+                meaning: None,
+                default_value: Some(json!("unnamed")),
+            },
+        ],
+    }
+}
+
+/// A bundle holding a Texture holds the values of its small members, its own example among
+/// them: the picture, which only a link carries, is left out and refused when set, and a small
+/// member declaring no default is still needed. A bundle of only heavy members holds none.
+///
+/// Mental-revert: judging the bundle wire-only as a whole refuses `{"level": 0.5}`, which a
+/// Make Bundle beside a wired picture is typed.
+#[test]
+fn a_bundle_holding_a_texture_holds_the_values_of_its_small_members() {
+    let bundle = a_labelled_metered_picture();
+
+    assert!(bundle.holds_a_stored_value());
+    assert!(bundle.check_value(&json!({ "level": 0.5 })).is_ok());
+    assert!(
+        bundle
+            .check_value(&json!({ "level": 0.5, "label": "kitchen" }))
+            .is_ok()
+    );
+    assert!(
+        bundle
+            .check_value(&json!({ "level": 0.5, "picture": { "surface_id": 1 } }))
+            .is_err()
+    );
+    assert!(bundle.check_value(&json!({ "label": "kitchen" })).is_err());
+    let refused = bundle
+        .check_value(&json!({}))
+        .expect_err("`level` declares no default");
+    assert!(bundle.check_value(&refused.example).is_ok(), "{refused:?}");
+    assert_eq!(
+        bundle.value_json_schema(None).unwrap()["required"],
+        json!(["level"])
+    );
+
+    let only_a_picture = PinType::Bundle {
+        name: None,
+        members: vec![BundleMember {
+            name: "picture".into(),
+            member_type: a_pin_type_named(BuiltInPinTypeName::Texture),
+            meaning: None,
+            default_value: None,
+        }],
+    };
+    assert!(!only_a_picture.holds_a_stored_value());
+}

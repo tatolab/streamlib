@@ -200,7 +200,7 @@ fn an_object_of_numbers(keys: &[&str], at_least_zero: &[&str]) -> Value {
 }
 
 /// An object keyed by `members`' names, each in its own type's form; one with a default may be
-/// left out.
+/// left out, and a heavy member, which only a link carries, is.
 fn a_bundle_object(members: &[BundleMember]) -> Value {
     let properties: Map<String, Value> = members
         .iter()
@@ -219,7 +219,7 @@ fn a_bundle_object(members: &[BundleMember]) -> Value {
         .collect();
     let required: Vec<&str> = members
         .iter()
-        .filter(|member| member.default_value.is_none())
+        .filter(|member| member.default_value.is_none() && !member.member_type.is_a_heavy_type())
         .map(|member| member.name.as_str())
         .collect();
     json!({
