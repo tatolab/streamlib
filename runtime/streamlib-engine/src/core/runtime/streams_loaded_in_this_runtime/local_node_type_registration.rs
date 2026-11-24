@@ -49,6 +49,8 @@ mod tests {
         }
     }
 
+    /// A Rust node holds no config, so a type added locally refuses every config key at add,
+    /// naming it.
     #[test]
     fn a_type_added_locally_refuses_a_config_key_at_add() {
         let project_directory = tempfile::tempdir().expect("a project directory");
@@ -65,7 +67,7 @@ mod tests {
 
         let refusal = stream
             .add_node(
-                NodeSpec::new(source_type.clone(), serde_json::json!({"frame_widht": 640}))
+                NodeSpec::new(source_type.clone(), serde_json::json!({"frame_width": 640}))
                     .with_display_name("front"),
             )
             .unwrap_err();
@@ -78,7 +80,7 @@ mod tests {
             } => {
                 assert_eq!(node_name, "front");
                 assert_eq!(node_type, source_type);
-                assert!(refusal.contains("`frame_widht`"), "{refusal}");
+                assert!(refusal.contains("`frame_width`"), "{refusal}");
             }
             other => panic!("expected NodeConfigRefused, got {other:?}"),
         }

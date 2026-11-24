@@ -241,6 +241,16 @@ impl Default for NodeInstanceFactory {
 }
 
 /// Log, rather than return, `registered` when the registration of `P` failed.
+/// `P`'s descriptor, refused naming `P` when it is not a `#[node]` type.
+fn descriptor_of<P: GeneratedNode>() -> Result<NodeDescriptor> {
+    <P as GeneratedNode>::descriptor().ok_or_else(|| {
+        Error::Configuration(format!(
+            "{} exposes no descriptor — it is not a #[node] type",
+            std::any::type_name::<P>()
+        ))
+    })
+}
+
 fn warn_of_a_failed_registration_of<P>(registered: Result<NodeClassImportPath>) {
     if let Err(e) = registered {
         tracing::warn!(
@@ -332,37 +342,11 @@ impl NodeInstanceFactory {
         P: GeneratedNode + 'static,
         P::Config: Config,
     {
-        let descriptor = <P as GeneratedNode>::descriptor().ok_or_else(|| {
-            Error::Configuration(format!(
-                "{} exposes no descriptor — it is not a #[node] type",
-                std::any::type_name::<P>()
-            ))
-        })?;
-        let constructor: DynamicNodeConstructorFn = Box::new(
-            |node: &GraphNode| -> Result<Box<dyn DynGeneratedNode + Send>> {
-                let config: P::Config = match &node.config {
-                    Some(config) => {
-                        config_the_node_type_takes(&node.display_name, &node.node_type, config)?
-                    }
-                    None => P::Config::default(),
-                };
-                Ok(Box::new(P::from_config(config)?))
-            },
-        );
-        let config_taken_check: NodeConfigTakenCheckFn =
-            Box::new(|node_name, node_type, config| {
-                config_the_node_type_takes::<P::Config>(node_name, node_type, config).map(drop)
-            });
-        let node_class_import_path = descriptor.node_class_import_path.clone();
-        self.register_with_constructor(
-            descriptor,
-            HostCompiledRustTypeRegistration {
-                constructor,
-                config_taken_check,
-            },
+        self.register_host_compiled_node_type_taking::<P, P::Config>(
+            descriptor_of::<P>()?,
+            |config| config,
             supplied,
-        )?;
-        Ok(node_class_import_path)
+        )
     }
 
     /// Register `P` as [`Self::register`] does, its nodes taking a config of `C` whole as a
@@ -376,43 +360,58 @@ impl NodeInstanceFactory {
         P::Config: Config,
         C: Config + crate::core::descriptors::NodeConfigJsonSchema,
     {
-        let registered = (|| {
-            let descriptor = <P as GeneratedNode>::descriptor()
-                .ok_or_else(|| {
-                    Error::Configuration(format!(
-                        "{} exposes no descriptor — it is not a #[node] type",
-                        std::any::type_name::<P>()
-                    ))
-                })?
-                .with_config_schema(C::node_config_schema_document());
-            let node_class_import_path = descriptor.node_class_import_path.clone();
-            let constructor: DynamicNodeConstructorFn = Box::new(
-                |node: &GraphNode| -> Result<Box<dyn DynGeneratedNode + Send>> {
-                    if let Some(config) = &node.config {
-                        config_the_node_type_takes::<C>(
-                            &node.display_name,
-                            &node.node_type,
-                            config,
-                        )?;
+        warn_of_a_failed_registration_of::<P>(
+            descriptor_of::<P>()
+                .map(|descriptor| descriptor.with_config_schema(C::node_config_schema_document()))
+                .and_then(|descriptor| {
+                    self.register_host_compiled_node_type_taking::<P, C>(
+                        descriptor,
+                        |_| P::Config::default(),
+                        WhatAConversionSupplies::default(),
+                    )
+                }),
+        );
+    }
+
+    /// Register `P` under `descriptor`, its nodes taking a config of `C`: a constructor that
+    /// refuses a config `C` would not take and builds `P` from the one `config_of_the_node`
+    /// makes of it, and a check refusing that config before any node of it is added.
+    fn register_host_compiled_node_type_taking<P, C>(
+        &self,
+        descriptor: NodeDescriptor,
+        config_of_the_node: fn(C) -> P::Config,
+        supplied: WhatAConversionSupplies,
+    ) -> Result<NodeClassImportPath>
+    where
+        P: GeneratedNode + 'static,
+        P::Config: Config,
+        C: Config,
+    {
+        let constructor: DynamicNodeConstructorFn = Box::new(
+            move |node: &GraphNode| -> Result<Box<dyn DynGeneratedNode + Send>> {
+                let config: C = match &node.config {
+                    Some(config) => {
+                        config_the_node_type_takes(&node.display_name, &node.node_type, config)?
                     }
-                    Ok(Box::new(P::from_config(P::Config::default())?))
-                },
-            );
-            let config_taken_check: NodeConfigTakenCheckFn =
-                Box::new(|node_name, node_type, config| {
-                    config_the_node_type_takes::<C>(node_name, node_type, config).map(drop)
-                });
-            self.register_with_constructor(
-                descriptor,
-                HostCompiledRustTypeRegistration {
-                    constructor,
-                    config_taken_check,
-                },
-                WhatAConversionSupplies::default(),
-            )?;
-            Ok(node_class_import_path)
-        })();
-        warn_of_a_failed_registration_of::<P>(registered);
+                    None => C::default(),
+                };
+                Ok(Box::new(P::from_config(config_of_the_node(config))?))
+            },
+        );
+        let config_taken_check: NodeConfigTakenCheckFn =
+            Box::new(|node_name, node_type, config| {
+                config_the_node_type_takes::<C>(node_name, node_type, config).map(drop)
+            });
+        let node_class_import_path = descriptor.node_class_import_path.clone();
+        self.register_with_constructor(
+            descriptor,
+            HostCompiledRustTypeRegistration {
+                constructor,
+                config_taken_check,
+            },
+            supplied,
+        )?;
+        Ok(node_class_import_path)
     }
 
     /// Register `registration` under `descriptor`'s import path, refusing a

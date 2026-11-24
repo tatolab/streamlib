@@ -37,9 +37,7 @@ pub use audio_window_contract::{
     AudioWindowContract, AudioWindowContractDeclaredValues,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
-pub use config_schema_document::{
-    NodeConfigJsonSchema, NodeConfigKeyDescribedBy, NodeConfigKeyDescription,
-};
+pub use config_schema_document::NodeConfigJsonSchema;
 pub use error::{SchemaError, SchemaResult};
 pub use exposed_name_cast::{
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,

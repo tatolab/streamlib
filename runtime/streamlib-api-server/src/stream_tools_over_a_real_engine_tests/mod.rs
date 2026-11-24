@@ -66,6 +66,7 @@ mod imported_and_nested_stream_fragment_tests;
 mod input_value_lifetime_tests;
 mod input_value_set_live_tests;
 mod input_value_set_tests;
+mod input_value_test_node;
 mod link_candidates_checked_before_one_is_made_tests;
 mod link_checked_before_it_is_made_tests;
 mod loop_closing_link_judged_before_commit_tests;

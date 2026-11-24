@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 pub use streamlib_node_schema::config_schema_document::{
-    NodeConfigJsonSchema, NodeConfigKeyDescribedBy, NodeConfigKeyDescription,
-    schema_carrying_the_declared_description,
+    NodeConfigJsonSchema, schema_carrying_the_declared_description,
 };
 pub use streamlib_node_schema::description_lint::{
     DescribedDeclaration, DescriptionLintFinding, DescriptionLintProblem,

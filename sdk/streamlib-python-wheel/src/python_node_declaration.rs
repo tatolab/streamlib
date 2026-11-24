@@ -502,13 +502,14 @@ class AudioConsumer:
         }
     }
 
-    /// One frame rate, two authoring languages, one frame rate declaration.
+    /// One frame rate, two authoring languages, one family declaration.
     #[test]
     fn a_python_declared_frame_rate_and_a_rust_declared_one_are_the_same_declaration() {
         let python_outputs = read_python_declaration(
             "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   video = Output(Image, rate=from_config('frames_per_second'))\n",
+             \x20   video = Output(Image, formats=('rgba8_unorm',), \
+             rate=from_config('frames_per_second'))\n",
         )
         .expect("the declaration reads")
         .descriptor
@@ -519,8 +520,8 @@ class AudioConsumer:
                 .expect("the macro emits a descriptor");
 
         assert_eq!(
-            python_outputs[0].family.frame_rate, rust_descriptor.outputs[0].family.frame_rate,
-            "the two authoring surfaces must produce one frame rate declaration"
+            python_outputs[0].family, rust_descriptor.outputs[0].family,
+            "the two authoring surfaces must produce one declaration"
         );
         assert_eq!(
             python_outputs[0].family.frame_rate.clone(),

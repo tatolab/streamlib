@@ -282,6 +282,29 @@ fn the_unknown_port_key_error_offers_every_key_a_port_accepts() {
     }
 }
 
+/// No pin type a Rust port names travels on Packets, so a Packets key is no key of a Rust port.
+///
+/// Mental-revert: a Rust port takes `codec` and is refused only as a family that does not take it.
+#[test]
+fn a_packets_key_is_refused_as_an_unknown_port_key() {
+    for key in [
+        quote! { codec = "h264" },
+        quote! { requires_codec = ["h264"] },
+    ] {
+        let msg = parse_err(quote! {
+            execution = reactive,
+            output("packets", pin_type = Tensor, #key),
+        });
+        let (_, offered) = msg
+            .split_once("expected")
+            .unwrap_or_else(|| panic!("an unknown port key; {key}: {msg}"));
+        assert!(
+            !offered.contains("codec"),
+            "the list offers no Packets key; {key}: {msg}"
+        );
+    }
+}
+
 fn declared_contract(parsed: &ParsedNodeAttr) -> &AudioWindowContractDeclaredValues {
     match parsed.inputs[0]
         .audio_window

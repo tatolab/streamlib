@@ -288,3 +288,34 @@ fn the_catalog_lists_its_format_as_a_menu_read_at_setup() {
     );
     assert!(descriptor.config_schema.is_none(), "{rendered}");
 }
+
+/// The formats `image` states are those one `[h, w, c]` tensor holds, each a `format` the node
+/// writes, so a link to it is judged by what it writes.
+///
+/// Mental-revert: a format the kernel learns to write and `image` leaves out refuses a link the
+/// node would serve.
+#[test]
+fn its_image_output_states_each_format_one_tensor_holds() {
+    use streamlib::sdk::descriptors::{PinType, TexturePixelFormat};
+    use streamlib::sdk::nodes::GeneratedNode;
+
+    let conversion = <TensorToTexture::Node as GeneratedNode>::descriptor()
+        .expect("a descriptor")
+        .pin_conversion()
+        .unwrap_or_else(|refusal| panic!("{refusal}"))
+        .expect("it states a conversion");
+    let the_formats_one_tensor_holds: Vec<TexturePixelFormat> = TexturePixelFormat::EVERY_FORMAT
+        .into_iter()
+        .filter(|format| {
+            TextureFormat::from_wire_name(format.wire_name())
+                .and_then(super::texture_to_tensor::tensor_element_and_channels_of_one_pixel)
+                .is_some()
+        })
+        .collect();
+    assert_eq!(
+        conversion.output_pin_type,
+        PinType::Texture {
+            pixel_formats: the_formats_one_tensor_holds
+        }
+    );
+}

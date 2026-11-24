@@ -615,16 +615,9 @@ fn no_declared_meta_or_port_descriptions() -> NodeDeclaredMetaAndPortDescription
 }
 
 fn rendered_descriptor() -> String {
-    rendered_descriptor_for_config_type(&quote! {
-        __streamlib_sdk::nodes::EmptyConfig
-    })
-}
-
-fn rendered_descriptor_for_config_type(config_type: &TokenStream) -> String {
     render_token_stream_without_whitespace(generate_descriptor_from_schema(
         &minimal_schema(),
         &no_declared_meta_or_port_descriptions(),
-        config_type,
         &NodeSettingsEmitted::of(None),
     ))
 }
@@ -638,7 +631,6 @@ fn only_a_node_paced_by_real_time_declares_it_on_its_descriptor() {
                 ..minimal_schema()
             },
             &no_declared_meta_or_port_descriptions(),
-            &quote! { __streamlib_sdk::nodes::EmptyConfig },
             &NodeSettingsEmitted::of(None),
         ))
     };
@@ -655,7 +647,6 @@ fn only_a_node_that_declares_a_category_sets_one_on_its_descriptor() {
                 category,
                 ..no_declared_meta_or_port_descriptions()
             },
-            &quote! { __streamlib_sdk::nodes::EmptyConfig },
             &NodeSettingsEmitted::of(None),
         ))
     };
@@ -672,7 +663,6 @@ fn only_a_node_that_states_a_conversion_says_so_on_its_descriptor() {
                 conversion,
                 ..no_declared_meta_or_port_descriptions()
             },
-            &quote! { __streamlib_sdk::nodes::EmptyConfig },
             &NodeSettingsEmitted::of(None),
         ))
     };
@@ -691,7 +681,6 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(built_in_node, &schema.name),
-        &quote! { __streamlib_sdk::nodes::EmptyConfig },
         &NodeSettingsEmitted::of(None),
         &[],
     ))
@@ -729,24 +718,6 @@ fn a_built_in_nodes_identity_is_its_class_in_the_stream_package() {
     assert!(
         !rendered.contains("module_path!()"),
         "a built-in's type never reads its module path — got: {rendered}"
-    );
-}
-
-/// The descriptor's config slot carries the config type's schema, derived
-/// through the bound-carrying trait — never a name, and never `schemars`
-/// reached directly, which would fail on a bound the author has no path to.
-#[test]
-fn the_descriptor_derives_its_config_schema_from_the_declared_config_type() {
-    let rendered = rendered_descriptor_for_config_type(&quote! {
-        crate::camera_source::CameraSourceConfig
-    });
-    assert!(
-        rendered.contains(
-            "with_config_schema(<crate::camera_source::CameraSourceConfigas\
-                 __streamlib_sdk::descriptors::NodeConfigJsonSchema>::\
-                 node_config_schema_document())"
-        ),
-        "the descriptor must derive the declared config type's schema — got: {rendered}"
     );
 }
 
@@ -895,7 +866,6 @@ fn a_crate_visible_node_generates_crate_visible_items_only() {
 fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
     let settings_type: syn::Path = syn::parse_quote! { crate::BlurSettings };
     let settings = NodeSettingsEmitted::of(Some(&settings_type));
-    let config_type = quote! { __streamlib_sdk::nodes::EmptyConfig };
 
     let node_struct = render_token_stream_without_whitespace(generate_node_struct_from_schema(
         &minimal_schema(),
@@ -915,7 +885,6 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
     let descriptor = render_token_stream_without_whitespace(generate_descriptor_from_schema(
         &minimal_schema(),
         &no_declared_meta_or_port_descriptions(),
-        &config_type,
         &settings,
     ));
     assert!(
@@ -929,7 +898,6 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(false, "MinimalProbe"),
-        &config_type,
         &settings,
         &[],
     ));
