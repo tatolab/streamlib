@@ -479,7 +479,7 @@ fn parse_body(
 }
 
 /// Every port, input or output, needs a name of its own once cast — the rule
-/// `@node.process` holds a Python class to.
+/// bare `@node` holds a Python class to.
 fn refuse_ports_that_cast_alike<'port>(
     ports: impl IntoIterator<Item = &'port ParsedPort>,
 ) -> syn::Result<()> {

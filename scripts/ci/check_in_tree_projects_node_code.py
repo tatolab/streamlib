@@ -52,8 +52,6 @@ FIRST_PARTY_DISTRIBUTION_NAME_PREFIX = "tatolab-"
 PYTHON_NODE_DECLARATIONS_CHECK = "python_node_declarations"
 """The check whose `not_checked` fails a project."""
 
-"""The finding code of a node declared in a retired form."""
-
 DIRECTORY_NAMES_NEVER_READ = frozenset({".venv", "__pycache__", "node_modules", "target", "tests", "imports"})
 """Folders whose Python is not a project's own node code."""
 

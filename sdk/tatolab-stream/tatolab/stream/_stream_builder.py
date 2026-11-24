@@ -13,7 +13,7 @@ import copy
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, overload
+from typing import Any, Protocol, overload
 
 from ._built_in_node import BuiltInNode, InputValuesOfATypedBuiltInNode
 from ._stream_clock_spec import (
@@ -300,13 +300,13 @@ class StreamBuilder:
         typed_pins = TypedNodePins.of(node_class, node_class.__name__)
         node_names_the_values_reference: list[str] = []
         if typed_pins is not None and values is not None:
-            given = _input_values_as_a_mapping(values, "input_values")
+            given = _input_values_as_a_mapping(values)
             node_names_the_values_reference.extend(
                 value.name for value in given.values() if isinstance(value, NodeReference)
             )
             values = typed_pins.stored_input_values(given)
         input_values_as_json_object = _input_values_as_json_object(
-            values, "input_values", node_names_the_values_reference
+            values, node_names_the_values_reference
         )
         for referenced_node_name in node_names_the_values_reference:
             self._refuse_a_node_this_stream_does_not_hold(referenced_node_name)
@@ -345,7 +345,7 @@ class StreamBuilder:
         _refuse_settings_the_generator_does_not_promote(generator_function, promoted_settings)
         node_names_the_settings_reference: list[str] = []
         promoted_settings_as_json = _input_values_as_json_object(
-            promoted_settings, "input_values", node_names_the_settings_reference
+            promoted_settings, node_names_the_settings_reference
         )
         if node_names_the_settings_reference:
             raise TypeError(
@@ -655,14 +655,14 @@ def _suggested_module_name(qualname: str) -> str:
     return "".join(snake_characters) or "nodes"
 
 
-type _ValuesArgument = Literal["input_values"]
-"""The argument of `add` a node's values were given as."""
+_INPUT_VALUES_ARGUMENT = "input_values"
+"""The argument of `add` a node's values are given as."""
 
 
-def _input_values_as_a_mapping(values: object, argument: _ValuesArgument) -> Mapping[Any, Any]:
+def _input_values_as_a_mapping(values: object) -> Mapping[Any, Any]:
     if not isinstance(values, Mapping):
         raise TypeError(
-            f"{argument} must be a mapping of input names to JSON values — the object a "
+            f"{_INPUT_VALUES_ARGUMENT} must be a mapping of input names to JSON values — the object a "
             f"node's values are; got {values!r}, of type `{_type_name_as_written(values)}`"
         )
     return values  # pyright: ignore[reportUnknownVariableType]
@@ -670,14 +670,16 @@ def _input_values_as_a_mapping(values: object, argument: _ValuesArgument) -> Map
 
 def _input_values_as_json_object(
     values: Mapping[str, Any] | None,
-    argument: _ValuesArgument,
     node_names_the_values_reference: list[str],
 ) -> dict[str, Any]:
     if values is None:
         return {}
-    as_a_mapping = _input_values_as_a_mapping(values, argument)
+    as_a_mapping = _input_values_as_a_mapping(values)
     return _json_object(
-        as_a_mapping, argument, {id(as_a_mapping): argument}, node_names_the_values_reference
+        as_a_mapping,
+        _INPUT_VALUES_ARGUMENT,
+        {id(as_a_mapping): _INPUT_VALUES_ARGUMENT},
+        node_names_the_values_reference,
     )
 
 

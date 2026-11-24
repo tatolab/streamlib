@@ -72,6 +72,28 @@ def test_a_node_that_cannot_set_itself_up_reports_the_failure(stand_in_parent):
     lifecycle_thread.join(timeout=5.0)
 
 
+def test_a_class_not_under_bare_node_is_refused_at_setup_naming_its_replacement(stand_in_parent):
+    """A class an older `tatolab-stream` declared with `@node.process` describes, and nothing
+    builds it from fields and pins: its setup fails naming bare `@node`.
+
+    Mental-revert: building it with no members again constructs it with nothing bound.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:DeclaredByAnOlderTatolabStreamProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    refusal = stand_in_parent.receive()
+    assert refusal["rpc"] == "error"
+    assert "is not a class under bare `@node`" in refusal["error"]
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+
+
 def test_a_manual_node_whose_start_raised_fails_its_node(
     stand_in_parent, log_records_this_process_sends_its_stand_in_parent
 ):

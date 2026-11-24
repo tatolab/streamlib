@@ -17,6 +17,11 @@ from tatolab.stream import (
     TexturePixelFormats,
     node,
 )
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_DECLARED_STAMP,
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 from tatolab.runtime._node_the_wheel_hosts import (
     NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG,
     stamp_the_ports_of_a_node_the_wheel_hosts,
@@ -396,3 +401,16 @@ class FieldsProbe:
 
     def process(self, ctx) -> None:
         WHAT_THE_FIELDS_PROBE_SAW.append(("process", self.gain, self.tint, self.width))
+
+
+class DeclaredByAnOlderTatolabStreamProbe:
+    """A class stamped as an older `tatolab-stream`'s `@node.process` stamped one: declared,
+    with its ports, and none of the fields and pins bare `@node` declares."""
+
+    def process(self, ctx) -> None:
+        pass
+
+
+setattr(DeclaredByAnOlderTatolabStreamProbe, NODE_DECLARATION_DECLARED_STAMP, True)
+setattr(DeclaredByAnOlderTatolabStreamProbe, NODE_DECLARATION_INPUT_PORTS_STAMP, [])
+setattr(DeclaredByAnOlderTatolabStreamProbe, NODE_DECLARATION_OUTPUT_PORTS_STAMP, [])
