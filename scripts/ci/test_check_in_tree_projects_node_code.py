@@ -3,7 +3,7 @@
 
 """check_in_tree_projects_node_code.py reaches every project and first-party module, and judges
 `tatolab check --json` by its codes: an error or an unfinished Python node declaration check
-fails a project, and each retired declaration is counted by project."""
+fails a project, and so does a declaration in a retired form."""
 
 import json
 import tempfile
@@ -118,7 +118,7 @@ class InTreeProjectsTest(unittest.TestCase):
 
 
 class JudgeACheckAnswerTest(unittest.TestCase):
-    def test_retired_declarations_alone_pass_and_are_counted(self) -> None:
+    def test_a_retired_declaration_fails_naming_its_node_type(self) -> None:
         outcome = judge_a_check_answer(
             A_PROJECT,
             {
@@ -127,7 +127,7 @@ class JudgeACheckAnswerTest(unittest.TestCase):
                 "findings": [finding("declaration_retired", "warning", node_type="Hum")],
             },
         )
-        self.assertEqual((outcome.failed_because, outcome.retired_declarations), ([], ["nodes/a.py:4: Hum"]))
+        self.assertEqual(outcome.failed_because, ["nodes/a.py:4: declaration_retired: Hum"])
 
     def test_an_error_finding_fails_with_its_code_and_words(self) -> None:
         outcome = judge_a_check_answer(
@@ -153,9 +153,7 @@ class JudgeACheckAnswerTest(unittest.TestCase):
                 ],
             },
         )
-        self.assertEqual(
-            (outcome.failed_because, outcome.retired_declarations), ([], ["python/tests_of_mine.py:4: Kept"])
-        )
+        self.assertEqual(outcome.failed_because, ["python/tests_of_mine.py:4: declaration_retired: Kept"])
 
     def test_a_python_node_declaration_check_that_did_not_finish_fails(self) -> None:
         for state in ["not_checked", "a_state_added_later"]:
@@ -198,17 +196,6 @@ class JudgeACheckAnswerTest(unittest.TestCase):
 
 
 class ReportTest(unittest.TestCase):
-    def test_the_report_lists_retired_declarations_by_project_with_the_total(self) -> None:
-        first = ProjectCheckOutcome(A_PROJECT, retired_declarations=["a.py:1: A", "a.py:9: B"])
-        second = ProjectCheckOutcome(InTreeProject("packages/b", Path("packages/b"), True))
-        third = ProjectCheckOutcome(
-            InTreeProject("packages/c", Path("packages/c"), False), retired_declarations=["c.py:2: C"]
-        )
-        report = the_report([first, second, third], [])
-        self.assertIn("  examples/a: 2\n    a.py:1: A\n    a.py:9: B\n  packages/c: 1\n", report)
-        self.assertNotIn("packages/b:", report)
-        self.assertIn("Total declarations in a retired form: 3\n", report)
-
     def test_a_failure_outranks_an_unfinished_run(self) -> None:
         passed = ProjectCheckOutcome(A_PROJECT)
         failed = ProjectCheckOutcome(A_PROJECT, failed_because=["x"])

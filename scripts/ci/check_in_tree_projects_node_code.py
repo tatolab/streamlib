@@ -14,9 +14,8 @@ older code.
 The unit's `tatolabd` is started once, and `tatolab check --json --dir <project>` asked of it
 for each project. A project fails when its check fails, or when its Python node declarations
 were not checked to their end. A finding in a module under a `tests/` folder is left out: a
-project's tests import what only its test environment holds, and no test ships. Each declaration in a retired form is a `declaration_retired`
-warning, which passes; the run prints them by project with their total, which says when the
-last node is typed and the retired forms can be deleted.
+project's tests import what only its test environment holds, and no test ships. A declaration in a
+retired form, a `declaration_retired` warning, fails its project too: every in-tree node is typed.
 
 Exits 0 when every project passed, 1 when a project failed, and 2 when the run could not
 check every project: a venv that would not sync, or a runtime that did not answer.
@@ -107,9 +106,6 @@ class ProjectCheckOutcome:
     not_fully_checked_because: list[str] = field(default_factory=list)
     """Each reason the run could not check it: a venv that would not sync, an unread answer."""
 
-    retired_declarations: list[str] = field(default_factory=list)
-    """Each declaration in a retired form, as `path:line: node type`."""
-
 
 def in_tree_projects(repository: Path) -> list[InTreeProject]:
     """Every in-tree project and first-party module, sorted by where it is."""
@@ -159,9 +155,9 @@ def holds_python_of_its_own(project: InTreeProject) -> bool:
 
 
 def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> ProjectCheckOutcome:
-    """What `tatolab check --json` answered of `project`, judged: every error outside its tests fails
-    it, as does a Python node declaration check that did not run to its end; a retired declaration
-    outside its tests is counted."""
+    """What `tatolab check --json` answered of `project`, judged: every error and every retired
+    declaration outside its tests fails it, as does a Python node declaration check that did not
+    run to its end."""
     outcome = ProjectCheckOutcome(project)
     for finding in answer.get("findings", []):
         if DIRECTORY_NAME_OF_TESTS in PurePosixPath(finding.get("path", "")).parts[:-1]:
@@ -171,7 +167,9 @@ def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> Proj
             words = (finding.get("words") or "").replace("\n", "\n    ")
             outcome.failed_because.append(f"{place}: {finding.get('finding_code')}: {words}")
         elif finding.get("finding_code") == RETIRED_DECLARATION_FINDING_CODE:
-            outcome.retired_declarations.append(f"{place}: {finding.get('node_type') or '?'}")
+            outcome.failed_because.append(
+                f"{place}: {RETIRED_DECLARATION_FINDING_CODE}: {finding.get('node_type') or '?'}"
+            )
     python_node_declaration_checks = [
         check for check in answer.get("checks", []) if check.get("check") == PYTHON_NODE_DECLARATIONS_CHECK
     ]
@@ -192,23 +190,13 @@ def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> Proj
 
 
 def the_report(outcomes: Sequence[ProjectCheckOutcome], unchecked: Sequence[InTreeProject]) -> str:
-    """Each project's failures, then each retired declaration by project with the total."""
+    """Each project's failures, then the projects that hold no Python of their own."""
     lines: list[str] = []
     for outcome in outcomes:
         for reason in outcome.not_fully_checked_because:
             lines.append(f"{outcome.project.name}: not fully checked: {reason}")
         for reason in outcome.failed_because:
             lines.append(f"{outcome.project.name}: failed: {reason}")
-    lines.append("")
-    lines.append("Declarations in a retired form, by project:")
-    total = 0
-    for outcome in outcomes:
-        if not outcome.retired_declarations:
-            continue
-        total += len(outcome.retired_declarations)
-        lines.append(f"  {outcome.project.name}: {len(outcome.retired_declarations)}")
-        lines.extend(f"    {declaration}" for declaration in outcome.retired_declarations)
-    lines.append(f"Total declarations in a retired form: {total}")
     for project in unchecked:
         lines.append(f"{project.name}: holds no Python of its own, so no node code to check")
     failed = sum(1 for outcome in outcomes if outcome.failed_because)
