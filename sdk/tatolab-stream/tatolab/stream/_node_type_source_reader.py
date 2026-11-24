@@ -10,7 +10,10 @@ node's `@node.meta` beside its kind decorator, and `@named_pin_type` classes, ea
 of the module named by its import path. A
 port is listed where the declaration states it in source; one whose family is computed at
 import is listed with no family, and a node whose ports only its native half knows is listed
-with none. The answer is a JSON-ready dict the runtime's node-type listing passes on.
+with none. A record a function node returns is read where it is defined: in its own module or
+in another of the same source that the module imports it from, so a `NamedTuple` imported from
+another module lists one output per field as the loaded node does. The answer is a JSON-ready
+dict the runtime's node-type listing passes on.
 """
 
 from __future__ import annotations
@@ -23,6 +26,15 @@ from pathlib import PurePosixPath
 from typing import Any, Optional
 
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
+from ._node_type_source_records import (
+    NAMED_TUPLE_BASE,
+    FieldOfARecord,
+    ModulesOfOneSource,
+    RecordOfOutputs,
+    imported_modules_by_local_name,
+    imported_names_by_local_name,
+    named_tuples_called_by_name,
+)
 from ._retired_declarations import RETIRED_DECLARATIONS, RetiredDeclaration
 
 __all__ = [
@@ -105,7 +117,6 @@ _CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
 _UNREAD_MESSAGE_ANNOTATION = "UnreadMessage"
 _SINGLE_OUTPUT_PORT_NAME = "result"
-_NAMED_TUPLE_BASE = "NamedTuple"
 
 
 def module_name_of_a_source_path(relative_path: str) -> Optional[str]:
@@ -133,6 +144,15 @@ def read_node_types_and_graph_generators_from_module_sources(
     graph_generators: list[dict[str, Any]] = []
     named_pin_types: list[dict[str, Any]] = []
     unreadable_modules: list[dict[str, Any]] = []
+    module_sources = list(module_sources)
+    modules_of_the_source = ModulesOfOneSource(
+        _ModuleDeclarationReading.of_the_names_a_module_binds,
+        {
+            module_name: (listed_path, source_text)
+            for module_name, listed_path, source_text in module_sources
+            if isinstance(source_text, str)
+        }
+    )
     for module_name, listed_path, source_text in module_sources:
         if isinstance(source_text, OSError):
             unreadable_modules.append(
@@ -171,7 +191,9 @@ def read_node_types_and_graph_generators_from_module_sources(
                 }
             )
             continue
-        module_reading = _ModuleDeclarationReading(module_name, listed_path, module_tree)
+        module_reading = _ModuleDeclarationReading(
+            module_name, listed_path, module_tree, modules_of_its_source=modules_of_the_source
+        )
         node_types.extend(module_reading.node_types)
         graph_generators.extend(module_reading.graph_generators)
         named_pin_types.extend(module_reading.named_pin_types)
@@ -205,11 +227,21 @@ def read_retired_declarations_from_module_source(
 
 
 class _ModuleDeclarationReading:
-    """One module's node types and graph generators, read from its parsed tree."""
+    """One module's node types and graph generators, read from its parsed tree; with
+    `reads_its_declarations` false, only the names it binds, which another module reads."""
 
-    def __init__(self, module_name: str, listed_path: str, module_tree: ast.Module) -> None:
+    def __init__(
+        self,
+        module_name: str,
+        listed_path: str,
+        module_tree: ast.Module,
+        *,
+        modules_of_its_source: Optional[ModulesOfOneSource] = None,
+        reads_its_declarations: bool = True,
+    ) -> None:
         self._module_name = module_name
         self._listed_path = listed_path
+        self._modules_of_its_source = modules_of_its_source
         self._sdk_names_by_local_name = _sdk_names_by_local_name(module_tree)
         self._module_level_strings_by_name = _module_level_strings_by_name(module_tree)
         self._classes_by_name = {
@@ -217,11 +249,32 @@ class _ModuleDeclarationReading:
             for statement in module_tree.body
             if isinstance(statement, ast.ClassDef)
         }
+        self._named_tuples_called_by_name = named_tuples_called_by_name(module_tree)
+        self._imported_names = imported_names_by_local_name(module_tree)
+        self._imported_modules = imported_modules_by_local_name(module_tree)
         self.node_types: list[dict[str, Any]] = []
         self.graph_generators: list[dict[str, Any]] = []
         self.named_pin_types: list[dict[str, Any]] = []
         self.retired_declarations: list[dict[str, Any]] = []
-        self._read_statements(module_tree.body, qualname_prefix="", at_module_scope=True)
+        if reads_its_declarations:
+            self._read_statements(module_tree.body, qualname_prefix="", at_module_scope=True)
+
+    @classmethod
+    def of_the_names_a_module_binds(
+        cls,
+        module_name: str,
+        listed_path: str,
+        module_tree: ast.Module,
+        modules_of_its_source: ModulesOfOneSource,
+    ) -> "_ModuleDeclarationReading":
+        """The names the module `module_name` binds, read for another module of its source."""
+        return cls(
+            module_name,
+            listed_path,
+            module_tree,
+            modules_of_its_source=modules_of_its_source,
+            reads_its_declarations=False,
+        )
 
     def _read_statements(
         self, statements: list[ast.stmt], qualname_prefix: str, at_module_scope: bool
@@ -419,25 +472,132 @@ class _ModuleDeclarationReading:
                 return None
             output_annotation = stateful_arguments[0]
         # Under the family grammar a returned dataclass is one output per field; under bare
-        # `@node` a returned `NamedTuple` is, and a dataclass is one bundle pin.
-        record_of_outputs = self._classes_by_name.get(_annotated_type_name(output_annotation) or "")
+        # `@node` a returned `NamedTuple` is, unless it is a named pin type, and a dataclass is
+        # one bundle pin.
+        record_of_outputs = self._the_record_an_annotation_names(output_annotation)
         if record_of_outputs is not None and reads_pin_types:
             record_of_outputs = (
-                record_of_outputs if self._is_a_named_tuple_of_outputs(record_of_outputs) else None
+                record_of_outputs
+                if record_of_outputs.is_a_named_tuple and not record_of_outputs.is_a_named_pin_type
+                else None
             )
         if record_of_outputs is not None:
             return [
-                self._function_port(field.target.id, field.annotation)
-                for field in record_of_outputs.body
-                if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
+                field.typed_in._function_port(field.name, field.annotation)
+                for field in record_of_outputs.fields
             ]
         return [self._function_port(_SINGLE_OUTPUT_PORT_NAME, output_annotation)]
 
-    def _is_a_named_tuple_of_outputs(self, record: ast.ClassDef) -> bool:
-        """Whether `record` subclasses `NamedTuple` and is not a named pin type, which is one pin."""
-        return any(
-            _annotated_type_name(base) == _NAMED_TUPLE_BASE for base in record.bases
-        ) and self._decorated_with(record, NAMED_PIN_TYPE_DECORATOR) is None
+    def _the_record_an_annotation_names(
+        self, annotation: Optional[ast.expr]
+    ) -> Optional[RecordOfOutputs]:
+        """The record `annotation` names, defined in this module or imported from another of its
+        source; `None` for any other annotation."""
+        if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+            try:
+                annotation = ast.parse(annotation.value, mode="eval").body
+            except SyntaxError:
+                return None
+        dotted_name = None if annotation is None else _dotted_name_of(annotation)
+        if dotted_name is None:
+            return None
+        owner, _, name = dotted_name.rpartition(".")
+        if owner:
+            owner_module = self._the_module_a_name_binds(owner)
+            names = None if owner_module is None else self._names_bound_by(owner_module)
+            if names is not None:
+                return names._the_record_named(name, frozenset())
+        return self._the_record_named(name, frozenset())
+
+    def _the_record_named(
+        self, name: str, seen: frozenset[tuple[str, str]]
+    ) -> Optional[RecordOfOutputs]:
+        """The record this module binds to `name`: a class it defines, a `NamedTuple` it calls
+        into being, or one it imports from another module of its source; `seen` holds each
+        `(module, name)` already followed, so an import cycle reads as no record."""
+        if (self._module_name, name) in seen:
+            return None
+        seen = seen | {(self._module_name, name)}
+        record_class = self._classes_by_name.get(name)
+        if record_class is not None:
+            return self._the_record_a_class_defines(record_class, seen)
+        named_tuple_fields = self._named_tuples_called_by_name.get(name)
+        if named_tuple_fields is not None:
+            return RecordOfOutputs(
+                fields=[
+                    FieldOfARecord(field_name, field_annotation, self)
+                    for field_name, field_annotation in named_tuple_fields
+                ],
+                is_a_named_tuple=True,
+                is_a_named_pin_type=False,
+            )
+        imported = self._imported_names.get(name)
+        if imported is None:
+            return None
+        relative_level, from_module, imported_name = imported
+        names = self._names_bound_by(self._the_module_imported_from(relative_level, from_module))
+        return None if names is None else names._the_record_named(imported_name, seen)
+
+    def _the_record_a_class_defines(
+        self, record_class: ast.ClassDef, seen: frozenset[tuple[str, str]]
+    ) -> RecordOfOutputs:
+        """The record `record_class` is: a `NamedTuple` of the fields it annotates, or of those of
+        the `NamedTuple` it subclasses; else a record of the fields it annotates."""
+        is_a_named_pin_type = self._decorated_with(record_class, NAMED_PIN_TYPE_DECORATOR) is not None
+        own_fields = [
+            FieldOfARecord(field.target.id, field.annotation, self)
+            for field in record_class.body
+            if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
+        ]
+        if any(_annotated_type_name(base) == NAMED_TUPLE_BASE for base in record_class.bases):
+            return RecordOfOutputs(own_fields, True, is_a_named_pin_type)
+        for base in record_class.bases:
+            base_name = _dotted_name_of(base)
+            base_record = None
+            if base_name is not None:
+                owner, _, name = base_name.rpartition(".")
+                if owner:
+                    owner_module = self._the_module_a_name_binds(owner)
+                    names = None if owner_module is None else self._names_bound_by(owner_module)
+                    base_record = None if names is None else names._the_record_named(name, seen)
+                else:
+                    base_record = self._the_record_named(name, seen)
+            if base_record is not None and base_record.is_a_named_tuple:
+                # A class subclassing a `NamedTuple` holds the fields that `NamedTuple` names.
+                return RecordOfOutputs(base_record.fields, True, is_a_named_pin_type)
+        return RecordOfOutputs(own_fields, False, is_a_named_pin_type)
+
+    def _the_module_a_name_binds(self, local_name: str) -> Optional[str]:
+        """The module `local_name` binds by an import: `import a.b as c` binds `c` to `a.b`, and
+        `from a import b` binds `b` to `a.b`, when that is a module."""
+        first_name, _, rest = local_name.partition(".")
+        bound = self._imported_modules.get(first_name)
+        if bound is None and first_name in self._imported_names:
+            relative_level, from_module, imported_name = self._imported_names[first_name]
+            parent = self._the_module_imported_from(relative_level, from_module)
+            bound = f"{parent}.{imported_name}" if parent else imported_name
+        if bound is None:
+            return None
+        return f"{bound}.{rest}" if rest else bound
+
+    def _the_module_imported_from(self, relative_level: int, from_module: str) -> str:
+        """The absolute name of the module `from <dots><from_module> import ...` names here."""
+        if relative_level == 0:
+            return from_module
+        package_parts = self._module_name.split(".")
+        if self._modules_of_its_source is None or not self._modules_of_its_source.is_a_package(
+            self._module_name
+        ):
+            package_parts = package_parts[:-1]
+        package_parts = package_parts[: len(package_parts) - (relative_level - 1)]
+        return ".".join([*package_parts, *([from_module] if from_module else [])])
+
+    def _names_bound_by(self, module_name: str) -> Optional["_ModuleDeclarationReading"]:
+        if module_name == self._module_name:
+            return self
+        if self._modules_of_its_source is None:
+            return None
+        return self._modules_of_its_source.names_bound_by(module_name)
 
     def _function_port(
         self,
