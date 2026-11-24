@@ -109,7 +109,7 @@ def test_a_node_writes_a_named_value_and_the_next_reads_an_equal_one():
     )
 
     assert fed(data_plane, island).ran_compiled_by_node_id == {"sensor-1": False, "double-1": False}
-    assert data_plane.read_from_input_port("reading", into=SensorReading) == SensorReading(0.5, 0.5)
+    assert SensorReading.from_bytes(data_plane.read_from_input_port("reading")) == SensorReading(0.5, 0.5)
 
 
 def test_an_optional_named_input_linked_to_nothing_is_none():

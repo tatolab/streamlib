@@ -26,7 +26,7 @@ fn a_message_written_on_a_wired_output_arrives_on_a_wired_input_as_the_same_byte
             .unwrap();
 
         let received = destination
-            .read_from_input_port(python, "frames_from_upstream", None)
+            .read_from_input_port(python, "frames_from_upstream")
             .unwrap()
             .expect("the wired input received nothing");
         assert_eq!(
@@ -79,7 +79,7 @@ fn a_channels_block_written_from_a_planar_array_reads_back_as_a_channels_block()
         assert_eq!(attribute("dtype").extract::<String>().unwrap(), "f32");
 
         let by_name = destination
-            .read_from_input_port(python, "frames_from_upstream", None)
+            .read_from_input_port(python, "frames_from_upstream")
             .unwrap()
             .expect("the second block arrived");
         assert_eq!(
@@ -419,7 +419,7 @@ fn a_write_refuses_a_payload_that_is_not_a_buffer_by_name() {
         }
         assert!(
             destination
-                .read_from_input_port(python, "frames_from_upstream", None)
+                .read_from_input_port(python, "frames_from_upstream")
                 .unwrap()
                 .is_none(),
             "a refused write publishes nothing"

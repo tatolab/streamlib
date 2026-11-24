@@ -253,7 +253,7 @@ fn a_helper_that_opened_its_board_mirrors_its_losses_as_its_reads_and_writes_cou
         };
         let read_frame_index = || {
             let payload = destination
-                .read_from_input_port(python, "frames_from_upstream", None)
+                .read_from_input_port(python, "frames_from_upstream")
                 .unwrap()
                 .expect("the port holds a message");
             i64::from_le_bytes(

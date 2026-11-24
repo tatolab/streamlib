@@ -3,8 +3,8 @@
 
 """The composable that makes a cast object the tensor-protocol producer.
 
-The object `read(port, into=T)` hands back speaks `__dlpack__` itself, through
-one public piece any cast type composes. The type under test here is a
+The frame a typed read hands back speaks `__dlpack__` itself, through one
+public piece any frame type composes. The type under test here is a
 *user-authored* one: if the protocol only worked for the class we ship, these
 would fail.
 
@@ -331,7 +331,7 @@ def test_a_generated_dataclass_constructor_claims_too(offered):
 
 
 def test_constructed_outside_a_typed_read_it_claims_nothing():
-    """Only a `read(port, into=…)` offers the means, so an object built from a
+    """Only a typed read offers the means, so an object built from a
     bag you are holding claims nothing — a hand-rolled bag may name no live
     surface at all."""
     frame = DepthFrame(**FRAME_BAG)
@@ -568,9 +568,9 @@ def test_the_protocol_outside_a_typed_read_refuses_naming_the_read():
     hand back — and the refusal says which spelling would have one."""
     frame = DepthFrame(**FRAME_BAG)
 
-    with pytest.raises(RuntimeError, match="into="):
+    with pytest.raises(RuntimeError, match="Texture or Tensor input pin"):
         frame.__dlpack__()
-    with pytest.raises(RuntimeError, match="into="):
+    with pytest.raises(RuntimeError, match="Texture or Tensor input pin"):
         frame.__dlpack_device__()
 
 

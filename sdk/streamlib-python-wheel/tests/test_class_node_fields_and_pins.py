@@ -122,7 +122,7 @@ class LevelTinterOnARealDataPlane:
         self.source = _engine.open_node_link_data_access_for_helper_process()
         self.source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
             {}, self.source, "runtime-under-test", "source-1"
-        ).outputs
+        )._link_output_data_writer
         self.link_id_by_input_port: "dict[str, str]" = {}
         self._blocks_written = 0
         members = class_node_members_of(LevelTinter)
@@ -130,7 +130,7 @@ class LevelTinterOnARealDataPlane:
         self.fields = ClassNodeFields(
             members,
             link_data_access=self.data_plane,
-            inputs=self.ctx.inputs,
+            inputs=self.ctx._link_input_data_reader,
             node_id="tinter-1",
             stored_input_values=stored_input_values,
         )
@@ -139,8 +139,8 @@ class LevelTinterOnARealDataPlane:
             members,
             self.fields,
             link_data_access=self.data_plane,
-            inputs=self.ctx.inputs,
-            outputs=self.ctx.outputs,
+            inputs=self.ctx._link_input_data_reader,
+            outputs=self.ctx._link_output_data_writer,
             node_id="tinter-1",
         )
 

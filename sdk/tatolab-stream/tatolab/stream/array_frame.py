@@ -39,7 +39,7 @@ ArrayFrameAttribute = Union["ArrayFrameCpuAttribute", ArrayFrameGpuAttribute]
 
 
 class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
-    """An Array frame, as `ctx.inputs.read(self.tensors)` returns it: name to tensor.
+    """An Array frame, as a Tensor input pin's `read()` returns it: name to tensor.
 
     Each value speaks `__dlpack__` and states its `dtype` and `shape`, so
     `torch.from_dlpack(frame["boxes"])` reads it in place.

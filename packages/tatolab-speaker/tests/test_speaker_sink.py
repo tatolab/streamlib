@@ -82,12 +82,12 @@ class SpeakerWiredToAWriter:
         )
 
     def write(self, payload: bytes) -> None:
-        self.writer.outputs.write(AUDIO_INPUT_PORT, payload)
+        self.writer._link_output_data_writer.write(AUDIO_INPUT_PORT, payload)
 
     def write_silent_channels_block(
         self, channel_count: int, samples_per_channel: int, sample_rate: int
     ) -> None:
-        self.writer.outputs.write_channels_block(
+        self.writer._link_output_data_writer.write_channels_block(
             AUDIO_INPUT_PORT,
             silent_planar_f32_samples(channel_count, samples_per_channel),
             start_sample=self.next_start_sample,
@@ -181,7 +181,7 @@ def test_the_audio_port_is_lent_to_native_code_so_python_cannot_read_it(
     speaker.setup(context)
     try:
         with pytest.raises(Exception, match=AUDIO_INPUT_PORT):
-            context.inputs.read(AUDIO_INPUT_PORT)
+            context._link_input_data_reader.read(AUDIO_INPUT_PORT)
     finally:
         speaker.teardown(context)
 

@@ -110,7 +110,7 @@ fn iosurface_raw_handle_is_macos_only_error() -> PyErr {
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
         "the GPU is not reachable from this Python node: its helper process was started \
-         without a surface-share channel to the engine. Frames still flow — `ctx.inputs` and \
-         `ctx.outputs` carry bags — but acquiring or mapping a surface cannot.",
+         without a surface-share channel to the engine. Frames still flow through its \
+         pins, but acquiring or mapping a surface cannot.",
     )
 }

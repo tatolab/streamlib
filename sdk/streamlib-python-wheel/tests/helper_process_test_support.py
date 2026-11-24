@@ -42,8 +42,8 @@ def the_pin_upstream_of_a_pass_through_probe(link_data_access) -> BoundOutputPin
     pin = bind_the_pins_of_a_class_node(
         members,
         link_data_access=link_data_access,
-        inputs=context.inputs,
-        outputs=context.outputs,
+        inputs=context._link_input_data_reader,
+        outputs=context._link_output_data_writer,
         node_id="upstream-of-the-probe",
     )["frames_to_downstream"]
     assert isinstance(pin, BoundOutputPin)

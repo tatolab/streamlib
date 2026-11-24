@@ -230,9 +230,9 @@ def test_a_started_encoder_lends_both_ports_so_python_cannot_reach_them(encoder_
     encoder.start(context)
     try:
         with pytest.raises(Exception, match=ENCODED_VIDEO_OUTPUT_PORT):
-            context.outputs.write(ENCODED_VIDEO_OUTPUT_PORT, b"from python")
+            context._link_output_data_writer.write(ENCODED_VIDEO_OUTPUT_PORT, b"from python")
         with pytest.raises(Exception, match=VIDEO_INPUT_PORT):
-            context.inputs.read(VIDEO_INPUT_PORT)
+            context._link_input_data_reader.read(VIDEO_INPUT_PORT)
     finally:
         encoder.stop(context)
 
@@ -244,7 +244,7 @@ def test_an_encoder_whose_device_is_refused_drains_and_stops_inside_its_budget(e
     context = encoder_wired.encoder_context
     encoder.start(context)
     for _ in range(3):
-        encoder_wired.source.outputs.write(VIDEO_INPUT_PORT, b"a frame no device reads")
+        encoder_wired.source._link_output_data_writer.write(VIDEO_INPUT_PORT, b"a frame no device reads")
     time.sleep(0.3)
 
     stop_began = time.monotonic()
@@ -252,7 +252,7 @@ def test_an_encoder_whose_device_is_refused_drains_and_stops_inside_its_budget(e
 
     assert time.monotonic() - stop_began < ENCODING_THREAD_JOIN_TIMEOUT_SECONDS + 0.5
     assert encoder._encoding_thread is None
-    assert encoder_wired.sink.inputs.read(ENCODED_VIDEO_OUTPUT_PORT) is None
+    assert encoder_wired.sink._link_input_data_reader.read(ENCODED_VIDEO_OUTPUT_PORT) is None
 
 
 def test_an_encoder_never_started_stops_and_tears_down_cleanly(encoder_wired):
@@ -312,9 +312,9 @@ def test_a_started_decoder_lends_both_ports_so_python_cannot_reach_them(decoder_
     decoder.start(context)
     try:
         with pytest.raises(Exception, match=VIDEO_INPUT_PORT):
-            context.outputs.write(VIDEO_INPUT_PORT, b"from python")
+            context._link_output_data_writer.write(VIDEO_INPUT_PORT, b"from python")
         with pytest.raises(Exception, match=ENCODED_VIDEO_OUTPUT_PORT):
-            context.inputs.read(ENCODED_VIDEO_OUTPUT_PORT)
+            context._link_input_data_reader.read(ENCODED_VIDEO_OUTPUT_PORT)
     finally:
         decoder.stop(context)
 
@@ -326,7 +326,7 @@ def test_a_decoder_whose_device_is_refused_drains_and_stops_inside_its_budget(de
     context = decoder_wired.decoder_context
     decoder.start(context)
     for _ in range(3):
-        decoder_wired.source.outputs.write(ENCODED_VIDEO_OUTPUT_PORT, b"\x25\x00\x00\x01\x65")
+        decoder_wired.source._link_output_data_writer.write(ENCODED_VIDEO_OUTPUT_PORT, b"\x25\x00\x00\x01\x65")
     time.sleep(0.3)
 
     stop_began = time.monotonic()
@@ -334,7 +334,7 @@ def test_a_decoder_whose_device_is_refused_drains_and_stops_inside_its_budget(de
 
     assert time.monotonic() - stop_began < DECODING_THREAD_JOIN_TIMEOUT_SECONDS + 0.5
     assert decoder._decoding_thread is None
-    assert decoder_wired.sink.inputs.read(VIDEO_INPUT_PORT) is None
+    assert decoder_wired.sink._link_input_data_reader.read(VIDEO_INPUT_PORT) is None
 
 
 def test_a_decoder_never_started_stops_and_tears_down_cleanly(decoder_wired):

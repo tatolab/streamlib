@@ -125,7 +125,7 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
     source = _engine.open_node_link_data_access_for_helper_process()
     source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
         {}, source, "runtime-under-test", "source-1"
-    ).outputs
+    )._link_output_data_writer
     node_interpreter_bootstrap.wire_link_data_access(
         data_plane, {"inputs": [_wiring_of_one_link_end("input", "layers.1.level", "L-layer-1")]}
     )
@@ -148,7 +148,7 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
             ),
         ),
         link_data_access=data_plane,
-        inputs=ctx.inputs,
+        inputs=ctx._link_input_data_reader,
         node_id="mixer-1",
         stored_input_values={"layers.0.gain": 2.0, "bands.0.width": 0.5},
     )
@@ -157,8 +157,8 @@ def test_each_slot_reads_through_its_own_pin_and_holds_its_own_value_set_live():
         members,
         fields,
         link_data_access=data_plane,
-        inputs=ctx.inputs,
-        outputs=ctx.outputs,
+        inputs=ctx._link_input_data_reader,
+        outputs=ctx._link_output_data_writer,
         node_id="mixer-1",
         members_of_each_slot=members_of_each_slot,
     )

@@ -21,8 +21,6 @@ from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
 from tatolab.runtime._node_hosting import class_node_members_of
 from tatolab.stream import (
     Message,
-    Output,
-    Packets,
     log,
 )
 from tatolab.stream._class_node_construction import construct_class_node
@@ -179,8 +177,8 @@ class PublisherWiredToEncoders:
         pins = bind_the_pins_of_a_class_node(
             members,
             link_data_access=tracks_input,
-            inputs=self.context.inputs,
-            outputs=self.context.outputs,
+            inputs=self.context._link_input_data_reader,
+            outputs=self.context._link_output_data_writer,
             node_id="node-under-test",
         )
         self.publisher = construct_class_node(WhipPublisher, field_values=config, pins=pins)
@@ -200,9 +198,9 @@ class PublisherWiredToEncoders:
         timestamp_ns: int = 0,
         starts_group: bool = True,
     ) -> None:
-        written_through = Output(Packets)
-        written_through.__set_name__(type(self), encoder_output_port)
-        self.encoder_context.outputs.write(written_through, payload, timestamp_ns, starts_group)
+        self.encoder_context._link_output_data_writer.write(
+            encoder_output_port, payload, timestamp_ns, starts_group, family="packets"
+        )
         self.publisher.process(
             _engine.limited_access_view_of_runtime_context_for_helper_process(
                 self.context
@@ -591,7 +589,7 @@ def test_a_started_player_lends_both_outputs_so_python_cannot_write_them(
     try:
         for output_port in (ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT):
             with pytest.raises(Exception, match=output_port):
-                context.outputs.write(output_port, b"from python")
+                context._link_output_data_writer.write(output_port, b"from python")
     finally:
         player.stop(context)
 

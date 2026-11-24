@@ -118,7 +118,7 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
         raise NotImplementedError
 
     def upstream_stream_facts(self, *, inbound_link: str | None = None) -> PortStreamFacts | None:
-        """The stream facts the output feeding this pin carries now, as `ctx.inputs.upstream_stream_facts` gives them."""
+        """The stream facts the output feeding this pin carries now."""
         raise NotImplementedError
 
     def count_the_message_last_read_as_lost(self) -> None:
@@ -179,11 +179,11 @@ class OutputPin(_ClassNodePin, Generic[PinTypeOfThePin]):
     def loan(
         self, payload_byte_len: int, timestamp_ns: int | None = None, starts_group: bool = True
     ) -> PortPayloadLoan:
-        """Loan `payload_byte_len` bytes on this pin to fill in place, as `ctx.outputs.loan` does."""
+        """Loan `payload_byte_len` bytes on this pin to fill in place."""
         raise NotImplementedError
 
     def set_stream_facts(self, stream_facts: PortStreamFacts) -> None:
-        """Replace the stream facts this pin carries, as `ctx.outputs.set_stream_facts` does."""
+        """Replace the stream facts this pin carries."""
         raise NotImplementedError
 
 

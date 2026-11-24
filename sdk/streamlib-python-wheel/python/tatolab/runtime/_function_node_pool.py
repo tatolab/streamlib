@@ -21,38 +21,19 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-from tatolab.stream import (
-    Array,
-    Channels,
-    Image,
-    Input,
-    NodeLinkDataAccess,
-    Output,
-    Packets,
-    PortFamily,
-    Records,
-    log,
-    node,
-)
+from tatolab.stream import NodeLinkDataAccess, log
 
 from tatolab.runtime._engine import (
     an_unread_message_carries_what_another_does,
     hand_an_unread_message_on,
     read_the_message_at_an_input_port_unread,
 )
+from tatolab.runtime._node_the_wheel_hosts import stamp_the_ports_of_a_node_the_wheel_hosts
 
 # What a carry's `family` names, besides `"channels"`, a control message: a record, or a message
 # handed on unread.
 _CARRIES_A_RECORD = "records"
 _CARRIES_A_MESSAGE_HANDED_ON_UNREAD = "message"
-
-_PORT_FAMILIES_BY_WIRE_NAME: "dict[str, PortFamily[Any]]" = {
-    "array": Array,
-    "channels": Channels,
-    "image": Image,
-    "packets": Packets,
-    "records": Records,
-}
 
 
 class FunctionNodePool:
@@ -62,7 +43,7 @@ class FunctionNodePool:
 def the_node_class_the_function_node_pool_runs_as(
     pool_config: "Mapping[str, Any]", link_data_access: NodeLinkDataAccess
 ) -> type:
-    """A `@node.process` class with one input and one output per island `pool_config["carries"]` names.
+    """A node class with one input and one output per island `pool_config["carries"]` names, run continuously.
 
     Wire contract with the engine: `{"carries": [{"input_port", "output_port",
     "family": "channels" | "records" | "message", "message_family",
@@ -71,14 +52,11 @@ def the_node_class_the_function_node_pool_runs_as(
     true`.
     """
     carries: "Sequence[Mapping[str, Any]]" = pool_config.get("carries") or []
-    class_attributes: "dict[str, Any]" = {}
-    for carry in carries:
-        family = _the_port_family_a_carry_declares(carry)
-        class_attributes[carry["input_port"]] = Input(family, delivery="newest")
-        class_attributes[carry["output_port"]] = Output(family)
-    class_attributes["__doc__"] = "The stream's function node pool."
-    class_attributes["__module__"] = __name__
-    pool_class = type("FunctionNodePoolNode", (_FunctionNodePoolBase,), class_attributes)
+    pool_class = type(
+        "FunctionNodePoolNode",
+        (_FunctionNodePoolBase,),
+        {"__doc__": "The stream's function node pool.", "__module__": __name__},
+    )
     pool_class._carries = tuple(
         (carry["input_port"], carry["output_port"], carry["family"]) for carry in carries
     )
@@ -86,7 +64,11 @@ def the_node_class_the_function_node_pool_runs_as(
         carry["input_port"] for carry in carries if carry.get("written_at_setup")
     )
     pool_class._link_data_access = link_data_access
-    return node.process(execution="continuous")(pool_class)
+    return stamp_the_ports_of_a_node_the_wheel_hosts(
+        pool_class,
+        input_ports=[carry["input_port"] for carry in carries],
+        output_ports=[carry["output_port"] for carry in carries],
+    )
 
 
 def take_the_carries_a_running_pool_is_handed(
@@ -104,14 +86,11 @@ def take_the_carries_a_running_pool_is_handed(
         for carry in (pool_config.get("carries") or [])
         if carry["input_port"] not in carried_input_ports
     ]
-    for carry in new_carries:
-        family = _the_port_family_a_carry_declares(carry)
-        for port_name, port in (
-            (carry["input_port"], Input(family, delivery="newest")),
-            (carry["output_port"], Output(family)),
-        ):
-            setattr(pool_class, port_name, port)
-            port.__set_name__(pool_class, port_name)
+    stamp_the_ports_of_a_node_the_wheel_hosts(
+        pool_class,
+        input_ports=[carry["input_port"] for carry in new_carries],
+        output_ports=[carry["output_port"] for carry in new_carries],
+    )
     link_data_access.declare_ports(
         [carry["input_port"] for carry in new_carries],
         [carry["output_port"] for carry in new_carries],
@@ -122,14 +101,6 @@ def take_the_carries_a_running_pool_is_handed(
     pool_class._input_ports_written_at_setup = pool_class._input_ports_written_at_setup | frozenset(
         carry["input_port"] for carry in new_carries if carry.get("written_at_setup")
     )
-
-
-def _the_port_family_a_carry_declares(carry: "Mapping[str, Any]") -> "PortFamily[Any]":
-    if carry["family"] == _CARRIES_A_MESSAGE_HANDED_ON_UNREAD:
-        return _PORT_FAMILIES_BY_WIRE_NAME[carry["message_family"]]
-    if carry["family"] == _CARRIES_A_RECORD:
-        return Records
-    return Channels
 
 
 class _FunctionNodePoolBase:
@@ -161,9 +132,9 @@ class _FunctionNodePoolBase:
     def _write_one_carry(self, ctx: Any, input_port: str, output_port: str, carries: str) -> None:
         """Write the value of the island `input_port` reads to `output_port`; an island into a setting only once it changed."""
         if carries == _CARRIES_A_RECORD:
-            record = ctx.inputs.read(getattr(type(self), input_port))
+            record = ctx._link_input_data_reader.read(input_port, families=[_CARRIES_A_RECORD])
             if record is not None:
-                ctx.outputs.write(getattr(type(self), output_port), record)
+                ctx._link_output_data_writer.write(output_port, record, family=_CARRIES_A_RECORD)
             return
         message = read_the_message_at_an_input_port_unread(
             link_data_access=self._link_data_access, input_port=input_port

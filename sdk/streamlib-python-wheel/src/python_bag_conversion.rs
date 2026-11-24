@@ -2,58 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Python data across the boundary: msgpack decoded into ordinary Python data,
-//! config and graph JSON both ways, and the cast a typed read hands a message's
-//! payload bytes to. A message's payload otherwise crosses
-//! as the bytes it is; nothing here encodes one.
+//! config and graph JSON both ways, and the GPU capability a read offers the family
+//! type it builds. A message's payload otherwise crosses as the bytes it is;
+//! nothing here encodes one.
 
 use std::cell::RefCell;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use rmpv::Value;
 use streamlib::sdk::iceoryx2::RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES;
 
 use crate::python_node_context::PythonGpuContextLimitedAccess;
 
-/// Hand one message's payload, a `PortPayloadBorrow`, to the `from_bytes` of
-/// the target an author named with `read(port, into=T)`, and return what it
-/// built.
-///
-/// Whatever `from_bytes` raises is what the author sees: a pydantic
-/// `ValidationError` or a dataclass's missing-argument `TypeError` says more
-/// about the mismatch than any wrapper here could.
-///
-/// `offered_gpu_limited_access` is what the cast may reach for through
-/// [`gpu_limited_access_of_the_typed_read_in_progress`] — offered for the
-/// `from_bytes` call and withdrawn the moment it returns. Nothing here knows
-/// which targets want it or what they do with it.
-pub(crate) fn cast_payload_into_read_target<'py>(
-    port_name: &str,
-    payload: &Bound<'py, PyAny>,
-    read_target: &Bound<'py, PyAny>,
-    offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let python = read_target.py();
-    let Some(from_bytes) = read_target
-        .getattr_opt(intern!(python, "from_bytes"))?
-        .filter(|from_bytes| from_bytes.is_callable())
-    else {
-        return Err(PyTypeError::new_err(format!(
-            "`into=` on input port {port_name:?} was handed a {}, which has no `from_bytes` to \
-             build the read from the message's payload bytes — name a class with a `from_bytes` \
-             classmethod, or an object with a `from_bytes` method.",
-            name_of_the_read_target_for_error_message(read_target)
-        )));
-    };
-    let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
-    from_bytes.call1((payload,))
-}
-
 /// Call `family_type` with `keyword_arguments` while this read offers its GPU
-/// capability, as a family type a read through a port attribute builds is
-/// constructed.
+/// capability, as a family type a read builds is constructed.
 pub(crate) fn family_type_built_offering_gpu_access<'py>(
     family_type: &Bound<'py, PyAny>,
     keyword_arguments: &Bound<'py, PyDict>,
@@ -61,18 +25,6 @@ pub(crate) fn family_type_built_offering_gpu_access<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
     family_type.call((), Some(keyword_arguments))
-}
-
-/// The name a refusal gives an `into=` target: a class by its own name, any
-/// other object by its type's.
-fn name_of_the_read_target_for_error_message(read_target: &Bound<'_, PyAny>) -> String {
-    match read_target.cast::<PyType>() {
-        Ok(read_target_class) => read_target_class.name().map_or_else(
-            |_| "class".to_string(),
-            |class_name| format!("class {class_name}"),
-        ),
-        Err(_) => python_type_name_for_error_message(read_target, "value"),
-    }
 }
 
 // =============================================================================
@@ -113,14 +65,13 @@ impl Drop for TypedReadGpuAccessOffer {
     }
 }
 
-/// The GPU capability of the `read(port, into=T)` currently running
-/// `T.from_bytes`, or `None` when nothing is being read into a type.
+/// The GPU capability of the read currently building a family type, an
+/// `ImageFrame` or an Array frame's GPU attribute, or `None` when no read is.
 ///
-/// The same capability as `ctx.gpu_limited_access`, offered so a type can do
+/// The same capability as `ctx.gpu_limited_access`, offered so the type can do
 /// per-frame work as it is built that needs the engine — claiming the frame's
 /// surface against producer reuse is what `ClaimedSurfacePixelAccess` does
-/// with it. Any class reachable through `into=` may call this; there is no
-/// registration, no marker and no privileged type.
+/// with it.
 #[pyfunction]
 pub(crate) fn gpu_limited_access_of_the_typed_read_in_progress(
     python: Python<'_>,
@@ -627,150 +578,6 @@ mod tests {
             let nested_int_keyed = PyDict::new(python);
             nested_int_keyed.set_item("inner", &int_keyed).unwrap();
             assert!(python_object_to_json_value(nested_int_keyed.as_any()).is_err());
-        });
-    }
-
-    /// Build a target the way an author's module would, so the runtime carries
-    /// whatever CPython actually assigns rather than attributes a test set by
-    /// hand.
-    fn read_target_from_source<'py>(
-        python: Python<'py>,
-        source: &str,
-        target_name: &str,
-    ) -> Bound<'py, PyAny> {
-        let namespace = PyDict::new(python);
-        python
-            .run(
-                &std::ffi::CString::new(source).unwrap(),
-                Some(&namespace),
-                None,
-            )
-            .unwrap();
-        namespace.get_item(target_name).unwrap().unwrap()
-    }
-
-    const DETECTION_CLASS_READ_FROM_ITS_LABEL_BYTES: &str = "\
-class Detection:
-    def __init__(self, label):
-        self.label = label
-
-    @classmethod
-    def from_bytes(cls, payload):
-        return cls(payload.decode('utf-8'))
-";
-
-    /// A class with a `from_bytes` classmethod is handed the payload exactly as
-    /// it crossed the wire, and what it returns is the read.
-    #[test]
-    fn a_class_with_from_bytes_is_handed_the_payload_bytes() {
-        Python::initialize();
-        Python::attach(|python| {
-            let target = read_target_from_source(
-                python,
-                DETECTION_CLASS_READ_FROM_ITS_LABEL_BYTES,
-                "Detection",
-            );
-            let read = cast_payload_into_read_target(
-                "detections",
-                &PyBytes::new(python, b"cat").into_any(),
-                &target,
-                None,
-            )
-            .unwrap();
-            assert!(read.is_instance(&target).unwrap());
-            assert_eq!(
-                read.getattr("label").unwrap().extract::<String>().unwrap(),
-                "cat"
-            );
-        });
-    }
-
-    /// `into=` takes any object with a `from_bytes`, not only a class.
-    #[test]
-    fn an_object_with_from_bytes_casts_like_a_class() {
-        Python::initialize();
-        Python::attach(|python| {
-            let target = read_target_from_source(
-                python,
-                "class LengthOfThePayload:\n    def from_bytes(self, payload):\n        return \
-                 len(payload)\nlength_of_the_payload = LengthOfThePayload()\n",
-                "length_of_the_payload",
-            );
-            let read = cast_payload_into_read_target(
-                "detections",
-                &PyBytes::new(python, b"four").into_any(),
-                &target,
-                None,
-            )
-            .unwrap();
-            assert_eq!(read.extract::<usize>().unwrap(), 4);
-        });
-    }
-
-    /// The dial's whole point: a payload the target cannot be built from raises
-    /// at the consuming read, and what `from_bytes` raised is what the author
-    /// sees.
-    #[test]
-    fn what_from_bytes_raises_reaches_the_author_unchanged() {
-        Python::initialize();
-        Python::attach(|python| {
-            let target = read_target_from_source(
-                python,
-                "class Detection:\n    @classmethod\n    def from_bytes(cls, payload):\n        \
-                 raise ValueError(f'no detection in {payload!r}')\n",
-                "Detection",
-            );
-            let refusal = cast_payload_into_read_target(
-                "detections",
-                &PyBytes::new(python, b"\x00\x01").into_any(),
-                &target,
-                None,
-            )
-            .unwrap_err();
-            assert!(
-                refusal.is_instance_of::<PyValueError>(python),
-                "got: {refusal}"
-            );
-            assert!(
-                refusal.to_string().contains("no detection in"),
-                "got: {refusal}"
-            );
-        });
-    }
-
-    /// A target with no `from_bytes` — a plain dataclass, a bare TypedDict, a
-    /// string — cannot build anything from bytes, and CPython's own
-    /// `AttributeError` names neither the port nor `into=`.
-    #[test]
-    fn a_target_without_from_bytes_is_refused_by_port_name() {
-        Python::initialize();
-        Python::attach(|python| {
-            let plain_dataclass = read_target_from_source(
-                python,
-                "from dataclasses import dataclass\n@dataclass\nclass Detection:\n    label: str\n",
-                "Detection",
-            );
-            let not_a_class = "Detection".into_pyobject(python).unwrap().into_any();
-            for target in [plain_dataclass, not_a_class] {
-                let refusal = cast_payload_into_read_target(
-                    "detections",
-                    &PyBytes::new(python, b"cat").into_any(),
-                    &target,
-                    None,
-                )
-                .unwrap_err();
-                assert!(
-                    refusal.is_instance_of::<PyTypeError>(python),
-                    "got: {refusal}"
-                );
-                let refusal_text = refusal.to_string();
-                assert!(
-                    refusal_text.contains("\"detections\"")
-                        && refusal_text.contains("into=")
-                        && refusal_text.contains("from_bytes"),
-                    "got: {refusal_text}"
-                );
-            }
         });
     }
 

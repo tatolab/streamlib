@@ -27,9 +27,7 @@ from tatolab.runtime._node_hosting import (
 from tatolab.runtime._node_interpreter_bootstrap import describe_one_node_class
 from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream import (
-    Channels,
     ChannelsBlock,
-    Input,
     StreamBuilder,
     run_graph_generator,
     log,
@@ -145,7 +143,7 @@ def an_opus_node_on_its_links(
     fields = ClassNodeFields(
         members,
         link_data_access=links,
-        inputs=ctx.inputs,
+        inputs=ctx._link_input_data_reader,
         node_id=node_class.__name__,
         stored_input_values=input_values,
     )
@@ -154,8 +152,8 @@ def an_opus_node_on_its_links(
         members,
         fields,
         link_data_access=links,
-        inputs=ctx.inputs,
-        outputs=ctx.outputs,
+        inputs=ctx._link_input_data_reader,
+        outputs=ctx._link_output_data_writer,
         node_id=node_class.__name__,
     )
 
@@ -190,12 +188,6 @@ def a_stereo_tone_window(window_index: int) -> PlanarWindowToSend:
         start_sample=window_index * SAMPLES_IN_ONE_WINDOW,
         timestamp_ns=window_index * NANOSECONDS_PER_WINDOW,
     )
-
-
-class DecodedAudioReader:
-    """The sink's `audio` input, read through its attribute as Channels blocks."""
-
-    audio = Input(Channels, delivery="ordered")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -275,7 +267,7 @@ class OpusRoundTripOnWiredLinks:
         )
 
     def send(self, window: PlanarWindowToSend) -> None:
-        self.source_context.outputs.write_channels_block(
+        self.source_context._link_output_data_writer.write_channels_block(
             "audio",
             window.planar_samples,
             start_sample=window.start_sample,
@@ -291,7 +283,9 @@ class OpusRoundTripOnWiredLinks:
 
     def decoded_blocks(self) -> "list[DecodedBlock]":
         blocks = []
-        while (block := self.sink_context.inputs.read(DecodedAudioReader.audio)) is not None:
+        while (
+            block := self.sink_context._link_input_data_reader.read("audio", families=["channels"])
+        ) is not None:
             blocks.append(decoded_block_of(block))
         return blocks
 

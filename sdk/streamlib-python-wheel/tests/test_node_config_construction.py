@@ -107,7 +107,7 @@ def test_a_model_config_reaches_the_node_validated():
 
 def test_whatever_the_config_class_raises_is_what_the_author_sees():
     """Construction is the only check the wheel performs: how strict it is is
-    the author's choice of config class, the same dial `read(port, into=T)` is."""
+    the author's choice of config class."""
     with pytest.raises(TypeError, match="bogus"):
         construct_node_instance(DataclassConfigured, {"bogus": 1}, None)
 

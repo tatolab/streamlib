@@ -594,7 +594,7 @@ class HelperProcessLifecycle:
         assert self._hosted is not None
         changed_values_by_field: "dict[str, Any]" = {}
         for field in self._config_fields_its_node_exposes_as_inputs:
-            payload = self._hosted.limited_access_context.inputs.read(field)
+            payload = self._link_data_access.read_from_input_port(field)
             if payload is None:
                 continue
             (input_value,) = struct.unpack_from(_CONTROL_VALUE_SAMPLE_FORMAT, bytes(payload))

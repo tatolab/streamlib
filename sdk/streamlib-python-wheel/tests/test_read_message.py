@@ -12,9 +12,8 @@ a helper-process one opened directly on it, so nothing here starts a runtime or
 touches a device.
 """
 
-import json
 import os
-from collections.abc import Buffer, Iterator
+from collections.abc import Iterator
 from dataclasses import FrozenInstanceError, dataclass
 
 import pytest
@@ -36,17 +35,6 @@ INPUT_PORT = "encoded_video"
 OUTPUT_PORT = "encoded_video_to_downstream"
 INPUT_PORT_RING_DEPTH = 2
 STAMP_NS = 1_700_000_000
-
-
-@dataclass
-class AccessUnitDescription:
-    """A record `into=` can cast a payload into."""
-
-    codec: str
-
-    @classmethod
-    def from_bytes(cls, payload: Buffer) -> "AccessUnitDescription":
-        return cls(**json.loads(bytes(payload)))
 
 
 @dataclass
@@ -108,7 +96,7 @@ def test_a_message_arrives_with_its_stamp_its_group_flag_and_its_link(
 ):
     one_link_into_one_port.deliver(b"keyframe")
     one_link_into_one_port.deliver(b"delta", starts_group=False)
-    inputs = one_link_into_one_port.context.inputs
+    inputs = one_link_into_one_port.context._link_input_data_reader
     inbound_link = one_link_into_one_port.inbound_link
 
     assert message_with_its_payload_copied(inputs.read_message(INPUT_PORT)) == Message(
@@ -134,7 +122,7 @@ def test_messages_the_link_lost_are_told_to_the_next_read_and_to_no_read_after_i
     """Fail-without-fix: leave `lost_since_last_read` at zero and the reader
     reads two messages that look contiguous over a gap of two."""
     messages_past_the_ring = 2
-    inputs = one_link_into_one_port.context.inputs
+    inputs = one_link_into_one_port.context._link_input_data_reader
     one_link_into_one_port.deliver(b"first")
     first = inputs.read_message(INPUT_PORT)
 
@@ -153,24 +141,9 @@ def test_messages_the_link_lost_are_told_to_the_next_read_and_to_no_read_after_i
     ]
 
 
-def test_into_casts_the_payload_the_way_read_does(
-    one_link_into_one_port: OneLinkIntoOnePort,
-):
-    one_link_into_one_port.deliver(json.dumps({"codec": "avc1.64001f"}).encode(), starts_group=False)
-
-    message = one_link_into_one_port.context.inputs.read_message(
-        INPUT_PORT, into=AccessUnitDescription
-    )
-
-    assert message is not None
-    assert message.payload == AccessUnitDescription(codec="avc1.64001f")
-    assert message.starts_group is False
-    assert message.inbound_link == one_link_into_one_port.inbound_link
-
-
 def test_a_message_is_frozen(one_link_into_one_port: OneLinkIntoOnePort):
     one_link_into_one_port.deliver(b"keyframe")
-    message = one_link_into_one_port.context.inputs.read_message(INPUT_PORT)
+    message = one_link_into_one_port.context._link_input_data_reader.read_message(INPUT_PORT)
 
     assert message is not None
     with pytest.raises(FrozenInstanceError):

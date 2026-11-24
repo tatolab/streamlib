@@ -21,7 +21,7 @@ use streamlib::sdk::rhi::TextureFormat;
 
 use super::{PythonNodeLinkDataAccess, declared_port_name_the_spelling_names, unwired_port_error};
 use crate::python_bag_conversion::{
-    cast_payload_into_read_target, family_type_built_offering_gpu_access, records_message_dict_of,
+    family_type_built_offering_gpu_access, records_message_dict_of,
 };
 use crate::python_node_context::{PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess};
 use crate::python_port_family_read_types::{
@@ -31,7 +31,7 @@ use crate::python_port_payload::PythonPortPayloadBorrow;
 
 impl PythonNodeLinkDataAccess {
     /// The next message's payload on `port_name`, offering
-    /// `offered_gpu_limited_access` to `into.from_bytes` when `into` is named.
+    /// `offered_gpu_limited_access` to the family type a read builds.
     ///
     /// The one read body; the context-carrying reader passes its capability
     /// and the bare data plane passes nothing.
@@ -39,7 +39,7 @@ impl PythonNodeLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        read_shape: PortPayloadReadShape<'_, 'py>,
+        read_shape: PortPayloadReadShape,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -72,7 +72,7 @@ impl PythonNodeLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        read_shape: PortPayloadReadShape<'_, 'py>,
+        read_shape: PortPayloadReadShape,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -100,56 +100,6 @@ impl PythonNodeLinkDataAccess {
         }
     }
 
-    /// The next message's payload on `port_name` with the inbound link it
-    /// arrived on, or `None` when the mailbox is empty.
-    ///
-    /// The read a destination taking many links on one port uses: each inbound
-    /// link is one producer, named by the source channel name it subscribed to.
-    pub(crate) fn read_from_input_port_naming_its_inbound_link<'py>(
-        &self,
-        python: Python<'py>,
-        port_name: &str,
-        read_shape: PortPayloadReadShape<'_, 'py>,
-        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
-    ) -> PyResult<Option<(Bound<'py, PyAny>, String)>> {
-        Ok(self
-            .read_from_input_port_naming_its_inbound_link_and_timestamp(
-                python,
-                port_name,
-                read_shape,
-                offered_gpu_limited_access,
-            )?
-            .map(|(payload, inbound_link_name, _timestamp_ns)| (payload, inbound_link_name)))
-    }
-
-    /// The same read, keeping the frame header's timestamp.
-    ///
-    /// A many-track sink needs both halves at once: the link says which
-    /// producer sent the message, and the stamp is the producer's own — the
-    /// source frame's instant, not the moment the message was read.
-    pub(crate) fn read_from_input_port_naming_its_inbound_link_and_timestamp<'py>(
-        &self,
-        python: Python<'py>,
-        port_name: &str,
-        read_shape: PortPayloadReadShape<'_, 'py>,
-        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
-    ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
-        Ok(self
-            .read_message_naming_its_inbound_link_with_its_payload_cast(
-                python,
-                port_name,
-                read_shape,
-                offered_gpu_limited_access,
-            )?
-            .map(|(payload, message, inbound_link_name)| {
-                (
-                    payload,
-                    inbound_link_name.as_str().to_string(),
-                    message.timestamp_ns,
-                )
-            }))
-    }
-
     /// The next message on `port_name` as a `tatolab.stream.Message` — its
     /// payload, stamp, group flag, losses and inbound link — or `None` when the
     /// mailbox is empty.
@@ -157,7 +107,7 @@ impl PythonNodeLinkDataAccess {
         &self,
         python: Python<'py>,
         port_name: &str,
-        read_shape: PortPayloadReadShape<'_, 'py>,
+        read_shape: PortPayloadReadShape,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         static TATOLAB_STREAM_MESSAGE_CLASS: PyOnceLock<Py<PyType>> = PyOnceLock::new();
@@ -187,12 +137,12 @@ impl PythonNodeLinkDataAccess {
     }
 
     /// The one fan-in read body: the next message on `port_name`, its payload
-    /// borrowed or cast by `into`, and the inbound link it arrived on.
+    /// read as `read_shape` asks, and the inbound link it arrived on.
     pub(super) fn read_message_naming_its_inbound_link_with_its_payload_cast<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
-        read_shape: PortPayloadReadShape<'_, 'py>,
+        read_shape: PortPayloadReadShape,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, MessageReadFromInputPort, InboundLinkName)>> {
         let port_name = &*declared_port_name_the_spelling_names(port_name)?;
@@ -270,14 +220,12 @@ impl PythonNodeLinkDataAccess {
 
 /// What a read hands back for a message's payload.
 #[derive(Clone, Copy)]
-pub(crate) enum PortPayloadReadShape<'target, 'py> {
-    /// The `PortPayloadBorrow` of the sample: a read by name.
+pub(crate) enum PortPayloadReadShape {
+    /// The `PortPayloadBorrow` of the sample: a read naming no family.
     RawBorrow,
     /// The arriving family's own type, built from the message's descriptor
-    /// kind: a read through a port attribute taking those families.
+    /// kind: a read naming the families its port takes.
     FamilyType(PortFamiliesOfTheRead),
-    /// What `into.from_bytes` builds from the borrow.
-    CastInto(&'target Bound<'py, PyAny>),
 }
 
 /// The family of the `Input` attribute a read names.
@@ -299,14 +247,14 @@ impl PortFamilyOfTheRead {
         Self::Records,
     ];
 
-    /// The family a declaration spells as `declaration_name`, such as `Image`.
-    pub(crate) fn of_declaration_name(declaration_name: &str) -> Option<Self> {
-        Some(match declaration_name {
-            "Image" => Self::Image,
-            "Array" => Self::Array,
-            "Channels" => Self::Channels,
-            "Packets" => Self::Packets,
-            "Records" => Self::Records,
+    /// The family the wire names `wire_name`, such as `image`.
+    pub(crate) fn of_wire_name(wire_name: &str) -> Option<Self> {
+        Some(match wire_name {
+            "image" => Self::Image,
+            "array" => Self::Array,
+            "channels" => Self::Channels,
+            "packets" => Self::Packets,
+            "records" => Self::Records,
             _ => return None,
         })
     }
@@ -364,16 +312,9 @@ impl PortFamiliesOfTheRead {
     }
 }
 
-impl<'target, 'py> PortPayloadReadShape<'target, 'py> {
-    /// The shape a read by name asks for: cast by `into`, or the raw borrow.
-    pub(crate) fn by_name_cast_into(into: Option<&'target Bound<'py, PyAny>>) -> Self {
-        into.map_or(Self::RawBorrow, Self::CastInto)
-    }
-}
-
-/// One message's payload as a `PortPayloadBorrow`, or what `into.from_bytes`
-/// builds from that borrow when `into` names a target — the half every read
-/// shares once the payload is in hand.
+/// One message's payload as a `PortPayloadBorrow`, or the family type a read
+/// naming families builds from it — the half every read shares once the
+/// payload is in hand.
 #[allow(
     clippy::too_many_arguments,
     reason = "each argument is a separate piece of the read the caller already holds"
@@ -385,13 +326,9 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
     payload_descriptor: DataChannelPayloadDescriptor,
     timestamp_ns: i64,
     group_boundary: MessageGroupBoundary,
-    read_shape: PortPayloadReadShape<'_, 'py>,
+    read_shape: PortPayloadReadShape,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let into = match read_shape {
-        PortPayloadReadShape::CastInto(into) => Some(into),
-        PortPayloadReadShape::RawBorrow | PortPayloadReadShape::FamilyType(_) => None,
-    };
     if let PortPayloadReadShape::FamilyType(families) = read_shape {
         let kind = payload_descriptor.known_kind();
         let family_of_the_message = kind
@@ -402,8 +339,8 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
             let family = families.declared_family;
             return Err(PyTypeError::new_err(format!(
                 "a read of {family:?} input port {port_name:?} got a message described as \
-                 {kind:?} rather than {:?}: its producer wrote it by name rather than through \
-                 an Output of a family the port takes. Read it by name to take its raw payload.",
+                 {kind:?} rather than {:?}: its producer wrote it as raw bytes rather than as \
+                 a family the port takes. Read it naming no family to take its raw payload.",
                 family.descriptor_kind()
             )));
         }
@@ -466,29 +403,19 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
         let claimed = gpu_limited_access
             .get()
             .note_and_claim_the_pooled_gpu_frame_a_read_carries(python, pooled_frame);
-        match (claimed, into) {
-            (Ok(claim), _) => pooled_gpu_frame_claim = claim,
-            (Err(refusal), Some(_)) => return Err(refusal),
-            (Err(refusal), None) => tracing::warn!(
+        match claimed {
+            Ok(claim) => pooled_gpu_frame_claim = claim,
+            Err(refusal) => tracing::warn!(
                 "a read on {port_name:?} kept its payload, though the pooled GPU frame it \
                  carries could not be claimed by its claim table: {refusal}"
             ),
         }
     }
-    let payload_borrow = Bound::new(
+    Ok(Bound::new(
         python,
         PythonPortPayloadBorrow::holding(payload, pooled_gpu_frame_claim),
     )?
-    .into_any();
-    match into {
-        Some(read_target) => cast_payload_into_read_target(
-            port_name,
-            &payload_borrow,
-            read_target,
-            offered_gpu_limited_access,
-        ),
-        None => Ok(payload_borrow),
-    }
+    .into_any())
 }
 
 /// The surface id a pooled GPU frame a read carried is published under, with
