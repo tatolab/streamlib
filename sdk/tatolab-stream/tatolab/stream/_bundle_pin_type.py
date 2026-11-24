@@ -122,8 +122,9 @@ def bundle_of_the_fields_of(
     refusal: Refusal,
     member_of_a_field: "Callable[[dataclasses.Field[object], object], BundleMember]",
 ) -> PinType:
-    """The bundle `written_type`, a dataclass, declares: one member for each of its fields, in
-    order, each read by `member_of_a_field` from the field and its resolved annotation."""
+    """The bundle `written_type`, a dataclass, declares: named by the dataclass, one member for
+    each of its fields, in order, each read by `member_of_a_field` from the field and its
+    resolved annotation."""
     dataclass_params = getattr(written_type, "__dataclass_params__", None)
     if not getattr(dataclass_params, "frozen", False):
         raise refusal(
@@ -149,7 +150,7 @@ def bundle_of_the_fields_of(
             "pin_type_unknown",
         ) from None
     members = [member_of_a_field(field, field_annotations[field.name]) for field in fields]
-    return {"type": "bundle", "members": members}  # pyright: ignore[reportReturnType]
+    return {"type": "bundle", "name": written_type.__name__, "members": members}  # pyright: ignore[reportReturnType]
 
 
 def refuse_what_a_bundle_member_does_not_state(

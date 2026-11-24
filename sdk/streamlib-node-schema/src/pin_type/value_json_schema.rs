@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 use super::stored_value_check::integer_bounds;
 use super::{
     BuiltInPinTypeName, BundleMember, DeclaredPinType, FloatSize, PinDeclaration, PinNumberRange,
-    PinType, VectorComponentCount,
+    PinType, PinTypesAChoiceTakes, VectorComponentCount,
 };
 
 impl PinDeclaration {
@@ -109,14 +109,14 @@ impl PinType {
                 "type": "array",
                 "items": element_type.value_json_schema(None).unwrap_or(Value::Bool(false)),
             }),
-            Self::Bundle { members } => a_bundle_object(members),
+            Self::Bundle { members, .. } => a_bundle_object(members),
             Self::NodeReference { .. } => json!({
                 "type": "object",
                 "properties": { "node": { "type": "string" } },
                 "required": ["node"],
                 "additionalProperties": false,
             }),
-            Self::PinTypeChoice { among } => a_pin_type_choice(among),
+            Self::PinTypeChoice { .. } => a_pin_type_choice(self.the_pin_types_a_choice_takes()?),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
@@ -230,21 +230,28 @@ fn a_bundle_object(members: &[BundleMember]) -> Value {
     })
 }
 
-/// A pin type: one of `among`, each as the contract writes it, when it names any; else any
-/// pin type by a built-in `type` tag.
-fn a_pin_type_choice(among: &[PinType]) -> Value {
-    if !among.is_empty() {
-        return json!({
-            "enum": among
-                .iter()
-                .filter_map(|pin_type| serde_json::to_value(pin_type).ok())
-                .collect::<Vec<_>>(),
-        });
-    }
+/// A pin type: one of `pin_types`, each as the contract writes it; a bundle by its `type` tag
+/// when it is one of the bundles its stream declares, which the runtime matches to one it
+/// offers; else any pin type by a built-in `type` tag.
+fn a_pin_type_choice(takes: PinTypesAChoiceTakes<'_>) -> Value {
+    let tags_it_takes = match takes {
+        PinTypesAChoiceTakes::OneOf(pin_types) => {
+            return json!({
+                "enum": pin_types
+                    .iter()
+                    .filter_map(|pin_type| serde_json::to_value(pin_type).ok())
+                    .collect::<Vec<_>>(),
+            });
+        }
+        PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares(_) => {
+            json!([BuiltInPinTypeName::Bundle])
+        }
+        PinTypesAChoiceTakes::AnyPinType => json!(BuiltInPinTypeName::EVERY_NAME),
+    };
     json!({
         "type": "object",
         "properties": {
-            "type": { "enum": BuiltInPinTypeName::EVERY_NAME },
+            "type": { "enum": tags_it_takes },
         },
         "required": ["type"],
     })

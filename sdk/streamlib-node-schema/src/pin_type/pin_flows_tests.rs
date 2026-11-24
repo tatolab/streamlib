@@ -29,6 +29,7 @@ fn named() -> PinType {
 
 fn bundle_of(member_types: Vec<PinType>) -> PinType {
     PinType::Bundle {
+        name: None,
         members: member_types
             .into_iter()
             .enumerate()

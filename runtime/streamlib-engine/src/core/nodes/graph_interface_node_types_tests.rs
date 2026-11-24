@@ -44,7 +44,7 @@ fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin
     assert_eq!(
         the_declared_type_of(&descriptor, "pin_type"),
         DeclaredPinType::Is {
-            pin_type: PinType::PinTypeChoice { among: Vec::new() }
+            pin_type: PinType::a_choice_of_any()
         }
     );
     let value = descriptor

@@ -30,8 +30,8 @@ pub(crate) enum PinTypeInItsGraph {
 }
 
 /// The pin `port`, a port of `node` at `direction`, resolves to in `graph`, as `graph` serves
-/// it: the pin it declares exactly, else its one type and its flow; `None` while it is one of
-/// several, any or untyped.
+/// it: the pin it declares exactly, a choice among the bundles its stream declares listing
+/// them, else its one type and its flow; `None` while it is one of several, any or untyped.
 pub(crate) fn the_pin_a_port_resolves_to(
     graph: &Graph,
     node: &GraphNode,
@@ -39,7 +39,12 @@ pub(crate) fn the_pin_a_port_resolves_to(
     direction: PortDirection,
 ) -> Option<ResolvedPin> {
     if declares_its_type_exactly(port) {
-        return port.pin.clone();
+        return port.pin.clone().map(|mut pin| {
+            graph
+                .node_types_this_stream_resolves()
+                .list_the_bundles_its_node_types_declare_in(&mut pin.pin_type);
+            pin
+        });
     }
     let PinTypeInItsGraph::Is(pin_type) =
         the_pin_type_of_a_port_in_its_graph(graph, node, port, direction)

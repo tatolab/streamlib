@@ -40,7 +40,7 @@ impl PinType {
     /// bundle.
     pub fn the_message_a_bundle_travels_as(&self) -> Option<BundleMessage> {
         match self {
-            Self::Bundle { members } => Some(BundleMessage::of_members(members)),
+            Self::Bundle { members, .. } => Some(BundleMessage::of_members(members)),
             _ => None,
         }
     }

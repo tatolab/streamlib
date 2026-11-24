@@ -209,7 +209,7 @@ fn pin_type_setting(description: &str) -> PortDescriptor {
     setting(
         GRAPH_INTERFACE_PIN_TYPE_SETTING,
         description,
-        PinType::PinTypeChoice { among: Vec::new() },
+        PinType::a_choice_of_any(),
         true,
         None,
     )

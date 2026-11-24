@@ -48,6 +48,7 @@ mod a_stream_outliving_its_connection_tests;
 mod an_edit_recorded_before_the_update_tests;
 mod bundle_frame_link_tests;
 mod bundle_member_link_tests;
+mod bundle_type_offered_by_its_stream_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
 mod connection_wire_tests;

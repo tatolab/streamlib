@@ -63,7 +63,8 @@ pub(crate) use node_types_of_the_graph_itself::{
     the_settings_of_a_node_type_of_the_graph_itself,
 };
 pub(crate) use node_types_one_stream_resolves::{
-    HowANodeOfADescribedTypeRuns, is_a_natively_compiled_node_type,
+    HowANodeOfADescribedTypeRuns, chooses_among_the_bundles_its_stream_declares,
+    is_a_natively_compiled_node_type,
 };
 pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;

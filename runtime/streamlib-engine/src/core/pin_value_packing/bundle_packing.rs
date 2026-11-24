@@ -62,7 +62,7 @@ pub(super) fn the_bundle_a_records_message_carries(
 /// type reads `value` as it is. Fails naming a member that is neither held nor defaulted.
 pub(super) fn the_value_read_as(pin_type: &PinType, value: &Value) -> Result<Value, String> {
     match (pin_type, value) {
-        (PinType::Bundle { members }, Value::Object(held)) => members
+        (PinType::Bundle { members, .. }, Value::Object(held)) => members
             .iter()
             .map(|member| {
                 let member_value = match (held.get(&member.name), &member.default_value) {
@@ -249,7 +249,7 @@ fn the_members_read_as(
     pin_type: &PinType,
     held: &Map<String, Value>,
 ) -> Result<Map<String, Value>, String> {
-    let PinType::Bundle { members } = pin_type else {
+    let PinType::Bundle { members, .. } = pin_type else {
         return Err(format!("a {pin_type} holds no members"));
     };
     held.iter()

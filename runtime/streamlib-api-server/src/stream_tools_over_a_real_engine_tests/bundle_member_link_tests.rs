@@ -32,6 +32,7 @@ fn a_reading() -> PinType {
         default_value: None,
     };
     PinType::Bundle {
+        name: None,
         members: vec![
             member("level", PinType::Float { exact_size: None }),
             member("label", PinType::String {}),

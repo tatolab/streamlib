@@ -29,6 +29,7 @@ class Reading:
 
 READING = {
     "type": "bundle",
+    "name": "Reading",
     "members": [
         {"name": "level", "member_type": {"type": "float"}},
         {"name": "label", "member_type": {"type": "string"}, "default_value": "unnamed"},

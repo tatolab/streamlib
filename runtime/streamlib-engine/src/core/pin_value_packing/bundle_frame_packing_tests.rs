@@ -27,6 +27,7 @@ fn a_texture() -> PinType {
 /// A picture with the region of it that matters, the bundle a node sends a frame with.
 fn a_framed_picture() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_member("picture", a_texture()),
             BundleMember {
@@ -124,6 +125,7 @@ fn a_frame_is_read_as_the_inputs_own_bundle() {
     )
     .unwrap();
     let only_the_picture = PinType::Bundle {
+        name: None,
         members: vec![a_member("picture", a_texture())],
     };
     let read = the_bundle_a_bundle_frame_carries(&only_the_picture, packed.as_ref()).unwrap();
@@ -131,6 +133,7 @@ fn a_frame_is_read_as_the_inputs_own_bundle() {
     assert_eq!(read.heavy_members[0].descriptor, an_image_frame(1, 1));
 
     let with_a_mask = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("picture", a_texture()),
             a_member("mask", a_texture()),
@@ -144,6 +147,7 @@ fn a_frame_is_read_as_the_inputs_own_bundle() {
 #[test]
 fn a_bundle_of_a_texture_alone_packs_no_records_row() {
     let only_the_picture = PinType::Bundle {
+        name: None,
         members: vec![a_member("picture", a_texture())],
     };
     let packed = the_bundle_frame_of_a_bundle(
@@ -214,6 +218,7 @@ fn only_a_bundle_holding_a_heavy_member_travels_as_a_bundle_frame() {
     assert!(refusal.contains("travels as a Bundle frame"), "{refusal}");
 
     let small_only = PinType::Bundle {
+        name: None,
         members: vec![a_member("label", PinType::String {})],
     };
     let refusal =

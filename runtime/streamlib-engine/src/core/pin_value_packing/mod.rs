@@ -116,7 +116,7 @@ pub fn message_kind_of(pin_type: &PinType) -> Option<DataChannelPayloadDescripto
             DataChannelPayloadDescriptorKind::PacketsUnit
         }
         PinType::Tensor {} => DataChannelPayloadDescriptorKind::ArrayFrame,
-        PinType::Bundle { members } => match BundleMessage::of_members(members) {
+        PinType::Bundle { members, .. } => match BundleMessage::of_members(members) {
             BundleMessage::RecordsMap => DataChannelPayloadDescriptorKind::RecordsMessage,
             BundleMessage::ArrayFrameOfTensors => DataChannelPayloadDescriptorKind::ArrayFrame,
             BundleMessage::BundleFrame => DataChannelPayloadDescriptorKind::BundleFrame,
@@ -176,7 +176,7 @@ pub fn pack_pin_value(
         PinType::ListOf { .. } if pin_type.holds_a_heavy_member() => {
             Err(a_bundle_frame_holds_no_json_value(pin_type))
         }
-        PinType::Bundle { members } => match BundleMessage::of_members(members) {
+        PinType::Bundle { members, .. } => match BundleMessage::of_members(members) {
             BundleMessage::RecordsMap => the_records_message_of_a_bundle(pin_type, value),
             BundleMessage::ArrayFrameOfTensors => {
                 the_array_frame_of_a_bundle_of_tensors(pin_type, members, value)
@@ -216,7 +216,7 @@ pub fn unpack_pin_value(
         PinType::ListOf { .. } if pin_type.holds_a_heavy_member() => {
             Err(a_bundle_frame_holds_no_json_value(pin_type))
         }
-        PinType::Bundle { members } => match BundleMessage::of_members(members) {
+        PinType::Bundle { members, .. } => match BundleMessage::of_members(members) {
             BundleMessage::RecordsMap => the_bundle_a_records_message_carries(pin_type, message),
             BundleMessage::ArrayFrameOfTensors => {
                 Err(format!("a {pin_type} value does not unpack off a link yet"))

@@ -24,7 +24,7 @@ impl MemberTakenAtTheRead {
     /// The member `member` of `bundle` taken at the read; `None` when `bundle` is no bundle
     /// holding it.
     pub fn of(bundle: &PinType, member: &str) -> Option<Self> {
-        let PinType::Bundle { members } = bundle else {
+        let PinType::Bundle { members, .. } = bundle else {
             return None;
         };
         let member = members.iter().find(|held| held.name == member)?.clone();
