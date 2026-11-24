@@ -478,7 +478,10 @@ fn an_output_whose_type_a_choice_holds_travels_on_that_types_family_and_codec() 
     let a_list = chosen(serde_json::json!({"type": "list_of", "element_type": {"type": "float"}}));
     let refusal = output_port_family_resolved_against_config(&output, Some(&a_list))
         .expect_err("a List travels on no one family");
-    assert!(refusal.contains("no stream's port carries"), "got {refusal}");
+    assert!(
+        refusal.contains("no stream's port carries"),
+        "got {refusal}"
+    );
 
     let no_pin_type = chosen(serde_json::json!({"type": "a picture"}));
     let refusal = output_port_family_resolved_against_config(&output, Some(&no_pin_type))

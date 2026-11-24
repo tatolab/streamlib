@@ -57,9 +57,9 @@ fn float() -> PinType {
     PinType::Float { exact_size: None }
 }
 
-fn h264() -> PinType {
+fn encoded_video(codec: &str) -> PinType {
     PinType::EncodedVideo {
-        codecs: vec!["h264".to_owned()],
+        codecs: vec![codec.to_owned()],
     }
 }
 
@@ -248,7 +248,7 @@ fn register_the_fixture_node_types() {
                             ..PortFamilyDeclaration::of_family(PortFamily::Packets)
                         },
                     )
-                    .with_pin_declaration(PinDeclaration::exactly(h264())),
+                    .with_pin_declaration(PinDeclaration::exactly(encoded_video("h264"))),
                 ],
                 Vec::new(),
             ),
@@ -752,16 +752,18 @@ fn an_output_whose_family_its_choice_sets_travels_on_the_family_and_codec_of_the
     let compiler = Arc::new(Compiler::new());
     let h264_sink = a_node_of(&compiler, H264_SINK);
 
-    let chose_h264 = a_node_holding(&compiler, FAMILY_CHOSEN_SOURCE, choosing(h264()));
+    let chose_h264 = a_node_holding(
+        &compiler,
+        FAMILY_CHOSEN_SOURCE,
+        choosing(encoded_video("h264")),
+    );
     connect(&compiler, &chose_h264, &h264_sink)
         .expect("a choice of H.264 carries Packets of H.264, though the port declares Records");
 
     let chose_h265 = a_node_holding(
         &compiler,
         FAMILY_CHOSEN_SOURCE,
-        choosing(PinType::EncodedVideo {
-            codecs: vec!["h265".to_owned()],
-        }),
+        choosing(encoded_video("h265")),
     );
     let refused = connect(&compiler, &chose_h265, &a_node_of(&compiler, H264_SINK))
         .expect_err("a choice of another codec does not feed an H.264 input");

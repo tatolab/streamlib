@@ -414,7 +414,7 @@ pub fn output_port_family_resolved_against_config(
                 )
             }),
         Some(held @ serde_json::Value::Object(_)) => {
-            let chosen = the_pin_type_a_config_key_chooses(config_key, held)?;
+            let chosen = the_pin_type_a_choice_holds(config_key, held)?;
             PortFamily::a_chosen_pin_type_travels_on(&chosen).ok_or_else(|| {
                 format!(
                     "config key {config_key:?} chooses {chosen}, which no stream's port carries"
@@ -428,15 +428,26 @@ pub fn output_port_family_resolved_against_config(
     }
 }
 
-/// The pin type `held`, the value of the pin type choice `config_key`, chooses, or why it holds
-/// none.
-fn the_pin_type_a_config_key_chooses(
-    config_key: &str,
+/// The pin type `held`, the value of the pin type choice `setting`, chooses, or why it holds
+/// none. Refused for a value holding no pin type, and for a type only a setting holds, which no
+/// link carries.
+pub fn the_pin_type_a_choice_holds(
+    setting: &str,
     held: &serde_json::Value,
 ) -> Result<PinType, String> {
-    serde_json::from_value(held.clone()).map_err(|refusal| {
-        format!("config key {config_key:?} holds {held}, which chooses no pin type: {refusal}")
-    })
+    let chosen = PinType::deserialize(held).map_err(|refusal| {
+        format!("`{setting}` holds {held}, which chooses no pin type: {refusal}")
+    })?;
+    if matches!(
+        chosen,
+        PinType::NodeReference { .. } | PinType::PinTypeChoice { .. }
+    ) {
+        return Err(format!(
+            "`{setting}` chooses {chosen}, which only a setting holds, and a stream's port \
+             carries what a link carries"
+        ));
+    }
+    Ok(chosen)
 }
 
 /// The frame rate an Image output's declaration resolves to against its node's
@@ -492,11 +503,12 @@ pub fn output_port_codec_resolved_against_config(
         None | Some(serde_json::Value::Null) => Ok(declaration.codec.clone()),
         Some(serde_json::Value::String(codec)) if !codec.is_empty() => Ok(Some(codec.clone())),
         Some(held @ serde_json::Value::Object(_)) => {
-            match the_pin_type_a_config_key_chooses(config_key, held)? {
-                PinType::EncodedVideo { codecs } | PinType::EncodedAudio { codecs }
-                    if codecs.len() == 1 =>
-                {
-                    Ok(codecs.into_iter().next())
+            match the_pin_type_a_choice_holds(config_key, held)? {
+                PinType::EncodedVideo { codecs } | PinType::EncodedAudio { codecs } => {
+                    match <[String; 1]>::try_from(codecs) {
+                        Ok([codec]) => Ok(Some(codec)),
+                        Err(_) => Ok(None),
+                    }
                 }
                 _ => Ok(declaration.codec.clone()),
             }
