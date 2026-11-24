@@ -205,10 +205,10 @@ class BrowserSource:
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         wired_video_input_ports = [
-            port for port in VIDEO_INPUT_PORTS if ctx.inputs.inbound_link_names(port)
+            port for port in VIDEO_INPUT_PORTS if getattr(self, port).inbound_link_names()
         ]
         wired_audio_input_ports = [
-            port for port in AUDIO_INPUT_PORTS if ctx.inputs.inbound_link_names(port)
+            port for port in AUDIO_INPUT_PORTS if getattr(self, port).inbound_link_names()
         ]
         module_host_table = ctx.open_module_host_table(
             output_ports=[VIDEO_OUTPUT_PORT, EVENTS_OUTPUT_PORT, AUDIO_OUTPUT_PORT],

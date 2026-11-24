@@ -35,8 +35,9 @@ class _TextureInfoValues(NamedTuple):
 )
 @node
 class TextureInfo:
-    """Hands on the values of each picture it reads. It writes an output when its value has
-    changed since it was last written, or when a reader connected after that write."""
+    """Hands on the values of each picture it reads. It writes an output only when its value
+    has changed since it was last written; each output flows as a value, so the runtime sends
+    its last write to a reader that connected after it."""
 
     picture: InputPin[Annotated[Texture, StreamDelivery("newest")]]
     width: OutputPin[Annotated[int, Description("The picture's width in pixels")]]
@@ -64,20 +65,15 @@ class TextureInfo:
         )
         written = self._values_written
 
-        def to_write(port: str, value_now: object, value_written: object) -> bool:
-            return value_now != value_written or ctx.outputs.has_a_reader_the_last_write_missed(port)
-
-        if to_write("width", values.width, written and written.width):
+        if values.width != (written and written.width):
             self.width.write(values.width)
-        if to_write("height", values.height, written and written.height):
+        if values.height != (written and written.height):
             self.height.write(values.height)
-        if to_write("size", values[:2], written and written[:2]):
+        if values[:2] != (written and written[:2]):
             self.size.write(Vector2(float(values.width), float(values.height)))
-        if to_write("pixel_format", values.pixel_format, written and written.pixel_format):
+        if values.pixel_format != (written and written.pixel_format):
             self.pixel_format.write(values.pixel_format)
-        if values.frame_rate is not None and to_write(
-            "frame_rate", values.frame_rate, written and written.frame_rate
-        ):
+        if values.frame_rate is not None and values.frame_rate != (written and written.frame_rate):
             self.frame_rate.write(values.frame_rate)
         self._values_written = values
 
