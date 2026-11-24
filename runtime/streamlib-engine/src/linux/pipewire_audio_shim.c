@@ -506,6 +506,10 @@ uint32_t streamlib_pipewire_stream_properties(struct StreamLibPipeWireStreamProp
     items[count++] = (struct StreamLibPipeWireStreamProperty){PW_KEY_MEDIA_ROLE, "Production"};
     if (device_id_or_null == NULL)
         return count;
+    // WirePlumber's key, absent from libpipewire's headers: without it a capture target the
+    // session cannot find is answered with the session's default source.
+    if (!is_playback)
+        items[count++] = (struct StreamLibPipeWireStreamProperty){"node.dont-fallback", "true"};
 
     // A sink's monitor is a *capture* endpoint the session already routes, and
     // `stream.capture.sink` is the only way to reach one: targeting a sink
@@ -570,11 +574,10 @@ static struct spa_audio_info_raw spa_audio_info_raw_requested_by(
     return requested_audio_info;
 }
 
-/// `PW_STREAM_FLAG_DONT_RECONNECT` is what makes a named device authoritative:
-/// `PW_STREAM_FLAG_AUTOCONNECT` alone treats a target it cannot resolve as
-/// licence to link the session default instead, and reaching a device other
-/// than the one the caller named is worse than failing. Nothing is set when no
-/// device was named — there the session default is what was asked for.
+/// `PW_STREAM_FLAG_DONT_RECONNECT` keeps a named device's stream from being
+/// moved to the session default when that device goes away: the stream enters
+/// its error state instead. Nothing is set when no device was
+/// named — there the session default is what was asked for.
 static int connect_audio_stream(struct StreamLibPipeWireAudioStream *audio_stream,
                                 const char *device_id_or_null, const struct spa_pod **params,
                                 uint32_t param_count)
