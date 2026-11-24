@@ -144,14 +144,13 @@ async fn a_value_input_of_a_node_added_while_playing_takes_a_link_made_later() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let links = engine.the_live_graph_of(&stream_id)["links"].clone();
-    assert!(
-        links
-            .as_array()
-            .into_iter()
-            .flatten()
-            .all(|link| link["state"] != "error"),
-        "{links}"
-    );
+    let states: Vec<&Value> = links
+        .as_array()
+        .expect("the graph lists its links")
+        .iter()
+        .map(|link| &link["state"])
+        .collect();
+    assert_eq!(states, [&json!("wired")], "{links}");
     engine
         .the_project_action_done("stop_playback", &project)
         .await;

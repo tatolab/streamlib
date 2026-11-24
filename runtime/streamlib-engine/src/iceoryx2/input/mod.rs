@@ -447,7 +447,9 @@ impl InputMailboxesInner {
         self.ports.lock().contains_key(port)
     }
 
-    /// Check if a port has already been configured.
+    /// Whether a read of `port` has something to read from: a mailbox, a fired trigger, an
+    /// island feeding it, or the value it reads while unlinked. Wiring a link asks
+    /// [`Self::has_a_mailbox`] instead.
     pub fn has_port(&self, port: &str) -> bool {
         self.has_a_mailbox(port)
             || self.was_ever_fired(port)
