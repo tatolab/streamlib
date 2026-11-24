@@ -72,15 +72,43 @@ impl<'contracts> ContractComparison<'contracts> {
         if let (Some(earlier_reference), Some(later_reference)) = (
             earlier_schema["$ref"].as_str(),
             later_schema["$ref"].as_str(),
-        ) && !self.schema_pairs_compared.insert((
-            earlier_reference.to_owned(),
-            later_reference.to_owned(),
-            direction,
-        )) {
+        ) {
+            if self.schema_pairs_compared.insert((
+                earlier_reference.to_owned(),
+                later_reference.to_owned(),
+                direction,
+            )) {
+                self.compare_the_keywords_of(
+                    path,
+                    the_schema_a_reference_names(self.earlier_contract, earlier_schema),
+                    the_schema_a_reference_names(self.later_contract, later_schema),
+                    direction,
+                );
+            }
+            // The keywords beside each `$ref` narrow the component where it is used, so they are
+            // compared at every use, however often the component itself was. Where only one side
+            // holds a `$ref`, its component is compared with the other side and the keywords
+            // beside it are not.
+            self.compare_the_keywords_of(path, earlier_schema, later_schema, direction);
             return;
         }
-        let earlier_schema = the_schema_a_reference_names(self.earlier_contract, earlier_schema);
-        let later_schema = the_schema_a_reference_names(self.later_contract, later_schema);
+        self.compare_the_keywords_of(
+            path,
+            the_schema_a_reference_names(self.earlier_contract, earlier_schema),
+            the_schema_a_reference_names(self.later_contract, later_schema),
+            direction,
+        );
+    }
+
+    /// Compare the keywords `earlier_schema` and `later_schema` state themselves, leaving a
+    /// `$ref` either holds to the caller.
+    fn compare_the_keywords_of(
+        &mut self,
+        path: &str,
+        earlier_schema: &'contracts Value,
+        later_schema: &'contracts Value,
+        direction: SchemaDirection,
+    ) {
         let (Some(earlier_object), Some(later_object)) =
             (earlier_schema.as_object(), later_schema.as_object())
         else {

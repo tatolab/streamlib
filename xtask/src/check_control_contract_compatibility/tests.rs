@@ -342,6 +342,33 @@ fn a_value_added_to_a_closed_set_in_an_answer_is_refused() {
 }
 
 #[test]
+fn a_keyword_beside_a_ref_is_compared_at_each_use_of_the_component() {
+    let with_a_first_stream_narrowed = |state_values: &[&str]| {
+        let mut contract = a_contract_at_version_one();
+        let states: Vec<Value> = state_values
+            .iter()
+            .map(|state| json!({ "type": "string", "const": state }))
+            .collect();
+        the_schemas_of(&mut contract)["ListStreamsResult"]["properties"]["first"] = json!({
+            "$ref": "#/components/schemas/ListedStream",
+            "properties": { "state": { "oneOf": states } },
+        });
+        contract
+    };
+    let earlier = with_a_first_stream_narrowed(&["running"]);
+    let mut later = with_a_first_stream_narrowed(&["running", "paused"]);
+    later["info"]["x-contract-revision"] =
+        json!(the_counter_of(&earlier, "x-contract-revision") + 1);
+
+    the_refusal_names(
+        &earlier,
+        &later,
+        "result.first.state.oneOf may now be the value \"paused\", and the set is not marked \
+         `x-may-grow`",
+    );
+}
+
+#[test]
 fn an_alternative_added_to_a_closed_union_in_an_answer_is_refused_by_its_tag_alone() {
     let earlier = a_contract_at_version_one();
     let later = an_addition_to(&earlier, |later| {
