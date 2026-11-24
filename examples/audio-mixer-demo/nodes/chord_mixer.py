@@ -19,7 +19,6 @@ import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
-    ChannelsBlock,
     Description,
     InputPin,
     NumberRange,
@@ -75,7 +74,7 @@ class ChordVoiceWindow:
     first_sample_timestamp_ns: int
 
     @classmethod
-    def copied_from(cls, block: ChannelsBlock) -> "ChordVoiceWindow":
+    def copied_from(cls, block: Audio) -> "ChordVoiceWindow":
         """The block's mono samples, copied: a read's borrow ends with the `process()` it was made in."""
         return cls(
             samples=numpy.array(numpy.from_dlpack(block)[0], dtype=numpy.float32),

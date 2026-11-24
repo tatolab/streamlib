@@ -17,7 +17,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -70,6 +70,6 @@ class CameraFrameToTexture:
         ctx.gpu_limited_access.copy_surface_to_surface(frame.surface_id, texture)
 
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(texture, frame.colour),
+            TextureToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

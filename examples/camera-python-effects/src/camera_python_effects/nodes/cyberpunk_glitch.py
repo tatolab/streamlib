@@ -15,7 +15,7 @@ import struct
 
 from typing import ClassVar
 
-from tatolab.stream import ImageFrame, RuntimeContextFullAccess, node
+from tatolab.stream import Texture, RuntimeContextFullAccess, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
 
@@ -92,7 +92,7 @@ class CyberpunkGlitch(SinglePassVideoEffect):
         super().setup(ctx)
         self.flash_schedule = GlitchFlashSchedule()
 
-    def push_constants_for(self, frame: ImageFrame, elapsed_seconds: float) -> bytes:
+    def push_constants_for(self, frame: Texture, elapsed_seconds: float) -> bytes:
         self.flash_schedule.advance_to(elapsed_seconds)
         return struct.pack(
             GLITCH_PUSH_CONSTANT_FORMAT,

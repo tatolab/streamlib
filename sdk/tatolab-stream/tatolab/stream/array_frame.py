@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Union
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
 if TYPE_CHECKING:
-    from ._node_context_protocols import ArrayFrameCpuAttribute
+    from ._node_context_protocols import TensorCpuAttribute
 
-__all__ = ["ArrayFrame", "ArrayFrameGpuAttribute"]
+__all__ = ["Tensor", "TensorGpuAttribute"]
 
 
 @dataclass(frozen=True, init=False)
-class ArrayFrameGpuAttribute(ClaimedSurfacePixelAccess):
+class TensorGpuAttribute(ClaimedSurfacePixelAccess):
     """One GPU-resident attribute of an Array frame: a claimed tensor surface."""
 
     surface_id: str
@@ -35,10 +35,10 @@ class ArrayFrameGpuAttribute(ClaimedSurfacePixelAccess):
         super().__init__(surface_id=surface_id, dtype=dtype, shape=tuple(shape))
 
 
-ArrayFrameAttribute = Union["ArrayFrameCpuAttribute", ArrayFrameGpuAttribute]
+TensorAttribute = Union["TensorCpuAttribute", TensorGpuAttribute]
 
 
-class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
+class Tensor(Mapping[str, TensorAttribute]):
     """An Array frame, as a Tensor input pin's `read()` returns it: name to tensor.
 
     Each value speaks `__dlpack__` and states its `dtype` and `shape`, so
@@ -51,7 +51,7 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
     """The pin type an Array frame is the read of."""
 
     def __init__(
-        self, attributes: "Mapping[str, ArrayFrameAttribute]", timestamp_ns: int
+        self, attributes: "Mapping[str, TensorAttribute]", timestamp_ns: int
     ) -> None:
         """Hold the attributes a read built, in their table's order."""
         self._attributes_by_name = dict(attributes)
@@ -62,7 +62,7 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
         """The stream time the frame was stamped with, in nanoseconds."""
         return self._timestamp_ns
 
-    def __getitem__(self, attribute_name: str) -> ArrayFrameAttribute:
+    def __getitem__(self, attribute_name: str) -> TensorAttribute:
         return self._attributes_by_name[attribute_name]
 
     def __iter__(self) -> Iterator[str]:
@@ -76,4 +76,4 @@ class ArrayFrame(Mapping[str, ArrayFrameAttribute]):
             f"{name}: {attribute.dtype}{list(attribute.shape)}"
             for name, attribute in self._attributes_by_name.items()
         )
-        return f"ArrayFrame({attributes})"
+        return f"Tensor({attributes})"

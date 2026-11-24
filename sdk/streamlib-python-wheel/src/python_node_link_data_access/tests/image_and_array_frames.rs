@@ -56,7 +56,7 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
             let attribute = received.get_item(name).unwrap();
             let attribute = attribute
                 .cast::<PythonArrayFrameCpuAttribute>()
-                .expect("a CPU attribute reads as an ArrayFrameCpuAttribute");
+                .expect("a CPU attribute reads as a TensorCpuAttribute");
             assert_eq!(attribute.get().dtype(), dtype);
             assert_eq!(attribute.get().shape(), shape);
             assert_eq!(
@@ -143,7 +143,7 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
 }
 
 /// An Image frame over a claim-tabled pool slot reads back as an
-/// `ImageFrame` naming the slot's published frame, its size, format and
+/// `Texture` naming the slot's published frame, its size, format and
 /// colour, holding the slot while it lives; written on, it publishes the
 /// same frame again. Needs a Vulkan device; skips where none comes up.
 #[cfg(target_os = "linux")]

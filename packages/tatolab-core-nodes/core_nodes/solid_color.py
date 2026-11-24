@@ -10,7 +10,7 @@ from typing import Annotated, Any
 from tatolab.stream import (
     Color,
     ColorInfo,
-    ImageFrameToWrite,
+    TextureToWrite,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
@@ -71,7 +71,7 @@ class SolidColor:
             self._filled_last = wanted
         self.image.write(self._frame_filled_last)
 
-    def _filled_frame(self, ctx: RuntimeContextLimitedAccess) -> ImageFrameToWrite:
+    def _filled_frame(self, ctx: RuntimeContextLimitedAccess) -> TextureToWrite:
         width, height = self.width, self.height
         slot = self._output_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, width, height
@@ -81,4 +81,4 @@ class SolidColor:
             slot.as_numpy()[:height, :width] = rgba_bytes_of_the_color(self.color)
         finally:
             slot.unlock()
-        return ImageFrameToWrite.of_texture(slot, SOLID_COLOR_COLOUR)
+        return TextureToWrite.of_texture(slot, SOLID_COLOR_COLOUR)

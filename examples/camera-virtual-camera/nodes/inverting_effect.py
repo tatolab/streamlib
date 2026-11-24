@@ -17,7 +17,7 @@ from typing import Annotated
 import numpy
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -80,6 +80,6 @@ class InvertingEffect:
         # sets the device's colorimetry from the frame's colour, so the two
         # cameras present the same picture under the same time and colour.
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(inverted_texture, camera_frame.colour),
+            TextureToWrite.of_texture(inverted_texture, camera_frame.colour),
             timestamp_ns=camera_frame.timestamp_ns,
         )

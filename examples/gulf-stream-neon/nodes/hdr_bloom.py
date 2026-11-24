@@ -18,7 +18,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -276,5 +276,5 @@ class HdrBloomPyramid:
         streak_top, stw, sth = self.streaks[0]
         streak_out = self.streak_ring.next_texture_for_this_frame(gpu, stw, sth)
         gpu.copy_surface_to_surface(streak_top.surface_id, streak_out)
-        self.bloom.write(ImageFrameToWrite.of_texture(bloom_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
-        self.streak.write(ImageFrameToWrite.of_texture(streak_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
+        self.bloom.write(TextureToWrite.of_texture(bloom_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
+        self.streak.write(TextureToWrite.of_texture(streak_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)

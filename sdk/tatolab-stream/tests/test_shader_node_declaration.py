@@ -10,13 +10,12 @@ from typing import Annotated
 
 import pytest
 from tatolab.stream import (
-    ChannelsBlock,
+    Audio,
     Color,
     Description,
-    ImageFrame,
+    Texture,
     ShaderNode,
     StreamBuilder,
-    Texture,
     Time,
     Vector2,
     Vector3,
@@ -42,7 +41,7 @@ float4 blend(ImageInput a, ImageInput b, float amount)
 
 
 @node.shader(BLEND_SLANG)
-def blend(a: ImageFrame, b: ImageFrame, amount: float = 0.5) -> ImageFrame: ...
+def blend(a: Texture, b: Texture, amount: float = 0.5) -> Texture: ...
 
 
 def test_a_shader_node_carries_kind_shader_and_its_slang_source():
@@ -116,19 +115,19 @@ def test_a_shader_node_is_added_to_a_stream_like_any_node():
     stream_builder.add(blend)
 
 
-def tint(image: ImageFrame) -> ImageFrame: ...
+def tint(image: Texture) -> Texture: ...
 
 
-def flat(level: float = 1.0) -> ImageFrame: ...
+def flat(level: float = 1.0) -> Texture: ...
 
 
-def levels(image: ImageFrame, level: ChannelsBlock) -> ImageFrame: ...
+def levels(image: Texture, level: Audio) -> Texture: ...
 
 
-def brightness(image: ImageFrame) -> float: ...
+def brightness(image: Texture) -> float: ...
 
 
-def animated(image: ImageFrame, *, now: Time) -> ImageFrame: ...
+def animated(image: Texture, *, now: Time) -> Texture: ...
 
 
 @dataclass(frozen=True)
@@ -136,7 +135,7 @@ class TintConfig:
     amount: float = 1.0
 
 
-def configured(image: ImageFrame, config: TintConfig) -> ImageFrame: ...
+def configured(image: Texture, config: TintConfig) -> Texture: ...
 
 
 def test_a_source_that_defines_no_function_named_for_the_node_is_refused():
@@ -150,7 +149,7 @@ def test_a_shader_with_no_image_input_is_refused():
 
 
 def test_an_input_that_is_neither_an_image_nor_a_float_is_refused_naming_it():
-    with pytest.raises(TypeError, match="input `level` is typed `ChannelsBlock`"):
+    with pytest.raises(TypeError, match="input `level` is typed `Audio`"):
         node.shader("float4 levels(ImageInput image) { return image.pixel; }")(levels)
 
 
@@ -170,7 +169,7 @@ def test_a_config_is_refused_pointing_at_value_inputs():
 
 
 def test_a_function_defined_inside_another_is_refused():
-    def nested(image: ImageFrame) -> ImageFrame: ...
+    def nested(image: Texture) -> Texture: ...
 
     with pytest.raises(TypeError, match="module-level `def`"):
         node.shader("float4 nested(ImageInput image) { return image.pixel; }")(nested)
@@ -191,12 +190,12 @@ float4 tint_and_shift(ImageInput image, float4 tint_color, float2 shift, float3 
 
 @node.shader(TINT_AND_SHIFT_SLANG)
 def tint_and_shift(
-    image: ImageFrame,
+    image: Texture,
     tint_color: Color = Color(1.0, 0.5, 0.25),
     shift: Vector2 = Vector2(0.0, 0.0),
     gain: Vector3 = Vector3(1.0, 1.0, 1.0),
     mix: Vector4 = Vector4(1.0, 1.0, 1.0, 1.0),
-) -> ImageFrame: ...
+) -> Texture: ...
 
 
 def test_a_color_and_vectors_are_typed_pins_whose_signature_states_their_pin_types():
@@ -236,7 +235,7 @@ def test_a_color_and_vectors_are_typed_pins_whose_signature_states_their_pin_typ
     assert input_ports["shift"]["pin_default"] == {"x": 0.0, "y": 0.0}
 
 
-def integer_steps(image: ImageFrame, steps: int = 4) -> ImageFrame: ...
+def integer_steps(image: Texture, steps: int = 4) -> Texture: ...
 
 
 def test_a_value_a_shader_holds_no_push_constant_for_is_refused_naming_its_types():

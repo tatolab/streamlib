@@ -21,9 +21,8 @@ from ._pin_types import Audio, EncodedAudio, EncodedVideo, Tensor, Texture, Trig
 
 if TYPE_CHECKING:
     from ._message import Message
-    from ._node_context_protocols import ChannelsBlock, PacketsUnit, PortPayloadBorrow, PortPayloadLoan
-    from .array_frame import ArrayFrame
-    from .image_frame import ImageFrame, ImageFrameToWrite
+    from ._node_context_protocols import PortPayloadBorrow, PortPayloadLoan
+    from .image_frame import TextureToWrite
     from .stream_facts import PortStreamFacts
 
 __all__ = ["InputPin", "OutputPin", "PinGroup"]
@@ -52,28 +51,27 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
     `InputPin[Annotated[Audio, StreamDelivery("ordered")]]`; a pin that states none reads by
     its type's default.
 
-    `read()` gives the next value waiting, or `None`: a Texture as an `ImageFrame`, Audio as a
-    `ChannelsBlock`, a Tensor as an `ArrayFrame`, encoded media as a `PacketsUnit`, a Trigger's
-    fire as `True`, and a value or a named type in its Python form. Each read type names its
+    `read()` gives the next value waiting, or `None`: a `Texture`, a block of `Audio`, a
+    `Tensor`, a unit of `EncodedVideo` or `EncodedAudio`, a Trigger's fire as `True`, and a value or a named type in its Python form. Each read type names its
     pin type as `pin_type`, so a read of a pin of several types narrows by it.
     """
 
     __slots__ = ()
 
     @overload
-    def read(self: InputPin[Texture]) -> ImageFrame | None: ...
+    def read(self: InputPin[Texture]) -> Texture | None: ...
     @overload
-    def read(self: InputPin[Audio]) -> ChannelsBlock | None: ...
+    def read(self: InputPin[Audio]) -> Audio | None: ...
     @overload
-    def read(self: InputPin[Tensor]) -> ArrayFrame | None: ...
+    def read(self: InputPin[Tensor]) -> Tensor | None: ...
     @overload
-    def read(self: InputPin[EncodedVideo | EncodedAudio]) -> PacketsUnit | None: ...
+    def read(self: InputPin[EncodedVideo | EncodedAudio]) -> EncodedVideo | EncodedAudio | None: ...
     @overload
     def read(self: InputPin[Trigger]) -> Literal[True] | None: ...
     @overload
     def read(
         self: InputPin[Texture | Audio | Tensor | EncodedVideo | EncodedAudio | None],
-    ) -> ImageFrame | ChannelsBlock | ArrayFrame | PacketsUnit | None: ...
+    ) -> Texture | Audio | Tensor | EncodedVideo | EncodedAudio | None: ...
     @overload
     def read(self) -> PinTypeTheInputReads | None: ...
     def read(self) -> object:
@@ -81,19 +79,19 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
         raise NotImplementedError
 
     @overload
-    def read_message(self: InputPin[Texture]) -> Message[ImageFrame] | None: ...
+    def read_message(self: InputPin[Texture]) -> Message[Texture] | None: ...
     @overload
-    def read_message(self: InputPin[Audio]) -> Message[ChannelsBlock] | None: ...
+    def read_message(self: InputPin[Audio]) -> Message[Audio] | None: ...
     @overload
-    def read_message(self: InputPin[Tensor]) -> Message[ArrayFrame] | None: ...
+    def read_message(self: InputPin[Tensor]) -> Message[Tensor] | None: ...
     @overload
-    def read_message(self: InputPin[EncodedVideo | EncodedAudio]) -> Message[PacketsUnit] | None: ...
+    def read_message(self: InputPin[EncodedVideo | EncodedAudio]) -> Message[EncodedVideo | EncodedAudio] | None: ...
     @overload
     def read_message(self: InputPin[Trigger]) -> Message[Literal[True]] | None: ...
     @overload
     def read_message(
         self: InputPin[Texture | Audio | Tensor | EncodedVideo | EncodedAudio | None],
-    ) -> Message[ImageFrame | ChannelsBlock | ArrayFrame | PacketsUnit] | None: ...
+    ) -> Message[Texture | Audio | Tensor | EncodedVideo | EncodedAudio] | None: ...
     @overload
     def read_message(self) -> Message[PinTypeTheInputReads] | None: ...
     def read_message(self) -> object:
@@ -129,7 +127,7 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
 class OutputPin(_ClassNodePin, Generic[PinTypeOfThePin]):
     """A class node's output: `result: OutputPin[Texture]`.
 
-    `write(value)` sends one message: a Texture as an `ImageFrame` or an `ImageFrameToWrite`,
+    `write(value)` sends one message: a `Texture` or a `TextureToWrite`,
     Audio as a `[channel][sample]` array from `start_sample`, at `sample_rate` when the pin's
     type does not fix one, a Tensor as a mapping of name to array, encoded media as the bytes of
     one unit, a Trigger's fire as `True`, and a value or a named type in its Python form.
@@ -140,7 +138,7 @@ class OutputPin(_ClassNodePin, Generic[PinTypeOfThePin]):
     @overload
     def write(
         self: OutputPin[Texture],
-        value: ImageFrame | ImageFrameToWrite,
+        value: Texture | TextureToWrite,
         timestamp_ns: int | None = None,
     ) -> None: ...
     @overload

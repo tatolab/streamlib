@@ -25,7 +25,7 @@ use crate::python_port_payload::refuse_a_dlpack_request_a_cpu_payload_cannot_mee
 
 /// A Channels block a read returned: `channel_count` runs of
 /// `samples_per_channel` samples, borrowed in place.
-#[pyclass(name = "ChannelsBlock", module = "tatolab.stream", frozen)]
+#[pyclass(name = "Audio", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonChannelsBlock {
     borrowed_payload: Arc<parking_lot::Mutex<InputPortMessagePayload>>,
     payload_base_address: usize,
@@ -157,7 +157,7 @@ impl PythonChannelsBlock {
 
 /// One CPU-resident attribute of an Array frame a read returned: a
 /// contiguous row-major tensor borrowed in the sample it arrived in.
-#[pyclass(name = "ArrayFrameCpuAttribute", module = "tatolab.stream", frozen)]
+#[pyclass(name = "TensorCpuAttribute", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonArrayFrameCpuAttribute {
     borrowed_payload: Arc<parking_lot::Mutex<InputPortMessagePayload>>,
     attribute_base_address: usize,
@@ -260,7 +260,7 @@ impl PythonArrayFrameCpuAttribute {
 /// A Packets unit a read returned: its bytes borrowed in the sample they
 /// arrived in, with its presentation stamp, whether a decoder may enter at
 /// it, and its codec.
-#[pyclass(name = "PacketsUnit", module = "tatolab.stream", frozen)]
+#[pyclass(name = "EncodedMedia", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonPacketsUnit {
     pub(crate) payload: Py<crate::python_port_payload::PythonPortPayloadBorrow>,
     pub(crate) pts: i64,

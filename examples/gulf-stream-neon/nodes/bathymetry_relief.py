@@ -18,7 +18,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -198,10 +198,10 @@ class BathymetryRelief:
         relief_texture = self.relief_textures.next_texture_for_this_frame(gpu, size, size)
         gpu.copy_surface_to_surface(self.held_relief.surface_id, relief_texture)
         self.contours.write(
-            ImageFrameToWrite.of_texture(contour_texture, RENDERED_FRAME_COLOUR),
+            TextureToWrite.of_texture(contour_texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )
         self.relief.write(
-            ImageFrameToWrite.of_texture(relief_texture, RENDERED_FRAME_COLOUR),
+            TextureToWrite.of_texture(relief_texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )

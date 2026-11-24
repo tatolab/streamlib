@@ -16,7 +16,6 @@ import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
-    ChannelsBlock,
     Description,
     InputPin,
     NumberRange,
@@ -223,7 +222,7 @@ class ReverbEffect:
                 return
             self.reverberate_one_window(dry_block)
 
-    def reverberate_one_window(self, dry_block: ChannelsBlock) -> None:
+    def reverberate_one_window(self, dry_block: Audio) -> None:
         """Mix one window's tail under it and write the result downstream."""
         # The contract guarantees mono f32, `[channel][sample]`. The view borrows
         # the message's samples, which the arithmetic below only ever reads.

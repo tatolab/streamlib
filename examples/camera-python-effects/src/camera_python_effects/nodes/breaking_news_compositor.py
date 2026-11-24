@@ -16,15 +16,14 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
     node,
 )
@@ -115,8 +114,8 @@ class BreakingNewsCompositor:
         )
         # Held across ticks: the two side layers pace themselves, and a frame
         # that has not been replaced is still the newest one there is.
-        self.latest_overlay: ImageFrame | None = None
-        self.latest_avatar_scene: ImageFrame | None = None
+        self.latest_overlay: Texture | None = None
+        self.latest_avatar_scene: Texture | None = None
         self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
         self.output_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
@@ -170,6 +169,6 @@ class BreakingNewsCompositor:
             ),
         )
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(composited, video.colour),
+            TextureToWrite.of_texture(composited, video.colour),
             timestamp_ns=video.timestamp_ns,
         )

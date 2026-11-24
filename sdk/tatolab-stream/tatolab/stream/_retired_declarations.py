@@ -107,6 +107,25 @@ RETIRED_IMPORTS: Final = (
         name="Packets",
         replaced_by="`EncodedVideo` or `EncodedAudio`, the pin types of encoded media",
     ),
+    RetiredImport(name="ImageFrame", replaced_by="`Texture`, the picture a Texture pin reads"),
+    RetiredImport(
+        name="ImageFrameToWrite",
+        replaced_by="`TextureToWrite`, the picture a Texture pin writes from a pooled texture",
+    ),
+    RetiredImport(name="ChannelsBlock", replaced_by="`Audio`, the samples an Audio pin reads"),
+    RetiredImport(
+        name="PacketsUnit",
+        replaced_by="`EncodedVideo` or `EncodedAudio`, the unit an encoded media pin reads",
+    ),
+    RetiredImport(name="ArrayFrame", replaced_by="`Tensor`, the arrays a Tensor pin reads"),
+    RetiredImport(
+        name="ProjectAssetUuid",
+        replaced_by='a pin typed `Asset`, narrowed by `Annotated[Asset, AssetMedia("image")]`',
+    ),
+    RetiredImport(
+        name="ProjectAssetMedia",
+        replaced_by='`AssetMedia("image")`, the media an `Asset` pin takes',
+    ),
     RetiredImport(
         name="Records",
         replaced_by="a frozen dataclass, a bundle pin whose members are its fields",

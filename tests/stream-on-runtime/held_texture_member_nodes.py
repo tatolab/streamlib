@@ -14,7 +14,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     ColorInfo,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -105,7 +105,7 @@ class PublishesOnePictureThenRefillsItsRing:
             slot.as_numpy()[:] = value
         finally:
             slot.unlock()
-        frame = ImageFrameToWrite.of_texture(slot, ColorInfo())
+        frame = TextureToWrite.of_texture(slot, ColorInfo())
         if self._held_picture_surface_id is None:
             self._held_picture_surface_id = slot.surface_id
             self.picture.write(frame)

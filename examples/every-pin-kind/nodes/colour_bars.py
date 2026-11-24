@@ -16,7 +16,7 @@ from typing import Annotated
 from tatolab.stream import (
     ColorInfo,
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -114,7 +114,7 @@ class BgraColourBars:
         finally:
             frame_texture.unlock()
         self.bars.write(
-            ImageFrameToWrite.of_texture(frame_texture, COLOUR_BARS_FRAME_COLOUR),
+            TextureToWrite.of_texture(frame_texture, COLOUR_BARS_FRAME_COLOUR),
             timestamp_ns=monotonic_now_ns(),
         )
 

@@ -11,12 +11,11 @@ import pytest
 
 from tatolab.stream import (
     EncodedVideo,
-    ImageFrame,
+    Texture,
     InputPin,
     NodeDeclarationRefusal,
     OutputPin,
     SettingOnly,
-    Texture,
     node,
 )
 from tatolab.stream._node_declaration import (
@@ -59,12 +58,12 @@ def level_as_text_stating_its_meta_below(level: float = 0.0) -> str:
 
 @node.meta(conversion=True)
 @node.shader(_slang_passing_the_image_on("picture_passed_on_stating_its_meta_above"))
-def picture_passed_on_stating_its_meta_above(image: ImageFrame) -> ImageFrame: ...
+def picture_passed_on_stating_its_meta_above(image: Texture) -> Texture: ...
 
 
 @node.shader(_slang_passing_the_image_on("picture_passed_on_stating_its_meta_below"))
 @node.meta(conversion=True)
-def picture_passed_on_stating_its_meta_below(image: ImageFrame) -> ImageFrame: ...
+def picture_passed_on_stating_its_meta_below(image: Texture) -> Texture: ...
 
 
 @node
@@ -79,7 +78,7 @@ def LevelAsText(level: float = 0.0, places: int = 2) -> str:
     return f"{level:.{places}f}"
 
 
-def Brighten(image: ImageFrame, amount: float = 0.0) -> ImageFrame: ...
+def Brighten(image: Texture, amount: float = 0.0) -> Texture: ...
 
 
 def LevelOfAnyType(level: object) -> float:

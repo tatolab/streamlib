@@ -17,7 +17,7 @@ from device_exchange_probe_shared_surfaces_and_reporting import (
     report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
-    ImageFrame,
+    Texture,
     InputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -177,7 +177,7 @@ class LaggedConsumerHoldsItsFrameProbe:
     array.
 
     The read goes through the Texture pin and that is load-bearing,
-    not style: the claim is taken as the read builds its `ImageFrame`. A read
+    not style: the claim is taken as the read builds its `Texture`. A read
     by name returns the payload bytes and takes no claim at all, so the held
     frame would ride pool depth like any other — and this probe would assert a
     lease it never took.
@@ -212,7 +212,7 @@ class LaggedConsumerHoldsItsFrameProbe:
             self._view_of_the_delivered_frame = None
             report_device_exchange_probe_observation(lambda: {"failure": traceback.format_exc()})
 
-    def _observe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> None:
+    def _observe(self, ctx: RuntimeContextLimitedAccess, frame: Texture) -> None:
         import torch
 
         if self._view_of_the_delivered_frame is None:

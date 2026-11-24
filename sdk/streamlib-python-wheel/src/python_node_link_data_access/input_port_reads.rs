@@ -487,7 +487,7 @@ fn color_info_of_the_image_frame_colour<'py>(
         .call((), Some(&axes))
 }
 
-/// The `ImageFrame` an Image descriptor states, its slot claimed.
+/// The `Texture` an Image descriptor states, its slot claimed.
 pub(crate) fn image_frame_of_the_read<'py>(
     python: Python<'py>,
     port_name: &str,
@@ -522,13 +522,13 @@ pub(crate) fn image_frame_of_the_read<'py>(
     family_type_built_offering_gpu_access(
         &python
             .import("tatolab.stream.image_frame")?
-            .getattr("ImageFrame")?,
+            .getattr("Texture")?,
         &fields,
         offered_gpu_limited_access,
     )
 }
 
-/// The `ArrayFrame` an Array payload's attribute table states: each CPU
+/// The `Tensor` an Array payload's attribute table states: each CPU
 /// attribute borrowed in the sample, each GPU attribute's slot claimed.
 fn array_frame_of_the_read<'py>(
     python: Python<'py>,
@@ -583,7 +583,7 @@ fn array_frame_of_the_read<'py>(
                 fields.set_item("dtype", &row.dtype)?;
                 fields.set_item("shape", PyTuple::new(python, &row.shape)?)?;
                 family_type_built_offering_gpu_access(
-                    &array_frame_module.getattr("ArrayFrameGpuAttribute")?,
+                    &array_frame_module.getattr("TensorGpuAttribute")?,
                     &fields,
                     offered_gpu_limited_access,
                 )?
@@ -592,6 +592,6 @@ fn array_frame_of_the_read<'py>(
         attributes.set_item(&row.name, attribute)?;
     }
     array_frame_module
-        .getattr("ArrayFrame")?
+        .getattr("Tensor")?
         .call1((attributes, timestamp_ns))
 }

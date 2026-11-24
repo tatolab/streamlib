@@ -152,15 +152,6 @@ class DeclaredPin:
     """Each type the setting typing a module's output may choose; empty for any other pin."""
 
 
-# The read types of the family grammar, by the typed spelling that replaces each.
-_TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME: Final[dict[str, str]] = {
-    "ImageFrame": "Texture",
-    "ArrayFrame": "Tensor",
-    "ChannelsBlock": "Audio",
-    "PacketsUnit": "EncodedVideo` or `EncodedAudio",
-}
-
-
 def read_pin_declaration(
     node: str,
     pin_name: str,
@@ -864,9 +855,6 @@ class _PinReading:
             return "PinTypeChoice"
         if is_the_node_reference_class(written_type):
             return "NodeReference"
-        typed_spelling = _TYPED_SPELLING_OF_EACH_FAMILY_READ_TYPE_NAME.get(
-            getattr(written_type, "__name__", "")
-        )
         if (
             getattr(written_type, "__name__", "") == "UnreadMessage"
             and getattr(written_type, "__module__", "").startswith("tatolab.stream")
@@ -875,25 +863,6 @@ class _PinReading:
                 f"{self._pin_named} is typed `UnreadMessage`, and a pin under bare `@node` that "
                 f"hands a value on unread is typed by a type parameter. To fix: "
                 f"`def {self._node}[PinValue]({self._pin_name}: PinValue, ...) -> PinValue`.",
-                "pin_type_unknown",
-            )
-        if typed_spelling is not None and getattr(written_type, "__module__", "").startswith(
-            "tatolab.stream"
-        ):
-            if self._form == "function":
-                raise self._refusal(
-                    f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a "
-                    f"port family, and a pin under bare `@node` is typed by its pin type, "
-                    f"`{typed_spelling}`, which only a class node's pin takes yet. To fix: "
-                    f"declare a class node with `{self._pin_name}: "
-                    f"{'InputPin' if self._direction == 'input' else 'OutputPin'}"
-                    f"[{typed_spelling}]`.",
-                    "pin_type_not_read_yet",
-                )
-            raise self._refusal(
-                f"{self._pin_named} is typed {_name_of(written_type)}, a read type of a port "
-                f"family, and a class node's pin is typed by its pin type. To fix: type it "
-                f"`{typed_spelling}`.",
                 "pin_type_unknown",
             )
         if isinstance(written_type, type) and dataclasses.is_dataclass(written_type):

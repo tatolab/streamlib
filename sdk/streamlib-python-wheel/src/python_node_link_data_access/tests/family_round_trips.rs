@@ -37,7 +37,7 @@ fn a_message_written_on_a_wired_output_arrives_on_a_wired_input_as_the_same_byte
 }
 
 /// A `[channel][sample]` array written as a Channels block reads back as a
-/// `ChannelsBlock` stating its shape, rate and first sample through a port
+/// `Audio` stating its shape, rate and first sample through a port
 /// attribute, and as the raw borrow by name.
 #[test]
 fn a_channels_block_written_from_a_planar_array_reads_back_as_a_channels_block() {

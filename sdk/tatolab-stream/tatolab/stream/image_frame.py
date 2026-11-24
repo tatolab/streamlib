@@ -20,11 +20,11 @@ from .color_info import ColorInfo
 if TYPE_CHECKING:
     from ._gpu_surface_protocols import GpuSurfaceHandle
 
-__all__ = ["ImageFrame", "ImageFrameToWrite"]
+__all__ = ["Texture", "TextureToWrite"]
 
 
 @dataclass(frozen=True, init=False)
-class ImageFrame(ClaimedSurfacePixelAccess):
+class Texture(ClaimedSurfacePixelAccess):
     """An Image frame, as a Texture input pin's `read()` returns it.
 
     `surface_id` names the pooled GPU surface, `format` is its texture format's
@@ -63,7 +63,7 @@ class ImageFrame(ClaimedSurfacePixelAccess):
 
 
 @dataclass(frozen=True)
-class ImageFrameToWrite:
+class TextureToWrite:
     """An Image frame a node publishes from a texture it acquired from a pool.
 
     A Texture output pin's `write(frame_to_write)` publishes the texture's
@@ -78,7 +78,7 @@ class ImageFrameToWrite:
     colour: ColorInfo
 
     @classmethod
-    def of_texture(cls, texture: "GpuSurfaceHandle", colour: ColorInfo) -> "ImageFrameToWrite":
+    def of_texture(cls, texture: "GpuSurfaceHandle", colour: ColorInfo) -> "TextureToWrite":
         """The frame `texture` holds, described by `colour`."""
         return cls(
             surface_id=texture.surface_id,

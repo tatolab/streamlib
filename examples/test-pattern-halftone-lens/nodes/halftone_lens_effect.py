@@ -12,7 +12,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -149,6 +149,6 @@ class HalftoneLensEffect:
             push_constants=HALFTONE_LENS_DIALS.pack(frame.width, frame.height, seconds),
         )
         self.video_to_downstream.write(
-            ImageFrameToWrite.of_texture(halftone_frame, frame.colour),
+            TextureToWrite.of_texture(halftone_frame, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

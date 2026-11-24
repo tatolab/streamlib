@@ -10,7 +10,6 @@ and each value under the typed grammar: a `float` as a `float`, a `Color` as a
 `float4` of red, green, blue and alpha, and a `Vector2`, `Vector3` or `Vector4`
 as a `float2`, `float3` or `float4` of its parts. The return is one
 `Texture`, the output `result`, in the one pixel format the runtime writes.
-The older spelling `ImageFrame` reads as `Texture`.
 Decorating registers nothing: it reads the signature once and stamps the
 declaration the runtime reads, with the Slang source the runtime compiles.
 No Python runs when the node is evaluated.

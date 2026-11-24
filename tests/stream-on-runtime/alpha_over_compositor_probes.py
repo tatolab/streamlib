@@ -18,15 +18,14 @@ from tatolab.stream import (
     ColorInfo,
     ComputeKernel,
     GpuContextLimitedAccess,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
     log,
     node,
@@ -97,7 +96,7 @@ class SolidPremultipliedColourSource:
             push_constants=self._fill_push_constants,
         )
         self.video.write(
-            ImageFrameToWrite.of_texture(frame_texture, ColorInfo()),
+            TextureToWrite.of_texture(frame_texture, ColorInfo()),
             timestamp_ns=ctx.time,
         )
 
@@ -130,7 +129,7 @@ class AlphaOverCompositeProbe:
         self._started_at_ns: "int | None" = None
         self._first_composite_at_ns: "int | None" = None
         self._composites_received = 0
-        self._newest_composite: "ImageFrame | None" = None
+        self._newest_composite: "Texture | None" = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self._reported:

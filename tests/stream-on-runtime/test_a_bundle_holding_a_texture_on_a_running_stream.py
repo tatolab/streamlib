@@ -48,7 +48,7 @@ from dataclasses import dataclass
 
 from tatolab.stream import (
     ColorInfo,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -80,7 +80,7 @@ class FramesAPicture:
         self.reported = False
 
     def process(self, ctx) -> None:
-        picture = ImageFrameToWrite.of_texture(
+        picture = TextureToWrite.of_texture(
             self.texture, ColorInfo(primaries="bt709", transfer="srgb", matrix="identity", range="full")
         )
         self.framed.write(Framed(picture, Rectangle(0.25, 0.5, 0.5, 0.25)))

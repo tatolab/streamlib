@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from tatolab.stream import ClaimedSurfacePixelAccess, ColorInfo, ImageFrame
+from tatolab.stream import ClaimedSurfacePixelAccess, ColorInfo, Texture
 from tatolab.stream import claimed_surface_pixel_access as composable_module
 
 FRAME_BAG = {
@@ -284,7 +284,7 @@ def warnings_logged(monkeypatch: pytest.MonkeyPatch) -> "list[str]":
 
 def test_a_user_authored_cast_type_claims_the_field_it_declares(offered):
     """The no-privilege claim, made concrete: a type `tatolab.stream` never heard of
-    gets exactly what `ImageFrame` gets."""
+    gets exactly what `Texture` gets."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
     frame = DepthFrame(**FRAME_BAG)
@@ -968,11 +968,11 @@ def test_declaring_no_surface_field_at_all_is_refused():
 def test_the_shipped_image_frame_is_built_from_this_piece(offered):
     """The proof of no privilege: the frame `tatolab.stream` ships takes its claim and
     exports its pixels through exactly the code a user-authored cast type
-    composes. An `ImageFrame` that stopped being one of these would be a private
+    composes. A `Texture` that stopped being one of these would be a private
     path back."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
-    frame = ImageFrame(
+    frame = Texture(
         surface_id="surface-7",
         width=1280,
         height=720,

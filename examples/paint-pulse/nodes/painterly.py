@@ -11,7 +11,7 @@ finish it. Every number is a pin, so it can be driven by any Float, the music in
 
 from __future__ import annotations
 
-from tatolab.stream import ImageFrame, node
+from tatolab.stream import Texture, node
 
 
 @node.meta(
@@ -111,11 +111,11 @@ float4 Painterly(ImageInput image, float stroke, float width, float height, floa
 """,
 )
 def Painterly(  # noqa: N802
-    image: ImageFrame,
+    image: Texture,
     stroke: float = 14.0,
     width: float = 1280.0,
     height: float = 720.0,
     time: float = 0.0,
     canvas: float = 0.03,
     amount: float = 1.0,
-) -> ImageFrame: ...
+) -> Texture: ...

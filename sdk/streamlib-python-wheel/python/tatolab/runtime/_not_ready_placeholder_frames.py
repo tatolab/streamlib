@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from tatolab.stream import ColorInfo, ImageFrameToWrite, NodeOutputTextureRing
+from tatolab.stream import ColorInfo, TextureToWrite, NodeOutputTextureRing
 
 from tatolab.runtime._node_the_wheel_hosts import link_output_data_writer_of
 
@@ -104,7 +104,7 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
                     slot.unlock()
                 link_output_data_writer_of(context).write(
                     port_name,
-                    ImageFrameToWrite.of_texture(slot, PLACEHOLDER_FRAME_COLOUR),
+                    TextureToWrite.of_texture(slot, PLACEHOLDER_FRAME_COLOUR),
                     family="image",
                 )
             except Exception as refusal:

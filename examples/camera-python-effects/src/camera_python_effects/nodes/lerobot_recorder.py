@@ -17,7 +17,7 @@ from typing import Annotated, Any
 import numpy
 from tatolab.stream import (
     Description,
-    ImageFrame,
+    Texture,
     InputPin,
     NumberRange,
     OutputPin,
@@ -25,7 +25,6 @@ from tatolab.stream import (
     RuntimeContextLimitedAccess,
     SettingOnly,
     StreamDelivery,
-    Texture,
     log,
     node,
 )
@@ -128,7 +127,7 @@ class LeRobotRecorder:
         self.frames_skipped_idle = 0
         self.frames_unreadable = 0
 
-    def _frame_pixels(self, frame: ImageFrame) -> numpy.ndarray | None:
+    def _frame_pixels(self, frame: Texture) -> numpy.ndarray | None:
         """The frame decimated to recording size, on the CPU, or None.
 
         Read from the frame's host side and copied out, because the rows

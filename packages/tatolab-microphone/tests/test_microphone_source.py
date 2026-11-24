@@ -18,7 +18,7 @@ from helper_process_link_wiring import wire_one_link
 from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
-from tatolab.stream import ChannelsBlock, RuntimeContextFullAccess, log
+from tatolab.stream import Audio, RuntimeContextFullAccess, log
 from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
 
@@ -63,8 +63,8 @@ class MicrophoneWiredToAReader:
             )
         )
 
-    def read_blocks(self, block_count: int) -> "list[ChannelsBlock]":
-        blocks: "list[ChannelsBlock]" = []
+    def read_blocks(self, block_count: int) -> "list[Audio]":
+        blocks: "list[Audio]" = []
         deadline = time.monotonic() + FIRST_BLOCKS_DEADLINE_SECONDS
         while len(blocks) < block_count:
             block = link_input_data_reader_of(self.reader).read(

@@ -18,7 +18,6 @@ import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
-    ChannelsBlock,
     Description,
     InputPin,
     NumberRange,
@@ -139,7 +138,7 @@ class SpectrumListener:
                 return
             self.listen_to_one_window(block)
 
-    def listen_to_one_window(self, block: ChannelsBlock) -> None:
+    def listen_to_one_window(self, block: Audio) -> None:
         samples = numpy.from_dlpack(block)[0]
         hop = samples.shape[0]
         self.history = numpy.roll(self.history, -hop)

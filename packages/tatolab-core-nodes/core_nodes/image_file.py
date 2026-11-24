@@ -12,7 +12,7 @@ from tatolab.stream import (
     AssetMedia,
     ColorInfo,
     FlowsAsValue,
-    ImageFrameToWrite,
+    TextureToWrite,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextLimitedAccess,
@@ -141,4 +141,4 @@ class ImageFile:
             slot.as_numpy()[:height, :width] = pixels
         finally:
             slot.unlock()
-        self.image.write(ImageFrameToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR))
+        self.image.write(TextureToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR))

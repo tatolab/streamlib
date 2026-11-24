@@ -12,7 +12,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -214,6 +214,6 @@ class HalftoneCompute:
         # The capture's timestamp, not the effect's: downstream orders frames by
         # when the camera captured them.
         self.halftone_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(halftone_frame_texture, frame.colour),
+            TextureToWrite.of_texture(halftone_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

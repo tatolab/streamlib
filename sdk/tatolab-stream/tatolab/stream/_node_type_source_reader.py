@@ -73,9 +73,6 @@ _PORT_FAMILY_OF_EACH_PIN_TYPE_WRITTEN_FORM = {
     if spelling.pin_type_name != "list_of"
 }
 
-# The older spelling of `Texture` a shader still reads.
-_OLDER_SPELLING_OF_TEXTURE = "ImageFrame"
-
 _NODE_META_KEYS = ("category", "description")
 
 _RETIRED_DECLARATIONS_BY_DECORATOR: dict[str, RetiredDeclaration] = {
@@ -841,8 +838,6 @@ def _function_port_family(annotation: Optional[ast.expr]) -> Optional[str]:
             return _function_port_family(arguments[0])
         if type_name == _ANNOTATED_ANNOTATION and arguments:
             return _function_port_family(arguments[0])
-    if type_name == _OLDER_SPELLING_OF_TEXTURE:
-        return _PORT_FAMILY_OF_EACH_PIN_TYPE_WRITTEN_FORM["Texture"]
     if type_name is None:
         return None
     return _PORT_FAMILY_OF_EACH_PIN_TYPE_WRITTEN_FORM.get(type_name)

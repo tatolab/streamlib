@@ -17,8 +17,8 @@ from typing import Annotated
 import numpy
 from tatolab.stream import (
     Description,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -27,7 +27,6 @@ from tatolab.stream import (
     RuntimeContextLimitedAccess,
     SettingOnly,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
     log,
     node,
@@ -206,11 +205,11 @@ class CyberpunkAvatar:
         copy_host_pixels_into_ring_texture(scene_texture, scene_pixels)
 
         self.scene_to_downstream.write(
-            ImageFrameToWrite.of_texture(scene_texture, HOST_DRAWN_FRAME_COLOUR),
+            TextureToWrite.of_texture(scene_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=frame.timestamp_ns,
         )
 
-    def detect_joints_in(self, frame: ImageFrame) -> PoseSample | None:
+    def detect_joints_in(self, frame: Texture) -> PoseSample | None:
         """The tracker's answer, with a failure degrading to the idle stage."""
         if self.pose_tracker is None:
             return None

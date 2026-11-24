@@ -212,8 +212,8 @@ class _FunctionNodeSignatureReading:
     def __init__(self, function: Callable[..., Any], *, reads_shader_images: bool = False) -> None:
         """Read `function`'s signature, each pin typed by its pin type.
 
-        `reads_shader_images` reads it as a shader's: each `Texture` it takes or returns, written
-        `Texture` or `ImageFrame`, is a picture it computes over, which arrives as an Image.
+        `reads_shader_images` reads it as a shader's: each `Texture` it takes or returns is a
+        picture it computes over, which arrives as an Image.
         """
         self._function_name = function.__name__
         self._reads_shader_images = reads_shader_images
@@ -730,13 +730,12 @@ def _is_a_named_tuple(annotation: Any) -> bool:
 
 
 def _is_a_shader_image(annotation: Any) -> bool:
-    """Whether a shader's annotation is a picture it computes over: `Texture` or `ImageFrame`, also `Annotated`."""
-    from ._pin_types import Texture
-    from .image_frame import ImageFrame
+    """Whether a shader's annotation is a picture it computes over: `Texture`, also `Annotated`."""
+    from .image_frame import Texture
 
     if typing.get_origin(annotation) is typing.Annotated:
         annotation = typing.get_args(annotation)[0]
-    return annotation is Texture or annotation is ImageFrame
+    return annotation is Texture
 
 
 def _value_annotation_and_whether_optional(annotation: Any) -> "tuple[Any, bool]":

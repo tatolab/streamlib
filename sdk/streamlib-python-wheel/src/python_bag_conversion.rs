@@ -66,7 +66,7 @@ impl Drop for TypedReadGpuAccessOffer {
 }
 
 /// The GPU capability of the read currently building a family type, an
-/// `ImageFrame` or an Array frame's GPU attribute, or `None` when no read is.
+/// `Texture` or an Array frame's GPU attribute, or `None` when no read is.
 ///
 /// The same capability as `ctx.gpu_limited_access`, offered so the type can do
 /// per-frame work as it is built that needs the engine — claiming the frame's

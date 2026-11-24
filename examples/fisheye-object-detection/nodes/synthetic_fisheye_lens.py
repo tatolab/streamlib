@@ -14,7 +14,7 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrameToWrite,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -187,6 +187,6 @@ class SyntheticFisheyeLens:
 
         # The capture's timestamp, not the lens's: downstream orders by it.
         self.fisheye_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(fisheye_frame_texture, frame.colour),
+            TextureToWrite.of_texture(fisheye_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )

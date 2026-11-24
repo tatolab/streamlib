@@ -72,8 +72,9 @@ class UnreadMessage(Protocol):
 
 
 @runtime_backed_protocol
-class ChannelsBlock(Protocol):
-    """A Channels block a read returned: planar samples borrowed in the sample they arrived in.
+class Audio(Protocol):
+    """A stream of audio samples, as an Audio pin's read returns a block of it: planar samples
+    borrowed in the sample they arrived in.
 
     `numpy.from_dlpack(block)` is a read-only `[channel][sample]` array over the
     sample, with no copy. The sample counts against its link's borrow quota
@@ -112,7 +113,7 @@ class ChannelsBlock(Protocol):
 
     @property
     def pin_type(self) -> Literal["audio"]:
-        """The pin type a Channels block is the read of: `"audio"`."""
+        """The pin type an audio block is the read of: `"audio"`."""
         ...
 
     def __dlpack__(
@@ -133,8 +134,8 @@ class ChannelsBlock(Protocol):
 
 
 @runtime_backed_protocol
-class ArrayFrameCpuAttribute(Protocol):
-    """One CPU attribute of an Array frame a read returned: a row-major tensor borrowed in the sample.
+class TensorCpuAttribute(Protocol):
+    """One CPU attribute of a Tensor a read returned: a row-major tensor borrowed in the sample.
 
     `numpy.from_dlpack(attribute)` reads it in place. The sample counts against
     its link's borrow quota while any attribute of the frame lives.
@@ -168,8 +169,12 @@ class ArrayFrameCpuAttribute(Protocol):
 
 
 @runtime_backed_protocol
-class PacketsUnit(Protocol):
-    """A Packets unit a read returned: its bytes borrowed in the sample, with its stamp and codec."""
+class EncodedMedia(Protocol):
+    """A unit of encoded media a read returned: its bytes borrowed in the sample, with its stamp and codec.
+
+    A read of an `EncodedVideo` pin returns it as an `EncodedVideo`, and of an `EncodedAudio`
+    pin as an `EncodedAudio`.
+    """
 
     @property
     def payload(self) -> PortPayloadBorrow:
@@ -194,6 +199,24 @@ class PacketsUnit(Protocol):
     @property
     def pin_type(self) -> Literal["encoded_video", "encoded_audio"]:
         """The pin type the unit is the read of: `"encoded_audio"` for a unit of an audio codec, `"encoded_video"` for any other."""
+        ...
+
+
+class EncodedVideo(EncodedMedia, Protocol):
+    """Encoded video, one access unit per message, as an `EncodedVideo` pin's read returns it."""
+
+    @property
+    def pin_type(self) -> Literal["encoded_video"]:
+        """The pin type an access unit is the read of: `"encoded_video"`."""
+        ...
+
+
+class EncodedAudio(EncodedMedia, Protocol):
+    """Encoded audio, one packet per message, as an `EncodedAudio` pin's read returns it."""
+
+    @property
+    def pin_type(self) -> Literal["encoded_audio"]:
+        """The pin type a packet is the read of: `"encoded_audio"`."""
         ...
 
 
@@ -592,8 +615,8 @@ class LinkInputDataReader(Protocol):
         """The next message's payload on `port_name`, or `None` when none is waiting.
 
         Naming `families`, the payload is the type of the family it arrived as,
-        built from the message's descriptor: `ImageFrame`, `ArrayFrame`,
-        `ChannelsBlock`, `PacketsUnit`, or a `dict` for Records. Naming none,
+        built from the message's descriptor: `Texture`, `Tensor`,
+        `Audio`, `EncodedVideo`, `EncodedAudio`, or a `dict` for Records. Naming none,
         it is a `PortPayloadBorrow` of the sample it arrived in.
         """
         ...
@@ -679,8 +702,8 @@ class LinkOutputDataWriter(Protocol):
         """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
         Naming `family` by its wire name, `payload` is the family's object and
-        the runtime builds its descriptor: an Image write takes an `ImageFrame`
-        this node read, an `ImageFrameToWrite`, or a texture it acquired from a
+        the runtime builds its descriptor: an Image write takes a `Texture`
+        this node read, a `TextureToWrite`, or a texture it acquired from a
         pool, whose colour is then unspecified, in one of `formats` when any is
         named; an Array write a mapping of `names` to a C-contiguous array or a
         tensor surface, its tensors where `residency` (`"gpu"` or `"cpu"`) says;
@@ -748,7 +771,7 @@ def gpu_limited_access_of_the_typed_read_in_progress() -> (
     GpuContextLimitedAccess | None
 ):
     """The GPU capability of the read currently building a family type, an
-    `ImageFrame` or an Array frame's GPU attribute, or `None` when no read is.
+    `Texture` or an Array frame's GPU attribute, or `None` when no read is.
 
     The same capability as `ctx.gpu_limited_access`, offered so the type can do
     per-frame work at construction that needs the engine — claiming the frame's

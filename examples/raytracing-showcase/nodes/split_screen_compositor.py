@@ -19,8 +19,8 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
-    ImageFrame,
-    ImageFrameToWrite,
+    Texture,
+    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -29,7 +29,6 @@ from tatolab.stream import (
     RuntimeContextLimitedAccess,
     SettingOnly,
     StreamDelivery,
-    Texture,
     TexturePixelFormats,
     node,
 )
@@ -240,7 +239,7 @@ class SplitScreenCompositor:
     ]
 
     def __init__(self) -> None:
-        self._newest_rasterized_frame: ImageFrame | None = None
+        self._newest_rasterized_frame: Texture | None = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
@@ -295,6 +294,6 @@ class SplitScreenCompositor:
         # Stamped with the traced frame's render instant, not the moment of
         # the cut: downstream orders by it.
         self.split_screen_frame_to_downstream.write(
-            ImageFrameToWrite.of_texture(split_screen_frame_texture, ray_traced_frame.colour),
+            TextureToWrite.of_texture(split_screen_frame_texture, ray_traced_frame.colour),
             timestamp_ns=ray_traced_frame.timestamp_ns,
         )

@@ -12,9 +12,10 @@ The exact sizes are `Annotated` aliases of `int` and `float`, so a value of one 
 number in Python. A Color, a Vector, a Rectangle and a Transform are frozen value classes whose
 fields are the keys of the type's stored JSON form, in the order the type packs its parts on a
 link. An Asset is a frozen value class of the asset's UUID and, for an asset of an import, that
-import's project UUID. A Texture, an Audio, a Tensor, an Encoded video, an Encoded audio and a
-Trigger hold no stored value: each is a class that only names its type, which a class node's
-`InputPin[...]` or `OutputPin[...]` carries.
+import's project UUID. A Texture, an Audio, a Tensor, an Encoded video and an Encoded audio hold
+no stored value: each is the class of what a read of its pin returns, which a class node's
+`InputPin[...]` or `OutputPin[...]` carries. A Trigger holds none either, and is a class that only
+names its type.
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar, Final, Optional, Self, final
 
 from ._contract_pin_types import BuiltInPinTypeName, FloatSize, IntegerSize, PinType
+from ._node_context_protocols import Audio, EncodedAudio, EncodedVideo
+from .array_frame import Tensor
+from .image_frame import Texture
 
 __all__ = [
     "PIN_TYPE_SPELLINGS",
@@ -423,41 +427,6 @@ class _StreamPinType:
             f"`{type(self).__name__}` names a pin type and holds no value, so it is never "
             f"constructed. Write it as a class node's pin, `InputPin[{type(self).__name__}]`."
         )
-
-
-@final
-class Texture(_StreamPinType):
-    """A GPU picture, in one of the pixel formats it states."""
-
-    __slots__ = ()
-
-
-@final
-class Audio(_StreamPinType):
-    """A stream of audio samples."""
-
-    __slots__ = ()
-
-
-@final
-class Tensor(_StreamPinType):
-    """An array of numbers with a shape."""
-
-    __slots__ = ()
-
-
-@final
-class EncodedVideo(_StreamPinType):
-    """Encoded video, one access unit per message."""
-
-    __slots__ = ()
-
-
-@final
-class EncodedAudio(_StreamPinType):
-    """Encoded audio, one packet per message."""
-
-    __slots__ = ()
 
 
 @final
