@@ -82,6 +82,50 @@ pub enum VideoFrameEncodeOutcome {
     /// No session is minted and no mint may be tried yet, so the frame is
     /// discarded.
     DiscardedWithoutASession,
+    /// The frame is a texture of a format the encoder does not read, so every
+    /// frame its producer sends would be refused the same way.
+    RefusedForItsFormat {
+        refusal: String,
+    },
+}
+
+/// The texture formats the encoder imports and reads a picture in.
+pub const TEXTURE_FORMATS_THE_ENCODER_READS: [TextureFormat; 4] = [
+    TextureFormat::Rgba8Unorm,
+    TextureFormat::Rgba8UnormSrgb,
+    TextureFormat::Bgra8Unorm,
+    TextureFormat::Bgra8UnormSrgb,
+];
+
+/// Refused, naming the format and the one the encoder reads, unless a pixel buffer whose format
+/// is `format_wire_name` is `rgba32`.
+pub fn the_pixel_buffer_format_the_encoder_reads(format_wire_name: &str) -> Result<(), String> {
+    match PixelFormat::parse_wire_name(format_wire_name) {
+        Ok(PixelFormat::Rgba32) => Ok(()),
+        _ => Err(format!(
+            "is a {format_wire_name} pixel buffer; the encoder reads only {}",
+            PixelFormat::Rgba32.wire_name()
+        )),
+    }
+}
+
+/// The format a texture whose format is `format_wire_name` is read in, refused
+/// in words naming it and each format the encoder reads when it is none of them.
+pub fn the_texture_format_the_encoder_reads(
+    format_wire_name: &str,
+) -> Result<TextureFormat, String> {
+    TextureFormat::from_wire_name(format_wire_name)
+        .filter(|format| TEXTURE_FORMATS_THE_ENCODER_READS.contains(format))
+        .ok_or_else(|| {
+            let formats_read: Vec<&str> = TEXTURE_FORMATS_THE_ENCODER_READS
+                .iter()
+                .map(|format| format.wire_name())
+                .collect();
+            format!(
+                "is a {format_wire_name} texture; the encoder reads only {}",
+                formats_read.join(", ")
+            )
+        })
 }
 
 /// One frame's access units and the session they were coded in.
@@ -188,16 +232,33 @@ impl VideoEncodeOnADevice {
         };
         let encoded = match checked_out {
             CheckedOutSurface::PixelBuffer(pixel_buffer) => {
-                self.encode_checked_out_pixel_buffer(frame, pixel_buffer)
+                match the_pixel_buffer_format_the_encoder_reads(&pixel_buffer.format_wire_name) {
+                    Ok(()) => Ok(self.encode_checked_out_pixel_buffer(frame, pixel_buffer)),
+                    Err(refusal) => Err(format!(
+                        "{node_type_name}: surface {:?} {refusal}",
+                        frame.surface_id()
+                    )),
+                }
             }
-            CheckedOutSurface::Texture(texture) => self.encode_checked_out_texture(frame, texture),
+            CheckedOutSurface::Texture(texture) => {
+                match the_texture_format_the_encoder_reads(&texture.format_wire_name) {
+                    Ok(format) => Ok(self.encode_checked_out_texture(frame, texture, format)),
+                    Err(refusal) => Err(format!(
+                        "{node_type_name}: surface {:?} {refusal}",
+                        frame.surface_id()
+                    )),
+                }
+            }
         };
         if let Err(release_refusal) =
             release_check_out_on_surface_share(&self.surface_share_connection, frame.surface_id())
         {
             tracing::warn!("{node_type_name}: {release_refusal}");
         }
-        let access_units = encoded?;
+        let access_units = match encoded {
+            Ok(encoded) => encoded?,
+            Err(refusal) => return Ok(VideoFrameEncodeOutcome::RefusedForItsFormat { refusal }),
+        };
         let coded_extent = self
             .minted_session
             .as_ref()
@@ -216,20 +277,6 @@ impl VideoEncodeOnADevice {
         checked_out: CheckedOutPixelBuffer,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
-        let pixel_format =
-            PixelFormat::parse_wire_name(&checked_out.format_wire_name).map_err(|refusal| {
-                format!(
-                    "{node_type_name}: surface {:?}: {refusal}",
-                    frame.surface_id()
-                )
-            })?;
-        if pixel_format != PixelFormat::Rgba32 {
-            return Err(format!(
-                "{node_type_name}: surface {:?} is a {} pixel buffer; the encoder reads rgba32",
-                frame.surface_id(),
-                checked_out.format_wire_name
-            ));
-        }
         let (width, height, bytes_per_row) = (
             checked_out.width,
             checked_out.height,
@@ -282,12 +329,13 @@ impl VideoEncodeOnADevice {
         &mut self,
         frame: &VideoFrameToEncode,
         checked_out: CheckedOutTexture,
+        format: TextureFormat,
     ) -> Result<Vec<EncodedVideoAccessUnit>, String> {
         let node_type_name = self.node.node_type_name;
         let surface_id = frame.surface_id();
         let (width, height) = (checked_out.width, checked_out.height);
         let published_layout = VulkanLayout(checked_out.current_image_layout);
-        self.import_texture_unless_already_imported(surface_id, checked_out)?;
+        self.import_texture_unless_already_imported(surface_id, checked_out, format)?;
         self.mint_unless_a_session_matches(frame, width, height)?;
         let session = self
             .minted_session
@@ -354,6 +402,7 @@ impl VideoEncodeOnADevice {
         &mut self,
         surface_id: &str,
         checked_out: CheckedOutTexture,
+        format: TextureFormat,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
         if self
@@ -362,23 +411,6 @@ impl VideoEncodeOnADevice {
         {
             return Ok(());
         }
-        let format = TextureFormat::from_wire_name(&checked_out.format_wire_name)
-            .filter(|format| {
-                matches!(
-                    format,
-                    TextureFormat::Rgba8Unorm
-                        | TextureFormat::Rgba8UnormSrgb
-                        | TextureFormat::Bgra8Unorm
-                        | TextureFormat::Bgra8UnormSrgb
-                )
-            })
-            .ok_or_else(|| {
-                format!(
-                    "{node_type_name}: surface {surface_id:?} is a {} texture; the encoder reads \
-                     8-bit RGBA or BGRA",
-                    checked_out.format_wire_name
-                )
-            })?;
         let consumer_vulkan_device = self.device.consumer_vulkan_device();
         let (memory_fd, imported) = match checked_out.memory {
             CheckedOutTextureMemory::DmaBuf {

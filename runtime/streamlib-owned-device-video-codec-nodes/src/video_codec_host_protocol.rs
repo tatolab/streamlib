@@ -24,7 +24,7 @@ use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncod
 use crate::video_encoder_settings::VideoEncoderSettings;
 
 /// The protocol both ends speak; a session asking for another is refused.
-pub const VIDEO_CODEC_HOST_PROTOCOL_VERSION: u32 = 3;
+pub const VIDEO_CODEC_HOST_PROTOCOL_VERSION: u32 = 4;
 
 /// The longest message either end reads; a frame's access units are far
 /// smaller.

@@ -5,7 +5,6 @@ use std::os::unix::net::UnixListener;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
-use crate::VideoCodecNodeIdentity;
 use crate::video_codec_host_protocol::{
     VIDEO_CODEC_HOST_PROTOCOL_VERSION, VideoCodecHostConnection, VideoCodecHostReply,
     VideoCodecHostRequest, VideoEncodeSessionRequest,
@@ -17,6 +16,8 @@ use crate::video_codec_host_session_of_the_node::{
 use crate::video_codec_retry_gate::VideoCodecRefusal;
 use crate::video_encode_on_a_device::{VideoFrameEncodeOutcome, VideoFrameToEncode};
 use crate::video_encoder_settings::VideoEncoderSettings;
+use crate::vulkan_video_encoder::the_frame_encoded_or_why_not;
+use crate::{VideoCodecNodeIdentity, VideoFrameNotEncoded};
 
 const NODE: VideoCodecNodeIdentity = VideoCodecNodeIdentity::H264_ENCODER;
 
@@ -208,4 +209,51 @@ fn a_session_the_host_refuses_for_now_is_refused_for_now() {
         "H264Encoder: the video codec host refused the session for now: BAR1 is full"
     );
     refusing.join().unwrap();
+}
+
+/// A frame the host refuses for its format reaches the encoder node as the refusal that fails
+/// it, naming the format; a frame only not checked out stays a skip that fails nothing.
+///
+/// Mental-revert: with the host answering the format as a plain `Refused`, the node takes it
+/// for this frame only and the node keeps showing healthy.
+#[test]
+fn a_frame_refused_for_its_format_fails_the_node_and_a_skipped_frame_does_not() {
+    let socket_directory = tempfile::tempdir().unwrap();
+    let endpoint = socket_directory.path().join("video-codec-host.sock");
+    let listener = UnixListener::bind(&endpoint).unwrap();
+    let refusal = "H264Encoder: surface \"pool:0\" is a rgba16_float texture; the encoder reads \
+                   only rgba8_unorm, rgba8_unorm_srgb, bgra8_unorm, bgra8_unorm_srgb";
+    let serving = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let mut connection = VideoCodecHostConnection::over(socket);
+        let _: Option<VideoCodecHostRequest> = connection.receive().unwrap();
+        connection
+            .send(&VideoCodecHostReply::SessionOpened {
+                device_name: "stand-in".to_string(),
+            })
+            .unwrap();
+        for outcome in [
+            VideoFrameEncodeOutcome::NotCheckedOut,
+            VideoFrameEncodeOutcome::RefusedForItsFormat {
+                refusal: refusal.to_string(),
+            },
+        ] {
+            let _: Option<VideoCodecHostRequest> = connection.receive().unwrap();
+            connection
+                .send(&VideoCodecHostReply::Encode(outcome))
+                .unwrap();
+        }
+    });
+    let mut session = VideoCodecHostSession::open(NODE, &endpoint, an_opening()).unwrap();
+
+    let skipped = encode(&mut session, a_frame(1)).unwrap();
+    assert_eq!(the_frame_encoded_or_why_not(skipped), Ok(None));
+    let refused = encode(&mut session, a_frame(2)).unwrap();
+    assert_eq!(
+        the_frame_encoded_or_why_not(refused),
+        Err(VideoFrameNotEncoded::EveryFrameOfItsProducer(
+            refusal.to_string()
+        ))
+    );
+    serving.join().unwrap();
 }
