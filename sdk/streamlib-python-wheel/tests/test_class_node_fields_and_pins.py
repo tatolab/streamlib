@@ -108,7 +108,7 @@ class LevelTinterOnARealDataPlane:
             [port["name"] for port in getattr(LevelTinter, NODE_DECLARATION_OUTPUT_PORTS_STAMP)],
         )
         self.ctx = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, self.data_plane, "runtime-under-test", "tinter-1"
+            self.data_plane, "runtime-under-test", "tinter-1"
         )
         self.reader = _engine.open_node_link_data_access_for_helper_process()
         self.reader.declare_ports(["tinted_read"], [])
@@ -123,7 +123,7 @@ class LevelTinterOnARealDataPlane:
         self.source = _engine.open_node_link_data_access_for_helper_process()
         self.source_outputs = link_output_data_writer_of(
             _engine.open_runtime_context_full_access_for_helper_process(
-                {}, self.source, "runtime-under-test", "source-1"
+                self.source, "runtime-under-test", "source-1"
             )
         )
         self.link_id_by_input_port: "dict[str, str]" = {}

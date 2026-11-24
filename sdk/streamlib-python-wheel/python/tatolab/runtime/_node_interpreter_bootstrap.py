@@ -174,7 +174,7 @@ from tatolab.runtime._function_node_saved_value_cast import (
     the_saved_value_a_function_node_casts as the_saved_value_a_function_node_casts,
 )
 from tatolab.runtime._node_class_description import (
-    DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE as DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE,
+    DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_NOT_EVERY_NODE_CARRIES as DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_NOT_EVERY_NODE_CARRIES,
     NodeClassNotDescribable as NodeClassNotDescribable,
     describe_one_node_class as describe_one_node_class,
     load_node_class as load_node_class,

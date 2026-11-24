@@ -73,12 +73,12 @@ class SpeakerWiredToAWriter:
         )
         self.writer: RuntimeContextFullAccess = (
             _engine.open_runtime_context_full_access_for_helper_process(
-                {}, writer_outputs, "runtime-under-test", "writer-under-test"
+                writer_outputs, "runtime-under-test", "writer-under-test"
             )
         )
         self.speaker_context: RuntimeContextFullAccess = (
             _engine.open_runtime_context_full_access_for_helper_process(
-                {}, speaker_inputs, "runtime-under-test", "speaker-under-test"
+                speaker_inputs, "runtime-under-test", "speaker-under-test"
             )
         )
 

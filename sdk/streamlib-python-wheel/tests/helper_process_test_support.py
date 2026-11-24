@@ -38,7 +38,7 @@ def the_pin_upstream_of_a_pass_through_probe(link_data_access) -> BoundOutputPin
     members = class_node_members_of(_UpstreamOfAPassThroughProbe)
     assert members is not None
     context = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, link_data_access, "R-helper-test", "upstream-of-the-probe"
+        link_data_access, "R-helper-test", "upstream-of-the-probe"
     )
     pin = bind_the_pins_of_a_class_node(
         members,

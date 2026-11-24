@@ -150,7 +150,8 @@ pub struct ProjectCodeCheckFinding {
     pub check: ProjectCodeCheckKind,
     /// What was found, for a caller to branch on: the code the declaration reader refused with,
     /// such as `value_input_has_no_default`, `module_does_not_import` for a module that does not
-    /// import, `declaration_retired` for a node declared in a retired form, or the manifest
+    /// import, `declaration_retired` for a node declared in a retired form or a retired name
+    /// imported, or the manifest
     /// check's own code for a view's port its manifest declares by its older field alone.
     pub finding_code: String,
     /// How much it matters.

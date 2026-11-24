@@ -175,7 +175,6 @@ class ContextStasher:
         def observe() -> dict:
             return {
                 "stashed_is_paused": self._stashed_context.is_paused(),
-                "stashed_config": self._stashed_context.config,
                 "stashed_node_id": self._stashed_context.node_id,
             }
 

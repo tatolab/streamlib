@@ -23,7 +23,6 @@ def test_both_contexts_name_the_stream_and_node_the_parent_named(
     monkeypatch.setenv("STREAMLIB_STREAM_ID", "main")
     monkeypatch.setenv("STREAMLIB_STREAM_PROJECT_DIRECTORY", "/home/someone/apps/desk")
     full_access_context = _engine.open_runtime_context_full_access_for_helper_process(
-        {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
         "node-under-test",
@@ -49,7 +48,6 @@ def test_a_context_no_parent_spawned_names_nothing(monkeypatch: pytest.MonkeyPat
     ):
         monkeypatch.delenv(variable, raising=False)
     context = _engine.open_runtime_context_full_access_for_helper_process(
-        {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
         "node-under-test",

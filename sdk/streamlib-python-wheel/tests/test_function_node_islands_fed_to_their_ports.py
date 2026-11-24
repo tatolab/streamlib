@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""An island of `@node.function` nodes fed to a port.
+"""An island of function nodes fed to a port.
 
 An island is read off a helper's own data plane as the node it feeds reads
 it: one f64 sample on one channel, evaluated at the read.
@@ -30,7 +30,6 @@ from tatolab.stream import (
     State,
     Stateful,
     Transform,
-    UnreadMessage,
     Vector2,
     node,
 )
@@ -41,8 +40,6 @@ from function_node_test_nodes import (
     a_rust_function_node_declaration,
     amplify,
     an_island_of_one_node,
-    count_the_label_letters,
-    label_the_level,
     lfo,
     measure_its_own_spelling,
     remap,
@@ -59,7 +56,7 @@ pytestmark = pytest.mark.usefixtures(
 
 _FUNCTION_NODES_BY_IMPORT_PATH = {
     f"{__name__}:{function_node.__qualname__}": function_node
-    for function_node in (remap, lfo, amplify)
+    for function_node in (remap, lfo, amplify, WeightedSumCountingItsCalls)
 }
 
 
@@ -106,7 +103,9 @@ def test_an_island_feeds_its_port_one_f64_sample_evaluated_at_the_read():
 
 
 def test_an_island_with_an_input_no_value_reaches_holds_until_a_later_feed_gives_it_one():
+    """A Rust function node's `x` declares no default, which a Python one always does."""
     island = an_island_of_lfo_then_remap_feeding("brightness")
+    island["nodes"][1]["import_path"] = f"{__name__}:WeightedSumCountingItsCalls"
     linked_x = island["nodes"][1]["links_into"]
     island["nodes"][1]["links_into"] = []
     data_plane = _engine.open_node_link_data_access_for_helper_process()
@@ -247,46 +246,22 @@ def test_an_island_output_a_rust_node_hands_out_nothing_on_reads_nothing(x: floa
 
 _FUNCTION_NODES_RUN_AS_PYTHON_BY_IMPORT_PATH = {
     f"{__name__}:{function_node.__qualname__}": function_node
-    for function_node in (measure_its_own_spelling, label_the_level, count_the_label_letters, remap)
+    for function_node in (measure_its_own_spelling, remap)
 }
 
 
-@node.function
-def hand_on_once_it_has_built_an_object(value: UnreadMessage) -> UnreadMessage:
+@node
+def hand_on_once_it_has_built_an_object[PinValue](value: PinValue) -> PinValue:
     repr(object())
     return value
 
 
-def test_a_body_run_as_python_hands_on_unread_a_number_or_a_dict_another_node_of_its_island_gave():
+def test_a_body_run_as_python_hands_on_unread_what_another_node_of_its_island_gave():
     handing_on = FunctionNodeBodyRunAsPython(run_as_python(hand_on_once_it_has_built_an_object), "h", None)
     level = 0.25
-    record = {"label": "low"}
+    message = object()
     assert handing_on.evaluate([level], 0)[0] is level
-    assert handing_on.evaluate([record], 1)[0] is record
-
-
-def an_island_of_label_then_count_feeding(input_port: str, output_node: str) -> "dict[str, Any]":
-    return {
-        "input_port": input_port,
-        "link_id": f"L-{input_port}",
-        "output": {"node": output_node, "port": "result"},
-        "nodes": [
-            {
-                "node": "label-1",
-                "breadcrumb_number": 0,
-                "import_path": f"{__name__}:label_the_level",
-                "config": None,
-                "links_into": [],
-            },
-            {
-                "node": "count-1",
-                "breadcrumb_number": 1,
-                "import_path": f"{__name__}:count_the_label_letters",
-                "config": None,
-                "links_into": [{"port": "record", "from": {"node": "label-1", "port": "result"}}],
-            },
-        ],
-    }
+    assert handing_on.evaluate([message], 1)[0] is message
 
 
 def test_an_island_runs_a_body_that_does_not_compile_as_python_inside_the_read():
@@ -301,27 +276,6 @@ def test_an_island_runs_a_body_that_does_not_compile_as_python_inside_the_read()
     payload = data_plane.read_from_input_port("spelled")
     assert payload is not None
     assert struct.unpack("<d", bytes(payload)) == (3.0,)
-
-
-def test_a_dict_passes_between_nodes_run_as_python_and_reaches_its_port_as_a_records_message():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["letters", "label"], [])
-    fed = feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [
-            an_island_of_label_then_count_feeding("letters", "count-1"),
-            an_island_of_label_then_count_feeding("label", "label-1"),
-        ],
-        _FUNCTION_NODES_RUN_AS_PYTHON_BY_IMPORT_PATH.__getitem__,
-    )
-    assert fed.ran_compiled_by_node_id == {"label-1": False, "count-1": False}
-
-    letters = data_plane.read_from_input_port("letters")
-    assert letters is not None
-    assert struct.unpack("<d", bytes(letters)) == (4.0,)
-    label = data_plane.read_from_input_port("label")
-    assert label is not None
-    assert bytes(label) == b"\x81\xa5label\xa4high", "one msgpack map, as a Records message carries it"
 
 
 @dataclass(frozen=True)
@@ -538,17 +492,17 @@ def test_an_unlinked_input_takes_its_pin_value_before_its_default():
 
 
 def test_an_island_node_input_with_no_link_pin_or_default_holds_its_port():
-    import_path = f"{__name__}:remap"
-    island = an_island_of_one_node("level", import_path, None, "remap-1")
+    import_path = f"{__name__}:WeightedSumCountingItsCalls"
+    island = an_island_of_one_node("level", import_path, None, "weighted-1")
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["level"], [])
     fed = feed_each_input_port_from_its_function_node_island(
-        data_plane, [island], {import_path: remap}.__getitem__
+        data_plane, [island], {import_path: WeightedSumCountingItsCalls}.__getitem__
     )
     assert data_plane.read_from_input_port("level") is None
-    island["nodes"][0]["pins"] = {"x": 0.5, "high": 4.0}
+    island["nodes"][0]["pins"] = {"x": 0.5}
     fed.feed_an_input_port_from_its_island(island)
-    assert the_value_read_from(data_plane, "level") == 2.0
+    assert the_value_read_from(data_plane, "level") == 0.5 * 2.0 + 0.25
 
 
 def test_a_pin_value_that_is_not_a_number_is_refused_by_name():
@@ -604,18 +558,13 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
     assert [the_value_read_from(data_plane, "count") for _ in range(3)] == [1.0, 2.0, 3.0]
 
 
-@dataclass(frozen=True)
-class SpelledGainConfig:
-    gain: float = 2.0
-
-
-@node.function
-def spell_the_scaled_value(x: float = 4.0, *, config: SpelledGainConfig) -> float:
-    return float(len(f"{x * config.gain:.1f}"))
+@node
+def spell_the_scaled_value(x: float = 4.0, gain: float = 10.0) -> float:
+    return float(len(f"{x * gain:.1f}"))
 
 
 def an_island_whose_gain_a_tally_drives(
-    input_port: str, scaled_import_path: str, scaled_pins: "dict[str, float]"
+    input_port: str, scaled_import_path: str, gain_port: str
 ) -> "dict[str, Any]":
     return {
         "input_port": input_port,
@@ -634,57 +583,81 @@ def an_island_whose_gain_a_tally_drives(
                 "node": "scaled-1",
                 "breadcrumb_number": 1,
                 "import_path": scaled_import_path,
-                "config": {"gain": 10.0},
-                "pins": scaled_pins,
-                "exposed_config_fields": ["gain"],
-                "links_into": [{"port": "gain", "from": {"node": "tally-1", "port": "result"}}],
+                "config": None,
+                "pins": {"x": 2.0},
+                "links_into": [{"port": gain_port, "from": {"node": "tally-1", "port": "result"}}],
             },
         ],
     }
 
 
-def test_a_linked_exposed_config_field_drives_a_compiled_node_in_place_of_its_config():
+_WEIGHTED_SUM_PATH = f"{__name__}:WeightedSumCountingItsCalls"
+
+
+def an_island_whose_rust_weight_a_tally_drives(input_port: str) -> "dict[str, Any]":
+    island = an_island_whose_gain_a_tally_drives(input_port, _WEIGHTED_SUM_PATH, "weight")
+    island["nodes"][1]["config"] = {"weight": 10.0}
+    island["nodes"][1]["exposed_config_fields"] = ["weight"]
+    return island
+
+
+def test_a_linked_exposed_config_field_drives_a_rust_function_node_in_place_of_its_config():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["amplified"], [])
+    data_plane.declare_ports(["weighted"], [])
     fed = feed_each_input_port_from_its_function_node_island(
         data_plane,
-        [an_island_whose_gain_a_tally_drives("amplified", f"{__name__}:amplify", {"x": 2.0})],
-        {f"{__name__}:tally": tally, f"{__name__}:amplify": amplify}.__getitem__,
+        [an_island_whose_rust_weight_a_tally_drives("weighted")],
+        {f"{__name__}:tally": tally, _WEIGHTED_SUM_PATH: WeightedSumCountingItsCalls}.__getitem__,
     )
     assert fed.ran_compiled_by_node_id == {"tally-1": True, "scaled-1": True}
-    assert the_value_read_from(data_plane, "amplified") == 2.0 * 3.0, (
-        "the tally's 3 is the gain, not the config's 10"
-    )
-
-
-def test_a_linked_exposed_config_field_drives_a_node_run_as_python_in_place_of_its_config():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["spelled"], [])
-    scaled_import_path = f"{__name__}:spell_the_scaled_value"
-    fed = feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [an_island_whose_gain_a_tally_drives("spelled", scaled_import_path, {})],
-        {f"{__name__}:tally": tally, scaled_import_path: spell_the_scaled_value}.__getitem__,
-    )
-    assert fed.ran_compiled_by_node_id == {"tally-1": True, "scaled-1": False}
-    assert the_value_read_from(data_plane, "spelled") == float(len("12.0")), (
-        "4 scaled by the tally's 3 spells 12.0, not 40.0"
+    assert the_value_read_from(data_plane, "weighted") == 2.0 * 3.0 + 0.25, (
+        "the tally's 3 is the weight, not the config's 10"
     )
 
 
 def test_an_exposed_config_field_no_link_drives_reads_the_nodes_config():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["amplified"], [])
-    island = an_island_whose_gain_a_tally_drives("amplified", f"{__name__}:amplify", {"x": 2.0})
+    data_plane.declare_ports(["weighted"], [])
+    island = an_island_whose_rust_weight_a_tally_drives("weighted")
     island["nodes"][1]["links_into"] = []
     feed_each_input_port_from_its_function_node_island(
-        data_plane, [island], {f"{__name__}:tally": tally, f"{__name__}:amplify": amplify}.__getitem__
+        data_plane,
+        [island],
+        {f"{__name__}:tally": tally, _WEIGHTED_SUM_PATH: WeightedSumCountingItsCalls}.__getitem__,
     )
-    assert the_value_read_from(data_plane, "amplified") == 2.0 * 10.0
+    assert the_value_read_from(data_plane, "weighted") == 2.0 * 10.0 + 0.25
 
 
-@node.function
-def one_without_a_frame_and_two_with_one(frame: "UnreadMessage | None" = None) -> float:
+def test_a_linked_input_drives_a_node_run_as_python_in_place_of_its_pin():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["spelled"], [])
+    scaled_import_path = f"{__name__}:spell_the_scaled_value"
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_whose_gain_a_tally_drives("spelled", scaled_import_path, "gain")],
+        {f"{__name__}:tally": tally, scaled_import_path: spell_the_scaled_value}.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"tally-1": True, "scaled-1": False}
+    assert the_value_read_from(data_plane, "spelled") == float(len("6.0")), (
+        "2 scaled by the tally's 3 spells 6.0, not 20.0"
+    )
+
+
+def test_a_node_run_as_python_exposing_a_config_field_is_refused_naming_it():
+    """Mental-revert: reading the exposed field into a config again builds the node."""
+    scaled_import_path = f"{__name__}:spell_the_scaled_value"
+    island = an_island_whose_gain_a_tally_drives("spelled", scaled_import_path, "gain")
+    island["nodes"][1]["exposed_config_fields"] = ["gain"]
+    with pytest.raises(FunctionNodeDoesNotCompile, match="exposes `gain` as an input, and a Python"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [island],
+            {f"{__name__}:tally": tally, scaled_import_path: spell_the_scaled_value}.__getitem__,
+        )
+
+
+@node
+def one_without_a_frame_and_two_with_one[PinValue](frame: PinValue | None = None) -> float:
     return 1.0 if frame is None else 2.0
 
 

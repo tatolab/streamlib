@@ -9,10 +9,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::ProjectCodeCheck
 
 use super::*;
 
-fn a_warning_in(path: &str) -> PythonNodeDeclarationFinding {
+fn a_retired_declaration_in(path: &str) -> PythonNodeDeclarationFinding {
     PythonNodeDeclarationFinding {
         finding_code: "declaration_retired".to_owned(),
-        severity: PythonNodeDeclarationFindingSeverity::Warning,
+        severity: PythonNodeDeclarationFindingSeverity::Error,
         words: "`@node.function` is retired. To fix: bare `@node`.".to_owned(),
         path: path.to_owned(),
         line: Some(4),
@@ -96,7 +96,7 @@ fn a_check_killed_at_its_bound_answers_not_checked_with_the_file_it_was_importin
         modules_checked: vec![PythonModuleChecked {
             path: "nodes/clamp.py".to_owned(),
             content_sha256: "aa".to_owned(),
-            findings: vec![a_warning_in("nodes/clamp.py")],
+            findings: vec![a_retired_declaration_in("nodes/clamp.py")],
         }],
         not_finished: Some(PythonNodeDeclarationCheckNotFinished {
             ran_out_of_time: true,
@@ -105,7 +105,11 @@ fn a_check_killed_at_its_bound_answers_not_checked_with_the_file_it_was_importin
         }),
     });
 
-    assert_eq!(answer.verdict, ProjectCodeCheckVerdict::NotFullyChecked);
+    assert_eq!(
+        answer.verdict,
+        ProjectCodeCheckVerdict::Failed,
+        "an error fails the check, finished or not"
+    );
     let run = &answer.checks[0];
     assert_eq!(run.state, ProjectCodeCheckState::NotChecked);
     let not_checked_because = run.not_checked_because.as_ref().unwrap();
@@ -131,23 +135,20 @@ fn a_check_killed_at_its_bound_answers_not_checked_with_the_file_it_was_importin
 }
 
 #[test]
-fn warnings_alone_pass() {
+fn a_retired_declaration_fails_the_check() {
     let answer = the_answer_of_the_declaration_check(PythonNodeDeclarationCheck {
         checked_with: Vec::new(),
         modules_checked: vec![PythonModuleChecked {
             path: "nodes/clamp.py".to_owned(),
             content_sha256: "aa".to_owned(),
-            findings: vec![a_warning_in("nodes/clamp.py")],
+            findings: vec![a_retired_declaration_in("nodes/clamp.py")],
         }],
         not_finished: None,
     });
 
-    assert_eq!(answer.checks[0].state, ProjectCodeCheckState::Passed);
-    assert_eq!(answer.verdict, ProjectCodeCheckVerdict::Passed);
-    assert_eq!(
-        answer.findings[0].severity,
-        ProjectCodeCheckSeverity::Warning
-    );
+    assert_eq!(answer.checks[0].state, ProjectCodeCheckState::Failed);
+    assert_eq!(answer.verdict, ProjectCodeCheckVerdict::Failed);
+    assert_eq!(answer.findings[0].severity, ProjectCodeCheckSeverity::Error);
 }
 
 #[test]

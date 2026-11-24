@@ -196,13 +196,13 @@ class EncoderWiredBetweenASourceAndASink:
             f"{unique}_sink/notify",
         )
         self.source = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, source_outputs, "runtime-under-test", "source-under-test"
+            source_outputs, "runtime-under-test", "source-under-test"
         )
         self.encoder_context = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, encoder_links, "runtime-under-test", "encoder-under-test"
+            encoder_links, "runtime-under-test", "encoder-under-test"
         )
         self.sink = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, sink_inputs, "runtime-under-test", "sink-under-test"
+            sink_inputs, "runtime-under-test", "sink-under-test"
         )
 
 
@@ -290,13 +290,13 @@ class DecoderWiredBetweenASourceAndASink:
             f"{unique}_sink/notify",
         )
         self.source = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, source_outputs, "runtime-under-test", "source-under-test"
+            source_outputs, "runtime-under-test", "source-under-test"
         )
         self.decoder_context = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, decoder_links, "runtime-under-test", "decoder-under-test"
+            decoder_links, "runtime-under-test", "decoder-under-test"
         )
         self.sink = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, sink_inputs, "runtime-under-test", "sink-under-test"
+            sink_inputs, "runtime-under-test", "sink-under-test"
         )
 
 

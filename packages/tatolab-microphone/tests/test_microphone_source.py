@@ -54,12 +54,12 @@ class MicrophoneWiredToAReader:
         )
         self.reader: RuntimeContextFullAccess = (
             _engine.open_runtime_context_full_access_for_helper_process(
-                {}, reader_inputs, "runtime-under-test", "reader-under-test"
+                reader_inputs, "runtime-under-test", "reader-under-test"
             )
         )
         self.microphone_context: RuntimeContextFullAccess = (
             _engine.open_runtime_context_full_access_for_helper_process(
-                {}, microphone_outputs, "runtime-under-test", "microphone-under-test"
+                microphone_outputs, "runtime-under-test", "microphone-under-test"
             )
         )
 

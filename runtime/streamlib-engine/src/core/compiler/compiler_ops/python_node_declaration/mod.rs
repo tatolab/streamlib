@@ -10,13 +10,14 @@ use crate::core::descriptors::{
     PortFamilyDeclarationDirection, refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
+use crate::core::nodes::EmptyConfig;
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
 use ports_typed_by_a_signature::{
     declare_each_typed_port, ports_a_function_node_signature_types,
     ports_a_shader_node_program_types,
 };
 use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
-use streamlib_node_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
+use streamlib_node_schema::{DELIVERY_PROFILE_DECLARATION_VALUES, NodeConfigJsonSchema};
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
@@ -55,7 +56,7 @@ pub struct PythonNodeDeclaration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HowAPythonNodeOfTheTypeRuns {
     InItsOwnNodeInterpreter(ExecutionConfig),
-    /// A `@node.function`, inside the read of each node it feeds.
+    /// A function under bare `@node`, inside the read of each node it feeds.
     InsideTheReadOfEachNodeItFeeds,
     /// A `@node.shader`, its Slang function compiled and run on the GPU in
     /// this process, with no Python process.
@@ -236,7 +237,7 @@ fn read_function_node_state_fields(
 }
 
 /// The kind a described node type declares: `process`, or `function` beside
-/// its `language`: `python` for a `@node.function`, `rust` for a module's
+/// its `language`: `python` for a function under bare `@node`, `rust` for a module's
 /// `#[function_node]`.
 fn read_described_node_kind(
     described_node_type: &serde_json::Value,
@@ -257,26 +258,27 @@ fn read_described_node_kind(
         },
         "shader" => Ok(NodeKind::Shader),
         other => Err(format!(
-            "{DESCRIBED_KIND_KEY} is {other:?}, which names no node kind: a class is \
-             `@node.process`, a function `@node.function` and a Slang function `@node.shader`"
+            "{DESCRIBED_KIND_KEY} is {other:?}, which names no node kind: a class or a \
+             function under bare `@node` is one, and a Slang function under `@node.shader`"
         )),
     }
 }
 
-/// The JSON Schema the decorator derived from the class's config class.
+/// The JSON Schema of the node's config: the one a Rust function node's declaration derived,
+/// carried across as the document the catalog serves, or the empty config's when the node
+/// describes none, as a node that takes each value as an input does.
 ///
-/// Derived in Python, where the config class is, and carried across as the
-/// document the catalog serves — the engine never re-derives it and never
-/// inspects it.
+/// The engine never re-derives the document and never inspects it.
 fn read_config_schema_document(
     described_node_type: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
-    let document = described_field(described_node_type, DESCRIBED_CONFIG_SCHEMA_KEY)?;
+    let Some(document) = described_node_type.get(DESCRIBED_CONFIG_SCHEMA_KEY) else {
+        return Ok(EmptyConfig::node_config_schema_document());
+    };
     if !document.is_object() {
         return Err(format!(
-            "{DESCRIBED_CONFIG_SCHEMA_KEY} must be a JSON object, got {} — the decorator derives \
-             this document, so a class reaching here was built by hand rather than by \
-             @tatolab.stream.node.process",
+            "{DESCRIBED_CONFIG_SCHEMA_KEY} must be a JSON object, got {} — the declaration \
+             derives this document, so a node reaching here was stamped by hand",
             json_kind_name(document)
         ));
     }
@@ -307,7 +309,7 @@ fn read_execution_config(
         unknown => {
             return Err(format!(
                 "unknown execution mode {unknown:?} — the decorator validates this, so a class \
-                 reaching here was built by hand rather than by @tatolab.stream.node.process"
+                 reaching here was built by hand rather than by bare @tatolab.stream.node"
             ));
         }
     };

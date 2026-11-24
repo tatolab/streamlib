@@ -249,7 +249,6 @@ class OpusRoundTripOnWiredLinks:
 
         def context(links: Any, node_run_id: str) -> Any:
             return _engine.open_runtime_context_full_access_for_helper_process(
-                {},
                 links,
                 "runtime-under-test",
                 node_run_id,

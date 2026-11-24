@@ -49,7 +49,7 @@ mod tests {
         let qualname = declared_class
             .getattr("__qualname__")?
             .extract::<String>()?;
-        Ok(serde_json::json!({
+        let mut described = serde_json::json!({
             "import_path": format!("{module}:{qualname}"),
             "short_name": declared_class.getattr("__name__")?.extract::<String>()?,
             "description": stamp("__tatolab_node_description__")?,
@@ -57,12 +57,16 @@ mod tests {
             "execution": stamp("__tatolab_node_execution__")?,
             "scheduling_priority": stamp("__tatolab_node_scheduling_priority__")?,
             "paced_by_real_time": stamp("__tatolab_node_paced_by_real_time__")?,
-            "config_schema": stamp("__tatolab_node_config_schema__")?,
             "input_ports": stamp("__tatolab_node_input_ports__")?,
             "output_ports": stamp("__tatolab_node_output_ports__")?,
             "conversion": stamp("__tatolab_node_conversion__")?,
             "pin_groups": stamp("__tatolab_node_pin_groups__")?,
-        }))
+        });
+        // Only a Rust function node stamps a config schema, as the node interpreter describes it.
+        if declared_class.hasattr("__tatolab_node_config_schema__")? {
+            described["config_schema"] = stamp("__tatolab_node_config_schema__")?;
+        }
+        Ok(described)
     }
 
     fn read_declaration_off(
@@ -322,107 +326,13 @@ class AudioConsumer:
         );
     }
 
-    #[test]
-    fn the_descriptor_carries_the_config_classs_derived_schema() {
-        let declaration = read_python_declaration(
-            "\
-import dataclasses
-
-
-@dataclasses.dataclass
-class AudioConsumerConfig:
-    gain: float = 1.0
-    label: str = 'unlabelled'
-
-
-@node.process(execution='manual')
-class AudioConsumer:
-    def __init__(self, config: AudioConsumerConfig) -> None:
-        self.config = config
-",
-        )
-        .expect("the declaration reads");
-
-        let document = declaration
-            .descriptor
-            .config_schema
-            .expect("a declared Python class always carries a config schema");
-        assert_eq!(document["type"], "object");
-        assert_eq!(document["properties"]["gain"]["type"], "number");
-        assert_eq!(document["properties"]["label"]["type"], "string");
-        assert_eq!(document["properties"]["label"]["default"], "unlabelled");
-        assert_eq!(document["properties"]["gain"]["default"], 1.0);
-        assert!(document.get("required").is_none(), "{document}");
-        assert_eq!(document["additionalProperties"], false);
-    }
-
-    /// What the MCP node catalog actually serializes for a Python class.
-    ///
-    /// The catalog's own test registers a descriptor by hand, and the test
-    /// above stops at the descriptor, so without this nothing in a GPU-free CI
-    /// run carries a Python class's schema as far as the served shape — and the
-    /// end-to-end proof needs a running graph, which needs a GPU.
-    #[test]
-    fn the_served_rendering_of_a_python_class_carries_its_config_schema() {
-        let declaration = read_python_declaration(
-            "\
-import dataclasses
-import typing
-
-
-@dataclasses.dataclass
-class AudioConsumerConfig:
-    gain: float = 1.0
-    label: str = 'unlabelled'
-    fallback: typing.Optional[str] = None
-
-
-@node.process(execution='manual')
-class AudioConsumer:
-    def __init__(self, config: AudioConsumerConfig) -> None:
-        self.config = config
-",
-        )
-        .expect("the declaration reads");
-
-        let served = serde_json::to_value(streamlib::sdk::json_schema::NodeDescriptorOutput::from(
-            &declaration.descriptor,
-        ))
-        .expect("the rendering serializes");
-
-        assert_eq!(
-            served["config_schema"]["properties"]["gain"]["type"],
-            "number"
-        );
-        assert_eq!(
-            served["config_schema"]["properties"]["label"]["default"],
-            "unlabelled"
-        );
-        assert_eq!(
-            served["config_schema"]["properties"]["gain"]["default"],
-            1.0
-        );
-        assert!(
-            served["config_schema"].get("required").is_none(),
-            "{served}"
-        );
-
-        // The null leg of the hop the document takes into Rust: a dropped key
-        // would read as "no default" rather than as the default the author
-        // wrote, and nothing else in a GPU-free run crosses a nil.
-        let fallback = &served["config_schema"]["properties"]["fallback"];
-        assert!(
-            fallback.get("default").is_some(),
-            "the null default was dropped: {fallback}"
-        );
-        assert_eq!(fallback["default"], serde_json::Value::Null);
-    }
-
+    /// A class under bare `@node` takes each value as an input, so it describes no config, and
+    /// the catalog serves it the document Rust publishes for a node that takes none.
     #[test]
     fn a_class_declaring_no_config_carries_the_same_document_rust_publishes() {
         let declaration = read_python_declaration(
             "\
-@node.process(execution='manual')
+@node(execution='manual')
 class AudioConsumer:
     def __init__(self) -> None:
         self.frames = 0
@@ -430,15 +340,9 @@ class AudioConsumer:
         )
         .expect("the declaration reads");
 
-        let mut what_rust_publishes = EmptyConfig::node_config_schema_document();
-        what_rust_publishes
-            .as_object_mut()
-            .expect("the document is an object")
-            .remove("title");
-
         assert_eq!(
             declaration.descriptor.config_schema,
-            Some(what_rust_publishes)
+            Some(EmptyConfig::node_config_schema_document())
         );
     }
 
@@ -480,82 +384,15 @@ class AudioConsumer:
         }
     }
 
-    /// The frame rate a Rust author declares on an Image output, spelled for
-    /// the same port the Python class below declares.
-    #[streamlib::sdk::node(
-        execution = manual,
-        output(
-            "video",
-            pin_type = Texture,
-            formats = ["rgba8_unorm"],
-            frame_rate = from_setting("frames_per_second")
-        ),
-    )]
-    struct RustDeclaredFrameRateSource;
-
-    impl streamlib::sdk::nodes::ManualNode for RustDeclaredFrameRateSource::Node {
-        fn start(
-            &mut self,
-            _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-        ) -> streamlib::sdk::error::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// One frame rate, two authoring languages, one family declaration.
-    #[test]
-    fn a_python_declared_frame_rate_and_a_rust_declared_one_are_the_same_declaration() {
-        let python_outputs = read_python_declaration(
-            "@node.process(execution='manual')\n\
-             class AudioConsumer:\n\
-             \x20   video = Output(Image, formats=('rgba8_unorm',), \
-             rate=from_config('frames_per_second'))\n",
-        )
-        .expect("the declaration reads")
-        .descriptor
-        .outputs;
-
-        let rust_descriptor =
-            <RustDeclaredFrameRateSource::Node as streamlib::sdk::nodes::GeneratedNode>::descriptor()
-                .expect("the macro emits a descriptor");
-
-        assert_eq!(
-            python_outputs[0].family, rust_descriptor.outputs[0].family,
-            "the two authoring surfaces must produce one declaration"
-        );
-        assert_eq!(
-            python_outputs[0].family.frame_rate.clone(),
-            Some(
-                streamlib::sdk::descriptors::ImageOutputPortFrameRate::FromConfig {
-                    config_key: "frames_per_second".to_string(),
-                }
-            )
-        );
-    }
-
-    /// A frame rate on an output whose family carries none is refused when the
-    /// class is described, naming the port.
-    #[test]
-    fn a_python_declared_frame_rate_on_a_packets_output_is_refused_naming_the_port() {
-        let refusal = python_declaration_refusal(
-            "@node.process(execution='manual')\n\
-             class AudioConsumer:\n\
-             \x20   encoded_video = Output(Packets, rate=30)\n",
-        );
-        assert!(
-            refusal.contains("encoded_video") || refusal.contains("rate"),
-            "got {refusal}"
-        );
-    }
-
     #[test]
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
-            "@node.process\n\
+            "from typing import Annotated\n\
+             @node\n\
              class AudioConsumer:\n\
-             \x20   audio = Input(Channels, delivery='ordered',\n\
-             \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                                  dtype='f32', window_size=512, hop=160))\n",
+             \x20   audio: InputPin[Annotated[Audio, StreamDelivery('ordered'),\n\
+             \x20       AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                           dtype='f32', window_size=512, hop=160)]]\n",
         );
 
         let rust_descriptor =
@@ -581,28 +418,12 @@ class AudioConsumer:
     }
 
     #[test]
-    fn a_python_declared_sentinel_is_refused_at_decoration() {
-        let refusal = python_declaration_refusal(
-            "@node.process(execution='manual')\n\
-             class AudioConsumer:\n\
-             \x20   audio = Input(Channels, delivery='ordered', window=AUDIO_WINDOW_MATCH_DEVICE)\n",
-        );
-
-        assert!(
-            refusal.contains("AUDIO_WINDOW_MATCH_DEVICE")
-                && refusal.contains("helper")
-                && refusal.contains("AudioWindowContract"),
-            "the refusal must name the sentinel, why it cannot resolve, and what to \
-             write instead; got {refusal}"
-        );
-    }
-
-    #[test]
     fn a_python_port_declaring_no_contract_reaches_the_descriptor_with_none() {
         let ports = python_declared_ports(
-            "@node.process\n\
+            "from typing import Annotated\n\
+             @node\n\
              class AudioConsumer:\n\
-             \x20   audio = Input(Channels, delivery='newest')\n",
+             \x20   audio: InputPin[Annotated[Audio, StreamDelivery('newest')]]\n",
         );
 
         assert_eq!(ports[0].audio_window, None);
@@ -614,10 +435,11 @@ class AudioConsumer:
     #[test]
     fn a_python_port_reaches_the_descriptor_under_its_cast_name() {
         let declaration = read_python_declaration(
-            "@node.process\n\
+            "from typing import Annotated\n\
+             @node\n\
              class AudioConsumer:\n\
-             \x20   Video = Input(Image, delivery='newest')\n\
-             \x20   Frames_Out = Output(Image)\n",
+             \x20   Video: InputPin[Annotated[Texture, StreamDelivery('newest')]]\n\
+             \x20   Frames_Out: OutputPin[Texture]\n",
         )
         .expect("the declaration reads");
 
@@ -628,11 +450,12 @@ class AudioConsumer:
     #[test]
     fn a_python_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
         let refusal = python_declaration_refusal(
-            "@node.process\n\
+            "from typing import Annotated\n\
+             @node\n\
              class AudioConsumer:\n\
-             \x20   audio = Input(Channels, delivery='newest',\n\
-             \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                                  dtype='f32', window_size=512))\n",
+             \x20   audio: InputPin[Annotated[Audio, StreamDelivery('newest'),\n\
+             \x20       AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                           dtype='f32', window_size=512)]]\n",
         );
 
         assert!(

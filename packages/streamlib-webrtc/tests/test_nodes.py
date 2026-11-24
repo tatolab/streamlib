@@ -162,10 +162,9 @@ class PublisherWiredToEncoders:
                 channel_service_name
             )
         self.encoder_context = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, self.encoder_outputs, "runtime-under-test", "encoders-under-test"
+            self.encoder_outputs, "runtime-under-test", "encoders-under-test"
         )
         self.context = _engine.open_runtime_context_full_access_for_helper_process(
-            {},
             tracks_input,
             "runtime-under-test",
             "node-under-test",
@@ -562,10 +561,9 @@ class PlayerWiredToBothDecoders:
                 notify_max_notifiers=len(output_ports),
             )
         self.decoders = _engine.open_runtime_context_full_access_for_helper_process(
-            {}, decoder_inputs, "runtime-under-test", "decoders-under-test"
+            decoder_inputs, "runtime-under-test", "decoders-under-test"
         )
         self.player_context = _engine.open_runtime_context_full_access_for_helper_process(
-            {},
             player_outputs,
             "runtime-under-test",
             "player-under-test",

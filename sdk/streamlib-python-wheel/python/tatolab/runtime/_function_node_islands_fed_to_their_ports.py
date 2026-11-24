@@ -199,10 +199,12 @@ class FunctionNodeIslandsFedToTheirPorts:
         body_run_as_python = self._body_run_as_python_by_input_port_and_node_id.get(
             (input_port, node_id)
         )
-        if body_run_as_python is not None and body_run_as_python.runs(prepared):
-            body_run_as_python.config_fields_set_by_the_inputs_past_its_own = (
-                linked_exposed_config_fields
-            )
+        if (
+            body_run_as_python is not None
+            and body_run_as_python.runs(prepared)
+            and not linked_exposed_config_fields
+        ):
+            body_run_as_python.take_the_config(config)
             return body_run_as_python, [], []
         return how_one_function_node_is_called(
             prepared, node_id, config, linked_exposed_config_fields

@@ -27,6 +27,7 @@ from tatolab.runtime._node_hosting import (
     the_members_of_each_slot_built,
 )
 from tatolab.runtime._node_the_wheel_hosts import (
+    is_a_node_the_wheel_builds_itself,
     link_input_data_reader_of,
     link_output_data_writer_of,
 )
@@ -207,7 +208,6 @@ def construct_hosted_node(
     `slot_counts` says before its `__init__()` runs.
     """
     full_access_context = open_runtime_context_full_access_for_helper_process(
-        configuration or {},
         link_data_access,
         runtime_id,
         node_run_id,
@@ -219,8 +219,15 @@ def construct_hosted_node(
     )
     members = class_node_members_of(node_class)
     if members is None:
+        if not is_a_node_the_wheel_builds_itself(node_class):
+            raise TypeError(
+                f"`{node_class.__module__}:{node_class.__qualname__}` is not a class under bare "
+                f"`@node`, so nothing builds it from its fields and pins. To fix: declare it with "
+                f"bare `@node`, its fields and pins typed, through a `tatolab-stream` that "
+                f"declares them."
+            )
         return HostedNode(
-            construct_node_instance(node_class, configuration, link_data_access),
+            construct_node_instance(node_class, configuration),
             full_access_context,
             limited_access_context,
         )

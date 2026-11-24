@@ -153,12 +153,11 @@ def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd_running_str
     no engine view to lease.
 
     A child owns its state outright — its pause flag is a local announcement
-    from the parent, its config a local value — so there is nothing to expire,
+    from the parent, its node id a local value — so there is nothing to expire,
     and nothing that could dangle.
     """
     observation = run_probe(start_tatolabd_running_stream, "ContextStasher")
     assert observation["stashed_is_paused"] is False
-    assert observation["stashed_config"] == {}
     assert observation["stashed_node_id"]
 
 

@@ -4,7 +4,7 @@
 """Compile a function node to its evaluate entry, a Numba body behind a C-signature wrapper.
 
 A body is compiled by Numba in nopython mode. Its dataclasses (its state
-record, its config, a several-output return) are lowered as named tuples of the
+record, a several-output return) are lowered as named tuples of the
 same fields, so the body constructs and reads them unchanged. A wrapper with the
 evaluate entry's C signature unpacks the f64 values the island hands it into the
 body's parameters and packs its outputs and new state back. The body is cached
@@ -30,7 +30,6 @@ from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     FunctionNode,
 )
-from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 from tatolab.stream._rust_function_node_declaration import (
     RustFunctionNode,
     RustFunctionNodeDeclaration,
@@ -41,7 +40,6 @@ from tatolab.runtime._engine import (
     MODULE_HOST_TABLE_ABI_MINOR,
 )
 from tatolab.runtime._function_node_carried_values import (
-    _exactly_as_f64,
     _how_the_values_of_a_signature_are_carried,
     _initial_state_values,
     _pin_defaults_by_input_port,
@@ -68,7 +66,7 @@ def compile_function_node_to_its_evaluate_entry(
         return _the_evaluate_entry_a_rust_function_node_exports(function_node, import_path)
     if not isinstance(function_node, FunctionNode):
         raise FunctionNodeDoesNotCompile(
-            f"{import_path} names {function_node!r}, which is not a `@node.function` function"
+            f"{import_path} names {function_node!r}, which is not a function under bare `@node`"
         )
     function_signature: "dict[str, Any]" = getattr(
         function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
@@ -104,13 +102,11 @@ def compile_function_node_to_its_evaluate_entry(
         if each_port["value_type"] in PART_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES
     }
 
-    config_class: Optional[type] = getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     state_parameter: Optional[str] = function_signature["state_parameter"]
     state_record_class: Optional[type] = (
         None if state_parameter is None else typing.get_args(annotations[state_parameter])[0]
     )
     output_record_class = _output_record_class(annotations["return"], state_record_class)
-    config_value_types = _scalar_field_value_types(import_path, "config", config_class)
     state_value_types = _scalar_field_value_types(import_path, "state", state_record_class)
 
     named_tuple_by_dataclass = {
@@ -119,7 +115,6 @@ def compile_function_node_to_its_evaluate_entry(
             [field.name for field in dataclasses.fields(dataclass_lowered)],
         )
         for dataclass_lowered in (
-            config_class,
             state_record_class,
             output_record_class,
             *sorted(part_classes, key=lambda part_class: part_class.__name__),
@@ -140,7 +135,6 @@ def compile_function_node_to_its_evaluate_entry(
             _a_constructor_keeping_the_dataclass_defaults(import_path, dataclass_lowered, named_tuple)
         )
         for dataclass_lowered, named_tuple in named_tuple_by_dataclass.items()
-        if dataclass_lowered is not config_class
     }
     body_with_its_dataclasses_lowered = numba.njit(cache=True, error_model="numpy")(
         _the_body_with_its_dataclasses_lowered(body, constructor_by_dataclass)
@@ -148,8 +142,6 @@ def compile_function_node_to_its_evaluate_entry(
     wrapper_source, wrapper_globals = _evaluate_entry_wrapper_source(
         body,
         function_signature,
-        config_class,
-        config_value_types,
         state_record_class,
         state_value_types,
         named_tuple_by_dataclass,
@@ -178,25 +170,13 @@ def compile_function_node_to_its_evaluate_entry(
         raise FunctionNodeDoesNotCompile(f"{import_path} compiled to no evaluate entry address")
 
     pin_defaults_by_input_port = _pin_defaults_by_input_port(import_path, function_signature)
-    config_fields = dataclasses.fields(config_class) if config_class is not None else ()
-    config_field_defaults = {
-        field.name: _exactly_as_f64(field.default, f"{import_path}'s config `{field.name}` default")
-        for field in config_fields
-        if field.default is not dataclasses.MISSING
-    }
-    config_field_default_factories: "dict[str, Callable[[], Any]]" = {
-        field.name: field.default_factory
-        for field in config_fields
-        if field.default_factory is not dataclasses.MISSING
-    }
     return FunctionNodeCompiledToItsEvaluateEntry(
         evaluate_entry_address=evaluate_entry_address,
         input_ports=tuple(each_input["port"] for each_input in function_signature["inputs"]),
         pin_defaults_by_input_port=pin_defaults_by_input_port,
         output_ports=tuple(each_output["port"] for each_output in function_signature["outputs"]),
-        config_fields=tuple(config_value_types),
-        config_field_defaults=config_field_defaults,
-        config_field_default_factories=config_field_default_factories,
+        config_fields=(),
+        config_field_defaults={},
         state_fields=tuple(state_value_types),
         initial_state_values=_initial_state_values(import_path, state_record_class, state_value_types),
         is_stateful=state_record_class is not None,
@@ -229,7 +209,6 @@ def _the_evaluate_entry_a_rust_function_node_exports(
         config_field_defaults={
             config_field.name: config_field.default for config_field in declaration.config_fields
         },
-        config_field_default_factories={},
         state_fields=tuple(state_field.name for state_field in declaration.state_fields),
         initial_state_values=tuple(state_field.default for state_field in declaration.state_fields),
         is_stateful=declaration.state_parameter is not None,
@@ -356,8 +335,6 @@ def _the_body_with_its_dataclasses_lowered(
 def _evaluate_entry_wrapper_source(
     body: Callable[..., Any],
     function_signature: "dict[str, Any]",
-    config_class: Optional[type],
-    config_value_types: "dict[str, str]",
     state_record_class: Optional[type],
     state_value_types: "dict[str, str]",
     named_tuple_by_dataclass: "dict[type, type]",
@@ -376,8 +353,6 @@ def _evaluate_entry_wrapper_source(
     lines = ["def evaluate(input_values, config_values, state_values, output_values, now_ns):"]
     if input_parameters:
         lines.append(f"    inputs = carray(input_values, ({input_slot_count},))")
-    if config_value_types:
-        lines.append(f"    config = carray(config_values, ({len(config_value_types)},))")
     if state_value_types:
         lines.append(f"    state = carray(state_values, ({len(state_value_types)},))")
     first_output_slot, output_slot_count = _slots_of_each_value(
@@ -407,17 +382,6 @@ def _evaluate_entry_wrapper_source(
                 + ", ".join(
                     _from_f64(f"state[{index}]", value_type)
                     for index, value_type in enumerate(state_value_types.values())
-                )
-                + ")"
-            )
-        elif parameter_name == function_signature["config_parameter"]:
-            assert config_class is not None
-            wrapper_globals["ConfigRecord"] = named_tuple_by_dataclass[config_class]
-            arguments.append(
-                "ConfigRecord("
-                + ", ".join(
-                    _from_f64(f"config[{index}]", value_type)
-                    for index, value_type in enumerate(config_value_types.values())
                 )
                 + ")"
             )

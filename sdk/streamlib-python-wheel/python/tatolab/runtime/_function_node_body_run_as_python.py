@@ -8,7 +8,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import inspect
-import typing
 from typing import Any, Optional
 
 
@@ -34,15 +33,14 @@ from tatolab.runtime._function_node_stored_values import (
 
 
 class FunctionNodeBodyRunAsPython:
-    """One function node's body, run as Python with its config and state; the native evaluator calls `evaluate`."""
+    """One function node's body, run as Python with its state; the native evaluator calls `evaluate`."""
 
     def __init__(
         self, run_as_python: FunctionNodeRunAsPythonInItsReader, node_id: str, config: Any
     ) -> None:
+        refuse_a_config_given_a_function_node_taking_none(node_id, config)
         self._run_as_python = run_as_python
         self._node_id = node_id
-        self._config = _config_record_of_one_function_node(run_as_python, node_id, config)
-        self.config_fields_set_by_the_inputs_past_its_own: "tuple[str, ...]" = ()
         state_record_class = run_as_python.state_record_class
         self._state = state_record_class() if state_record_class is not None else None
         signature = run_as_python.function_signature
@@ -82,8 +80,9 @@ class FunctionNodeBodyRunAsPython:
         ]
 
     def take_the_config(self, config: Any) -> None:
-        """Call the body with `config` from the next evaluation on."""
-        self._config = _config_record_of_one_function_node(self._run_as_python, self._node_id, config)
+        """Refuse a `config` that sets anything, as a Python function node takes each value as an
+        input."""
+        refuse_a_config_given_a_function_node_taking_none(self._node_id, config)
 
     def runs(self, run_as_python: FunctionNodeReadyToEvaluate) -> bool:
         """Whether this is the body of `run_as_python`, so an island fed again can call it with its state."""
@@ -99,9 +98,6 @@ class FunctionNodeBodyRunAsPython:
         The new state is kept only once every output is answered.
         """
         signature = self._run_as_python.function_signature
-        self._take_the_config_fields_its_inputs_past_its_own_set(
-            input_values[len(self._input_parameters) :]
-        )
         arguments: "dict[str, Any]" = {}
         for parameter_name, input_value in zip(self._input_parameters, input_values):
             arguments[parameter_name] = self._the_input_the_body_takes(
@@ -113,8 +109,6 @@ class FunctionNodeBodyRunAsPython:
         if signature["state_parameter"] is not None:
             state_handed_to_the_body = copy.deepcopy(self._state)
             arguments[signature["state_parameter"]] = state_handed_to_the_body
-        if signature["config_parameter"] is not None:
-            arguments[signature["config_parameter"]] = self._config
         positional_arguments = [
             arguments.pop(parameter_name) for parameter_name in self._positional_only_parameters
         ]
@@ -143,15 +137,6 @@ class FunctionNodeBodyRunAsPython:
         self._state = new_state
         return answered
 
-    def _take_the_config_fields_its_inputs_past_its_own_set(self, input_values: "list[Any]") -> None:
-        changed_fields: "dict[str, Any]" = {}
-        for field, input_value in zip(self.config_fields_set_by_the_inputs_past_its_own, input_values):
-            value = the_value_a_config_field_takes(getattr(self._config, field), float(input_value))
-            if value != getattr(self._config, field):
-                changed_fields[field] = value
-        if changed_fields:
-            self._config = dataclasses.replace(self._config, **changed_fields)
-
     def state_values(self) -> "list[float]":
         """The node's state as the f64s its stream carries, one per field of a state record of numbers and bools."""
         return self._the_state_values_of(self._state)
@@ -178,13 +163,6 @@ class FunctionNodeBodyRunAsPython:
     def _the_input_the_body_takes(self, parameter_name: str, value_type: str, input_value: Any) -> Any:
         if value_type == UNREAD_MESSAGE_VALUE_TYPE:
             return input_value
-        if value_type == "records":
-            if not isinstance(input_value, dict):
-                raise TypeError(
-                    f"function node `{self._node_id}`'s input `{parameter_name}` takes a dict, "
-                    f"and was handed {type(input_value).__name__}"
-                )
-            return copy.deepcopy(input_value)
         if value_type == NAMED_VALUE_TYPE:
             if input_value is None:
                 return None
@@ -232,10 +210,6 @@ class FunctionNodeBodyRunAsPython:
                     f"{type(output_value).__name__}"
                 )
             return output_value
-        if each_output["value_type"] == "records":
-            if not isinstance(output_value, dict):
-                raise TypeError(f"{what_it_is} is a dict, and the body gave {type(output_value).__name__}")
-            return output_value
         if each_output["value_type"] == NAMED_VALUE_TYPE:
             named_class = self._named_class_by_output_port[each_output["port"]]
             if output_value is None or type(output_value) is not named_class:
@@ -281,49 +255,16 @@ def the_value_a_config_field_takes(value_it_holds: Any, input_value: float) -> A
     return input_value
 
 
-def _config_record_of_one_function_node(
-    run_as_python: FunctionNodeRunAsPythonInItsReader, node_id: str, config: Any
-) -> Any:
+def refuse_a_config_given_a_function_node_taking_none(node_id: str, config: Any) -> None:
+    """Refuse a `config` that sets anything on a function node declaring no config field, a
+    Python one among them, which takes each value as an input of its own."""
     config_values_by_field = dict(config) if isinstance(config, dict) else {}
-    config_class = run_as_python.config_class
-    if config_class is None:
-        if config_values_by_field:
-            raise FunctionNodeDoesNotCompile(
-                f"function node `{node_id}`'s config sets "
-                f"{', '.join(sorted(config_values_by_field))}, and it takes no config"
-            )
-        return None
-    declared_fields = [field.name for field in dataclasses.fields(config_class)]
-    fields_it_does_not_declare = sorted(set(config_values_by_field) - set(declared_fields))
-    if fields_it_does_not_declare:
+    if config_values_by_field:
         raise FunctionNodeDoesNotCompile(
-            f"function node `{node_id}`'s config sets {', '.join(fields_it_does_not_declare)}, "
-            f"which its config class does not declare; its fields are "
-            f"{', '.join(declared_fields) or 'none'}"
+            f"function node `{node_id}`'s config sets "
+            f"{', '.join(sorted(config_values_by_field))}, and it takes no config: each value "
+            f"is an input of its own, set by `input_values`"
         )
-    try:
-        return _a_dataclass_built_from_its_fields(config_class, config_values_by_field)
-    except TypeError as config_refused:
-        raise FunctionNodeDoesNotCompile(
-            f"function node `{node_id}`'s config does not build its config class: {config_refused}"
-        ) from config_refused
-
-
-def _a_dataclass_built_from_its_fields(dataclass_type: type, values_by_field: "dict[str, Any]") -> Any:
-    try:
-        field_types: "dict[str, Any]" = typing.get_type_hints(dataclass_type)
-    except NameError:
-        field_types = {field.name: field.type for field in dataclasses.fields(dataclass_type)}
-    return dataclass_type(
-        **{
-            field: (
-                _a_dataclass_built_from_its_fields(field_types[field], value)
-                if isinstance(value, dict) and dataclasses.is_dataclass(field_types.get(field))
-                else value
-            )
-            for field, value in values_by_field.items()
-        }
-    )
 
 
 def _python_value_of_an_f64(value: float, value_type: str) -> Any:

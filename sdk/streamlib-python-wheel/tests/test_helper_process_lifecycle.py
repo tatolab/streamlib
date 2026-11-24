@@ -925,7 +925,7 @@ def test_a_configuration_the_node_takes_is_answered_ok(stand_in_parent):
 @pytest.mark.parametrize(
     ("probe_name", "the_cause_named"),
     [
-        ("PassThroughProbe", "cannot be reconfigured while running"),
+        ("PassThroughProbe", "takes no config, so `gain` has nowhere to go"),
         ("RefusesReconfigurationProbe", "a gain of 3 is out of range"),
         ("RefusesSetupProbe", "setup did not succeed"),
     ],

@@ -19,16 +19,35 @@ from tatolab.stream._node_declaration import (
 )
 
 __all__ = [
+    "NODE_THE_WHEEL_BUILDS_ITSELF",
+    "NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG",
+    "is_a_node_the_wheel_builds_itself",
     "link_input_data_reader_of",
     "link_output_data_writer_of",
     "stamp_the_ports_of_a_node_the_wheel_hosts",
 ]
 
 
+NODE_THE_WHEEL_BUILDS_ITSELF = "_tatolab_built_by_the_wheel"
+"""The attribute set on each node class the wheel builds itself, which no author declares."""
+
+
+NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG = "_tatolab_takes_its_config_at_construction"
+"""The attribute set on a node the wheel builds itself that is built from, and takes, the config
+the parent hands it, as a function node run as a standalone node is."""
+
+
+def is_a_node_the_wheel_builds_itself(node_class: type) -> bool:
+    """Whether the wheel built `node_class` itself, rather than an author declaring it."""
+    return vars(node_class).get(NODE_THE_WHEEL_BUILDS_ITSELF, False) is True
+
+
 def stamp_the_ports_of_a_node_the_wheel_hosts(
     node_class: type, *, input_ports: "Sequence[str]", output_ports: "Sequence[str]"
 ) -> type:
-    """Stamp `node_class` with `input_ports` and `output_ports`, in addition to any it holds."""
+    """Stamp `node_class` with `input_ports` and `output_ports`, in addition to any it holds,
+    and as a node the wheel builds itself."""
+    setattr(node_class, NODE_THE_WHEEL_BUILDS_ITSELF, True)
     for stamp, ports in (
         (NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports),
         (NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports),

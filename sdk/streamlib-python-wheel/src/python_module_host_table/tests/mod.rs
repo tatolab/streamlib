@@ -105,7 +105,6 @@ fn full_access_context_recording_escalates<'py>(
     let plane = Bound::new(python, plane).unwrap();
     let context = open_runtime_context_full_access_for_helper_process(
         python,
-        PyDict::new(python).as_any(),
         &plane,
         "runtime-under-test".to_string(),
         node_id.to_string(),

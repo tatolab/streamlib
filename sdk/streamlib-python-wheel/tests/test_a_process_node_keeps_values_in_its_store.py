@@ -38,7 +38,6 @@ class StandInParentKeepingNodeStoreValues:
 
 def contexts_escalating_to(parent: StandInParentKeepingNodeStoreValues):
     full_access_context = _engine.open_runtime_context_full_access_for_helper_process(
-        {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
         "node-under-test",
@@ -94,7 +93,6 @@ def test_a_value_json_cannot_carry_is_refused_before_it_reaches_the_parent():
 
 def test_a_context_with_no_route_to_the_parent_refuses_by_name():
     context = _engine.open_runtime_context_full_access_for_helper_process(
-        {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
         "node-under-test",

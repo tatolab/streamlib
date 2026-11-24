@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A `@node.function` body compiled to its evaluate entry, or run as Python where it cannot be.
+"""A function node's body compiled to its evaluate entry, or run as Python where it cannot be.
 
 Each node is called through its compiled entry the way the native evaluator
 calls it.
@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import ctypes
 import math
-import struct
-import itertools
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, NamedTuple
 
 import pytest
 
@@ -25,23 +23,18 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeDoesNotCompile,
     UNREAD_MESSAGE_VALUE_TYPE,
     compile_function_node_to_its_evaluate_entry,
-    feed_each_input_port_from_its_function_node_island,
     prepare_function_node_to_evaluate,
 )
 from tatolab.stream import NumberRange, NumberUnit, PinMeaning, State, Stateful, UnreadMessage, node
 from tatolab.stream import _function_node_declaration
 
 from function_node_test_nodes import (
-    GainConfig,
     Phase,
     RustGate,
     WeightedSumCountingItsCalls,
     _EVALUATE_ENTRY_TYPE,
     a_rust_function_node_declaration,
     amplify,
-    an_island_of_one_node,
-    count_the_label_letters,
-    label_the_level,
     lfo,
     measure_its_own_spelling,
     remap,
@@ -62,14 +55,13 @@ def compiled(function_node: Any) -> FunctionNodeCompiledToItsEvaluateEntry:
     )
 
 
-@dataclass(frozen=True)
-class Halves:
+class Halves(NamedTuple):
     lower: float
     upper: float
 
 
-@node.function
-def halve(x: float) -> Halves:
+@node
+def halve(x: float = 0.0) -> Halves:
     return Halves(lower=x / 2.0, upper=x - x / 2.0)
 
 
@@ -97,41 +89,6 @@ def square_root(x: float = 0.0) -> float:
     if x < 0.0:
         raise ValueError("a negative number has no real square root")
     return math.sqrt(x)
-
-
-@dataclass(frozen=True)
-class Spread:
-    centre: float
-    width: float = 1.0
-
-
-@node.function
-def spread_around(x: float) -> Spread:
-    return Spread(centre=x)
-
-
-@dataclass(frozen=True)
-class SpreadWithAFactoryWidth:
-    centre: float = 0.0
-    width: float = field(default_factory=lambda: 1.0)
-
-
-@node.function
-def spread_with_a_factory_width(x: float) -> SpreadWithAFactoryWidth:
-    return SpreadWithAFactoryWidth(centre=x)
-
-
-_SEEDS_HANDED_OUT = itertools.count(7)
-
-
-@dataclass(frozen=True)
-class SeededConfig:
-    seed: int = field(default_factory=lambda: next(_SEEDS_HANDED_OUT))
-
-
-@node.function
-def offset_by_seed(x: float = 0.0, *, config: SeededConfig) -> float:
-    return x + config.seed
 
 
 @node
@@ -171,11 +128,11 @@ def the_evaluate_entry_status(
 def test_a_stateless_body_runs_compiled_with_its_pins_in_signature_order():
     remap_compiled = compiled(remap)
     assert remap_compiled.input_ports == ("x", "low", "high")
-    assert remap_compiled.pin_defaults_by_input_port == {"low": 0.0, "high": 1.0}
+    assert remap_compiled.pin_defaults_by_input_port == {"x": 0.0, "low": 0.0, "high": 1.0}
     assert call_the_evaluate_entry(remap_compiled, [0.5, 2.0, 4.0], [], [])[0] == [3.0]
 
 
-def test_a_function_under_bare_node_whose_pins_are_numbers_compiles_as_one_under_node_function():
+def test_a_pins_range_unit_and_meaning_leave_how_it_compiles_unchanged():
     typed_compiled = compiled(remap_with_typed_pins)
     assert typed_compiled.input_ports == ("x", "low", "high")
     assert typed_compiled.pin_defaults_by_input_port == {"x": 0.0, "low": 0.0, "high": 1.0}
@@ -191,18 +148,17 @@ def test_a_stateful_body_reads_time_and_its_state_and_writes_its_next_state():
     assert outputs[0] == pytest.approx(1.0) and state == [0.25, 1_250_000_000.0]
 
 
-def test_a_returned_dataclass_writes_one_output_per_field():
+def test_a_returned_named_tuple_writes_one_output_per_field():
     halve_compiled = compiled(halve)
     assert halve_compiled.output_ports == ("lower", "upper")
     assert call_the_evaluate_entry(halve_compiled, [3.0], [], [])[0] == [1.5, 1.5]
 
 
-def test_config_is_read_as_its_dataclass_with_a_bool_as_zero_or_one():
+def test_a_bool_input_travels_as_zero_or_one():
     amplify_compiled = compiled(amplify)
-    assert amplify_compiled.config_fields == ("gain", "inverted")
-    assert amplify_compiled.config_field_defaults == {"gain": 2.0, "inverted": 0.0}
-    assert call_the_evaluate_entry(amplify_compiled, [3.0], [2.0, 0.0], [])[0] == [6.0]
-    assert call_the_evaluate_entry(amplify_compiled, [3.0], [2.0, 1.0], [])[0] == [-6.0]
+    assert amplify_compiled.config_fields == ()
+    assert call_the_evaluate_entry(amplify_compiled, [3.0, 2.0, 0.0], [], [])[0] == [6.0]
+    assert call_the_evaluate_entry(amplify_compiled, [3.0, 2.0, 1.0], [], [])[0] == [-6.0]
 
 
 def test_an_int_input_and_output_travel_as_f64():
@@ -214,7 +170,7 @@ def test_an_int_input_and_output_travel_as_f64():
     [
         (remap, [0.25, -2.0, 6.0], [], [], 0),
         (lfo, [3.0], [], [0.1, 1_000_000_000.0], 1_100_000_000),
-        (amplify, [1.5], [3.0, 1.0], [], 0),
+        (amplify, [1.5, 3.0, 1.0], [], [], 0),
         (tally, [4.0, 2.0], [], [], 0),
     ],
 )
@@ -228,7 +184,7 @@ def test_a_compiled_body_matches_the_python_it_was_compiled_from(
         expected, expected_state = lfo(inputs[0], now=now_ns, previous=Phase(state[0], int(state[1])))
         assert new_state == pytest.approx([expected_state.cycles, expected_state.last_now_ns])
     elif function_node is amplify:
-        expected = amplify(inputs[0], GainConfig(gain=config[0], inverted=bool(config[1])))
+        expected = amplify(inputs[0], inputs[1], bool(inputs[2]))
     else:
         expected = tally(inputs[0], int(inputs[1]))
     assert outputs == pytest.approx([float(expected)])
@@ -256,53 +212,14 @@ def test_a_body_that_raises_answers_the_refused_status():
     assert the_evaluate_entry_status(square_root_compiled, [-1.0]) == -1
 
 
-def test_a_body_may_omit_a_field_its_dataclass_defaults():
-    assert call_the_evaluate_entry(compiled(spread_around), [3.0], [], [])[0] == [3.0, 1.0]
-
-
-def test_a_factory_default_in_a_dataclass_the_body_builds_is_refused_by_name():
-    with pytest.raises(FunctionNodeDoesNotCompile, match="`width` defaults through `default_factory`"):
-        compiled(spread_with_a_factory_width)
-
-
 def test_an_int_default_an_f64_cannot_hold_exactly_is_refused():
     with pytest.raises(FunctionNodeDoesNotCompile, match="only up to 2\\*\\*53"):
         compiled(count_from)
 
 
 def test_what_is_not_a_function_node_is_refused():
-    with pytest.raises(FunctionNodeDoesNotCompile, match="not a `@node.function` function"):
+    with pytest.raises(FunctionNodeDoesNotCompile, match="not a function under bare `@node`"):
         compile_function_node_to_its_evaluate_entry(math.sin, "math:sin")
-
-
-def test_a_config_field_its_class_does_not_declare_is_refused_by_name():
-    import_path = f"{__name__}:offset_by_seed"
-    with pytest.raises(FunctionNodeDoesNotCompile, match="config sets sede, which its config class"):
-        feed_each_input_port_from_its_function_node_island(
-            _engine.open_node_link_data_access_for_helper_process(),
-            [an_island_of_one_node("level", import_path, {"sede": 3})],
-            {import_path: offset_by_seed}.__getitem__,
-        )
-
-
-def test_a_config_field_default_factory_runs_for_each_node():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["first", "second"], [])
-    import_path = f"{__name__}:offset_by_seed"
-    feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [
-            an_island_of_one_node("first", import_path, None, "seeded-1"),
-            an_island_of_one_node("second", import_path, None, "seeded-2"),
-        ],
-        {import_path: offset_by_seed}.__getitem__,
-    )
-    seeds_read = []
-    for port in ("first", "second"):
-        payload = data_plane.read_from_input_port(port)
-        assert payload is not None
-        seeds_read.append(struct.unpack("<d", bytes(payload))[0])
-    assert seeds_read[0] != seeds_read[1]
 
 
 def test_a_rust_function_node_is_read_from_its_declaration_and_never_compiled():
@@ -341,8 +258,8 @@ def test_a_rust_function_node_built_for_a_table_this_runtime_does_not_serve_is_r
         )
 
 
-@node.function
-def python_gate(value: UnreadMessage, open: bool = True) -> "UnreadMessage | None":
+@node
+def python_gate[PinValue](value: PinValue, open: bool = True) -> PinValue | None:
     return value if open else None
 
 
@@ -393,12 +310,6 @@ def test_a_body_that_does_not_compile_runs_as_python_saying_why():
     prepared = run_as_python(build_an_object)
     assert "body does not compile" in prepared.why_it_does_not_compile
     assert prepared.input_ports == ("x",)
-    assert prepared.ports_carrying_records == frozenset()
-
-
-def test_a_body_taking_or_giving_a_dict_runs_as_python():
-    assert run_as_python(label_the_level).ports_carrying_records == frozenset({"result"})
-    assert run_as_python(count_the_label_letters).ports_carrying_records == frozenset({"record"})
 
 
 def test_a_signature_neither_compiled_nor_python_carries_is_refused_by_name():
@@ -406,17 +317,11 @@ def test_a_signature_neither_compiled_nor_python_carries_is_refused_by_name():
         prepare_function_node_to_evaluate(take_an_optional_level, f"{__name__}:take_an_optional_level")
 
 
-def test_a_body_run_as_python_answers_each_output_as_a_float_or_a_dict():
-    assert FunctionNodeBodyRunAsPython(run_as_python(measure_its_own_spelling), "m", None).evaluate(
+def test_a_body_run_as_python_answers_each_number_output_as_a_float():
+    spelled = FunctionNodeBodyRunAsPython(run_as_python(measure_its_own_spelling), "m", None).evaluate(
         [12.0], 0
-    ) == [4.0]
-    assert FunctionNodeBodyRunAsPython(run_as_python(label_the_level), "l", None).evaluate([0.25], 0) == [
-        {"label": "low"}
-    ]
-    letters = FunctionNodeBodyRunAsPython(run_as_python(count_the_label_letters), "c", None).evaluate(
-        [{"label": "high"}], 0
     )
-    assert letters == [4.0] and isinstance(letters[0], float)
+    assert spelled == [4.0] and isinstance(spelled[0], float)
 
 
 def test_the_runtime_spells_the_unread_message_value_type_as_tatolab_stream_does():
@@ -428,21 +333,21 @@ class FirstMessageHeld:
     message: UnreadMessage | None = None
 
 
-@node.function
-def hold_the_first_message_handed(
-    value: UnreadMessage | None = None, *, previous: State[FirstMessageHeld]
-) -> Stateful[UnreadMessage | None, FirstMessageHeld]:
+@node
+def hold_the_first_message_handed[PinValue](
+    value: PinValue | None = None, *, previous: State[FirstMessageHeld]
+) -> Stateful[PinValue | None, FirstMessageHeld]:
     if previous.message is None and value is not None:
         return value, FirstMessageHeld(value)
     return previous.message, previous
 
 
-def test_a_body_run_as_python_hands_on_a_number_or_a_dict_its_state_held_from_an_earlier_call():
+def test_a_body_run_as_python_hands_on_a_message_its_state_held_from_an_earlier_call():
     holding = FunctionNodeBodyRunAsPython(run_as_python(hold_the_first_message_handed), "h", None)
-    record = {"label": "low"}
-    assert holding.evaluate([record], 0)[0] is record
-    assert holding.evaluate([None], 1)[0] == record
-    assert holding.evaluate([{"label": "high"}], 2)[0] == record
+    first, second = "the first message", "the second message"
+    assert holding.evaluate([first], 0)[0] is first
+    assert holding.evaluate([None], 1)[0] is first
+    assert holding.evaluate([second], 2)[0] is first
 
 
 def test_a_body_run_as_python_keeps_a_state_of_any_record_between_calls():
@@ -475,11 +380,6 @@ def spell_a_positional_level(level: float = 0.75, /) -> float:
     return level + len(repr(object())) * 0
 
 
-@node.function
-def take_the_label_out(record: dict) -> int:
-    return len(record.pop("label"))
-
-
 @dataclass
 class LabelsKept:
     labels: list = field(default_factory=list)
@@ -498,32 +398,10 @@ def jump_the_count_past_an_f64(step: float = 1.0, *, previous: State[CallsSoFar]
     return step + len(repr(object())) * 0, CallsSoFar(previous.calls + 2**53 + 1)
 
 
-@dataclass(frozen=True)
-class LabelPolicy:
-    prefix: str = ""
-
-
-@dataclass(frozen=True)
-class LabelConfig:
-    policy: LabelPolicy = field(default_factory=LabelPolicy)
-
-
-@node.function
-def label_with_a_prefix(level: float = 0.5, *, config: LabelConfig) -> dict:
-    return {"label": f"{config.policy.prefix}{level}"}
-
-
 def test_a_body_run_as_python_takes_a_positional_only_input_positionally():
     assert FunctionNodeBodyRunAsPython(run_as_python(spell_a_positional_level), "p", None).evaluate(
         [0.25], 0
     ) == [0.25]
-
-
-def test_a_body_run_as_python_that_changes_its_dict_input_leaves_the_one_it_was_handed():
-    record = {"label": "high"}
-    taking = FunctionNodeBodyRunAsPython(run_as_python(take_the_label_out), "t", None)
-    assert taking.evaluate([record], 0) == [4.0]
-    assert record == {"label": "high"}, "a sibling reading the same dict still finds its label"
 
 
 def test_a_body_run_as_python_that_changes_its_state_and_raises_keeps_the_state_it_had():
@@ -541,13 +419,6 @@ def test_a_body_run_as_python_keeps_no_state_its_stream_cannot_carry():
     assert jumping.state_values() == [0.0]
 
 
-def test_a_body_run_as_python_that_takes_no_config_refuses_one_naming_its_fields():
+def test_a_body_run_as_python_refuses_a_config_naming_the_input_values_that_replace_it():
     with pytest.raises(FunctionNodeDoesNotCompile, match="`m`'s config sets rate, and it takes no config"):
         FunctionNodeBodyRunAsPython(run_as_python(measure_its_own_spelling), "m", {"rate": 1})
-
-
-def test_a_body_run_as_python_reads_a_nested_dataclass_of_its_config():
-    labelling = FunctionNodeBodyRunAsPython(
-        run_as_python(label_with_a_prefix), "l", {"policy": {"prefix": "at "}}
-    )
-    assert labelling.evaluate([0.5], 0) == [{"label": "at 0.5"}]

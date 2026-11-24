@@ -10,15 +10,33 @@ from tatolab.stream import (
     Color,
     EncodedVideo,
     InputPin,
-    Output,
     OutputPin,
-    Packets,
     SettingOnly,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
     node,
 )
+from tatolab.runtime._node_the_wheel_hosts import (
+    NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG,
+    stamp_the_ports_of_a_node_the_wheel_hosts,
+)
+
+
+def built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
+    *, output_ports: "tuple[str, ...]" = ()
+) -> Any:
+    """Stand the class in for a node the wheel builds itself from the config the parent hands
+    it, as it builds a promoted function node: no author declares a config."""
+
+    def stand_in(node_class: type) -> type:
+        stamp_the_ports_of_a_node_the_wheel_hosts(
+            node_class, input_ports=[], output_ports=list(output_ports)
+        )
+        setattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, True)
+        return node_class
+
+    return stand_in
 
 
 @node
@@ -36,22 +54,6 @@ class PassThroughProbe:
         if unit is not None:
             record = json.loads(bytes(unit.payload))
             self.frames_to_downstream.write(json.dumps({**record, "tag": self.tag}).encode())
-
-
-class PassThroughProbeConfig(TypedDict, total=False):
-    """A TypedDict config, so construction from one is covered beside the typed probes."""
-
-    tag: str
-
-
-@node.process(execution="manual")
-class ConfiguredByATypedDictProbe:
-    """A node declaring a TypedDict config, the form a config is constructed from."""
-
-    def __init__(self, config: PassThroughProbeConfig) -> None:
-        self.tag = config.get("tag", "untagged")
-
-    frames_to_downstream = Output(Packets)
 
 
 @node(execution="continuous", interval_ms=60_000)
@@ -237,11 +239,11 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 
 
-@node.process(execution="manual")
+@built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
+    output_ports=("frames_to_downstream",)
+)
 class RefusesReconfigurationProbe:
     """Defines `configure` and refuses every configuration handed to it."""
-
-    frames_to_downstream = Output(Packets)
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
         self.gain = config.get("gain", 1)
@@ -250,11 +252,11 @@ class RefusesReconfigurationProbe:
         raise ValueError(f"a gain of {config.get('gain')} is out of range")
 
 
-@node.process(execution="manual")
+@built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
+    output_ports=("frames_to_downstream",)
+)
 class TakesReconfigurationProbe:
     """Defines `configure` and takes whatever it is handed."""
-
-    frames_to_downstream = Output(Packets)
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
         self.gain = config.get("gain", 1)
@@ -311,7 +313,7 @@ class ExposedGainProbeConfig(TypedDict, total=False):
     gain: float
 
 
-@node.process(execution="continuous", interval_ms=5)
+@built_from_its_config_as_the_wheel_builds_a_promoted_function_node()
 class ExposedGainProbe:
     """Records the `gain` of each config it is handed; the node exposes `gain` as an input."""
 
@@ -325,12 +327,12 @@ class ExposedGainProbe:
         pass
 
 
-@node.process(execution="manual")
+@built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
+    output_ports=("frames_to_downstream",)
+)
 class NotReadyInStartProbe:
     """Reports itself not ready from `start()`, and ready on its next config
     update, through the context it kept from `start()`."""
-
-    frames_to_downstream = Output(Packets)
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
         self._context = None

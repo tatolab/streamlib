@@ -4,7 +4,7 @@
 """A saved value cast by a function node conversion, its body run once out of stream.
 
 When a Graph Input is retyped, the runtime casts its saved value through the one conversion
-between the two types. A module's `@node` or `@node.function` conversion computes its output
+between the two types. A module's `@node` conversion computes its output
 from its one input alone, so its body is run once here, in the stream's own interpreter, its
 input holding the saved value, and its one output, in the stored JSON form a pin of its type
 holds, is the cast.

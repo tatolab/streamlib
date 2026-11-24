@@ -42,7 +42,6 @@ def a_project_holding_one_data_asset(project_directory: Path) -> str:
 def both_contexts_of_a_node_in(project_directory: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STREAMLIB_STREAM_PROJECT_DIRECTORY", str(project_directory))
     full_access_context = _engine.open_runtime_context_full_access_for_helper_process(
-        {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
         "node-under-test",

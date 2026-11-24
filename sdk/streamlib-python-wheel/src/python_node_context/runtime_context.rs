@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyDict};
+use pyo3::types::PyCapsule;
 
-use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_helper_stream_clock::{PythonStreamClockReading, helper_stream_clock_now_ns};
 use crate::python_module_host_table::module_host_table_capsule_lending;
@@ -121,7 +120,6 @@ pub(crate) struct PythonRuntimeContextFullAccess {
     runtime_id: String,
     node_run_id: String,
     stream_and_node: StreamAndNodeTheHelperHosts,
-    configuration: serde_json::Value,
     link_input_data_reader: Py<PythonLinkInputDataReader>,
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
@@ -146,10 +144,9 @@ pub(crate) struct PythonRuntimeContextFullAccess {
 /// with both and the surface-share socket the parent's env names, the GPU
 /// surface works here — without any of them, GPU calls refuse by name.
 #[pyfunction]
-#[pyo3(signature = (configuration, link_data_access, runtime_id, node_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
+#[pyo3(signature = (link_data_access, runtime_id, node_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
 pub(crate) fn open_runtime_context_full_access_for_helper_process(
     python: Python<'_>,
-    configuration: &Bound<'_, PyAny>,
     link_data_access: &Bound<'_, PythonNodeLinkDataAccess>,
     runtime_id: String,
     node_id: String,
@@ -194,7 +191,6 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
         runtime_id,
         node_run_id: node_id,
         stream_and_node: StreamAndNodeTheHelperHosts::named_by_the_parent_at_spawn(),
-        configuration: python_object_to_json_value(configuration)?,
         link_input_data_reader: Py::new(
             python,
             PythonLinkInputDataReader {
@@ -236,8 +232,7 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
     })
 }
 
-/// The limited-access view of the same node — same configuration, same links,
-/// same pause state.
+/// The limited-access view of the same node — same links, same pause state.
 ///
 /// A helper builds both views once and hands each hook the one its phase
 /// calls for.
@@ -251,7 +246,6 @@ pub(crate) fn limited_access_view_of_runtime_context_for_helper_process(
         runtime_id: full_access_context.runtime_id.clone(),
         node_run_id: full_access_context.node_run_id.clone(),
         stream_and_node: full_access_context.stream_and_node.clone(),
-        configuration: full_access_context.configuration.clone(),
         link_input_data_reader: full_access_context.link_input_data_reader.clone_ref(python),
         link_output_data_writer: full_access_context
             .link_output_data_writer
@@ -333,11 +327,6 @@ pub(crate) fn note_pause_state_from_parent_on_runtime_context(
 
 #[pymethods]
 impl PythonRuntimeContextFullAccess {
-    #[getter]
-    fn config<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        configuration_as_python_dict(python, &self.configuration)
-    }
-
     /// Stream time now in nanoseconds, on the clock the node's stream runs on.
     #[getter]
     fn time(&self) -> u64 {
@@ -485,7 +474,6 @@ pub(crate) struct PythonRuntimeContextLimitedAccess {
     runtime_id: String,
     node_run_id: String,
     stream_and_node: StreamAndNodeTheHelperHosts,
-    configuration: serde_json::Value,
     link_input_data_reader: Py<PythonLinkInputDataReader>,
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
@@ -498,11 +486,6 @@ pub(crate) struct PythonRuntimeContextLimitedAccess {
 
 #[pymethods]
 impl PythonRuntimeContextLimitedAccess {
-    #[getter]
-    fn config<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        configuration_as_python_dict(python, &self.configuration)
-    }
-
     /// Stream time now in nanoseconds, on the clock the node's stream runs on.
     #[getter]
     fn time(&self) -> u64 {
@@ -597,14 +580,4 @@ impl PythonRuntimeContextLimitedAccess {
     fn report_ready(&self) {
         *self.not_ready_report.lock() = None;
     }
-}
-
-fn configuration_as_python_dict<'py>(
-    python: Python<'py>,
-    configuration: &serde_json::Value,
-) -> PyResult<Bound<'py, PyAny>> {
-    if configuration.is_null() {
-        return Ok(PyDict::new(python).into_any());
-    }
-    json_value_to_python_object(python, configuration)
 }

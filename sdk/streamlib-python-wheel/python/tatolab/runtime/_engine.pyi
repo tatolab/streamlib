@@ -21,7 +21,7 @@ conformance gate prints as its allowlist.
 """
 
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
@@ -262,7 +262,6 @@ def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLin
     """
 
 def open_runtime_context_full_access_for_helper_process(
-    configuration: Mapping[str, Any],
     link_data_access: _stream_protocols.NodeLinkDataAccess,
     runtime_id: str,
     node_id: str,
@@ -279,7 +278,7 @@ def open_runtime_context_full_access_for_helper_process(
 def limited_access_view_of_runtime_context_for_helper_process(
     full_access_context: _stream_protocols.RuntimeContextFullAccess,
 ) -> _stream_protocols.RuntimeContextLimitedAccess:
-    """The limited-access view of the same node: same configuration, links and pause state."""
+    """The limited-access view of the same node: same links and pause state."""
 
 def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool

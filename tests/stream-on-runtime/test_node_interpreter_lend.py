@@ -149,7 +149,7 @@ def test_an_unstamped_class_is_refused_by_name(
     )
 
     assert "lend_unstamped_nodes:NotANode" in refusal
-    assert "carries no `@node.process` declaration" in refusal
+    assert "carries no `@node` declaration" in refusal
 
 
 def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what_it_is(

@@ -15,7 +15,7 @@ The unit's `tatolabd` is started once, and `tatolab check --json --dir <project>
 for each project. A project fails when its check fails, or when its Python node declarations
 were not checked to their end. A finding in a module under a `tests/` folder is left out: a
 project's tests import what only its test environment holds, and no test ships. A declaration in a
-retired form, a `declaration_retired` warning, fails its project too: every in-tree node is typed.
+retired form is a `declaration_retired` error, so it fails its project as any error does.
 
 Exits 0 when every project passed, 1 when a project failed, and 2 when the run could not
 check every project: a venv that would not sync, or a runtime that did not answer.
@@ -52,7 +52,6 @@ FIRST_PARTY_DISTRIBUTION_NAME_PREFIX = "tatolab-"
 PYTHON_NODE_DECLARATIONS_CHECK = "python_node_declarations"
 """The check whose `not_checked` fails a project."""
 
-RETIRED_DECLARATION_FINDING_CODE = "declaration_retired"
 """The finding code of a node declared in a retired form."""
 
 DIRECTORY_NAMES_NEVER_READ = frozenset({".venv", "__pycache__", "node_modules", "target", "tests", "imports"})
@@ -155,9 +154,8 @@ def holds_python_of_its_own(project: InTreeProject) -> bool:
 
 
 def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> ProjectCheckOutcome:
-    """What `tatolab check --json` answered of `project`, judged: every error and every retired
-    declaration outside its tests fails it, as does a Python node declaration check that did not
-    run to its end."""
+    """What `tatolab check --json` answered of `project`, judged: every error outside its tests
+    fails it, as does a Python node declaration check that did not run to its end."""
     outcome = ProjectCheckOutcome(project)
     for finding in answer.get("findings", []):
         if DIRECTORY_NAME_OF_TESTS in PurePosixPath(finding.get("path", "")).parts[:-1]:
@@ -166,10 +164,6 @@ def judge_a_check_answer(project: InTreeProject, answer: dict[str, Any]) -> Proj
         if finding.get("severity") == "error":
             words = (finding.get("words") or "").replace("\n", "\n    ")
             outcome.failed_because.append(f"{place}: {finding.get('finding_code')}: {words}")
-        elif finding.get("finding_code") == RETIRED_DECLARATION_FINDING_CODE:
-            outcome.failed_because.append(
-                f"{place}: {RETIRED_DECLARATION_FINDING_CODE}: {finding.get('node_type') or '?'}"
-            )
     python_node_declaration_checks = [
         check for check in answer.get("checks", []) if check.get("check") == PYTHON_NODE_DECLARATIONS_CHECK
     ]

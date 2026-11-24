@@ -30,12 +30,12 @@ import pytest
 import tatolab.runtime
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
-from tatolab.stream._node_config_schema import json_schema_for_a_node_declaring_no_config
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_CONVERSION_STAMP,
     NODE_DECLARATION_PIN_GROUPS_STAMP,
 )
+from tatolab.stream._rust_function_node_declaration import NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP
 
 #: The directory holding the `tatolab/runtime/` this process imported.
 LEND_DIRECTORY = Path(tatolab.runtime.__file__).resolve().parent.parent.parent
@@ -198,7 +198,6 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                 "execution": {"mode": "reactive", "interval_ms": 0},
                 "scheduling_priority": "high",
                 "paced_by_real_time": False,
-                "config_schema": json_schema_for_a_node_declaring_no_config(),
                 "input_ports": [
                     {
                         "name": "audio_from_upstream",
@@ -260,13 +259,14 @@ def test_a_node_paced_by_real_time_is_described_as_one(project_directory: Path):
     assert live_capture["paced_by_real_time"] is True
 
 
-def test_the_bootstrap_spells_each_stamp_an_older_tatolab_stream_lacks_as_tatolab_stream_does():
+def test_the_bootstrap_spells_each_stamp_not_every_node_carries_as_tatolab_stream_does():
     assert dict(
-        node_interpreter_bootstrap.DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE
+        node_interpreter_bootstrap.DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_NOT_EVERY_NODE_CARRIES
     ) == {
         "category": NODE_DECLARATION_CATEGORY_STAMP,
         "conversion": NODE_DECLARATION_CONVERSION_STAMP,
         "pin_groups": NODE_DECLARATION_PIN_GROUPS_STAMP,
+        "config_schema": NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP,
     }
 
 
@@ -392,7 +392,7 @@ def test_an_unstamped_class_is_refused_naming_it(project_directory: Path):
     assert refused_import_paths_in(described_document(described)) == ["described_nodes:Unstamped"]
     assert (
         "cannot describe described_nodes:Unstamped: the class `Unstamped` carries no "
-        "`@node.process` declaration"
+        "`@node` declaration"
     ) in described.stderr
 
 

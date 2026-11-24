@@ -27,16 +27,14 @@ with its value.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import struct
 from typing import Any, Optional
 
 from tatolab.stream import NodeLinkDataAccess, log
-from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
 from tatolab.runtime._node_the_wheel_hosts import (
-    link_input_data_reader_of,
+    NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG,
     link_output_data_writer_of,
     stamp_the_ports_of_a_node_the_wheel_hosts,
 )
@@ -75,7 +73,6 @@ def the_node_class_a_promoted_function_node_runs_as(
 ) -> type:
     """A node class whose `process` calls `function_node`, compiled or as Python, once per run of its loop."""
     prepared = prepare_function_node_to_evaluate(function_node, import_path)
-    config_class: Optional[type] = getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     runner_class = type(
         f"FunctionNodeRunAsAStandaloneNode_{function_node.__name__}",
         (_FunctionNodeRunAsAStandaloneNode,),
@@ -90,7 +87,7 @@ def the_node_class_a_promoted_function_node_runs_as(
     declared = stamp_the_ports_of_a_node_the_wheel_hosts(
         runner_class, input_ports=prepared.input_ports, output_ports=prepared.output_ports
     )
-    setattr(declared, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
+    setattr(declared, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, True)
     setattr(declared, "__init__", _FunctionNodeRunAsAStandaloneNode.start_from_its_config)
     return declared
 
@@ -151,7 +148,7 @@ class _FunctionNodeRunAsAStandaloneNode:
         self._control_values_written = 0
         compiled_config_fields = _compiled_config_fields(prepared)
         called_through, config_values, compiled_config_value_indices = how_one_function_node_is_called(
-            prepared, self._node_id, _config_as_a_mapping(prepared, config), compiled_config_fields
+            prepared, self._node_id, _config_as_a_mapping(config), compiled_config_fields
         )
         self._compiled_config_values_handed_to_each_call = list(config_values)
         self._body_run_as_python = (
@@ -186,7 +183,7 @@ class _FunctionNodeRunAsAStandaloneNode:
     def configure(self, config: Any) -> None:
         """Call the node with `config` from the next run on, keeping its state."""
         prepared = self._prepared
-        config_as_a_mapping = _config_as_a_mapping(prepared, config)
+        config_as_a_mapping = _config_as_a_mapping(config)
         if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
             self._compiled_config_values_handed_to_each_call = config_values_of_one_function_node(
                 prepared, self._node_id, config_as_a_mapping
@@ -196,7 +193,6 @@ class _FunctionNodeRunAsAStandaloneNode:
 
     def process(self, ctx: Any) -> None:
         prepared = self._prepared
-        ports_carrying_records = _ports_carrying_records(prepared)
         ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
         value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
         pin_types_of_stored_values = _pin_types_of_the_stored_values_it_carries(prepared)
@@ -206,11 +202,6 @@ class _FunctionNodeRunAsAStandaloneNode:
                 self._input_values[input_index] = read_the_message_at_an_input_port_unread(
                     link_data_access=self._link_data_access, input_port=input_port
                 )
-                continue
-            if input_port in ports_carrying_records:
-                record = link_input_data_reader_of(ctx).read(input_port, families=["records"])
-                if record is not None:
-                    self._input_values[input_index] = record
                 continue
             value_type = value_type_by_input_port.get(input_port, "float")
             if input_port in pin_types_of_stored_values:
@@ -261,9 +252,6 @@ class _FunctionNodeRunAsAStandaloneNode:
                     output_port=output_port,
                     message=output_value,
                 )
-                continue
-            if output_port in ports_carrying_records:
-                link_output_data_writer_of(ctx).write(output_port, output_value, family="records")
                 continue
             if output_port in ports_carrying_a_named_value:
                 if not isinstance(output_value, bytes):
@@ -359,35 +347,17 @@ def _the_output_value_types_of(prepared: FunctionNodeReadyToEvaluate) -> "tuple[
     return tuple(each_output["value_type"] for each_output in prepared.function_signature["outputs"])
 
 
-def _ports_carrying_records(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":
-    if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
-        return frozenset()
-    return prepared.ports_carrying_records
-
-
 def _compiled_config_fields(prepared: FunctionNodeReadyToEvaluate) -> "tuple[str, ...]":
     if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
         return prepared.config_fields
     return ()
 
 
-def _config_fields(prepared: FunctionNodeReadyToEvaluate) -> "tuple[str, ...]":
-    if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
-        return prepared.config_fields
-    if prepared.config_class is None:
-        return ()
-    return tuple(field.name for field in dataclasses.fields(prepared.config_class))
-
-
-def _config_as_a_mapping(prepared: FunctionNodeReadyToEvaluate, config: Any) -> "dict[str, Any]":
+def _config_as_a_mapping(config: Any) -> "dict[str, Any]":
     if config is None:
         return {}
     if isinstance(config, dict):
         return config
-    config_fields = _config_fields(prepared)
-    missing_fields = [field for field in config_fields if not hasattr(config, field)]
-    if missing_fields:
-        raise FunctionNodeDoesNotCompile(
-            f"the config handed to a promoted function node has no {', '.join(missing_fields)}"
-        )
-    return {field: getattr(config, field) for field in config_fields}
+    raise FunctionNodeDoesNotCompile(
+        f"the config handed to a promoted function node is a {type(config).__name__}, not a dict"
+    )

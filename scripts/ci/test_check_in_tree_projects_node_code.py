@@ -118,17 +118,6 @@ class InTreeProjectsTest(unittest.TestCase):
 
 
 class JudgeACheckAnswerTest(unittest.TestCase):
-    def test_a_retired_declaration_fails_naming_its_node_type(self) -> None:
-        outcome = judge_a_check_answer(
-            A_PROJECT,
-            {
-                "verdict": "passed",
-                "checks": [python_node_declarations_run("passed")],
-                "findings": [finding("declaration_retired", "warning", node_type="Hum")],
-            },
-        )
-        self.assertEqual(outcome.failed_because, ["nodes/a.py:4: declaration_retired: Hum"])
-
     def test_an_error_finding_fails_with_its_code_and_words(self) -> None:
         outcome = judge_a_check_answer(
             A_PROJECT,
@@ -148,12 +137,14 @@ class JudgeACheckAnswerTest(unittest.TestCase):
                 "checks": [python_node_declarations_run("failed")],
                 "findings": [
                     finding("module_does_not_import", "error", path="tests/test_nodes.py"),
-                    finding("declaration_retired", "warning", path="tests/live/sink.py", node_type="Sink"),
-                    finding("declaration_retired", "warning", path="python/tests_of_mine.py", node_type="Kept"),
+                    finding("declaration_retired", "error", path="tests/live/sink.py", node_type="Sink"),
+                    finding("declaration_retired", "error", path="python/tests_of_mine.py", node_type="Kept"),
                 ],
             },
         )
-        self.assertEqual(outcome.failed_because, ["python/tests_of_mine.py:4: declaration_retired: Kept"])
+        self.assertEqual(
+            outcome.failed_because, ["python/tests_of_mine.py:4: declaration_retired: what was found"]
+        )
 
     def test_a_python_node_declaration_check_that_did_not_finish_fails(self) -> None:
         for state in ["not_checked", "a_state_added_later"]:

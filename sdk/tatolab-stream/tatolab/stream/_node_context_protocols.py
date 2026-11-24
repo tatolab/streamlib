@@ -455,11 +455,6 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
     """The runtime-context members the limited and the full context both carry."""
 
     @property
-    def config(self) -> dict[str, Any]:
-        """The node's configuration."""
-        ...
-
-    @property
     def time(self) -> int:
         """Stream time now in nanoseconds, on the clock the node's stream runs on.
 
