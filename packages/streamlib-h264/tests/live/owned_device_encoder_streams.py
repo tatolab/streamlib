@@ -53,7 +53,7 @@ def test_pattern_through_an_owned_device_encoder(
     encoder = stream_builder.add(
         H264Encoder,
         name=f"encoder_{stream_number}",
-        config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
+        input_values={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
     gateway = stream_builder.add(
         MoqGateway,

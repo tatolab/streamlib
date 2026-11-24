@@ -24,14 +24,16 @@ LINUX_X86_64_PLATFORM_TAG = "manylinux_2_28_x86_64"
 MACOS_ARM64_PLATFORM_TAG = "macosx_26_0_arm64"
 
 NODE_MODULE_SOURCE = '''
-from tatolab.stream import Image, Input, Output, node
+from typing import Annotated
+
+from tatolab.stream import Description, InputPin, OutputPin, Texture, node
 
 
 @node.meta(description="Makes frames out of nothing.\\n\\nA second paragraph.")
-@node.process
+@node
 class FrameMaker:
-    pattern = Input(Image, description="A picture to tile")
-    video = Output(Image, description="The frames it makes")
+    pattern: InputPin[Annotated[Texture, Description("A picture to tile")]]
+    video: OutputPin[Annotated[Texture, Description("The frames it makes")]]
 
     def process(self, ctx):
         pass
