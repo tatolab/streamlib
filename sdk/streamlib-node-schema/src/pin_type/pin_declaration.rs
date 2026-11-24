@@ -109,6 +109,18 @@ pub enum DeclaredPinType {
     },
 }
 
+impl DeclaredPinType {
+    /// The pin types it names: its one type, or each of the types it takes one of; none for
+    /// a pin of any type, or one typed by another port.
+    pub fn the_pin_types_it_names(&self) -> &[PinType] {
+        match self {
+            Self::Is { pin_type } => std::slice::from_ref(pin_type),
+            Self::OneOf { pin_types } => pin_types,
+            Self::Any | Self::SameAsInput { .. } | Self::SetByInput { .. } => &[],
+        }
+    }
+}
+
 /// How a pin's messages are read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(

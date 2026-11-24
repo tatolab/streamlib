@@ -26,7 +26,8 @@ const MEMBERS_OUTPUT_PORT: &str = "members";
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BundleTypeSettings {
-    #[description = "The bundle the node carries: one a module of the stream declares."]
+    #[description = "The bundle the node carries: one a node type of the stream declares."]
+    #[among_the_bundles_its_stream_declares]
     pub bundle_type: Option<PinType>,
 }
 

@@ -21,6 +21,7 @@ fn a_reading() -> PinType {
         default_value,
     };
     PinType::Bundle {
+        name: None,
         members: vec![
             member("level", PinType::Float { exact_size: None }, None),
             member("label", PinType::String {}, Some(json!("unnamed"))),
@@ -137,6 +138,7 @@ fn a_message_holding_no_bundle_is_dropped_and_counted() {
 /// A picture with the level metered off it and the sound recorded with it.
 fn a_metered_picture() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_bundle_member("picture", a_texture(), None),
             a_bundle_member("level", PinType::Float { exact_size: None }, None),

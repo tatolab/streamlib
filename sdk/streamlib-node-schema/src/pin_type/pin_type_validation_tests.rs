@@ -105,6 +105,7 @@ fn a_list_of_a_heavy_type_is_a_pin_type_and_of_a_trigger_or_tensor_is_refused_na
 fn a_bundle_with_a_heavy_member_is_a_pin_type_that_holds_no_stored_value() {
     for member_type in every_heavy_type() {
         let frame_with_metadata = PinType::Bundle {
+            name: None,
             members: vec![
                 a_member("frame", member_type.clone()),
                 a_member("label", PinType::String {}),
@@ -119,6 +120,7 @@ fn a_bundle_with_a_heavy_member_is_a_pin_type_that_holds_no_stored_value() {
         );
     }
     let small = PinType::Bundle {
+        name: None,
         members: vec![a_member("label", PinType::String {})],
     };
     assert!(!small.holds_a_heavy_member());
@@ -128,6 +130,7 @@ fn a_bundle_with_a_heavy_member_is_a_pin_type_that_holds_no_stored_value() {
 #[test]
 fn a_list_of_a_bundle_of_small_types_is_a_pin_type_and_of_a_bundle_holding_a_list_is_not() {
     let placement = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("x", PinType::Integer { exact_size: None }),
             a_member("opacity", PinType::Float { exact_size: None }),
@@ -135,6 +138,7 @@ fn a_list_of_a_bundle_of_small_types_is_a_pin_type_and_of_a_bundle_holding_a_lis
     };
     assert_eq!(a_list_of(placement).validate(), Ok(()));
     let holding_a_list = PinType::Bundle {
+        name: None,
         members: vec![a_member(
             "points",
             a_list_of(PinType::Float { exact_size: None }),
@@ -147,15 +151,18 @@ fn a_list_of_a_bundle_of_small_types_is_a_pin_type_and_of_a_bundle_holding_a_lis
 #[test]
 fn a_bundle_inside_a_bundle_is_refused_and_a_bundle_of_tensors_is_not() {
     let inner = PinType::Bundle {
+        name: None,
         members: vec![a_member("x", PinType::Float { exact_size: None })],
     };
     let refusal = PinType::Bundle {
+        name: None,
         members: vec![a_member("inner", inner)],
     }
     .validate()
     .unwrap_err();
     assert!(refusal.contains("`inner`"), "{refusal}");
     let tensors = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("boxes", PinType::Tensor {}),
             a_member("scores", PinType::Tensor {}),
@@ -181,6 +188,7 @@ fn a_menu_with_no_option_is_refused() {
 fn a_bundle_member_that_is_a_trigger_or_a_lone_tensor_is_refused_by_its_name() {
     for member_type in [PinType::Trigger {}, PinType::Tensor {}] {
         let refusal = PinType::Bundle {
+            name: None,
             members: vec![
                 a_member("opacity", PinType::Float { exact_size: None }),
                 a_member("frame", member_type.clone()),
@@ -202,6 +210,7 @@ fn a_bundle_member_that_is_a_trigger_or_a_lone_tensor_is_refused_by_its_name() {
 #[test]
 fn a_bundle_naming_a_member_twice_is_refused_by_that_name() {
     let named_twice = PinType::Bundle {
+        name: None,
         members: vec![
             a_member("gain", PinType::Float { exact_size: None }),
             a_member("pan", PinType::Float { exact_size: None }),

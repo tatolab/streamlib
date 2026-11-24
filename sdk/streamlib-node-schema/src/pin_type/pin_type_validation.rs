@@ -55,8 +55,8 @@ impl PinType {
                 exact_size.variant_name()
             )),
             Self::ListOf { element_type } => validate_a_list_element(element_type),
-            Self::Bundle { members } => validate_a_bundle(members),
-            Self::PinTypeChoice { among } => among.iter().try_for_each(PinType::validate),
+            Self::Bundle { members, .. } => validate_a_bundle(members),
+            Self::PinTypeChoice { among, .. } => among.iter().try_for_each(PinType::validate),
             Self::Menu { option_names } if option_names.is_empty() => {
                 Err("a Menu lists at least one option".to_owned())
             }
@@ -81,7 +81,7 @@ impl PinType {
     pub fn holds_a_heavy_member(&self) -> bool {
         match self {
             Self::ListOf { element_type } => element_type.is_a_heavy_type(),
-            Self::Bundle { members } => members
+            Self::Bundle { members, .. } => members
                 .iter()
                 .any(|member| member.member_type.is_a_heavy_type()),
             _ => false,
@@ -95,7 +95,7 @@ fn validate_a_list_element(element_type: &PinType) -> Result<(), String> {
             "a List of a List is not a pin type; its element is {element_type}"
         )),
         PinType::Integer { .. } => Ok(()),
-        PinType::Bundle { members }
+        PinType::Bundle { members, .. }
             if members
                 .iter()
                 .all(|member| member.member_type.is_a_small_type()) =>

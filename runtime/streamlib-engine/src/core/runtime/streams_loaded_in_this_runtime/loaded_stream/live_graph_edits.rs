@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -800,6 +801,7 @@ fn set_the_saved_value(
     member: Option<&str>,
     value: Option<serde_json::Value>,
 ) -> Result<SavedSetToPutBack> {
+    let node_types = Arc::clone(graph.node_types_this_stream_resolves());
     let node = graph
         .traversal_mut()
         .v(node_run_id)
@@ -829,7 +831,7 @@ fn set_the_saved_value(
         )));
     }
     if let Some(value) = &value {
-        refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
+        refuse_a_pin_value_a_process_node_cannot_read(&node_types, node, input, value)?;
     }
     graph.refuse_a_slot_count_leaving_out_a_linked_slot(node_run_id, input, value.as_ref())?;
     let node = graph

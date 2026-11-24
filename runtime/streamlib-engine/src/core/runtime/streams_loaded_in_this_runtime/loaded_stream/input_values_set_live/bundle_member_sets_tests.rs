@@ -60,6 +60,7 @@ pub(super) fn a_graph_resolving_a_bundle_reader() -> Graph {
         .with_input(a_typed_input(
             "reading",
             PinType::Bundle {
+                name: None,
                 members: vec![
                     a_member("level", float(), None),
                     a_member("label", PinType::String {}, None),
@@ -402,6 +403,7 @@ fn a_member_the_inputs_default_holds_may_be_taken_off_the_saved_bundle() {
         a_typed_input(
             "reading",
             PinType::Bundle {
+                name: None,
                 members: vec![
                     a_member("level", float(), None),
                     a_member("label", PinType::String {}, None),

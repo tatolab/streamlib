@@ -33,7 +33,7 @@ impl PinType {
     fn member_types(&self) -> impl Iterator<Item = &PinType> {
         let (element_type, members) = match self {
             Self::ListOf { element_type } => (Some(element_type.as_ref()), &[][..]),
-            Self::Bundle { members } => (None, members.as_slice()),
+            Self::Bundle { members, .. } => (None, members.as_slice()),
             _ => (None, &[][..]),
         };
         element_type
@@ -71,7 +71,7 @@ impl PinType {
             Self::ListOf { element_type } => {
                 Some(format!("elements of the {} type", label_of(element_type)))
             }
-            Self::Bundle { members } => members
+            Self::Bundle { members, .. } => members
                 .iter()
                 .find(|member| member.member_type.flows() == flows)
                 .map(|member| {
@@ -156,14 +156,9 @@ impl PinDeclaration {
     /// Why port `port_name` may not be declared so: it states a flow a type it may carry does
     /// not allow. `None` when every type it may carry allows its flow.
     pub fn refusal_of_its_flow(&self, port_name: &str) -> Option<String> {
-        let pin_types_it_may_carry: &[PinType] = match &self.pin_type {
-            DeclaredPinType::Is { pin_type } => std::slice::from_ref(pin_type),
-            DeclaredPinType::OneOf { pin_types } => pin_types,
-            DeclaredPinType::Any
-            | DeclaredPinType::SameAsInput { .. }
-            | DeclaredPinType::SetByInput { .. } => &[],
-        };
-        let (refusing_type, flows_it_allows) = pin_types_it_may_carry
+        let (refusing_type, flows_it_allows) = self
+            .pin_type
+            .the_pin_types_it_names()
             .iter()
             .map(|pin_type| (pin_type, pin_type.flows()))
             .find(|(_, flows)| !flows.contains(&self.flow))?;

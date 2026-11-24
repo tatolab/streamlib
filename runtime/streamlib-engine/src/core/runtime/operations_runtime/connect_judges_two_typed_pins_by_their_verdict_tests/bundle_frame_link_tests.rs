@@ -34,6 +34,7 @@ fn a_texture() -> PinType {
 /// A picture with the region of it that matters.
 fn a_framed_picture() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_member("picture", a_texture()),
             a_member("region", PinType::Rectangle {}),
@@ -71,6 +72,7 @@ fn register_the_bundle_frame_fixture_node_types() {
             vec![a_typed_port(
                 "reading",
                 PinType::Bundle {
+                    name: None,
                     members: vec![
                         a_member("level", float()),
                         a_member("label", PinType::String {}),

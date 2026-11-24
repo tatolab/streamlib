@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod codegen;
+mod field_attribute;
 mod grammar;
 mod node_config;
 mod node_settings;

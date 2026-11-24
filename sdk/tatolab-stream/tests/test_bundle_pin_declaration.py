@@ -8,7 +8,7 @@ its name."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import pytest
 
@@ -25,8 +25,10 @@ from tatolab.stream import (
     node,
 )
 from tatolab.stream._class_node_declaration import read_class_node_ports_and_members
+from tatolab.stream._contract_pin_types import PinType
 from tatolab.stream._function_node_declaration import NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
 from tatolab.stream._pin_declaration import NO_DEFAULT, read_pin_declaration
+from tatolab.stream._pin_type_choice import pin_type_in_words
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -97,8 +99,8 @@ def test_a_function_taking_and_returning_a_dataclass_has_one_bundle_input_and_on
 
     assert list(inputs) == ["tone"], "the dataclass is one input, not one per field"
     assert list(outputs) == ["result"], "the returned dataclass is one output"
-    assert the_one_pin_type(inputs["tone"]) == {"type": "bundle", "members": TONE_MEMBERS}
-    assert the_one_pin_type(outputs["result"]) == {"type": "bundle", "members": TONE_MEMBERS}
+    assert the_one_pin_type(inputs["tone"]) == {"type": "bundle", "name": "Tone", "members": TONE_MEMBERS}
+    assert the_one_pin_type(outputs["result"]) == {"type": "bundle", "name": "Tone", "members": TONE_MEMBERS}
     assert inputs["tone"]["family"] == {"family": "records"}
     assert inputs["tone"]["pin_default"] == {
         "frequency": 440.0,
@@ -125,10 +127,14 @@ def Retune(pitch: Pitch = Pitch(220.0)) -> Pitch:
     return pitch
 
 
-def test_two_dataclasses_with_the_same_members_are_one_pin_type() -> None:
-    assert the_one_pin_type(ports(Retune, NODE_DECLARATION_INPUT_PORTS_STAMP)["pitch"]) == (
-        the_one_pin_type(ports(Louder, NODE_DECLARATION_INPUT_PORTS_STAMP)["tone"])
-    ), "a bundle has no name of its own"
+def test_a_bundle_is_named_by_its_dataclass_and_two_with_the_same_members_differ_by_name() -> None:
+    pitch = the_one_pin_type(ports(Retune, NODE_DECLARATION_INPUT_PORTS_STAMP)["pitch"])
+    tone = the_one_pin_type(ports(Louder, NODE_DECLARATION_INPUT_PORTS_STAMP)["tone"])
+
+    assert (pitch["name"], tone["name"]) == ("Pitch", "Tone"), "each names its dataclass"
+    assert pitch["members"] == tone["members"], "the members alone are what a link compares"
+    words = pin_type_in_words(cast(PinType, pitch))
+    assert words.startswith("Bundle `Pitch` (frequency: "), words
 
 
 def test_a_list_of_a_dataclass_is_one_list_pin_whose_elements_are_bundles() -> None:
@@ -139,6 +145,7 @@ def test_a_list_of_a_dataclass_is_one_list_pin_whose_elements_are_bundles() -> N
         "type": "list_of",
         "element_type": {
             "type": "bundle",
+            "name": "Dot",
             "members": [
                 {"name": "x", "member_type": {"type": "float"}},
                 {"name": "y", "member_type": {"type": "float"}, "default_value": 0.0},
@@ -167,7 +174,7 @@ def test_a_class_node_reads_a_bundle_as_a_field_an_input_pin_and_an_output_pin()
         ("outgoing", "value"),
     ], "a field is read as a value, an `InputPin` message by message"
     for port in by_name.values():
-        assert the_one_pin_type(port) == {"type": "bundle", "members": TONE_MEMBERS}
+        assert the_one_pin_type(port) == {"type": "bundle", "name": "Tone", "members": TONE_MEMBERS}
     assert [member.bundle_class for member in members] == [Tone, Tone, Tone]
 
 

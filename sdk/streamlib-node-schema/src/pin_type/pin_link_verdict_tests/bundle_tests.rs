@@ -16,6 +16,7 @@ fn a_member(name: &str, member_type: PinType) -> BundleMember {
 
 fn a_bundle_of(members: &[(&str, PinType)]) -> PinType {
     PinType::Bundle {
+        name: None,
         members: members
             .iter()
             .map(|(name, member_type)| a_member(name, member_type.clone()))
@@ -38,6 +39,7 @@ fn a_placement() -> PinType {
 #[test]
 fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
     let bundle = |meaning: &str| PinType::Bundle {
+        name: None,
         members: vec![BundleMember {
             name: "pitch".to_owned(),
             member_type: float(),
@@ -72,6 +74,7 @@ fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
         }
     );
     let nested = |meaning: &str| PinType::Bundle {
+        name: None,
         members: vec![BundleMember {
             name: "voice".to_owned(),
             member_type: bundle(meaning),
@@ -87,6 +90,7 @@ fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
         }
     );
     let renamed = PinType::Bundle {
+        name: None,
         members: vec![BundleMember {
             name: "gain".to_owned(),
             member_type: float(),
@@ -114,9 +118,11 @@ fn bundles_holding_the_same_members_in_another_order_connect_member_by_name() {
         default_value: None,
     };
     let output = PinType::Bundle {
+        name: None,
         members: vec![member("pitch", "frequency"), member("gain", "decibels")],
     };
     let input = PinType::Bundle {
+        name: None,
         members: vec![member("gain", "decibels"), member("pitch", "note")],
     };
     assert_eq!(
@@ -131,6 +137,7 @@ fn bundles_holding_the_same_members_in_another_order_connect_member_by_name() {
         }
     );
     let with_another_member = PinType::Bundle {
+        name: None,
         members: vec![member("gain", "decibels"), member("pan", "position")],
     };
     assert!(matches!(
@@ -144,6 +151,7 @@ fn bundles_holding_the_same_members_in_another_order_connect_member_by_name() {
 #[test]
 fn a_bundle_naming_a_member_twice_does_not_connect_to_one_naming_it_once() {
     let bundle_of = |names: &[&str]| PinType::Bundle {
+        name: None,
         members: names
             .iter()
             .map(|name| BundleMember {
@@ -207,7 +215,7 @@ fn a_bundle_output_connects_to_an_input_asking_for_fewer_members() {
         (&mut output_meaning_y, "height"),
         (&mut input_meaning_y, "depth"),
     ] {
-        let PinType::Bundle { members } = bundle else {
+        let PinType::Bundle { members, .. } = bundle else {
             unreachable!("a bundle");
         };
         for member in members.iter_mut().filter(|member| member.name == "y") {
@@ -259,4 +267,37 @@ fn an_output_naming_an_asked_member_twice_is_refused_by_that_name() {
         words.ends_with("the input asks for member `x`, which the output names more than once"),
         "{words}"
     );
+}
+
+/// `bundle` named `name`.
+fn named(name: &str, bundle: PinType) -> PinType {
+    let PinType::Bundle { members, .. } = bundle else {
+        unreachable!("only a bundle is named")
+    };
+    PinType::Bundle {
+        name: Some(name.to_owned()),
+        members,
+    }
+}
+
+/// A bundle's name never decides a link: bundles of the same members connect whatever each is
+/// named, or when one names none, and so do Lists of them.
+///
+/// Mental-revert: comparing bundles whole refuses a `Pitch` output into a `Tone` input.
+#[test]
+fn bundles_of_the_same_members_connect_whatever_each_is_named() {
+    let pitch = named("Pitch", a_placement());
+    let tone = named("Tone", a_placement());
+    for (output, input) in [
+        (pitch.clone(), tone.clone()),
+        (a_list_of(pitch.clone()), a_list_of(tone)),
+        (a_placement(), pitch.clone()),
+        (pitch, a_placement()),
+    ] {
+        assert_eq!(
+            the_verdict_between(&output, &input).outcome,
+            PinLinkOutcome::Connects,
+            "{output} into {input}"
+        );
+    }
 }

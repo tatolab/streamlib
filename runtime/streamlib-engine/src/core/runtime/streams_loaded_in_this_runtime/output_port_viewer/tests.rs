@@ -248,6 +248,7 @@ fn a_viewer_of_a_bundle_holding_a_texture_is_refused_naming_the_member() {
 
     let camera = ARunningCameraWithNoLinks::load();
     let framed = PinType::Bundle {
+        name: None,
         members: vec![
             BundleMember {
                 name: "picture".to_owned(),

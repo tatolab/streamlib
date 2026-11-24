@@ -32,6 +32,7 @@ fn a_member(name: &str, member_type: PinType) -> BundleMember {
 /// A reading: a Float `level` and a String `label`.
 fn a_reading() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![
             a_member("level", float()),
             a_member("label", PinType::String {}),
@@ -68,6 +69,7 @@ fn register_the_bundle_fixture_node_types() {
             vec![a_typed_port(
                 "reading",
                 PinType::Bundle {
+                    name: None,
                     members: vec![
                         a_member("level", float()),
                         a_member("frame", PinType::Tensor {}),
@@ -93,6 +95,7 @@ fn a_texture() -> PinType {
 /// A picture with the level metered off it: a Texture beside a Float.
 fn a_metered_picture() -> PinType {
     PinType::Bundle {
+        name: None,
         members: vec![a_member("picture", a_texture()), a_member("level", float())],
     }
 }

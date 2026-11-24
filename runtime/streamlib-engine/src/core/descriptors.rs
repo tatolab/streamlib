@@ -13,7 +13,8 @@ pub use streamlib_node_schema::descriptors::{
     CodeExamples, NodeDescriptor, NodeRuntime, PortDescriptor,
 };
 pub use streamlib_node_schema::node_settings::{
-    NodeSettings, SettingChosenFromOptions, SettingPinType, the_default_of_a_setting,
+    NodeSettings, SettingChoosingAPinType, SettingChosenFromOptions, SettingPinType,
+    the_choice_among_the_bundles_its_stream_declares, the_default_of_a_setting,
     the_input_of_a_setting, the_menu_of_a_setting,
 };
 pub use streamlib_node_schema::pin_type::{
@@ -22,11 +23,11 @@ pub use streamlib_node_schema::pin_type::{
     PinAnnotations, PinConversion, PinConversionOutputPick, PinConversionOutputPicked,
     PinConversionSavedValueCast, PinDeclaration, PinFlow, PinLinkEnd, PinLinkEndNamed,
     PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinLinkWarning,
-    PinNumberRange, PinProjectAssetAnnotation, PinType, PinValueNotTaken, ProjectAssetMedia,
-    ResolvedPin, SavedValueNotCast, SavedValueRetyped, SettingReadTime, TexturePixelFormat,
-    VectorComponentCount, WhyASavedValueTakesTheDefault, an_input_takes_a_wire, built_in_pin_type,
-    pin_link_verdict, the_integer_a_float_is_cast_to, the_number_cast, the_saved_value_retyped,
-    the_value_held_within_the_range,
+    PinNumberRange, PinProjectAssetAnnotation, PinType, PinTypesAChoiceTakes, PinValueNotTaken,
+    ProjectAssetMedia, ResolvedPin, SavedValueNotCast, SavedValueRetyped, SettingReadTime,
+    TexturePixelFormat, VectorComponentCount, WhyASavedValueTakesTheDefault, an_input_takes_a_wire,
+    built_in_pin_type, pin_link_verdict, the_integer_a_float_is_cast_to, the_number_cast,
+    the_saved_value_retyped, the_value_held_within_the_range,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

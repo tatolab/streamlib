@@ -151,7 +151,7 @@ class BreakBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     bundle_type: Annotated[
         PinTypeChoice | None,
         SettingOnly(),
-        Description("The bundle the node carries: one a module of the stream declares."),
+        Description("The bundle the node carries: one a node type of the stream declares."),
     ] = None
 
     members: OutputPin[
@@ -308,7 +308,7 @@ class MakeBundle(BuiltInNode[InputValuesOfATypedBuiltInNode]):
     bundle_type: Annotated[
         PinTypeChoice | None,
         SettingOnly(),
-        Description("The bundle the node carries: one a module of the stream declares."),
+        Description("The bundle the node carries: one a node type of the stream declares."),
     ] = None
 
     bundle: OutputPin[

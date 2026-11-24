@@ -194,7 +194,7 @@ impl MemberPutAtTheRead {
         newest: &Map<String, Value>,
         set_on_the_input: Option<&Map<String, Value>>,
     ) -> Map<String, Value> {
-        let PinType::Bundle { members } = &self.bundle else {
+        let PinType::Bundle { members, .. } = &self.bundle else {
             return newest.clone();
         };
         let mut whole: Map<String, Value> = set_on_the_input
@@ -221,7 +221,7 @@ impl MemberPutAtTheRead {
         small_members: &Map<String, Value>,
         newest: &NewestOfEachMemberPutAtTheRead,
     ) -> bool {
-        let PinType::Bundle { members } = &self.bundle else {
+        let PinType::Bundle { members, .. } = &self.bundle else {
             return false;
         };
         members.iter().any(|member| {
