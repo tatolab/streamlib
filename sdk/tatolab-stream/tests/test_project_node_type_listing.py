@@ -342,7 +342,7 @@ def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_k
     if meta_is_written == "below_the_kind_decorator":
         decorators.reverse()
     module_source = "\n".join(
-        ["from tatolab.stream import Texture, InputPin, Texture, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
+        ["from tatolab.stream import InputPin, Texture, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
     )
 
     read = read_node_types_and_graph_generators_from_module_sources(

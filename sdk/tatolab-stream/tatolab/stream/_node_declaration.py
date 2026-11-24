@@ -163,7 +163,7 @@ class AudioWindowContract:
         if dtype not in _AUDIO_WINDOW_DTYPES:
             raise ValueError(
                 f"AudioWindowContract field 'dtype' is {dtype!r} — must be one of "
-                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two a Audio carries"
+                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two an Audio block carries"
             )
 
         if resolved_hop > window_size:

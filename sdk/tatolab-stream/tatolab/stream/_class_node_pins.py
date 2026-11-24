@@ -52,8 +52,9 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
     its type's default.
 
     `read()` gives the next value waiting, or `None`: a `Texture`, a block of `Audio`, a
-    `Tensor`, a unit of `EncodedVideo` or `EncodedAudio`, a Trigger's fire as `True`, and a value or a named type in its Python form. Each read type names its
-    pin type as `pin_type`, so a read of a pin of several types narrows by it.
+    `Tensor`, a unit of `EncodedVideo` or `EncodedAudio`, a Trigger's fire as `True`, and a
+    value or a named type in its Python form. Each read type names its pin type as `pin_type`,
+    so a read of a pin of several types narrows by it.
     """
 
     __slots__ = ()
@@ -64,6 +65,10 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
     def read(self: InputPin[Audio]) -> Audio | None: ...
     @overload
     def read(self: InputPin[Tensor]) -> Tensor | None: ...
+    @overload
+    def read(self: InputPin[EncodedVideo]) -> EncodedVideo | None: ...
+    @overload
+    def read(self: InputPin[EncodedAudio]) -> EncodedAudio | None: ...
     @overload
     def read(self: InputPin[EncodedVideo | EncodedAudio]) -> EncodedVideo | EncodedAudio | None: ...
     @overload
@@ -85,7 +90,13 @@ class InputPin(_ClassNodePin, Generic[PinTypeTheInputReads]):
     @overload
     def read_message(self: InputPin[Tensor]) -> Message[Tensor] | None: ...
     @overload
-    def read_message(self: InputPin[EncodedVideo | EncodedAudio]) -> Message[EncodedVideo | EncodedAudio] | None: ...
+    def read_message(self: InputPin[EncodedVideo]) -> Message[EncodedVideo] | None: ...
+    @overload
+    def read_message(self: InputPin[EncodedAudio]) -> Message[EncodedAudio] | None: ...
+    @overload
+    def read_message(
+        self: InputPin[EncodedVideo | EncodedAudio],
+    ) -> Message[EncodedVideo | EncodedAudio] | None: ...
     @overload
     def read_message(self: InputPin[Trigger]) -> Message[Literal[True]] | None: ...
     @overload

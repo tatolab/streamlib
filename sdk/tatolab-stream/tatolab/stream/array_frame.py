@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The frame an Array port's read returns: each named attribute a borrowed DLPack tensor.
+"""The `Tensor` a Tensor pin's read returns: each named attribute a borrowed DLPack tensor.
 
 Built from the message's Array descriptor and the attribute table its payload
 starts with. A CPU attribute borrows the sample it arrived in; a GPU attribute
@@ -24,7 +24,7 @@ __all__ = ["Tensor", "TensorGpuAttribute"]
 
 @dataclass(frozen=True, init=False)
 class TensorGpuAttribute(ClaimedSurfacePixelAccess):
-    """One GPU-resident attribute of an Array frame: a claimed tensor surface."""
+    """One GPU-resident attribute of a `Tensor`: a claimed tensor surface."""
 
     surface_id: str
     dtype: str
@@ -39,7 +39,7 @@ TensorAttribute = Union["TensorCpuAttribute", TensorGpuAttribute]
 
 
 class Tensor(Mapping[str, TensorAttribute]):
-    """An Array frame, as a Tensor input pin's `read()` returns it: name to tensor.
+    """A Tensor, as a Tensor input pin's `read()` returns it: name to tensor.
 
     Each value speaks `__dlpack__` and states its `dtype` and `shape`, so
     `torch.from_dlpack(frame["boxes"])` reads it in place.
@@ -48,7 +48,7 @@ class Tensor(Mapping[str, TensorAttribute]):
     __slots__ = ("_attributes_by_name", "_timestamp_ns")
 
     pin_type: ClassVar[Literal["tensor"]] = "tensor"
-    """The pin type an Array frame is the read of."""
+    """The pin type a Tensor is the read of."""
 
     def __init__(
         self, attributes: "Mapping[str, TensorAttribute]", timestamp_ns: int

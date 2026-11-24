@@ -5,10 +5,10 @@
 
 Such a bundle travels as one Bundle frame: its small members in the frame's one Records row, and
 each Texture by the pool slot it lives in. The native read hands back each member by name, a
-small member its stored JSON form and a Texture the `Texture` it is, and the pin builds the
+small member its stored JSON form and a Texture as it was read, and the pin builds the
 frozen dataclass the bundle is written as from them. A write splits the dataclass the node gives
-back into its small members' stored forms and its Textures, each a `Texture` the node read
-or a texture it acquired from a pool.
+back into its small members' stored forms and its Textures, each a `Texture` the node read or a
+texture it acquired from a pool.
 """
 
 from __future__ import annotations
@@ -60,7 +60,8 @@ def the_small_members_and_textures_of(
     stored JSON forms by name and its Textures by name.
 
     Refused naming what `value` is when it is no dataclass of exactly the bundle's members, and
-    naming the member when a Texture is no `Texture` or texture the node holds.
+    naming the member when a Texture member is neither a `Texture` the node read nor a texture it
+    holds.
     """
     member_names = [member["name"] for member in pin_type["members"]]
     if not dataclasses.is_dataclass(value) or isinstance(value, type):
@@ -86,7 +87,7 @@ def the_small_members_and_textures_of(
             )
         elif getattr(held, "surface_id", None) is None:
             raise TypeError(
-                f"{what_the_member_is} is a Texture, a `Texture` this node read or a texture "
+                f"{what_the_member_is} is a Texture: a `Texture` this node read or a texture "
                 f"it acquired from a pool, and was given {type(held).__name__}"
             )
         else:

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The frame an Image port's read returns: a borrowed GPU surface with its size, format and colour.
+"""The `Texture` a Texture pin's read returns: a borrowed GPU surface with its size, format, colour.
 
 Built from the message's Image descriptor. It holds its
 surface against producer reuse while it lives and speaks `__dlpack__`, with
@@ -25,7 +25,7 @@ __all__ = ["Texture", "TextureToWrite"]
 
 @dataclass(frozen=True, init=False)
 class Texture(ClaimedSurfacePixelAccess):
-    """An Image frame, as a Texture input pin's `read()` returns it.
+    """A Texture, as a Texture input pin's `read()` returns it.
 
     `surface_id` names the pooled GPU surface, `format` is its texture format's
     wire name such as `rgba16_float`, and `colour` its H.273 description.
@@ -33,7 +33,7 @@ class Texture(ClaimedSurfacePixelAccess):
     """
 
     pin_type: ClassVar[Literal["texture"]] = "texture"
-    """The pin type an Image frame is the read of."""
+    """The pin type a Texture is the read of."""
 
     surface_id: str
     width: int
@@ -64,7 +64,7 @@ class Texture(ClaimedSurfacePixelAccess):
 
 @dataclass(frozen=True)
 class TextureToWrite:
-    """An Image frame a node publishes from a texture it acquired from a pool.
+    """A Texture a node publishes from a texture it acquired from a pool.
 
     A Texture output pin's `write(frame_to_write)` publishes the texture's
     slot with this extent, format and colour; the write's own `timestamp_ns`

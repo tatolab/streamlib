@@ -119,6 +119,14 @@ RETIRED_IMPORTS: Final = (
     ),
     RetiredImport(name="ArrayFrame", replaced_by="`Tensor`, the arrays a Tensor pin reads"),
     RetiredImport(
+        name="ArrayFrameCpuAttribute",
+        replaced_by="`TensorCpuAttribute`, one CPU attribute of a Tensor a read returned",
+    ),
+    RetiredImport(
+        name="ArrayFrameGpuAttribute",
+        replaced_by="`TensorGpuAttribute`, one GPU attribute of a Tensor a read returned",
+    ),
+    RetiredImport(
         name="ProjectAssetUuid",
         replaced_by='a pin typed `Asset`, narrowed by `Annotated[Asset, AssetMedia("image")]`',
     ),
