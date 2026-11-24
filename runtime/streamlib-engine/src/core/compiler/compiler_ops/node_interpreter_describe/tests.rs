@@ -73,6 +73,7 @@ impl StubNodeInterpreter {
             the_stream_the_describe_belongs_to,
             &|| false,
         )
+        .and_then(NodeTypesOneDescribeAnswered::every_one_described)
     }
 
     fn refusal_of(&self, import_paths: &[&str]) -> (Vec<NodeClassImportPath>, String) {
