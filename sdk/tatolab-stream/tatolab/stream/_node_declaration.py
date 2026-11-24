@@ -8,8 +8,7 @@ a working node. `@node.process` validates the declaration and stamps it on the c
 `__tatolab_node_*__` attributes; it registers nothing. The runtime reads exactly
 that set when a stream naming the class loads, so the set is the contract between
 this module and the runtime's reader, and the two move together.
-Ports are declared as `Input` and `Output` class attributes, one family each,
-and accessed at run time through `ctx.inputs` / `ctx.outputs`.
+Ports are declared as `Input` and `Output` class attributes, one family each.
 
 A node is named by its class's import path, derived from `__module__` and
 `__qualname__` by the runtime. Identity is never authored here.

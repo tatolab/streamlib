@@ -36,11 +36,11 @@ thread_local! {
         RefCell<Option<Py<PythonGpuContextLimitedAccess>>> = const { RefCell::new(None) };
 }
 
-/// Opens the offer for one `from_bytes` call and withdraws it on drop, whether
-/// it returned or raised.
+/// Opens the offer for one family type's construction and withdraws it on
+/// drop, whether it returned or raised.
 struct TypedReadGpuAccessOffer {
-    /// Restored rather than cleared: a target whose `from_bytes` reads its own
-    /// input ports would otherwise leave the outer read's offer withdrawn.
+    /// Restored rather than cleared: a construction that reads input ports of
+    /// its own would otherwise leave the outer read's offer withdrawn.
     offer_this_read_displaced: Option<Py<PythonGpuContextLimitedAccess>>,
 }
 

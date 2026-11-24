@@ -124,7 +124,7 @@ fn python_writes_to_a_lent_output_are_refused_naming_the_port() {
         let _capsule = open_module_host_table(&context, &[SOURCE_OUTPUT_PORT], &[]).unwrap();
 
         let refusal = context
-            .getattr("outputs")
+            .getattr("_link_output_data_writer")
             .unwrap()
             .call_method1(
                 "write",

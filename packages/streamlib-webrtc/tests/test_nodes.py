@@ -16,6 +16,7 @@ from played_media_stand_ins import (
     MONO_OPUS_IDENTIFICATION_HEADER_HEX,
     OPUS_PACKET,
 )
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
 from tatolab.runtime._node_hosting import class_node_members_of
@@ -177,8 +178,8 @@ class PublisherWiredToEncoders:
         pins = bind_the_pins_of_a_class_node(
             members,
             link_data_access=tracks_input,
-            inputs=self.context._link_input_data_reader,
-            outputs=self.context._link_output_data_writer,
+            inputs=link_input_data_reader_of(self.context),
+            outputs=link_output_data_writer_of(self.context),
             node_id="node-under-test",
         )
         self.publisher = construct_class_node(WhipPublisher, field_values=config, pins=pins)
@@ -198,7 +199,7 @@ class PublisherWiredToEncoders:
         timestamp_ns: int = 0,
         starts_group: bool = True,
     ) -> None:
-        self.encoder_context._link_output_data_writer.write(
+        link_output_data_writer_of(self.encoder_context).write(
             encoder_output_port, payload, timestamp_ns, starts_group, family="packets"
         )
         self.publisher.process(
@@ -589,7 +590,7 @@ def test_a_started_player_lends_both_outputs_so_python_cannot_write_them(
     try:
         for output_port in (ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT):
             with pytest.raises(Exception, match=output_port):
-                context._link_output_data_writer.write(output_port, b"from python")
+                link_output_data_writer_of(context).write(output_port, b"from python")
     finally:
         player.stop(context)
 

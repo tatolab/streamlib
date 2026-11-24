@@ -18,6 +18,7 @@ import pytest
 from helper_process_link_wiring import wire_one_link
 from parent_stream_facts_stand_in import ParentHoldingStreamFacts
 from tatolab.opus import OpusDecoder, OpusEncoder
+from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime._class_node_fields import ClassNodeFields
 from tatolab.runtime._node_hosting import (
@@ -143,7 +144,7 @@ def an_opus_node_on_its_links(
     fields = ClassNodeFields(
         members,
         link_data_access=links,
-        inputs=ctx._link_input_data_reader,
+        inputs=link_input_data_reader_of(ctx),
         node_id=node_class.__name__,
         stored_input_values=input_values,
     )
@@ -152,8 +153,8 @@ def an_opus_node_on_its_links(
         members,
         fields,
         link_data_access=links,
-        inputs=ctx._link_input_data_reader,
-        outputs=ctx._link_output_data_writer,
+        inputs=link_input_data_reader_of(ctx),
+        outputs=link_output_data_writer_of(ctx),
         node_id=node_class.__name__,
     )
 
@@ -267,7 +268,7 @@ class OpusRoundTripOnWiredLinks:
         )
 
     def send(self, window: PlanarWindowToSend) -> None:
-        self.source_context._link_output_data_writer.write_channels_block(
+        link_output_data_writer_of(self.source_context).write_channels_block(
             "audio",
             window.planar_samples,
             start_sample=window.start_sample,
@@ -284,7 +285,7 @@ class OpusRoundTripOnWiredLinks:
     def decoded_blocks(self) -> "list[DecodedBlock]":
         blocks = []
         while (
-            block := self.sink_context._link_input_data_reader.read("audio", families=["channels"])
+            block := link_input_data_reader_of(self.sink_context).read("audio", families=["channels"])
         ) is not None:
             blocks.append(decoded_block_of(block))
         return blocks

@@ -36,9 +36,9 @@ classifiers = [
 [project.optional-dependencies]
 # numpy, torch and mlx are test-and-types dependencies, not runtime ones — the
 # wheel itself never imports any of them; the exchange surface hands frames to
-# whichever consumer the user installed. pydantic is the same: `read(port,
-# into=T)` constructs whatever target it is handed and names no library, so
-# pydantic is here to prove that a model is one of them.
+# whichever consumer the user installed. pydantic is the same: a node's config
+# is constructed into whatever class it names, and pydantic is here to prove
+# that a model is one of them.
 dev = [
     "pytest>=7.0",
     "numpy>=2.1",

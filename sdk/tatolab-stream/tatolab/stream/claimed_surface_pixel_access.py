@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The tensor protocol a cast type composes to reach its own pixels.
+"""The tensor protocol a frame type composes to reach its own pixels.
 
 The frame a Texture or Tensor input pin's read hands back is the tensor-protocol
 producer: it composes `ClaimedSurfacePixelAccess`, so `torch.from_dlpack(frame)`

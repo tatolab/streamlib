@@ -745,6 +745,35 @@ def test_a_promoted_stateful_function_node_keeps_its_state_through_a_live_config
     )
 
 
+@node
+def passes_its_process_and_setup_inputs_on(process: float = 0.0, setup: float = 0.0) -> float:
+    return process + setup
+
+
+def test_a_promoted_function_node_with_ports_named_like_runner_members_runs():
+    """Its ports are stamped by name, never set on the class, so a port named `process` or
+    `setup` leaves the runner's own members as they are."""
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner = _constructed_with_its_ports_declared(
+        the_node_class_a_promoted_function_node_runs_as(
+            passes_its_process_and_setup_inputs_on,
+            f"{__name__}:passes_its_process_and_setup_inputs_on",
+            "passes-1",
+            data_plane,
+        ),
+        None,
+        data_plane,
+    )
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["process", "setup"])
+    ctx = _ContextOfOneProcess()
+
+    control_values.write_control_value("process", 2.0)
+    control_values.write_control_value("setup", 0.5)
+    runner.process(ctx)
+
+    assert ctx._link_output_data_writer.blocks_written == [("result", [[2.5]], 0, 0)]
+
+
 class _OutputsRecordingEachWrite(_OutputsRecordingEachControlValueWritten):
     """The output writer recording each Channels block, and each Records write by its port."""
 
