@@ -217,6 +217,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::the_core_nodes_project_directory_this_runtime_carries`].
     fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf>;
 
+    /// [`Runner::the_core_project_history_directory`].
+    fn the_core_project_history_directory(&self) -> Option<PathBuf>;
+
     /// [`Runner::record_first_party_package_moves_in`].
     fn record_first_party_package_moves_in(
         &self,
@@ -457,6 +460,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf> {
         Runner::the_core_nodes_project_directory_this_runtime_carries(self)
+    }
+
+    fn the_core_project_history_directory(&self) -> Option<PathBuf> {
+        Runner::the_core_project_history_directory(self)
     }
 
     fn record_first_party_package_moves_in(

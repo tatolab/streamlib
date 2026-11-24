@@ -151,6 +151,9 @@ impl Runner {
                     "the runtime unit's uv",
                 ),
                 extension_code_checkers: Default::default(),
+                core_project_history_directory: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
+                    "the core project's history directory",
+                ),
                 created_project_first_commit: OnceLock::new(),
                 project_history_recording_first_party_package_moves: Mutex::new(None),
                 shared_native_services:

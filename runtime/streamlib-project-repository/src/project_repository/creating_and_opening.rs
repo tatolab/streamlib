@@ -111,6 +111,18 @@ impl ProjectRepository {
 
     /// Open the project in `project_directory`, its assets read from their sidecars.
     pub fn open(project_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
+        Self::open_with_its_history_in(
+            project_directory,
+            &project_directory.join(PROJECT_HISTORY_DIRECTORY),
+        )
+    }
+
+    /// Open the project in `project_directory` as [`Self::open`] does, its history kept in
+    /// `history_directory` rather than in the project, so opening writes nothing into it.
+    pub fn open_with_its_history_in(
+        project_directory: &Path,
+        history_directory: &Path,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
         refuse_a_relative_project_directory(project_directory)?;
         let project_file = TatolabProjectFile::read_from_project_directory(project_directory)?;
         if project_file.created_with_runtime.as_deref() != Some(THIS_RUNTIME_VERSION) {
@@ -122,7 +134,7 @@ impl ProjectRepository {
             );
         }
         let assets_by_uuid = read_every_asset_sidecar(project_directory)?;
-        let history = ProjectHistoryRepository::open_for_project(project_directory)?;
+        let history = ProjectHistoryRepository::open_in(history_directory)?;
         let commit_of_each_idempotency_key = the_commit_of_each_idempotency_key_in(&history)?;
         Ok(Self {
             project_directory: project_directory.to_path_buf(),

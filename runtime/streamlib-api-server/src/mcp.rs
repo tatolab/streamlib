@@ -123,7 +123,10 @@ impl LocalApiMcpServerHandler {
             .reading_the_core_project_the_runtime_carries_at(Arc::new(move || {
                 runtime_carrying_the_core_nodes_project
                     .the_core_nodes_project_directory_this_runtime_carries()
-            })),
+            }))
+            .keeping_the_core_projects_history_in(
+                operations_on_the_loaded_streams.the_core_project_history_directory(),
+            ),
         );
         operations_on_the_loaded_streams.record_first_party_package_moves_in(Arc::new(
             crate::first_party_package_moves_recorded_in_the_open_projects::FirstPartyPackageMovesRecordedInTheOpenProjects {
