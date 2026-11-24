@@ -224,7 +224,7 @@ fn a_config_update_on_the_source_of_a_link_kept_despite_its_formats_is_taken() {
         refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &source,
-            &serde_json::json!({ "label": "camera" })
+            serde_json::json!({ "label": "camera" })
                 .as_object()
                 .expect("an object of input values"),
         )

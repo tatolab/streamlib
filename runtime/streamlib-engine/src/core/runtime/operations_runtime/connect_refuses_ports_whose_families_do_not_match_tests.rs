@@ -320,7 +320,7 @@ fn names_from_config_satisfy_requires_and_a_live_update_dropping_one_is_refused(
         refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &engine,
-            &json!({ "channel_names": ["rpm"] })
+            json!({ "channel_names": ["rpm"] })
                 .as_object()
                 .expect("an object of input values"),
         )
@@ -328,7 +328,7 @@ fn names_from_config_satisfy_requires_and_a_live_update_dropping_one_is_refused(
         let refusal = refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &engine,
-            &json!({ "channel_names": ["torque"] })
+            json!({ "channel_names": ["torque"] })
                 .as_object()
                 .expect("an object of input values"),
         )
@@ -429,7 +429,7 @@ fn a_live_update_is_checked_against_the_inputs_a_passer_carries_it_on_to() {
         let refusal = refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
             graph,
             &engine,
-            &json!({ "channel_names": ["torque"] })
+            json!({ "channel_names": ["torque"] })
                 .as_object()
                 .expect("an object of input values"),
         )

@@ -250,7 +250,7 @@ fn a_config_update_choosing_a_format_a_wired_link_refuses_is_refused() {
             let refused = refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
                 graph,
                 &fixture.convert_node,
-                &json!({ "format": "bgra8_unorm" })
+                json!({ "format": "bgra8_unorm" })
                     .as_object()
                     .expect("an object of input values"),
             )
@@ -261,7 +261,7 @@ fn a_config_update_choosing_a_format_a_wired_link_refuses_is_refused() {
             refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
                 graph,
                 &fixture.convert_node,
-                &json!({ "format": "rgba8_unorm" })
+                json!({ "format": "rgba8_unorm" })
                     .as_object()
                     .expect("an object of input values"),
             )
