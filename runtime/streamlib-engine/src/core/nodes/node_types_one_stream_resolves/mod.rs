@@ -475,9 +475,7 @@ impl NodeTypesOneStreamResolves {
                 })
             })
             .map(|mut ports| {
-                for input in &mut ports.inputs {
-                    self.list_the_bundles_its_node_types_declare_on(input);
-                }
+                self.list_the_bundles_its_node_types_declare_on(&mut ports.inputs);
                 ports
             })
     }
@@ -957,6 +955,8 @@ impl NodeTypesOneStreamResolves {
 }
 
 mod bundles_its_node_types_declare;
+
+pub(crate) use bundles_its_node_types_declare::chooses_among_the_bundles_its_stream_declares;
 
 #[cfg(test)]
 mod tests;

@@ -268,3 +268,36 @@ fn an_output_naming_an_asked_member_twice_is_refused_by_that_name() {
         "{words}"
     );
 }
+
+/// `bundle` named `name`.
+fn named(name: &str, bundle: PinType) -> PinType {
+    let PinType::Bundle { members, .. } = bundle else {
+        unreachable!("only a bundle is named")
+    };
+    PinType::Bundle {
+        name: Some(name.to_owned()),
+        members,
+    }
+}
+
+/// A bundle's name never decides a link: bundles of the same members connect whatever each is
+/// named, or when one names none, and so do Lists of them.
+///
+/// Mental-revert: comparing bundles whole refuses a `Pitch` output into a `Tone` input.
+#[test]
+fn bundles_of_the_same_members_connect_whatever_each_is_named() {
+    let pitch = named("Pitch", a_placement());
+    let tone = named("Tone", a_placement());
+    for (output, input) in [
+        (pitch.clone(), tone.clone()),
+        (a_list_of(pitch.clone()), a_list_of(tone)),
+        (a_placement(), pitch.clone()),
+        (pitch, a_placement()),
+    ] {
+        assert_eq!(
+            the_verdict_between(&output, &input).outcome,
+            PinLinkOutcome::Connects,
+            "{output} into {input}"
+        );
+    }
+}

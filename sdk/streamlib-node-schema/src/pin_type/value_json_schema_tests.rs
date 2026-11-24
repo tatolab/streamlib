@@ -230,10 +230,7 @@ fn each_type_that_holds_a_stored_value_states_a_schema_and_each_other_states_non
             referenced_node_type: None,
             one_referrer_per_referenced_node: false,
         },
-        PinType::PinTypeChoice {
-            among_the_bundles_its_stream_declares: false,
-            among: Vec::new(),
-        },
+        PinType::a_choice_of_any(),
     ];
 
     for pin_type in every_kind {
@@ -308,8 +305,8 @@ fn a_vectors_unused_components_may_be_null_as_its_check_reads_them() {
 }
 
 /// A pin type choice among types takes each whole, as the contract writes it, not its tag alone;
-/// one among any takes a built-in tag alone, and one among the bundles its stream declares that
-/// no stream has listed yet takes the bundle tag alone.
+/// one among any takes a built-in tag alone, and one among the bundles its stream declares takes
+/// the bundle tag alone, listed or not, since the runtime matches a bundle to one it lists.
 #[test]
 fn a_pin_type_choice_takes_each_type_it_names_whole() {
     let among = PinType::PinTypeChoice {
@@ -321,10 +318,7 @@ fn a_pin_type_choice_takes_each_type_it_names_whole() {
             PinType::Boolean {},
         ],
     };
-    let any = PinType::PinTypeChoice {
-        among_the_bundles_its_stream_declares: false,
-        among: Vec::new(),
-    };
+    let any = PinType::a_choice_of_any();
 
     assert_eq!(
         among.value_json_schema(None),
@@ -340,14 +334,21 @@ fn a_pin_type_choice_takes_each_type_it_names_whole() {
     assert!(tags.contains(&json!("float")));
     assert!(!tags.contains(&json!("bogus")));
 
-    let among_the_bundles_listed_by_no_stream = PinType::PinTypeChoice {
-        among: Vec::new(),
+    let listed = PinType::PinTypeChoice {
+        among: vec![PinType::Bundle {
+            name: Some("Reading".into()),
+            members: Vec::new(),
+        }],
         among_the_bundles_its_stream_declares: true,
     };
-    assert_eq!(
-        among_the_bundles_listed_by_no_stream
-            .value_json_schema(None)
-            .expect("a choice")["properties"]["type"]["enum"],
-        json!(["bundle"])
-    );
+    for among_the_bundles in [
+        PinType::a_choice_among_the_bundles_its_stream_declares(),
+        listed,
+    ] {
+        assert_eq!(
+            among_the_bundles.value_json_schema(None).expect("a choice")["properties"]["type"]["enum"],
+            json!(["bundle"]),
+            "{among_the_bundles:?}"
+        );
+    }
 }

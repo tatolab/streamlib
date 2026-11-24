@@ -552,14 +552,7 @@ fn read_pin_declaration(
         .map_err(|refusal| {
             format!("port {port_name:?}: {DESCRIBED_PIN_DECLARATION_KEY} {refusal}")
         })?;
-    let declared_pin_types = match &pin_declaration.pin_type {
-        DeclaredPinType::Is { pin_type } => std::slice::from_ref(pin_type),
-        DeclaredPinType::OneOf { pin_types } => pin_types.as_slice(),
-        DeclaredPinType::Any
-        | DeclaredPinType::SameAsInput { .. }
-        | DeclaredPinType::SetByInput { .. } => &[],
-    };
-    for pin_type in declared_pin_types {
+    for pin_type in pin_declaration.pin_type.the_pin_types_it_names() {
         pin_type.validate().map_err(|refusal| {
             format!("port {port_name:?} declares the pin type {pin_type}, and {refusal}")
         })?;

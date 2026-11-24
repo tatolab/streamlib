@@ -218,3 +218,63 @@ async fn a_bundle_its_stream_does_not_declare_is_refused_and_one_it_declares_is_
         .unwrap_or_else(|| panic!("`make` has a `bundle` output: {made}"));
     assert_eq!(bundle_output["pin_type"], json!(a_tone()), "{made}");
 }
+
+const MAKE_NODE_UUID: &str = "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a";
+
+/// A Make Bundle saved before bundles were named holds its reading unnamed; setting a named
+/// bundle over it, then undoing and redoing the set, each applies, and the undo puts the unnamed
+/// reading back.
+///
+/// Mental-revert: matching a chosen bundle to an offered one whole refuses the undo, since the
+/// unnamed reading the undo puts back is no bundle on offer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bundle_saved_unnamed_is_put_back_by_an_undo_of_a_set_over_it() {
+    streamlib_media_builtins::register_media_builtin_node_types();
+    let PinType::Bundle { members, .. } = a_reading() else {
+        unreachable!("a reading is a bundle")
+    };
+    let an_unnamed_reading = json!(PinType::Bundle {
+        name: None,
+        members
+    });
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            { "id": MAKE_NODE_UUID, "name": "make",
+              "type": MakeBundle::node_class_import_path().as_str(),
+              "input_values": { "bundle_type": an_unnamed_reading } },
+        ],
+        "links": [],
+    }));
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    the_stream_describing_three_node_types_of_two_bundles(&engine, &stream_id);
+    let alice =
+        || json!({ "project_directory": project.path(), "author": an_agent_named("alice") });
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": project.stream_asset_of("main"), "node": MAKE_NODE_UUID,
+                    "input": "bundle_type", "value": a_tone(),
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("a bundle on offer is set: {refusal:?}"));
+    engine
+        .the_answer_or_the_refusal_of("undo", alice())
+        .await
+        .unwrap_or_else(|refusal| panic!("the undo puts the unnamed reading back: {refusal:?}"));
+    assert_eq!(
+        the_input_values_of(&project.the_graph_document_of("main"), MAKE_NODE_UUID),
+        json!({ "bundle_type": an_unnamed_reading })
+    );
+    engine
+        .the_answer_or_the_refusal_of("redo", alice())
+        .await
+        .unwrap_or_else(|refusal| panic!("the redo sets the tone again: {refusal:?}"));
+    assert_eq!(
+        the_input_values_of(&project.the_graph_document_of("main"), MAKE_NODE_UUID),
+        json!({ "bundle_type": a_tone() })
+    );
+}

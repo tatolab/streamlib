@@ -12,6 +12,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Attribute, Fields, ItemStruct, LitStr, Meta, Token};
 
+use crate::field_attribute::take_the_one_attribute_named;
 use crate::node_config::take_the_declared_description;
 
 const OPTIONS_ATTRIBUTE: &str = "options";
@@ -66,9 +67,9 @@ pub(crate) fn expand_node_settings(
         let chooses_among_the_bundles_its_stream_declares =
             take_the_marker_of_a_choice_among_the_bundles_its_stream_declares(&mut field.attrs)?;
         let pin_type = match take_the_declared_options(&mut field.attrs)? {
-            Some(_) if chooses_among_the_bundles_its_stream_declares.is_some() => {
+            Some(_) if let Some(marker) = chooses_among_the_bundles_its_stream_declares => {
                 return Err(syn::Error::new(
-                    field_ident.span(),
+                    marker,
                     format!(
                         "setting `{setting_name}` is chosen from `#[options(…)]` or among the \
                          bundles its stream declares, not both"
@@ -114,37 +115,29 @@ pub(crate) fn expand_node_settings(
 /// Removes the field's `#[options("…", …)]` and returns the names it lists; `None` when the
 /// field declares none.
 fn take_the_declared_options(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Vec<LitStr>>> {
-    let mut option_names = None;
-    let mut kept_attributes = Vec::with_capacity(attributes.len());
-    for attribute in attributes.drain(..) {
-        if !attribute.path().is_ident(OPTIONS_ATTRIBUTE) {
-            kept_attributes.push(attribute);
-            continue;
-        }
-        if option_names.is_some() {
-            return Err(syn::Error::new(
-                attribute.span(),
-                "a setting declares one `#[options(…)]`, listing every option",
-            ));
-        }
-        let Meta::List(listed) = &attribute.meta else {
-            return Err(options_spelling_refusal(attribute.span()));
-        };
-        let names: Vec<LitStr> = listed
-            .parse_args_with(Punctuated::<LitStr, Token![,]>::parse_terminated)
-            .map_err(|_| options_spelling_refusal(listed.span()))?
-            .into_iter()
-            .collect();
-        if names.is_empty() {
-            return Err(syn::Error::new(
-                listed.span(),
-                "`#[options(…)]` lists the names a setting is chosen from, and lists none",
-            ));
-        }
-        option_names = Some(names);
+    let Some(attribute) = take_the_one_attribute_named(
+        attributes,
+        OPTIONS_ATTRIBUTE,
+        "a setting declares one `#[options(…)]`, listing every option",
+    )?
+    else {
+        return Ok(None);
+    };
+    let Meta::List(listed) = &attribute.meta else {
+        return Err(options_spelling_refusal(attribute.span()));
+    };
+    let names: Vec<LitStr> = listed
+        .parse_args_with(Punctuated::<LitStr, Token![,]>::parse_terminated)
+        .map_err(|_| options_spelling_refusal(listed.span()))?
+        .into_iter()
+        .collect();
+    if names.is_empty() {
+        return Err(syn::Error::new(
+            listed.span(),
+            "`#[options(…)]` lists the names a setting is chosen from, and lists none",
+        ));
     }
-    *attributes = kept_attributes;
-    Ok(option_names)
+    Ok(Some(names))
 }
 
 /// Removes the field's `#[among_the_bundles_its_stream_declares]` and returns where it was
@@ -152,27 +145,20 @@ fn take_the_declared_options(attributes: &mut Vec<Attribute>) -> syn::Result<Opt
 fn take_the_marker_of_a_choice_among_the_bundles_its_stream_declares(
     attributes: &mut Vec<Attribute>,
 ) -> syn::Result<Option<proc_macro2::Span>> {
-    let mut marker = None;
-    let mut kept_attributes = Vec::with_capacity(attributes.len());
-    for attribute in attributes.drain(..) {
-        if !attribute
-            .path()
-            .is_ident(AMONG_THE_BUNDLES_ITS_STREAM_DECLARES_ATTRIBUTE)
-        {
-            kept_attributes.push(attribute);
-            continue;
-        }
-        if !matches!(attribute.meta, Meta::Path(_)) || marker.is_some() {
-            return Err(syn::Error::new(
-                attribute.span(),
-                "a setting is marked once with a bare \
-                 `#[among_the_bundles_its_stream_declares]`",
-            ));
-        }
-        marker = Some(attribute.span());
+    const MARKED_ONCE_BARE: &str =
+        "a setting is marked once with a bare `#[among_the_bundles_its_stream_declares]`";
+    let Some(marker) = take_the_one_attribute_named(
+        attributes,
+        AMONG_THE_BUNDLES_ITS_STREAM_DECLARES_ATTRIBUTE,
+        MARKED_ONCE_BARE,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !matches!(marker.meta, Meta::Path(_)) {
+        return Err(syn::Error::new(marker.span(), MARKED_ONCE_BARE));
     }
-    *attributes = kept_attributes;
-    Ok(marker)
+    Ok(Some(marker.span()))
 }
 
 fn options_spelling_refusal(span: proc_macro2::Span) -> syn::Error {

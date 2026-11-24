@@ -47,10 +47,11 @@ impl fmt::Display for PinType {
                     .iter()
                     .map(|member| format!("{}: {}", member.name, member.member_type))
                     .collect();
-                match name {
-                    Some(name) => write!(formatter, "{label} `{name}` ({})", members.join(", ")),
-                    None => write!(formatter, "{label} ({})", members.join(", ")),
-                }
+                let named = name
+                    .as_deref()
+                    .map(|name| format!(" `{name}`"))
+                    .unwrap_or_default();
+                write!(formatter, "{label}{named} ({})", members.join(", "))
             }
             Self::Named { named_pin_type }
             | Self::Connection {

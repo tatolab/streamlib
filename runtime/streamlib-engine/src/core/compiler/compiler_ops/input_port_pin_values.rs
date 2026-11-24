@@ -9,7 +9,9 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNode, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
 };
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{
+    NodeTypesOneStreamResolves, chooses_among_the_bundles_its_stream_declares,
+};
 use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
@@ -84,10 +86,10 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     let Some(port) = node.input_port(input) else {
         return Ok(());
     };
-    let mut port = port
-        .typed_by_its_setting_in(&node.ports.inputs, &node.pins)
-        .into_owned();
-    node_types.list_the_bundles_its_node_types_declare_on(&mut port);
+    let mut port = port.typed_by_its_setting_in(&node.ports.inputs, &node.pins);
+    if chooses_among_the_bundles_its_stream_declares(&port) {
+        node_types.list_the_bundles_its_node_types_declare_on(std::slice::from_mut(port.to_mut()));
+    }
     refuse_a_value_the_input_port_does_not_take(
         &node.display_name,
         node.node_kind(),

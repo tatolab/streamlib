@@ -14,6 +14,7 @@ mod pin_conversion;
 mod pin_declaration;
 mod pin_flows;
 mod pin_link_verdict;
+mod pin_type_choice;
 mod pin_type_in_words;
 mod pin_type_validation;
 mod pin_type_variants;
@@ -41,6 +42,7 @@ pub use pin_link_verdict::{
     ConvertNodeToInsert, FreePinConversion, PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd,
     PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinLinkWarning, pin_link_verdict,
 };
+pub use pin_type_choice::PinTypesAChoiceTakes;
 pub use pin_type_variants::{
     BundleMember, FloatSize, IntegerSize, NamedPinTypeImportPath, PinType, ProjectAssetMedia,
     TexturePixelFormat, VectorComponentCount,

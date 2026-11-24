@@ -64,10 +64,7 @@ fn both_nodes_carry_the_bundle_their_bundle_type_setting_chooses() {
         assert_eq!(
             declared.pin_type,
             DeclaredPinType::Is {
-                pin_type: PinType::PinTypeChoice {
-                    among: Vec::new(),
-                    among_the_bundles_its_stream_declares: true,
-                }
+                pin_type: PinType::a_choice_among_the_bundles_its_stream_declares()
             }
         );
         assert!(declared.may_be_unset);

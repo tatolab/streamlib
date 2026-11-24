@@ -11,7 +11,8 @@ use super::stored_pin_values::{
     AssetPinValue, ColorPinValue, RectanglePinValue, TransformPinValue, VectorPinValue,
 };
 use super::{
-    DeclaredPinType, FloatSize, IntegerSize, PinDeclaration, PinType, VectorComponentCount,
+    DeclaredPinType, FloatSize, IntegerSize, PinDeclaration, PinType, PinTypesAChoiceTakes,
+    VectorComponentCount,
 };
 use crate::node_reference_in_config::NodeReferenceInConfig;
 
@@ -160,13 +161,11 @@ impl PinType {
                     })
             }),
             Self::NodeReference { .. } => reads_as::<NodeReferenceInConfig>(value),
-            Self::PinTypeChoice {
-                among,
-                among_the_bundles_its_stream_declares,
-            } => serde_json::from_value::<PinType>(value.clone()).is_ok_and(|chosen| {
-                among.contains(&chosen)
-                    || (among.is_empty() && !among_the_bundles_its_stream_declares)
-            }),
+            Self::PinTypeChoice { .. } => serde_json::from_value::<PinType>(value.clone())
+                .is_ok_and(|chosen| {
+                    self.the_pin_types_a_choice_takes()
+                        .is_some_and(|choice| choice.takes(&chosen))
+                }),
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }
@@ -224,13 +223,12 @@ impl PinType {
                     .join(", ")
             ),
             Self::NodeReference { .. } => "a node reference, `{\"node\": \"<name>\"}`".to_owned(),
-            Self::PinTypeChoice {
-                among,
-                among_the_bundles_its_stream_declares: true,
-            } => match among.as_slice() {
-                [] => "one of the bundles its stream's node types declare, and they declare none"
-                    .to_owned(),
-                bundles => format!(
+            Self::PinTypeChoice { .. } => match self.the_pin_types_a_choice_takes() {
+                Some(PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares([])) => {
+                    "one of the bundles its stream's node types declare, and they declare none"
+                        .to_owned()
+                }
+                Some(PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares(bundles)) => format!(
                     "one of the bundles its stream's node types declare: {}",
                     bundles
                         .iter()
@@ -238,8 +236,8 @@ impl PinType {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
+                _ => "a pin type, `{\"type\": \"<name>\"}`".to_owned(),
             },
-            Self::PinTypeChoice { .. } => "a pin type, `{\"type\": \"<name>\"}`".to_owned(),
             Self::Trigger {} => {
                 "no value: a live set with no value, or `null`, fires it once".to_owned()
             }
@@ -281,19 +279,14 @@ impl PinType {
                     .collect(),
             ),
             Self::NodeReference { .. } => json!({ "node": "<name>" }),
-            Self::PinTypeChoice {
-                among,
-                among_the_bundles_its_stream_declares,
-            } => among
-                .first()
-                .and_then(|first| serde_json::to_value(first).ok())
-                .unwrap_or_else(|| {
-                    if *among_the_bundles_its_stream_declares {
-                        Value::Null
-                    } else {
-                        json!({ "type": "float" })
-                    }
-                }),
+            Self::PinTypeChoice { .. } => match self.the_pin_types_a_choice_takes() {
+                Some(
+                    PinTypesAChoiceTakes::OneOf([first, ..])
+                    | PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares([first, ..]),
+                ) => serde_json::to_value(first).unwrap_or(Value::Null),
+                Some(PinTypesAChoiceTakes::OneOfTheBundlesItsStreamDeclares([])) => Value::Null,
+                _ => json!({ "type": "float" }),
+            },
             Self::Texture { .. }
             | Self::Audio {}
             | Self::EncodedVideo { .. }

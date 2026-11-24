@@ -100,16 +100,11 @@ fn register_the_fixture_node_types() {
             a_node_type(class_name, vec![a_port("value", pin_type)], Vec::new())
         };
         let a_type_choice = || {
-            a_port(
-                "kind",
-                is(PinType::PinTypeChoice {
-                    among_the_bundles_its_stream_declares: false,
-                    among: Vec::new(),
-                }),
+            a_port("kind", is(PinType::a_choice_of_any())).with_input_mode(
+                NodeInputMode::SettingOnly {
+                    read: SettingReadTime::AtSetup,
+                },
             )
-            .with_input_mode(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup,
-            })
         };
         let chosen_by = |class_name, kind: PortDescriptor| {
             a_node_type(

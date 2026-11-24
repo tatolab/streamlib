@@ -113,10 +113,7 @@ integer_setting_pin_type! {
 /// A setting choosing any pin type, which holds none until one is chosen.
 impl SettingPinType for Option<PinType> {
     fn setting_pin_type() -> PinType {
-        PinType::PinTypeChoice {
-            among: Vec::new(),
-            among_the_bundles_its_stream_declares: false,
-        }
+        PinType::a_choice_of_any()
     }
 }
 
@@ -155,10 +152,7 @@ impl SettingChoosingAPinType for Option<PinType> {}
 /// The pin type choice a setting of type `T` is declared with when it chooses one of the bundles
 /// its stream's node types declare, which the runtime lists for a placed node.
 pub fn the_choice_among_the_bundles_its_stream_declares<T: SettingChoosingAPinType>() -> PinType {
-    PinType::PinTypeChoice {
-        among: Vec::new(),
-        among_the_bundles_its_stream_declares: true,
-    }
+    PinType::a_choice_among_the_bundles_its_stream_declares()
 }
 
 /// The input setting `name` is declared as: described by `description`, of `pin_type`, holding

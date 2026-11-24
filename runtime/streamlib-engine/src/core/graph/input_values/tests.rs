@@ -334,10 +334,7 @@ fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
     };
     let kind = PortInfo {
         name: "kind".to_owned(),
-        ..a_channels_input_typed(PinType::PinTypeChoice {
-            among_the_bundles_its_stream_declares: false,
-            among: Vec::new(),
-        })
+        ..a_channels_input_typed(PinType::a_choice_of_any())
     };
     let inputs = [members.clone(), kind];
     let reading = PinType::Bundle {

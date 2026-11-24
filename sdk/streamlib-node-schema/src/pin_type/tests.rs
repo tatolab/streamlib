@@ -704,11 +704,52 @@ fn a_choice_among_the_bundles_its_stream_declares_takes_only_a_bundle_it_lists()
         .expect_err("a stream declaring no bundle offers none");
     assert!(refused.takes.contains("declare none"), "{}", refused.takes);
 
-    let any = PinType::PinTypeChoice {
-        among: Vec::new(),
-        among_the_bundles_its_stream_declares: false,
-    };
+    let any = PinType::a_choice_of_any();
     assert!(any.check_value(&as_written(&reading)).is_ok());
+}
+
+/// A choice among the bundles its stream declares takes a bundle of a listed one's member names
+/// and types, unnamed as a value saved before bundles were named, or of the listed name; a
+/// member's default and meaning do not count, and another name or member type is refused.
+///
+/// Mental-revert: matching a chosen bundle whole refuses the unnamed `Reading` an earlier graph
+/// holds, which undoing a set puts back.
+#[test]
+fn a_choice_among_the_bundles_its_stream_declares_takes_a_listed_bundle_unnamed_or_by_its_name() {
+    let reading = a_bundle_named("Reading", "level");
+    let offering = PinType::PinTypeChoice {
+        among: vec![reading.clone()],
+        among_the_bundles_its_stream_declares: true,
+    };
+    let with = |name: Option<&str>, member_type: PinType, meaning: Option<&str>| {
+        json!(PinType::Bundle {
+            name: name.map(str::to_owned),
+            members: vec![BundleMember {
+                name: "level".into(),
+                member_type,
+                meaning: meaning.map(str::to_owned),
+                default_value: meaning.map(|_| json!(0.5)),
+            }],
+        })
+    };
+    let float = || PinType::Float { exact_size: None };
+
+    assert!(offering.check_value(&with(None, float(), None)).is_ok());
+    assert!(
+        offering
+            .check_value(&with(Some("Reading"), float(), Some("loudness")))
+            .is_ok()
+    );
+    assert!(
+        offering
+            .check_value(&with(Some("Tone"), float(), None))
+            .is_err()
+    );
+    assert!(
+        offering
+            .check_value(&with(None, PinType::String {}, None))
+            .is_err()
+    );
 }
 
 #[test]

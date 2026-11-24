@@ -81,10 +81,7 @@ fn an_input_whose_pin_type_takes_no_wire_is_described_as_a_setting() {
             false,
             PortFamilyDeclaration::of_family(PortFamily::Records),
         )
-        .with_pin_declaration(PinDeclaration::exactly(PinType::PinTypeChoice {
-            among_the_bundles_its_stream_declares: false,
-            among: Vec::new(),
-        })),
+        .with_pin_declaration(PinDeclaration::exactly(PinType::a_choice_of_any())),
     );
 
     let described = NodeTypePortsDescribedOnTheWire::of(&descriptor);

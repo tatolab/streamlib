@@ -88,13 +88,7 @@ fn a_typed_port_serves_the_family_its_messages_belong_to() {
         PortFamily::carrying(&PinType::Tensor {}),
         Some(PortFamily::Array)
     );
-    assert_eq!(
-        PortFamily::carrying(&PinType::PinTypeChoice {
-            among_the_bundles_its_stream_declares: false,
-            among: vec![]
-        }),
-        None
-    );
+    assert_eq!(PortFamily::carrying(&PinType::a_choice_of_any()), None);
 }
 
 /// A bundle of numbers is carried whole on Records, as one map of its members, and a type

@@ -6,6 +6,8 @@ use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, Fields, Ident, ItemStruct, Meta};
 
+use crate::field_attribute::take_the_one_attribute_named;
+
 const DESCRIPTION_ATTRIBUTE: &str = "description";
 
 pub(crate) fn expand_node_config(
@@ -134,33 +136,25 @@ fn description_marker(sdk_root: &TokenStream, marker: &Ident, description: &Expr
 pub(crate) fn take_the_declared_description(
     attributes: &mut Vec<Attribute>,
 ) -> syn::Result<Option<Expr>> {
-    let mut description = None;
-    let mut kept_attributes = Vec::with_capacity(attributes.len());
-    for attribute in attributes.drain(..) {
-        if !attribute.path().is_ident(DESCRIPTION_ATTRIBUTE) {
-            kept_attributes.push(attribute);
-            continue;
-        }
-        if description.is_some() {
-            return Err(syn::Error::new(
-                attribute.span(),
-                "a field declares one `#[description = …]`",
-            ));
-        }
-        let Meta::NameValue(name_value) = &attribute.meta else {
-            return Err(description_spelling_refusal(attribute.span()));
-        };
-        match &name_value.value {
-            Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(_),
-                ..
-            })
-            | Expr::Path(_) => description = Some(name_value.value.clone()),
-            other => return Err(description_spelling_refusal(other.span())),
-        }
+    let Some(attribute) = take_the_one_attribute_named(
+        attributes,
+        DESCRIPTION_ATTRIBUTE,
+        "a field declares one `#[description = …]`",
+    )?
+    else {
+        return Ok(None);
+    };
+    let Meta::NameValue(name_value) = &attribute.meta else {
+        return Err(description_spelling_refusal(attribute.span()));
+    };
+    match &name_value.value {
+        Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(_),
+            ..
+        })
+        | Expr::Path(_) => Ok(Some(name_value.value.clone())),
+        other => Err(description_spelling_refusal(other.span())),
     }
-    *attributes = kept_attributes;
-    Ok(description)
 }
 
 fn description_spelling_refusal(span: Span) -> syn::Error {

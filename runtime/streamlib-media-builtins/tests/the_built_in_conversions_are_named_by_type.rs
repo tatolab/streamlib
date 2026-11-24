@@ -376,10 +376,7 @@ fn every_built_in_end_type(conversions: &[PinConversion]) -> Vec<PinType> {
                 referenced_node_type: None,
                 one_referrer_per_referenced_node: false,
             }),
-            BuiltInPinTypeName::PinTypeChoice => end_types.push(PinType::PinTypeChoice {
-                among_the_bundles_its_stream_declares: false,
-                among: Vec::new(),
-            }),
+            BuiltInPinTypeName::PinTypeChoice => end_types.push(PinType::a_choice_of_any()),
         }
     }
     for conversion in conversions {
