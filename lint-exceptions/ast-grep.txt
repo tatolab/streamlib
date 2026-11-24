@@ -355,7 +355,6 @@
 1 no-inline-test-module runtime/tatolabd/src/paired_group_writer_test_node.rs
 1 no-inline-test-module runtime/tatolabd/src/runtime_unit_executable_beside_tatolabd.rs
 1 no-inline-test-module runtime/tatolabd/src/runtime_unit_lend.rs
-1 no-inline-test-module sdk/streamlib-macros/src/node_config.rs
 1 no-inline-test-module sdk/streamlib-node-schema/src/audio_window_contract.rs
 1 no-inline-test-module sdk/streamlib-node-schema/src/config_schema_document.rs
 1 no-inline-test-module sdk/streamlib-node-schema/src/description_lint.rs

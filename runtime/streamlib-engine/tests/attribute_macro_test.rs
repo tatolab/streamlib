@@ -1,15 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde::{Deserialize, Serialize};
-use streamlib::sdk::schemars::JsonSchema;
 use streamlib_engine::core::GeneratedNode;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
 #[streamlib::sdk::node(
     execution = manual,
     input("video_in", delivery_profile = "newest", pin_type = Texture),
-    output("video_out", pin_type = Texture),
+    output("video_out", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub struct TestNode;
 
@@ -102,101 +100,24 @@ fn a_node_declaring_no_config_publishes_an_empty_object_schema() {
     assert!(config_schema.get("properties").is_none());
 }
 
-#[streamlib::sdk::node_config]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "streamlib::sdk::schemars")]
-pub struct ConfiguredProbeNodeConfig {
-    #[description = PROBE_WIDTH_DESCRIPTION]
-    #[serde(default = "default_probe_width")]
-    pub width: u32,
-    /// Where the recording is written, read by rustdoc and never by the catalog.
-    pub path: String,
-    #[description = "The recording's **label**."]
-    #[serde(default)]
-    pub label: Option<String>,
-}
-
-const PROBE_WIDTH_DESCRIPTION: &str = "Frame width in pixels.";
 const PROBE_NODE_DESCRIPTION: &str = "Records `video_out` to `path`.";
-
-fn default_probe_width() -> u32 {
-    1280
-}
-
-impl Default for ConfiguredProbeNodeConfig {
-    fn default() -> Self {
-        Self {
-            width: default_probe_width(),
-            path: String::new(),
-            label: None,
-        }
-    }
-}
 
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::ConfiguredProbeNodeConfig,
-    output("video_out", pin_type = Texture, description = "Frames as *recorded*."),
+    output(
+        "video_out",
+        pin_type = Texture,
+        formats = ["rgba8_unorm"],
+        description = "Frames as *recorded*."
+    ),
 )]
 #[meta(category = "Probes/Recording", description = PROBE_NODE_DESCRIPTION)]
-pub struct ConfiguredProbeNode;
+pub struct DescribedProbeNode;
 
-impl streamlib_engine::ManualNode for ConfiguredProbeNode::Node {
+impl streamlib_engine::ManualNode for DescribedProbeNode::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
-}
-
-#[test]
-fn the_descriptor_carries_the_config_types_schema_rather_than_its_name() {
-    let descriptor = ConfiguredProbeNode::Node::descriptor().expect("a descriptor");
-    let config_schema = descriptor
-        .config_schema
-        .expect("a configured node carries its config type's document");
-
-    assert_eq!(config_schema["properties"]["width"]["type"], "integer");
-    assert_eq!(
-        config_schema["properties"]["width"]["description"],
-        "Frame width in pixels."
-    );
-    assert_eq!(config_schema["properties"]["width"]["default"], 1280);
-    assert_eq!(
-        config_schema["properties"]["label"]["description"],
-        "The recording's **label**."
-    );
-    assert!(
-        config_schema["properties"]["path"]
-            .get("description")
-            .is_none(),
-        "a doc comment never reaches the document"
-    );
-    assert!(
-        config_schema.get("required").is_none(),
-        "every key a config leaves out is filled from the struct's `Default`"
-    );
-    assert_eq!(config_schema["properties"]["path"]["default"], "");
-    // The retired id grammar named the type; the document describes it.
-    assert!(config_schema.get("$schema").is_none());
-    assert_ne!(
-        config_schema,
-        serde_json::json!("ConfiguredProbeNodeConfig")
-    );
-}
-
-#[test]
-fn a_key_a_config_leaves_out_is_filled_from_the_structs_default() {
-    let config: ConfiguredProbeNodeConfig =
-        serde_json::from_value(serde_json::json!({"width": 640})).expect("deserializes");
-    assert_eq!(
-        config,
-        ConfiguredProbeNodeConfig {
-            width: 640,
-            ..ConfiguredProbeNodeConfig::default()
-        }
-    );
-    let empty: ConfiguredProbeNodeConfig =
-        serde_json::from_value(serde_json::json!({})).expect("deserializes");
-    assert_eq!(empty, ConfiguredProbeNodeConfig::default());
 }
 
 #[test]
@@ -262,7 +183,7 @@ pub struct CfgGatedFieldAlwaysCompiledState {
 #[streamlib::sdk::node(
     execution = manual,
     input("video_in", delivery_profile = "newest", pin_type = Texture),
-    output("video_out", pin_type = Texture),
+    output("video_out", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub struct CfgGatedFieldNode {
     #[cfg(any())]
@@ -459,15 +380,14 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
 
 #[streamlib::sdk::node(
     execution = manual,
-    input("signals", delivery_profile = "ordered", family = Channels, requires = ["rpm"]),
+    input("signals", delivery_profile = "ordered", pin_type = Audio, requires = ["rpm"]),
     output(
         "telemetry",
-        family = Channels,
-        names = from_config("channel_names"),
+        pin_type = Audio,
+        names = from_setting("channel_names"),
         rate = 48000,
         dtype = "f64"
     ),
-    output("packets", family = Packets, codec = "h264"),
 )]
 pub struct PortFamilyTestNode;
 
@@ -508,19 +428,18 @@ fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
         Some(ChannelsOutputPortSampleRate::Stated(48_000))
     );
     assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F64));
-    assert_eq!(descriptor.outputs[1].family.codec.as_deref(), Some("h264"));
 }
 
 #[test]
 fn a_node_and_a_port_description_reach_the_descriptor_as_written_from_a_const_or_a_literal() {
-    let descriptor = ConfiguredProbeNode::Node::descriptor().expect("a descriptor");
+    let descriptor = DescribedProbeNode::Node::descriptor().expect("a descriptor");
     assert_eq!(descriptor.description, PROBE_NODE_DESCRIPTION);
     assert_eq!(descriptor.outputs[0].description, "Frames as *recorded*.");
 }
 
 #[test]
 fn a_node_category_reaches_the_descriptor_as_the_path_written_and_none_when_undeclared() {
-    let described = ConfiguredProbeNode::Node::descriptor().expect("a descriptor");
+    let described = DescribedProbeNode::Node::descriptor().expect("a descriptor");
     assert_eq!(described.category.as_deref(), Some("Probes/Recording"));
     let undescribed = TestNode::Node::descriptor().expect("a descriptor");
     assert_eq!(undescribed.category, None);

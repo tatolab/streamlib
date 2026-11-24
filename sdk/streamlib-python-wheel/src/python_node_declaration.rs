@@ -484,7 +484,12 @@ class AudioConsumer:
     /// the same port the Python class below declares.
     #[streamlib::sdk::node(
         execution = manual,
-        output("video", pin_type = Texture, frame_rate = from_config("frames_per_second")),
+        output(
+            "video",
+            pin_type = Texture,
+            formats = ["rgba8_unorm"],
+            frame_rate = from_setting("frames_per_second")
+        ),
     )]
     struct RustDeclaredFrameRateSource;
 
@@ -503,7 +508,8 @@ class AudioConsumer:
         let python_outputs = read_python_declaration(
             "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   video = Output(Image, rate=from_config('frames_per_second'))\n",
+             \x20   video = Output(Image, formats=('rgba8_unorm',), \
+             rate=from_config('frames_per_second'))\n",
         )
         .expect("the declaration reads")
         .descriptor

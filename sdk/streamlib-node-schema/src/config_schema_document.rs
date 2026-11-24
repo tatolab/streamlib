@@ -1,11 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::borrow::Cow;
-use std::marker::PhantomData;
-
-use schemars::JsonSchema;
-use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{RootSchema, Schema, SchemaObject, SingleOrVec};
 use schemars::visit::{Visitor, visit_root_schema, visit_schema_object};
 use serde_json::Value;
@@ -14,7 +9,7 @@ use serde_json::Value;
 const DEFINITION_POINTER_PREFIX: &str = "#/$defs/";
 
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` is a node `config =` type but does not derive `JsonSchema`",
+    message = "`{Self}` is a node config type but does not derive `JsonSchema`",
     note = "add `#[derive(streamlib::sdk::schemars::JsonSchema)]` and `#[schemars(crate = \"streamlib::sdk::schemars\")]` to `{Self}`",
     note = "the SDK re-exports `schemars` at `streamlib::sdk::schemars`, so the crate needs no new dependency"
 )]
@@ -42,60 +37,10 @@ impl<T: schemars::JsonSchema> NodeConfigJsonSchema for T {
     }
 }
 
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is a `#[node_config]` type but does not implement `Default`",
-    note = "derive `Default` on `{Self}`, or implement it, so every key a config leaves out is filled from it",
-    note = "`Default` must be a config the node runs with: a key with nothing sensible to default to is left unset, and the node reports itself not ready, naming the key, until it is set"
-)]
-pub trait NodeConfigFilledFromItsDefault: Default {}
-
-impl<T: Default> NodeConfigFilledFromItsDefault for T {}
-
 /// Where a schema carries the description a `#[description = …]` attribute
 /// declared until the document is rendered, apart from the `description` a
 /// doc comment fills.
 const DECLARED_DESCRIPTION_EXTENSION_KEY: &str = "x-streamlib-declared-description";
-
-/// The text one config key's `#[description = …]` attribute declares.
-pub trait NodeConfigKeyDescription {
-    /// The description, CommonMark with no raw HTML, served exactly as written.
-    const DESCRIPTION: &'static str;
-}
-
-/// The schema `#[node_config]` gives a described key in place of its
-/// type's: `T`'s, carrying the description `D` declares.
-pub struct NodeConfigKeyDescribedBy<T: ?Sized, D>(PhantomData<D>, PhantomData<Box<T>>);
-
-impl<T: JsonSchema + ?Sized, D: NodeConfigKeyDescription> JsonSchema
-    for NodeConfigKeyDescribedBy<T, D>
-{
-    fn is_referenceable() -> bool {
-        false
-    }
-
-    fn schema_name() -> String {
-        T::schema_name()
-    }
-
-    fn schema_id() -> Cow<'static, str> {
-        T::schema_id()
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        schema_carrying_the_declared_description(generator.subschema_for::<T>(), D::DESCRIPTION)
-    }
-
-    fn _schemars_private_non_optional_json_schema(generator: &mut SchemaGenerator) -> Schema {
-        schema_carrying_the_declared_description(
-            T::_schemars_private_non_optional_json_schema(generator),
-            D::DESCRIPTION,
-        )
-    }
-
-    fn _schemars_private_is_option() -> bool {
-        T::_schemars_private_is_option()
-    }
-}
 
 /// `schema`, marked with the description its key declares.
 pub fn schema_carrying_the_declared_description(schema: Schema, description: &str) -> Schema {
@@ -205,6 +150,7 @@ fn single_schema_items(schema: &SchemaObject) -> Option<&schemars::schema::Schem
 mod config_schema_document_tests {
     use super::*;
     use schemars::JsonSchema;
+    use schemars::r#gen::SchemaGenerator;
     use schemars::schema::Schema;
     use serde::{Deserialize, Serialize};
 
@@ -215,37 +161,44 @@ mod config_schema_document_tests {
     struct FixtureSourceConfig {
         /// Read by rustdoc, never by the document.
         #[serde(default = "default_width")]
-        #[schemars(with = "NodeConfigKeyDescribedBy<u32, FixtureWidthDescription>")]
+        #[schemars(schema_with = "fixture_width_schema")]
         width: u32,
         /// Where the recording is written.
         path: String,
         /// How the frame maps onto the window.
         #[serde(default)]
-        #[schemars(with = "NodeConfigKeyDescribedBy<FixtureScaling, FixtureScalingDescription>")]
+        #[schemars(schema_with = "fixture_scaling_schema")]
         scaling: FixtureScaling,
         /// Left, top, right, bottom.
         crop: (u32, u32, u32, u32),
         /// Every device to open.
         device_ids: Vec<String>,
-        #[schemars(with = "NodeConfigKeyDescribedBy<Option<u32>, FixtureFpsDescription>")]
+        #[serde(default)]
+        #[schemars(schema_with = "fixture_fps_schema")]
         fps: Option<u32>,
     }
 
     const FIXTURE_FPS_DESCRIPTION: &str = "Frames per second; absent, the device's own.";
 
-    struct FixtureWidthDescription;
-    impl NodeConfigKeyDescription for FixtureWidthDescription {
-        const DESCRIPTION: &'static str = "Frame width in **pixels**.";
+    fn fixture_width_schema(generator: &mut SchemaGenerator) -> Schema {
+        schema_carrying_the_declared_description(
+            generator.subschema_for::<u32>(),
+            "Frame width in **pixels**.",
+        )
     }
 
-    struct FixtureScalingDescription;
-    impl NodeConfigKeyDescription for FixtureScalingDescription {
-        const DESCRIPTION: &'static str = "How the frame maps onto the window.";
+    fn fixture_scaling_schema(generator: &mut SchemaGenerator) -> Schema {
+        schema_carrying_the_declared_description(
+            generator.subschema_for::<FixtureScaling>(),
+            "How the frame maps onto the window.",
+        )
     }
 
-    struct FixtureFpsDescription;
-    impl NodeConfigKeyDescription for FixtureFpsDescription {
-        const DESCRIPTION: &'static str = FIXTURE_FPS_DESCRIPTION;
+    fn fixture_fps_schema(generator: &mut SchemaGenerator) -> Schema {
+        schema_carrying_the_declared_description(
+            generator.subschema_for::<Option<u32>>(),
+            FIXTURE_FPS_DESCRIPTION,
+        )
     }
 
     fn default_width() -> u32 {

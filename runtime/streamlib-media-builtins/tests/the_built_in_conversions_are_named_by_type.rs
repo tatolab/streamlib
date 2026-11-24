@@ -59,7 +59,7 @@ fn the_typed_conversions() -> [PinConversion; 5] {
             "array",
             PinType::Tensor {},
             "image",
-            a_texture_of(&[]),
+            a_texture_of(&ONE_TENSOR_PIXEL_FORMATS),
         ),
         conversion(
             "TextureFormatConvert",

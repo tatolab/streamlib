@@ -14,7 +14,6 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 use streamlib_project_repository::StreamGraphOperation;
 use uuid::Uuid;
 
-#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub struct FrameWidthTakingTestNodeConfig {
@@ -24,7 +23,6 @@ pub struct FrameWidthTakingTestNodeConfig {
 
 #[streamlib::sdk::node(
     execution = manual,
-    config = crate::FrameWidthTakingTestNodeConfig,
 )]
 pub struct FrameWidthTakingTestNode;
 
@@ -40,7 +38,7 @@ fn a_running_stream_with_a_frame_width_taking_node() -> (
     Arc<LoadedStreamInThisRuntime>,
     Uuid,
 ) {
-    NODE_REGISTRY.register::<FrameWidthTakingTestNode::Node>();
+    NODE_REGISTRY.register_taking_a_config_for_a_test::<FrameWidthTakingTestNode::Node, FrameWidthTakingTestNodeConfig>();
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner

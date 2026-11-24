@@ -35,7 +35,6 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
     pub(super) fn module_alias_and_constructor(
         &self,
         member_visibility: &TokenStream,
-        config_type: &TokenStream,
     ) -> TokenStream {
         match self.settings_type {
             Some(settings_type) => quote! {
@@ -46,7 +45,7 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
                 }
             },
             None => quote! {
-                #member_visibility type Config = #config_type;
+                #member_visibility type Config = __streamlib_sdk::nodes::EmptyConfig;
 
                 #member_visibility fn node(config: Config) -> __streamlib_sdk::nodes::NodeSpec {
                     Node::node(config)
@@ -57,11 +56,7 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
 
     /// `Node::node`: a spec of the node holding `settings` as the values of its setting inputs,
     /// or, for a node declaring none, holding `config`.
-    pub(super) fn node_spec_constructor(
-        &self,
-        member_visibility: &TokenStream,
-        config_type: &TokenStream,
-    ) -> TokenStream {
+    pub(super) fn node_spec_constructor(&self, member_visibility: &TokenStream) -> TokenStream {
         match self.settings_type {
             Some(settings_type) => quote! {
                 #member_visibility fn node(settings: #settings_type) -> __streamlib_sdk::nodes::NodeSpec {
@@ -84,7 +79,7 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
                 }
             },
             None => quote! {
-                #member_visibility fn node(config: #config_type) -> __streamlib_sdk::nodes::NodeSpec {
+                #member_visibility fn node(config: __streamlib_sdk::nodes::EmptyConfig) -> __streamlib_sdk::nodes::NodeSpec {
                     __streamlib_sdk::nodes::NodeSpec::new(
                         Self::node_class_import_path(),
                         __streamlib_sdk::serde_json::to_value(&config)
@@ -162,7 +157,7 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
     }
 
     /// The descriptor's config schema; none for a node declaring settings, which takes no config.
-    pub(super) fn descriptor_config_schema(&self, config_type: &TokenStream) -> TokenStream {
+    pub(super) fn descriptor_config_schema(&self) -> TokenStream {
         if self.declares_settings() {
             return quote! {};
         }
@@ -170,7 +165,7 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
         // type missing the derive fails on a diagnostic that names the fix.
         quote! {
             .with_config_schema(
-                <#config_type as __streamlib_sdk::descriptors::NodeConfigJsonSchema>
+                <__streamlib_sdk::nodes::EmptyConfig as __streamlib_sdk::descriptors::NodeConfigJsonSchema>
                     ::node_config_schema_document()
             )
         }

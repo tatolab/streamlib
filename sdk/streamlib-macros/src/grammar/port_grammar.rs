@@ -22,14 +22,14 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// Parse an `input(...)` / `output(...)` port body.
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
-/// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType> |
+/// audio_window(...) | audio_window = match_device, pin_type = <PinType> |
 /// pin_type = from_setting("<setting>"), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
 /// takes_a_value = true, <family key> = …]`.
 ///
-/// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
-/// type serves the family its messages belong to, and its family keys apply to that family.
-/// A port with a pin — a pin type, or a picture family — may state `flow = …` where its type
-/// allows another flow than its default.
+/// A port states its pin type, and serves the family its messages belong to; its family keys
+/// apply to that family. A port typed by a setting serves Records, the family a bundle or a
+/// module's named type travels on. A Texture output states the pixel formats it writes. A port
+/// may state `flow = …` where its type allows another flow than its default.
 ///
 /// `delivery_profile` is a consumer-side setting: optional on an `input(...)` with a pin, which
 /// reads by its pin's default when it states none, **required** on every other `input(...)`,
@@ -78,7 +78,6 @@ pub(super) fn parse_port(
     let mut delivery_profile = None;
     let mut borrow_quota = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
-    let mut family: Option<PortFamily> = None;
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
     let mut pin_type_from_setting: Option<(proc_macro2::Span, String)> = None;
     let mut lifetime = NodeValueLifetime::Kept;
@@ -87,7 +86,6 @@ pub(super) fn parse_port(
     let mut may_be_unset: Option<proc_macro2::Span> = None;
     let mut takes_a_value = false;
     let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
-    let mut first_family_key_span: Option<proc_macro2::Span> = None;
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -154,11 +152,23 @@ pub(super) fn parse_port(
                 borrow_quota = Some(quota);
             }
             "family" => {
-                let family_ident: Ident = content.parse()?;
-                family = Some(parse_port_family(&family_ident, &name)?);
+                return Err(syn::Error::new(
+                    key_span,
+                    format!(
+                        "port `{name}` declares `family = …`, which is retired: a port states \
+                         `pin_type = …`, one of {}, and serves the family its messages belong to",
+                        rendered_rust_declared_pin_type_names()
+                    ),
+                ));
             }
-            "pin_type" if content.peek(Ident) && content.peek2(syn::token::Paren) => {
-                pin_type_from_setting = Some((key_span, parse_from_setting(&content, &name)?));
+            "pin_type" if peeks_a_call(&content) => {
+                let setting_name = parse_from_setting(&content, |function| {
+                    format!(
+                        "port `{name}` declares `pin_type = {function}(…)` — a port typed by a \
+                         setting states `pin_type = from_setting(\"<setting>\")`"
+                    )
+                })?;
+                pin_type_from_setting = Some((key_span, setting_name));
             }
             "pin_type" => {
                 let pin_type_ident: Ident = content.parse()?;
@@ -209,9 +219,8 @@ pub(super) fn parse_port(
                 }
                 takes_a_value = stated.value;
             }
-            family_key @ ("names" | "requires" | "codec" | "requires_codec" | "rate"
-            | "frame_rate" | "dtype" | "formats" | "residency") => {
-                first_family_key_span.get_or_insert(key_span);
+            family_key @ ("names" | "requires" | "rate" | "frame_rate" | "dtype" | "formats"
+            | "residency") => {
                 parse_port_family_key(&content, family_key, &name, &mut family_keys)?;
             }
             other => {
@@ -219,53 +228,49 @@ pub(super) fn parse_port(
                     key.span(),
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
-                         `borrow_quota`, `description`, `audio_window`, `family`, `pin_type`, \
+                         `borrow_quota`, `description`, `audio_window`, `pin_type`, \
                          `lifetime`, `flow`, `former_names`, `may_be_unset`, `takes_a_value`, or \
-                         one of the family keys `names`, `requires`, `codec`, `requires_codec`, \
-                         `rate`, `frame_rate`, `dtype`, `formats`, `residency`"
+                         one of the family keys `names`, `requires`, `rate`, `frame_rate`, \
+                         `dtype`, `formats`, `residency`"
                     ),
                 ));
             }
         }
     }
 
-    let family_its_pin_type_carries = pin_type
-        .as_ref()
-        .map(|(span, pin_type)| (*span, PortFamily::carrying(pin_type)));
-    let family = match (family, family_its_pin_type_carries, first_family_key_span) {
-        (Some(stated), Some((pin_type_span, Some(carried))), _) if stated != carried => {
+    let stated_pin_type = match (pin_type, pin_type_from_setting) {
+        (Some(_), Some((from_setting_span, setting_name))) => {
             return Err(syn::Error::new(
-                pin_type_span,
+                from_setting_span,
                 format!(
-                    "port `{name}` declares `family = {stated}` and a pin type whose messages \
-                     are {carried} — drop `family = …`, which the pin type sets"
+                    "port `{name}` states `pin_type` twice — once a type, once \
+                     `from_setting(\"{setting_name}\")`; keep one"
                 ),
             ));
         }
-        (Some(family), _, _) | (None, Some((_, Some(family))), _) => family,
-        (None, _, Some(family_key_span)) => {
-            return Err(syn::Error::new(
-                family_key_span,
-                format!(
-                    "port `{name}` states a family key without `family = …` or \
-                     `pin_type = …` — a family is one of {}",
-                    rendered_port_family_names()
-                ),
-            ));
-        }
-        (None, _, None) => {
+        (Some((pin_type_span, pin_type)), None) => StatedPinType::Exactly(pin_type_span, pin_type),
+        (None, Some((_, setting_name))) => StatedPinType::FromSetting(setting_name),
+        (None, None) => {
             return Err(syn::Error::new(
                 name_lit.span(),
                 format!(
-                    "port `{name}` declares no family — add `family = …`, one of {}, or \
-                     `pin_type = …`, one of {}",
-                    rendered_port_family_names(),
+                    "port `{name}` declares no pin type — add `pin_type = …`, one of {}, or \
+                     `pin_type = from_setting(\"<setting>\")`",
                     rendered_rust_declared_pin_type_names()
                 ),
             ));
         }
     };
-    family_keys.family = family;
+    family_keys.family = match &stated_pin_type {
+        StatedPinType::Exactly(pin_type_span, pin_type) => PortFamily::carrying(pin_type)
+            .ok_or_else(|| {
+                syn::Error::new(
+                    *pin_type_span,
+                    format!("port `{name}` declares a pin type no family carries"),
+                )
+            })?,
+        StatedPinType::FromSetting(_) => PortFamily::Records,
+    };
     let declaration_direction = match direction {
         PortDirection::Input => PortFamilyDeclarationDirection::Input,
         PortDirection::Output => PortFamilyDeclarationDirection::Output,
@@ -273,61 +278,41 @@ pub(super) fn parse_port(
     if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
         return Err(syn::Error::new(name_lit.span(), refusal));
     }
-    let pin_type = match pin_type {
-        Some((pin_type_span, PinType::Texture { .. })) => Some(texture_of_the_formats_stated(
-            &family_keys,
-            &name,
-            pin_type_span,
-        )?),
-        other => other.map(|(_, pin_type)| pin_type),
+    let (pin_type, pin, pin_type_from_setting) = match stated_pin_type {
+        StatedPinType::Exactly(pin_type_span, pin_type) => {
+            let pin_type = match pin_type {
+                PinType::Texture { .. } => {
+                    texture_of_the_formats_stated(&family_keys, &name, direction, pin_type_span)?
+                }
+                other => other,
+            };
+            let pin = declared_pin(pin_type.clone(), flow, &name)?;
+            (Some(pin_type), pin, None)
+        }
+        StatedPinType::FromSetting(setting_name) => {
+            let pin = pin_typed_by_a_setting(&setting_name, flow);
+            (None, pin, Some(setting_name))
+        }
     };
     let family = family_keys;
-    let pin = match &pin_type_from_setting {
-        Some((from_setting_span, setting_name)) => Some(pin_typed_by_a_setting(
-            setting_name,
-            pin_type.is_some(),
-            flow,
-            &name,
-            *from_setting_span,
-        )?),
-        None => declared_pin(pin_type.as_ref(), &family, flow, &name)?,
-    };
-    let stated_beside_the_pin = flow
-        .map(|(span, _)| span)
-        .or(former_names.as_ref().map(|(span, _)| *span))
-        .or(may_be_unset);
-    if pin.is_none()
-        && let Some(stated_span) = former_names
-            .as_ref()
-            .map(|(span, _)| *span)
-            .or(may_be_unset)
-    {
-        return Err(syn::Error::new(
-            stated_span,
-            format!(
-                "port `{name}` states `former_names` or `may_be_unset` and has no pin type to \
-                 state them on — add `pin_type = …`, one of {}",
-                rendered_rust_declared_pin_type_names()
-            ),
-        ));
-    }
     // A picture port that states a flow, a former name or that it may be unset states its
     // Texture with it, so what it states is emitted.
-    let pin_type = match (stated_beside_the_pin, &pin) {
-        (Some(_), Some(pin)) => pin.clone().into_resolved().map(|pin| pin.pin_type),
-        _ => pin_type,
+    let stated_beside_the_pin = flow.is_some() || former_names.is_some() || may_be_unset.is_some();
+    let pin_type = if stated_beside_the_pin {
+        pin.clone().into_resolved().map(|pin| pin.pin_type)
+    } else {
+        pin_type
     };
 
     if direction == PortDirection::Input {
-        if let (Some(stated), Some(pin)) = (&delivery_profile, &pin)
+        if let Some(stated) = &delivery_profile
             && let Some(refusal) = pin.refusal_of_its_stated_delivery_profile(&name, stated)
         {
             return Err(syn::Error::new(name_lit.span(), refusal));
         }
-        let delivery_profile_read_by = delivery_profile.as_deref().or_else(|| {
-            pin.as_ref()
-                .and_then(PinDeclaration::default_input_delivery_profile)
-        });
+        let delivery_profile_read_by = delivery_profile
+            .as_deref()
+            .or_else(|| pin.default_input_delivery_profile());
         let Some(delivery_profile_read_by) = delivery_profile_read_by else {
             return Err(syn::Error::new(
                 name_lit.span(),
@@ -357,7 +342,7 @@ pub(super) fn parse_port(
         audio_window: audio_window.map(|(_, contract)| contract),
         family,
         pin_type,
-        pin_type_from_setting: pin_type_from_setting.map(|(_, setting_name)| setting_name),
+        pin_type_from_setting,
         lifetime,
         flow: flow.map(|(_, flow)| flow),
         former_names: former_names.map(|(_, names)| names).unwrap_or_default(),
@@ -427,58 +412,31 @@ fn parse_lifetime(
     })
 }
 
-/// The pin a port declares: its stated pin type, else the one its family states exactly, in
-/// the flow it states, else that type's default. `None` for a port with no pin, which may not
-/// state a flow; a flow the type does not allow is refused at the flow.
+/// The pin a port declares: its stated pin type, in the flow it states, else that type's
+/// default; a flow the type does not allow is refused at the flow.
 fn declared_pin(
-    pin_type: Option<&PinType>,
-    family: &PortFamilyDeclaration,
+    pin_type: PinType,
     flow: Option<(proc_macro2::Span, PinFlow)>,
     port_name: &str,
-) -> syn::Result<Option<PinDeclaration>> {
-    let Some(pin_type) = pin_type.cloned().or_else(|| family.exact_pin_type()) else {
-        return match flow {
-            Some((flow_span, _)) => Err(syn::Error::new(
-                flow_span,
-                format!(
-                    "port `{port_name}` states `flow = …` and has no pin type to flow by — add \
-                     `pin_type = …`, one of {}",
-                    rendered_rust_declared_pin_type_names()
-                ),
-            )),
-            None => Ok(None),
-        };
-    };
+) -> syn::Result<PinDeclaration> {
     let mut pin = PinDeclaration::exactly(pin_type);
     let Some((flow_span, flow)) = flow else {
-        return Ok(Some(pin));
+        return Ok(pin);
     };
     pin.flow = flow;
     match pin.refusal_of_its_flow(port_name) {
         Some(refusal) => Err(syn::Error::new(flow_span, refusal)),
-        None => Ok(Some(pin)),
+        None => Ok(pin),
     }
 }
 
-/// The pin of port `port_name`, typed by the setting `setting_name` as `pin_type =
-/// from_setting("…")` states it at `from_setting_span`: a value, or of the flow it states, of the
-/// type the setting chooses. Refused beside a stated pin type, which it would replace.
+/// The pin of a port typed by the setting `setting_name`, as `pin_type = from_setting("…")`
+/// states it: a value, or of the flow it states, of the type the setting chooses.
 fn pin_typed_by_a_setting(
     setting_name: &str,
-    a_pin_type_is_stated_too: bool,
     flow: Option<(proc_macro2::Span, PinFlow)>,
-    port_name: &str,
-    from_setting_span: proc_macro2::Span,
-) -> syn::Result<PinDeclaration> {
-    if a_pin_type_is_stated_too {
-        return Err(syn::Error::new(
-            from_setting_span,
-            format!(
-                "port `{port_name}` states `pin_type` twice — once a type, once                  `from_setting(\"{setting_name}\")`; keep one"
-            ),
-        ));
-    }
-    Ok(PinDeclaration {
+) -> PinDeclaration {
+    PinDeclaration {
         pin_type: DeclaredPinType::SetByInput {
             input_name: setting_name.to_owned(),
         },
@@ -486,26 +444,34 @@ fn pin_typed_by_a_setting(
         annotations: PinAnnotations::default(),
         former_names: Vec::new(),
         may_be_unset: false,
-    })
+    }
 }
 
-/// Parse `pin_type = from_setting("<setting>")`'s value on port `port_name` into the setting
-/// it names.
-fn parse_from_setting(content: ParseStream<'_>, port_name: &str) -> syn::Result<String> {
+/// How a port states its pin type: exactly, at its span, or by the setting it names.
+enum StatedPinType {
+    Exactly(proc_macro2::Span, PinType),
+    FromSetting(String),
+}
+
+/// Parse `from_setting("<setting>")` into the setting it names, refusing any other call with
+/// `refusal` of the function it names.
+fn parse_from_setting(
+    content: ParseStream<'_>,
+    refusal: impl FnOnce(&Ident) -> String,
+) -> syn::Result<String> {
     let function: Ident = content.parse()?;
     if function != "from_setting" {
-        return Err(syn::Error::new(
-            function.span(),
-            format!(
-                "port `{port_name}` declares `pin_type = {function}(…)` — a port typed by a \
-                 setting states `pin_type = from_setting(\"<setting>\")`"
-            ),
-        ));
+        return Err(syn::Error::new(function.span(), refusal(&function)));
     }
     let arguments;
     parenthesized!(arguments in content);
     let setting_name: LitStr = arguments.parse()?;
     Ok(setting_name.value())
+}
+
+/// Whether what follows is a call, `<function>(…)`.
+fn peeks_a_call(content: ParseStream<'_>) -> bool {
+    content.peek(Ident) && content.peek2(syn::token::Paren)
 }
 
 /// Parse `flow = <PinFlow>`'s value: `Value`, `Stream` or `Trigger`.
@@ -529,21 +495,24 @@ fn parse_pin_flow(flow_ident: &Ident, port_name: &str) -> syn::Result<PinFlow> {
         })
 }
 
-fn rendered_port_family_names() -> String {
-    PortFamily::ALL
-        .iter()
-        .map(|family| format!("`{family}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// The Texture a port declaring `pin_type = Texture` carries: of the pixel formats its
-/// `formats` key states, any when it states none.
+/// `formats` key states, any when an input states none. An output states the formats it
+/// writes, so a link to it is judged by them.
 fn texture_of_the_formats_stated(
     family_keys: &PortFamilyDeclaration,
     port_name: &str,
+    direction: PortDirection,
     pin_type_span: proc_macro2::Span,
 ) -> syn::Result<PinType> {
+    if direction == PortDirection::Output && family_keys.formats.is_empty() {
+        return Err(syn::Error::new(
+            pin_type_span,
+            format!(
+                "Texture output `{port_name}` states no pixel format — add `formats = [\"…\"]`, \
+                 the formats it writes, so a link to it is judged by them"
+            ),
+        ));
+    }
     let pixel_formats = family_keys
         .formats
         .iter()
@@ -603,23 +572,6 @@ fn parse_pin_type(pin_type_ident: &Ident, port_name: &str) -> syn::Result<PinTyp
         })
 }
 
-/// Parse `family = <Family>`'s value.
-fn parse_port_family(family_ident: &Ident, port_name: &str) -> syn::Result<PortFamily> {
-    PortFamily::ALL
-        .into_iter()
-        .find(|family| family_ident == family.declaration_name())
-        .ok_or_else(|| {
-            syn::Error::new(
-                family_ident.span(),
-                format!(
-                    "port `{port_name}` declares `family = {family_ident}` — a port's family is \
-                     one of {}",
-                    rendered_port_family_names()
-                ),
-            )
-        })
-}
-
 /// Parse `["a", "b"]`, a list of string literals.
 fn parse_string_literal_list(content: ParseStream<'_>, key: &str) -> syn::Result<Vec<String>> {
     let list: syn::ExprArray = content.parse().map_err(|_| {
@@ -643,27 +595,19 @@ fn parse_string_literal_list(content: ParseStream<'_>, key: &str) -> syn::Result
         .collect()
 }
 
-/// Parse `from_config("key")` or `from_setting("name")`, when that is what follows, into the
-/// config key or setting the fact is read from; the node's port facts read its settings laid over
-/// its config, so both name a value of the one map.
-fn parse_from_config_key(content: ParseStream<'_>) -> syn::Result<Option<String>> {
-    if !(content.peek(Ident) && content.peek2(syn::token::Paren)) {
+/// Parse `from_setting("name")`, when that is what follows, into the setting the fact is read
+/// from.
+fn parse_the_setting_a_fact_is_read_from(content: ParseStream<'_>) -> syn::Result<Option<String>> {
+    if !peeks_a_call(content) {
         return Ok(None);
     }
-    let function: Ident = content.parse()?;
-    if function != "from_config" && function != "from_setting" {
-        return Err(syn::Error::new(
-            function.span(),
-            format!(
-                "expected `from_config(\"<config key>\")` or `from_setting(\"<setting>\")`, \
-                 found `{function}(…)`"
-            ),
-        ));
-    }
-    let arguments;
-    parenthesized!(arguments in content);
-    let config_key: LitStr = arguments.parse()?;
-    Ok(Some(config_key.value()))
+    parse_from_setting(content, |function| {
+        format!(
+            "expected `from_setting(\"<setting>\")`, found `{function}(…)` — a Rust node holds \
+             no config, so a fact read at setup is read from one of its settings"
+        )
+    })
+    .map(Some)
 }
 
 /// Parse one family key's value into `family_keys`; which family and
@@ -676,22 +620,22 @@ fn parse_port_family_key(
 ) -> syn::Result<()> {
     match family_key {
         "names" => {
-            family_keys.names = Some(match parse_from_config_key(content)? {
-                Some(config_key) => OutputPortDeclaredNames::FromConfig { config_key },
+            family_keys.names = Some(match parse_the_setting_a_fact_is_read_from(content)? {
+                Some(setting_name) => OutputPortDeclaredNames::FromConfig {
+                    config_key: setting_name,
+                },
                 None => {
                     OutputPortDeclaredNames::Stated(parse_string_literal_list(content, "names")?)
                 }
             });
         }
         "requires" => family_keys.requires = parse_string_literal_list(content, "requires")?,
-        "requires_codec" => {
-            family_keys.requires_codec = parse_string_literal_list(content, "requires_codec")?
-        }
         "formats" => family_keys.formats = parse_string_literal_list(content, "formats")?,
-        "codec" => family_keys.codec = Some(content.parse::<LitStr>()?.value()),
         "rate" => {
-            family_keys.rate = Some(match parse_from_config_key(content)? {
-                Some(config_key) => ChannelsOutputPortSampleRate::FromConfig { config_key },
+            family_keys.rate = Some(match parse_the_setting_a_fact_is_read_from(content)? {
+                Some(setting_name) => ChannelsOutputPortSampleRate::FromConfig {
+                    config_key: setting_name,
+                },
                 None => {
                     let rate: LitInt = content.parse()?;
                     ChannelsOutputPortSampleRate::Stated(rate.base10_parse()?)
@@ -699,8 +643,10 @@ fn parse_port_family_key(
             });
         }
         "frame_rate" => {
-            family_keys.frame_rate = Some(match parse_from_config_key(content)? {
-                Some(config_key) => ImageOutputPortFrameRate::FromConfig { config_key },
+            family_keys.frame_rate = Some(match parse_the_setting_a_fact_is_read_from(content)? {
+                Some(setting_name) => ImageOutputPortFrameRate::FromConfig {
+                    config_key: setting_name,
+                },
                 None => {
                     let frames_per_second: LitInt = content.parse()?;
                     ImageOutputPortFrameRate::Stated(streamlib_node_schema::ImageStreamFrameRate {

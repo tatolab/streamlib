@@ -349,7 +349,7 @@ async fn a_kept_value_that_no_longer_fits_its_input_is_forgotten_as_the_stream_l
               "type": InputLifetimeTestNode::node_class_import_path().as_str(),
               "input_values": { "flash": 0.1 } },
             { "id": mixer, "name": "mixer",
-              "type": super::input_value_set_tests::InputValueTestNode::node_class_import_path()
+              "type": super::input_value_test_node::InputValueTestNode::node_class_import_path()
                   .as_str() },
         ],
         "links": [],

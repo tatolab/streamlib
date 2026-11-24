@@ -61,7 +61,7 @@ pub mod logging {
     };
 }
 
-pub use streamlib_macros::{node, node_config, node_settings};
+pub use streamlib_macros::{node, node_settings};
 
 #[cfg(doctest)]
 pub struct NodeAttributeAcceptsNoIdentity;
@@ -267,7 +267,7 @@ pub mod sdk {
     pub use crate::schemars;
     pub use crate::serde_json;
 
-    pub use streamlib_macros::{node, node_config, node_settings};
+    pub use streamlib_macros::{node, node_settings};
 
     pub mod permissions {
         pub use crate::{request_audio_permission, request_camera_permission};

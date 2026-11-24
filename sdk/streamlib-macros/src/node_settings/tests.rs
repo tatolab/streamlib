@@ -95,6 +95,23 @@ fn a_field_without_a_description_is_refused_by_name() {
 }
 
 #[test]
+fn a_description_that_is_neither_a_literal_nor_a_const_path_is_refused() {
+    let refused = refusal(
+        TokenStream::new(),
+        quote! {
+            struct BlurSettings {
+                #[description = include_str!("kernel_size.md")]
+                kernel_size: u32,
+            }
+        },
+    );
+    assert!(
+        refused.contains("string literal or the path of a `const`"),
+        "{refused}"
+    );
+}
+
+#[test]
 fn arguments_generics_and_unnamed_fields_are_refused() {
     let described = quote! {
         struct BlurSettings {

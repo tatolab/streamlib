@@ -14,8 +14,8 @@ use super::*;
 fn a_port_name_declared_twice_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("dup", family = Image, delivery_profile = "newest"),
-        input("dup", family = Image, delivery_profile = "newest"),
+        input("dup", pin_type = Texture, delivery_profile = "newest"),
+        input("dup", pin_type = Texture, delivery_profile = "newest"),
     });
     assert!(
         msg.contains("the port name `dup` is declared more than once"),
@@ -27,8 +27,8 @@ fn a_port_name_declared_twice_is_an_error() {
 fn an_input_and_an_output_sharing_a_name_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("video", family = Image, delivery_profile = "newest"),
-        output("video", family = Image),
+        input("video", pin_type = Texture, delivery_profile = "newest"),
+        output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert!(
         msg.contains("the port name `video` is declared more than once"),
@@ -40,9 +40,9 @@ fn an_input_and_an_output_sharing_a_name_is_an_error() {
 fn two_ports_that_cast_alike_are_an_error_naming_both() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("videoOut", family = Image),
-        output("video_out", family = Image),
-        output("VideoOut", family = Image),
+        output("videoOut", pin_type = Texture, formats = ["rgba8_unorm"]),
+        output("video_out", pin_type = Texture, formats = ["rgba8_unorm"]),
+        output("VideoOut", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert!(
         msg.contains("the ports `videoOut` and `VideoOut` both cast to `videoout`"),
@@ -54,8 +54,8 @@ fn two_ports_that_cast_alike_are_an_error_naming_both() {
 fn a_port_is_declared_under_its_cast_and_keeps_its_spelling_for_the_marker() {
     let parsed = parse_ok(quote! {
         execution = manual,
-        input("VidéoIn", family = Image, delivery_profile = "newest"),
-        output("videoOut", family = Image),
+        input("VidéoIn", pin_type = Texture, delivery_profile = "newest"),
+        output("videoOut", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert_eq!(parsed.inputs[0].declared_marker_ident, "VidéoIn");
     assert_eq!(parsed.inputs[0].cast_name, "videoin");
@@ -98,7 +98,7 @@ fn a_port_name_that_is_not_an_identifier_is_an_error() {
 fn a_decomposed_spelling_is_declared_as_its_composed_identifier() {
     let parsed = parse_ok(quote! {
         execution = manual,
-        output("Vide\u{301}oOut", family = Image),
+        output("Vide\u{301}oOut", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert_eq!(parsed.outputs[0].declared_marker_ident, "Vid\u{e9}oOut");
     assert_eq!(parsed.outputs[0].cast_name, "videoout");
@@ -108,7 +108,7 @@ fn a_decomposed_spelling_is_declared_as_its_composed_identifier() {
 fn a_port_name_casting_to_nothing_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("日本", family = Image),
+        output("日本", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert!(msg.contains("cannot name anything"), "got: {msg}");
 }
@@ -136,7 +136,7 @@ fn input_delivery_profile_is_accepted() {
     // an `input(...)` and reaches the parsed port.
     let parsed = parse_ok(quote! {
         execution = manual,
-        input("video_in", family = Image, delivery_profile = "ordered"),
+        input("video_in", pin_type = Texture, delivery_profile = "ordered"),
     });
     assert_eq!(
         parsed.inputs[0].delivery_profile.as_deref(),
@@ -196,7 +196,7 @@ fn a_port_states_the_names_it_had_and_an_input_that_it_may_be_unset() {
     let parsed = parse_ok(quote! {
         execution = manual,
         input("gain", pin_type = Float, former_names = ["Level", "amount"], may_be_unset = true),
-        input("frames", family = Image, delivery_profile = "newest", former_names = ["video"]),
+        input("frames", pin_type = Texture, delivery_profile = "newest", former_names = ["video"]),
         output("out", pin_type = Float),
     });
     assert_eq!(parsed.inputs[0].former_names, ["level", "amount"]);
@@ -209,7 +209,7 @@ fn a_port_states_the_names_it_had_and_an_input_that_it_may_be_unset() {
     assert!(schema.inputs[0].may_be_unset);
 }
 
-/// `may_be_unset` is an input's, and both facts need a pin to be stated on; a port does not list
+/// `may_be_unset` is an input's; a port does not list
 /// its own name, or one name twice, as a name it had.
 #[test]
 fn a_former_name_or_may_be_unset_that_cannot_hold_is_an_error() {
@@ -220,14 +220,6 @@ fn a_former_name_or_may_be_unset_that_cannot_hold_is_an_error() {
     assert!(
         on_an_output.contains("`may_be_unset` is declared by an input"),
         "{on_an_output}"
-    );
-    let with_no_pin = parse_err(quote! {
-        execution = manual,
-        input("records", family = Records, delivery_profile = "newest", former_names = ["rows"]),
-    });
-    assert!(
-        with_no_pin.contains("has no pin type to state them on"),
-        "{with_no_pin}"
     );
     let its_own_name = parse_err(quote! {
         execution = manual,
@@ -251,7 +243,7 @@ fn a_former_name_or_may_be_unset_that_cannot_hold_is_an_error() {
 fn input_without_a_delivery_profile_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("video_in", family = Records),
+        input("video_in", pin_type = from_setting("bundle_type"), flow = Stream),
     });
     assert!(
         msg.contains("input port `video_in` must declare a `delivery_profile`"),
@@ -269,7 +261,7 @@ fn output_without_a_delivery_profile_stays_valid() {
     // profile is the correct shape, not a missing declaration.
     let parsed = parse_ok(quote! {
         execution = manual,
-        output("video", family = Image),
+        output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     assert_eq!(parsed.outputs[0].delivery_profile, None);
 }
@@ -281,12 +273,35 @@ fn output_without_a_delivery_profile_stays_valid() {
 fn the_unknown_port_key_error_offers_every_key_a_port_accepts() {
     let msg = parse_err(quote! {
         execution = reactive,
-        input("audio", family = Channels, delivery_profile = "ordered", frobnicate = "yes"),
+        input("audio", pin_type = Audio, delivery_profile = "ordered", frobnicate = "yes"),
     });
 
     assert!(msg.contains("unknown port key `frobnicate`"), "got: {msg}");
     for key in ["delivery_profile", "description", "audio_window"] {
         assert!(msg.contains(key), "the list must offer `{key}`; got: {msg}");
+    }
+}
+
+/// No pin type a Rust port names travels on Packets, so a Packets key is no key of a Rust port.
+///
+/// Mental-revert: a Rust port takes `codec` and is refused only as a family that does not take it.
+#[test]
+fn a_packets_key_is_refused_as_an_unknown_port_key() {
+    for key in [
+        quote! { codec = "h264" },
+        quote! { requires_codec = ["h264"] },
+    ] {
+        let msg = parse_err(quote! {
+            execution = reactive,
+            output("packets", pin_type = Tensor, #key),
+        });
+        let (_, offered) = msg
+            .split_once("expected")
+            .unwrap_or_else(|| panic!("an unknown port key; {key}: {msg}"));
+        assert!(
+            !offered.contains("codec"),
+            "the list offers no Packets key; {key}: {msg}"
+        );
     }
 }
 
@@ -307,7 +322,7 @@ fn an_audio_window_declares_its_five_values() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(
                 sample_rate = 16_000,
@@ -339,7 +354,7 @@ fn an_omitted_hop_defaults_to_the_window_size() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 400)
         ),
@@ -352,7 +367,7 @@ fn an_omitted_hop_defaults_to_the_window_size() {
 fn the_sentinel_is_a_whole_contract() {
     let parsed = parse_ok(quote! {
         execution = manual,
-        input("audio", family = Channels, delivery_profile = "ordered", audio_window = match_device),
+        input("audio", pin_type = Audio, delivery_profile = "ordered", audio_window = match_device),
     });
 
     assert_eq!(
@@ -365,8 +380,8 @@ fn the_sentinel_is_a_whole_contract() {
 fn a_port_declaring_no_contract_carries_none() {
     let parsed = parse_ok(quote! {
         execution = reactive,
-        input("video_in", family = Image, delivery_profile = "newest"),
-        output("video_out", family = Image),
+        input("video_in", pin_type = Texture, delivery_profile = "newest"),
+        output("video_out", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
 
     assert_eq!(parsed.inputs[0].audio_window, None);
@@ -379,7 +394,7 @@ fn a_partial_contract_is_refused_naming_the_missing_fields() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(sample_rate = 16_000, window_size = 512)
         ),
@@ -397,7 +412,7 @@ fn a_hop_above_the_window_size_is_refused_naming_both_numbers() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(
                 sample_rate = 16_000,
@@ -421,7 +436,7 @@ fn a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs() 
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "newest",
             audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512)
         ),
@@ -441,7 +456,7 @@ fn a_contract_declared_before_its_profile_is_refused_the_same() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512),
             delivery_profile = "newest"
         ),
@@ -458,7 +473,7 @@ fn a_contract_declared_before_its_profile_is_refused_the_same() {
 fn the_sentinel_beside_a_skipping_delivery_profile_is_refused_too() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("audio", family = Channels, delivery_profile = "newest", audio_window = match_device),
+        input("audio", pin_type = Audio, delivery_profile = "newest", audio_window = match_device),
     });
 
     assert!(
@@ -473,7 +488,7 @@ fn a_zero_numeric_field_is_refused_naming_the_field_and_the_value() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 0)
         ),
@@ -493,7 +508,7 @@ fn a_negative_numeric_field_is_refused_by_name() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(sample_rate = -1, channels = 1, dtype = "f32", window_size = 512)
         ),
@@ -511,7 +526,7 @@ fn an_unknown_dtype_is_refused_listing_the_legal_values() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(sample_rate = 16_000, channels = 1, dtype = "i16", window_size = 512)
         ),
@@ -529,7 +544,7 @@ fn an_unknown_audio_window_field_is_refused_listing_the_five() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(
                 sample_rate = 16_000,
@@ -551,7 +566,7 @@ fn an_unknown_audio_window_field_is_refused_listing_the_five() {
 fn an_unknown_sentinel_is_refused_naming_the_only_one() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("audio", family = Channels, delivery_profile = "ordered", audio_window = match_whatever),
+        input("audio", pin_type = Audio, delivery_profile = "ordered", audio_window = match_whatever),
     });
 
     assert!(
@@ -564,7 +579,7 @@ fn an_unknown_sentinel_is_refused_naming_the_only_one() {
 fn an_audio_window_on_an_output_is_refused() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("audio_out", family = Channels, audio_window = match_device),
+        output("audio_out", pin_type = Audio, audio_window = match_device),
     });
 
     assert!(
@@ -577,17 +592,16 @@ fn an_audio_window_on_an_output_is_refused() {
 fn a_ports_family_and_its_keys_reach_the_schema() {
     let parsed = parse_ok(quote! {
         execution = manual,
-        input("signals", delivery_profile = "ordered", family = Channels, requires = ["rpm"]),
-        input("video", delivery_profile = "newest", family = Image, formats = ["rgba8_unorm"]),
+        input("signals", delivery_profile = "ordered", pin_type = Audio, requires = ["rpm"]),
+        input("video", delivery_profile = "newest", pin_type = Texture, formats = ["rgba8_unorm"]),
         output(
             "telemetry",
-            family = Channels,
-            names = from_config("channel_names"),
+            pin_type = Audio,
+            names = from_setting("channel_names"),
             rate = 48000,
             dtype = "f32"
         ),
-        output("packets", family = Packets, codec = "h264"),
-        output("tensor", family = Array, names = ["boxes"], residency = "gpu"),
+        output("tensor", pin_type = Tensor, names = ["boxes"], residency = "gpu"),
     });
     let schema = parsed.to_node_schema();
 
@@ -610,9 +624,8 @@ fn a_ports_family_and_its_keys_reach_the_schema() {
         Some(ChannelsOutputPortSampleRate::Stated(48_000))
     );
     assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F32));
-    assert_eq!(schema.outputs[1].family.codec.as_deref(), Some("h264"));
     assert_eq!(
-        schema.outputs[2].family.residency,
+        schema.outputs[1].family.residency,
         Some(ArrayOutputPortResidency::Gpu)
     );
 }
@@ -621,7 +634,7 @@ fn a_ports_family_and_its_keys_reach_the_schema() {
 fn a_family_key_the_family_does_not_take_is_refused_naming_the_port() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("video", family = Image, names = ["x"]),
+        output("video", pin_type = Texture, formats = ["rgba8_unorm"], names = ["x"]),
     });
     assert!(
         msg.contains("\"video\"") && msg.contains("`names=`"),
@@ -630,30 +643,13 @@ fn a_family_key_the_family_does_not_take_is_refused_naming_the_port() {
 }
 
 #[test]
-fn a_port_without_a_family_is_refused_naming_the_families() {
+fn a_family_key_its_pin_types_family_does_not_take_is_refused() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("video"),
+        output("level", pin_type = Float, formats = ["rgba8_unorm"]),
     });
     assert!(
-        msg.contains("port `video` declares no family") && msg.contains("`Records`"),
-        "got {msg}"
-    );
-}
-
-#[test]
-fn a_family_key_without_a_family_and_an_unknown_family_are_refused() {
-    let msg = parse_err(quote! {
-        execution = manual,
-        output("video", formats = ["rgba8_unorm"]),
-    });
-    assert!(msg.contains("without `family = …`"), "got {msg}");
-    let msg = parse_err(quote! {
-        execution = manual,
-        output("video", family = Picture),
-    });
-    assert!(
-        msg.contains("Picture") && msg.contains("`Image`"),
+        msg.contains("states `formats=`, which a Channels output does not take"),
         "got {msg}"
     );
 }
@@ -662,9 +658,9 @@ fn a_family_key_without_a_family_and_an_unknown_family_are_refused() {
 fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
     let parsed = parse_ok(quote! {
         execution = manual,
-        output("video", family = Image, frame_rate = 30),
-        output("preview", family = Image, frame_rate = from_config("frames_per_second")),
-        output("bare", family = Image),
+        output("video", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = 30),
+        output("preview", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = from_setting("frames_per_second")),
+        output("bare", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     let schema = parsed.to_node_schema();
 
@@ -690,7 +686,7 @@ fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
 fn a_catalog_key_is_refused_as_unknown() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("text", family = Image, catalog = TextEntry { format: "vtt" }),
+        output("text", pin_type = Texture, formats = ["rgba8_unorm"], catalog = TextEntry { format: "vtt" }),
     });
 
     assert!(msg.contains("unknown port key `catalog`"), "got {msg}");
@@ -702,7 +698,7 @@ fn a_second_audio_window_on_one_port_is_refused() {
         execution = manual,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window = match_device,
             audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512)
@@ -721,7 +717,7 @@ fn the_projected_schema_carries_the_contract_the_port_declared() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(
                 sample_rate = 16_000,
@@ -755,7 +751,7 @@ fn a_contract_omitting_its_channel_count_parses_as_following_the_source() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(
                 sample_rate = 48_000,
@@ -798,7 +794,7 @@ fn a_contract_missing_a_value_other_than_the_count_is_still_refused_by_name() {
     ] {
         let msg = parse_err(quote! {
             execution = reactive,
-            input("audio", family = Channels, delivery_profile = "ordered", #declaration),
+            input("audio", pin_type = Audio, delivery_profile = "ordered", #declaration),
         });
 
         assert!(
@@ -814,7 +810,7 @@ fn a_port_following_the_source_projects_its_count_as_the_source() {
         execution = reactive,
         input(
             "audio",
-            family = Channels,
+            pin_type = Audio,
             delivery_profile = "ordered",
             audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960)
         ),
@@ -840,7 +836,7 @@ fn a_port_following_the_source_projects_its_count_as_the_source() {
 fn a_contract_less_ports_projection_carries_no_audio_window_key() {
     let parsed = parse_ok(quote! {
         execution = reactive,
-        input("video_in", family = Image, delivery_profile = "newest"),
+        input("video_in", pin_type = Texture, delivery_profile = "newest"),
     });
 
     let schema = parsed.to_node_schema();
@@ -852,6 +848,7 @@ fn a_contract_less_ports_projection_carries_no_audio_window_key() {
             "description": null,
             "delivery_profile": "newest",
             "family": {"family": "image"},
+            "pin_type": {"type": "texture"},
         })
     );
 }
@@ -859,11 +856,11 @@ fn a_contract_less_ports_projection_carries_no_audio_window_key() {
 #[test]
 fn a_positional_port_schema_is_an_error() {
     // A port declares a name and keyed options only. The old
-    // `input("name", family = Image, <schema>, ...)` form must fail to parse, not be
+    // `input("name", pin_type = Texture, <schema>, ...)` form must fail to parse, not be
     // silently accepted and dropped.
     let msg = parse_err(quote! {
         execution = manual,
-        input("in1", family = Image, "@tatolab/core/VideoFrame", delivery_profile = "newest"),
+        input("in1", pin_type = Texture, "@tatolab/core/VideoFrame", delivery_profile = "newest"),
     });
     assert!(
         msg.contains("a port declares no type") && msg.contains("input(\"in1\", ...)"),
@@ -875,7 +872,7 @@ fn a_positional_port_schema_is_an_error() {
 fn a_bare_any_port_schema_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        output("out1", family = Image, any),
+        output("out1", pin_type = Texture, formats = ["rgba8_unorm"], any),
     });
     assert!(
         msg.contains("a port declares no type") && msg.contains("output(\"out1\", ...)"),

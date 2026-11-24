@@ -12,8 +12,8 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Attribute, Fields, ItemStruct, LitStr, Meta, Token};
 
+use crate::field_attribute::take_the_declared_description;
 use crate::field_attribute::take_the_one_attribute_named;
-use crate::node_config::take_the_declared_description;
 
 const OPTIONS_ATTRIBUTE: &str = "options";
 const AMONG_THE_BUNDLES_ITS_STREAM_DECLARES_ATTRIBUTE: &str =

@@ -113,7 +113,7 @@ impl streamlib_engine::ContinuousNode for EveryThirdStepTickSink::Node {
     }
 }
 
-#[streamlib::sdk::node(execution = manual, output("frames", pin_type = Texture))]
+#[streamlib::sdk::node(execution = manual, output("frames", pin_type = Texture, formats = ["rgba8_unorm"]))]
 pub struct SelfPacedSource;
 
 impl streamlib_engine::ManualNode for SelfPacedSource::Node {
@@ -125,7 +125,7 @@ impl streamlib_engine::ManualNode for SelfPacedSource::Node {
 #[streamlib::sdk::node(
     execution = manual,
     paced_by_real_time,
-    output("frames", pin_type = Texture),
+    output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 pub struct RealTimePacedManualSource;
 

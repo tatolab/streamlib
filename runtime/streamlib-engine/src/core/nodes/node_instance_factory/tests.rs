@@ -454,9 +454,12 @@ fn a_rust_node_declaring_a_camel_case_port_registers_its_cast() {
 
 #[test]
 fn a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any() {
-    use crate::core::test_support::MockSourceTakingOneSetting;
+    use crate::core::test_support::{MockSourceTakingOneSetting, MockSourceTakingOneSettingConfig};
     let factory = NodeInstanceFactory::new();
-    factory.register::<MockSourceTakingOneSetting::Node>();
+    factory.register_taking_a_config_for_a_test::<
+        MockSourceTakingOneSetting::Node,
+        MockSourceTakingOneSettingConfig,
+    >();
     let python_class = class_import_path("my_app.nodes:Blur");
     factory
         .register_descriptor_only(descriptor_for(python_class.as_str()))
@@ -494,6 +497,39 @@ fn a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_t
     factory
         .refuse_a_config_the_node_type_does_not_take("blur", &python_class, &a_misspelled_setting)
         .unwrap();
+}
+
+/// A live edit of the config of a node a test registered taking a config is taken when the
+/// config type takes it, and refused saying why when it does not.
+///
+/// Mental-revert: the edit is read as the node's own config, which takes none, so a width it
+/// would take is refused.
+#[test]
+fn a_live_config_edit_of_a_node_taking_a_config_for_a_test_is_read_as_that_config() {
+    use crate::core::test_support::{MockSourceTakingOneSetting, MockSourceTakingOneSettingConfig};
+    let factory = NodeInstanceFactory::new();
+    factory.register_taking_a_config_for_a_test::<
+        MockSourceTakingOneSetting::Node,
+        MockSourceTakingOneSettingConfig,
+    >();
+    let mut node = factory
+        .create(&GraphNode::new(
+            MockSourceTakingOneSetting::node_class_import_path(),
+            None,
+            "front",
+            Some(serde_json::json!({"frame_width": 640})),
+            vec![],
+            vec![],
+        ))
+        .expect("the node is built");
+
+    node.apply_config_json(&serde_json::json!({"frame_width": 1280}))
+        .expect("a width the config takes is taken");
+    let refusal = node
+        .apply_config_json(&serde_json::json!({"frame_width": "wide"}))
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("invalid type"), "{refusal}");
 }
 
 #[test]
@@ -534,7 +570,7 @@ fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
 #[crate::node(
     execution = manual,
     output("level", pin_type = Float),
-    output("frames", pin_type = Texture),
+    output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
 struct ValueAndStreamSource;
 

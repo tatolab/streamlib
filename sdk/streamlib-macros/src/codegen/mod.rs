@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, TokenStream};
 use quote::{quote, quote_spanned};
 use streamlib_node_schema::NodeSchema;
 
@@ -39,27 +39,12 @@ pub(crate) fn generate_from_parsed_node_attr(
     let schema = &parsed.to_node_schema();
     let settings = NodeSettingsEmitted::of(parsed.settings_type.as_ref());
 
-    let config_type = match &parsed.config_type {
-        Some(path) => quote! { #path },
-        None => quote! { __streamlib_sdk::nodes::EmptyConfig },
-    };
-
-    let config_field_name = parsed
-        .config_type
-        .as_ref()
-        .map(|_| Ident::new(&parsed.config_field_name, Span::call_site()));
-
     // Extract custom fields from the user's struct
     let custom_fields = extract_custom_fields(item);
     let refused_field_attribute_diagnostics = refused_field_attribute_diagnostics(item);
 
-    let node_struct = generate_node_struct_from_schema(
-        schema,
-        &config_field_name,
-        &settings,
-        &custom_fields,
-        &member_visibility,
-    );
+    let node_struct =
+        generate_node_struct_from_schema(schema, &settings, &custom_fields, &member_visibility);
     let input_link_module = generate_port_marker_module(
         PortDirection::Input,
         &parsed.inputs,
@@ -77,10 +62,6 @@ pub(crate) fn generate_from_parsed_node_attr(
         &member_visibility,
         &NodeDeclaredMetaAndPortDescriptions::of(parsed),
         &node_type_minted(parsed.built_in_node, &schema.name),
-        &NodeConfigEmitted {
-            config_type: &config_type,
-            field_name: &config_field_name,
-        },
         &settings,
         &custom_fields,
     );
@@ -96,8 +77,7 @@ pub(crate) fn generate_from_parsed_node_attr(
         }
     };
 
-    let module_alias_and_constructor =
-        settings.module_alias_and_constructor(&member_visibility, &config_type);
+    let module_alias_and_constructor = settings.module_alias_and_constructor(&member_visibility);
 
     // Generate unsafe Send impl if required (for !Send types like AVFoundation)
     let unsafe_send_impl = if schema.runtime.options.unsafe_send {
@@ -221,14 +201,10 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
 
 fn generate_node_struct_from_schema(
     schema: &NodeSchema,
-    config_field_name: &Option<Ident>,
     settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
     member_visibility: &TokenStream,
 ) -> TokenStream {
-    let config_field = config_field_name.as_ref().map(|name| {
-        quote! { #member_visibility #name: Config, }
-    });
     let settings_fields = settings.struct_fields(member_visibility);
 
     let ipc_input_field = if !schema.inputs.is_empty() {
@@ -261,7 +237,6 @@ fn generate_node_struct_from_schema(
         #member_visibility struct Node {
             #ipc_input_field
             #ipc_output_field
-            #config_field
             #settings_fields
             #(#custom_field_defs)*
         }
@@ -285,28 +260,15 @@ fn node_type_minted(built_in_node: bool, node_class_short_name: &str) -> TokenSt
     }
 }
 
-/// The config a node declares: its type (`EmptyConfig` when it declares none) and the field
-/// that holds it.
-struct NodeConfigEmitted<'a> {
-    config_type: &'a TokenStream,
-    field_name: &'a Option<Ident>,
-}
-
 fn generate_node_impl_from_schema(
     schema: &NodeSchema,
     member_visibility: &TokenStream,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     node_type_minted: &TokenStream,
-    config: &NodeConfigEmitted<'_>,
     settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
     use streamlib_node_schema::NodeSchemaExecution;
-
-    let NodeConfigEmitted {
-        config_type,
-        field_name: config_field_name,
-    } = config;
 
     let node_class_short_name = &schema.name;
 
@@ -371,27 +333,13 @@ fn generate_node_impl_from_schema(
             }
         };
 
-    let from_config_body =
-        generate_from_config_from_schema(schema, config_field_name, settings, custom_fields);
-    let descriptor_impl = generate_descriptor_from_schema(
-        schema,
-        declared_meta_and_port_descriptions,
-        config_type,
-        settings,
-    );
-    let node_spec_constructor = settings.node_spec_constructor(member_visibility, config_type);
+    let from_config_body = generate_from_config_from_schema(schema, settings, custom_fields);
+    let descriptor_impl =
+        generate_descriptor_from_schema(schema, declared_meta_and_port_descriptions, settings);
+    let node_spec_constructor = settings.node_spec_constructor(member_visibility);
     let settings_taken_from_the_input_values = settings.settings_taken_from_the_input_values();
     let setup_marked = settings.setup_marked();
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
-
-    let update_config = config_field_name.as_ref().map(|name| {
-        quote! {
-            fn update_config(&mut self, config: Self::Config) -> __streamlib_sdk::error::Result<()> {
-                self.#name = config;
-                Ok(())
-            }
-        }
-    });
 
     quote! {
         impl Node {
@@ -418,7 +366,7 @@ fn generate_node_impl_from_schema(
         }
 
         impl __streamlib_sdk::nodes::__generated_private::GeneratedNode for Node {
-            type Config = #config_type;
+            type Config = __streamlib_sdk::nodes::EmptyConfig;
 
             fn name(&self) -> &str {
                 Self::NAME
@@ -439,8 +387,6 @@ fn generate_node_impl_from_schema(
                 let _ = ctx;
                 #stop_impl
             }
-
-            #update_config
 
             #settings_taken_from_the_input_values
 
@@ -488,7 +434,6 @@ fn generate_node_impl_from_schema(
 /// Generate from_config method from schema.
 fn generate_from_config_from_schema(
     schema: &NodeSchema,
-    config_field_name: &Option<Ident>,
     settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
@@ -504,10 +449,6 @@ fn generate_from_config_from_schema(
         quote! {}
     };
 
-    let config_init = config_field_name
-        .as_ref()
-        .map(|name| quote! { #name: config, })
-        .unwrap_or_default();
     let settings_init = settings.struct_field_initializers();
 
     // Initialize custom fields with Default::default()
@@ -524,11 +465,10 @@ fn generate_from_config_from_schema(
         .collect();
 
     quote! {
-        fn from_config(config: Self::Config) -> __streamlib_sdk::error::Result<Self> {
+        fn from_config(_config: Self::Config) -> __streamlib_sdk::error::Result<Self> {
             Ok(Self {
                 #ipc_input_init
                 #ipc_output_init
-                #config_init
                 #settings_init
                 #(#custom_field_inits)*
             })
@@ -566,7 +506,6 @@ impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
 fn generate_descriptor_from_schema(
     schema: &NodeSchema,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
-    config_type: &TokenStream,
     settings: &NodeSettingsEmitted<'_>,
 ) -> TokenStream {
     let description =
@@ -661,7 +600,7 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    let config_schema = settings.descriptor_config_schema(config_type);
+    let config_schema = settings.descriptor_config_schema();
     let setting_inputs = settings.descriptor_setting_inputs();
 
     let scheduling = schema.scheduling.as_ref().map(|s| {

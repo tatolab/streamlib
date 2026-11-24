@@ -200,7 +200,7 @@ fn image_files_asset_is_a_string_setting_carrying_its_project_asset_annotation()
     assert_eq!(rendered["config_schema"], config_schema);
 }
 
-/// A built-in's settings as `#[node_config]` derives them: an integer of 32 bits keeps its size,
+/// A built-in's config as its schema document derives it: an integer of 32 bits keeps its size,
 /// one of 64 bits has no pin type, and a field reached through a definition is read through it.
 #[test]
 fn a_built_ins_settings_are_typed_by_their_rust_format_and_a_definition_is_read_through() {

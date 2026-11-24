@@ -4,7 +4,6 @@
 mod codegen;
 mod field_attribute;
 mod grammar;
-mod node_config;
 mod node_settings;
 
 use grammar as attribute_grammar;
@@ -32,15 +31,6 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         &parsed,
         sdk_root(),
     ))
-}
-
-#[proc_macro_attribute]
-pub fn node_config(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_struct = parse_macro_input!(item as ItemStruct);
-    match node_config::expand_node_config(attr.into(), item_struct, sdk_root()) {
-        Ok(expanded) => expanded.into(),
-        Err(refusal) => refusal.to_compile_error().into(),
-    }
 }
 
 /// Declares a struct as a node type's settings: each field an input read once, when the node is

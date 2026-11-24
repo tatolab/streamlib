@@ -64,7 +64,7 @@ async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
         &engine,
         "add_node",
         json!({ "stream": stream_id, "name": "mixer",
-                "type": super::input_value_set_tests::InputValueTestNode::node_class_import_path().as_str() }),
+                "type": super::input_value_test_node::InputValueTestNode::node_class_import_path().as_str() }),
     )
     .await;
     let mixer = mixed["added_nodes"][0]["node"].as_str().unwrap().to_owned();
