@@ -42,6 +42,7 @@ mod stream_graph_default_port_and_variable_names;
 mod stream_graph_document;
 mod stream_graph_fragment_fold;
 mod stream_graph_placed_stream_level;
+mod stream_graph_placed_stream_ports;
 mod stream_graph_studio_contract;
 mod tatolab_view_manifest;
 #[cfg(feature = "history")]

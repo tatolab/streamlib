@@ -17,7 +17,11 @@ use crate::project_views::{
 use crate::stream_document_upgrade::{NODE_INPUT_VALUES_KEY, stream_document_in_the_current_shape};
 use crate::stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
-    asset_references_made_references_into_the_import,
+    asset_references_made_references_into_the_import, node_uuid_of,
+};
+use crate::stream_graph_placed_stream_ports::{
+    PortsAPlacedStreamDeclares, each_end_on_a_placing_node_renamed,
+    the_refusal_of_an_interface_node_the_placed_stream_does_not_hold,
 };
 
 /// The keys of a held stream's graph document a stream fragment places: its graph.
@@ -94,7 +98,9 @@ fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTree
 /// import's folder, `imports/<folder>/<module>:<qualname>`, so it is imported from there. Refused, naming each stream, when a stream holds itself, directly
 /// or through another stream, and when a held stream does not read. A node, at any level, that
 /// is typed `<project name>:<view folder>` for a view the project or one of its imports brings
-/// takes that view's type.
+/// takes that view's type. A link onto a stream fragment naming its port by the UUID of a
+/// `GraphInput` or `GraphOutput` node of the stream it places names the port that node declares,
+/// and is refused, naming the fragment, when that stream holds no such node.
 pub fn graph_document_as_its_project_reads_it(
     project_directory: &Path,
     graph_document: &Value,
@@ -293,7 +299,55 @@ fn resolve_each_stream_fragment_of_the_level(
             resolve_each_stream_fragment_of_the_level(context, fragment, streams_being_resolved)?;
         }
     }
-    Ok(())
+    each_link_onto_a_placed_stream_named_by_the_port_its_fragment_declares(level)
+}
+
+/// Each link of `level` onto a stream fragment that names its port by the UUID of an interface
+/// node of the stream it places, named by the port that node declares in the fragment it
+/// places; refused when that stream holds no such interface node.
+fn each_link_onto_a_placed_stream_named_by_the_port_its_fragment_declares(
+    level: &mut Map<String, Value>,
+) -> Result<(), String> {
+    if !matches!(level.get("links"), Some(Value::Array(_))) {
+        return Ok(());
+    }
+    let Some(Value::Array(mut links)) = level.remove("links") else {
+        return Ok(());
+    };
+    let nodes = match level.get("nodes") {
+        Some(Value::Array(nodes)) => nodes.as_slice(),
+        _ => &[],
+    };
+    let renamed = each_end_on_a_placing_node_renamed(
+        nodes,
+        &mut links,
+        &mut |placing_node| {
+            let fragment_nodes = placing_node.get("fragment")?.get("nodes")?.as_array()?;
+            Some(PortsAPlacedStreamDeclares::of(
+                fragment_nodes.iter().filter_map(Value::as_object),
+            ))
+        },
+        &mut |ports, placing_node, direction, port| {
+            let (Ok(interface_node), Some(fragment_node)) =
+                (Uuid::parse_str(port), node_uuid_of(placing_node))
+            else {
+                return Ok(None);
+            };
+            let placed = Uuid::new_v5(&fragment_node, interface_node.as_bytes());
+            ports
+                .port_of(direction, placed)
+                .map(|port| Some(port.to_owned()))
+                .ok_or_else(|| {
+                    the_refusal_of_an_interface_node_the_placed_stream_does_not_hold(
+                        placing_node,
+                        direction,
+                        interface_node,
+                    )
+                })
+        },
+    );
+    level.insert("links".to_owned(), Value::Array(links));
+    renamed
 }
 
 fn the_fragment_held_stream_places(

@@ -852,6 +852,10 @@ impl StreamGraphDocument {
         &mut self.link_values
     }
 
+    pub(crate) fn node_and_link_values_mut(&mut self) -> (&mut [Value], &mut [Value]) {
+        (&mut self.node_values, &mut self.link_values)
+    }
+
     /// `link` with each end's node by UUID, an end naming its node by name resolved through
     /// the nodes the document holds.
     pub(crate) fn link_read_from(&self, link: &Value) -> Option<StreamGraphDocumentLink> {

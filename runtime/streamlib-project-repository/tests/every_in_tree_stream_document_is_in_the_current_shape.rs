@@ -58,3 +58,39 @@ fn the_upgrade_finds_nothing_to_change_in_any_in_tree_stream_document() {
          so the upgrade rewrites it: {in_an_old_shape:#?}"
     );
 }
+
+#[test]
+fn every_in_tree_link_onto_a_placed_stream_names_its_port_by_the_interface_nodes_uuid() {
+    let tree = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut documents = Vec::new();
+    every_stream_document_under(&tree, &mut documents);
+    let mut linked_by_a_port_name = Vec::new();
+    for path in &documents {
+        let document: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("a stream document reads"))
+                .unwrap_or_else(|refusal| panic!("{path:?} is not JSON: {refusal}"));
+        let placing_nodes: Vec<&str> = document["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|node| node["type"] == streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE)
+            .filter_map(|node| node["id"].as_str())
+            .collect();
+        for link in document["links"].as_array().into_iter().flatten() {
+            for end in [&link["source"], &link["target"]] {
+                let on_a_placing_node = end["node"]
+                    .as_str()
+                    .is_some_and(|node| placing_nodes.contains(&node));
+                let port = end["port"].as_str().unwrap_or_default();
+                if on_a_placing_node && uuid::Uuid::parse_str(port).is_err() {
+                    linked_by_a_port_name.push(format!("{}: {port}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        linked_by_a_port_name.is_empty(),
+        "these links onto a placed stream name its port by name rather than by the UUID of its \
+         `GraphInput` or `GraphOutput` node: {linked_by_a_port_name:#?}"
+    );
+}

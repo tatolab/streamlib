@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::stream_fragment_references::each_view_placed_by_its_projects_name_placed_by_its_type;
+use crate::stream_graph_placed_stream_ports::each_link_onto_a_placed_stream_named_by_its_port;
 
 impl ProjectRepository {
     /// Every asset, ordered by UUID: each sidecar's, and each stream's, read from its graph
@@ -251,7 +252,8 @@ impl ProjectRepository {
     }
 
     /// The graph document of the stream asset `stream`, as it is on disk now, each node placing a
-    /// view by its project's name read as placing it by the view's type.
+    /// view by its project's name read as placing it by the view's type, and each link onto a
+    /// port of a placed stream naming the port as the stream declares it now.
     pub fn stream_graph_document(
         &self,
         stream: Uuid,
@@ -280,6 +282,10 @@ impl ProjectRepository {
             &self.project_directory,
             document.node_values_mut(),
         );
+        let (nodes, links) = document.node_and_link_values_mut();
+        each_link_onto_a_placed_stream_named_by_its_port(nodes, links, &mut |held_stream| {
+            self.the_ports_a_placed_stream_declares(assets, None, held_stream)
+        });
         Ok((stream_asset.path.clone(), document))
     }
 

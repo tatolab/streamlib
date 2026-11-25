@@ -2,10 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::stream_fragment_references::the_stream_document_of_an_import;
+use crate::stream_graph_placed_stream_ports::{
+    PortsAPlacedStreamDeclares, each_link_onto_a_placed_stream_named_by_its_interface_node,
+};
 
 impl ProjectRepository {
     /// Write each staged graph document at the path its stream asset holds once the
-    /// transaction applies, answering what each held before so a refusal can restore it.
+    /// transaction applies, each link onto a port of a placed stream naming the port by the
+    /// UUID of the interface node declaring it, answering what each held before so a refusal
+    /// can restore it.
     pub(super) fn write_staged_documents(
         &self,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
@@ -18,7 +24,20 @@ impl ProjectRepository {
             };
             let on_disk = stream_asset.path.on_disk_under(&self.project_directory);
             let bytes_before = std::fs::read(&on_disk).ok();
-            let written = staged_document
+            let mut document_on_disk = staged_document.clone();
+            let (nodes, links) = document_on_disk.node_and_link_values_mut();
+            each_link_onto_a_placed_stream_named_by_its_interface_node(
+                nodes,
+                links,
+                &mut |held_stream| {
+                    self.the_ports_a_placed_stream_declares(
+                        staged_assets,
+                        Some(staged_documents),
+                        held_stream,
+                    )
+                },
+            );
+            let written = document_on_disk
                 .canonical_bytes()
                 .map_err(ProjectRepositoryRefusal::from)
                 .and_then(|bytes| write_file_whole(&on_disk, &bytes));
@@ -29,6 +48,36 @@ impl ProjectRepository {
             written_documents.push((on_disk, bytes_before));
         }
         Ok(written_documents)
+    }
+
+    /// The ports the stream `held_stream`, the input value `stream` of a node placing one, places
+    /// declare: a stream of the project as `staged_documents` holds it, or as it is on disk, or
+    /// a stream of an import as the import's folder holds it; `None` when it does not read.
+    pub(super) fn the_ports_a_placed_stream_declares(
+        &self,
+        staged_assets: &BTreeMap<Uuid, ProjectAsset>,
+        staged_documents: Option<&BTreeMap<Uuid, StreamGraphDocument>>,
+        held_stream: &Value,
+    ) -> Option<PortsAPlacedStreamDeclares> {
+        let stream = Uuid::parse_str(held_stream.get("asset")?.as_str()?).ok()?;
+        if let Some(from) = held_stream.get("from") {
+            let from = Uuid::parse_str(from.as_str()?).ok()?;
+            let (document, _) =
+                the_stream_document_of_an_import(&self.project_directory, from, stream).ok()?;
+            let nodes = document.get("nodes")?.as_array()?;
+            return Some(PortsAPlacedStreamDeclares::of(
+                nodes.iter().filter_map(Value::as_object),
+            ));
+        }
+        if let Some(staged) = staged_documents.and_then(|staged| staged.get(&stream)) {
+            return Some(PortsAPlacedStreamDeclares::of(staged.node_objects()));
+        }
+        let stream_asset = staged_assets
+            .get(&stream)
+            .filter(|asset| asset.kind == ProjectAssetKind::Stream)?;
+        let bytes = std::fs::read(stream_asset.path.on_disk_under(&self.project_directory)).ok()?;
+        let document = StreamGraphDocument::from_bytes(&bytes).ok()?;
+        Some(PortsAPlacedStreamDeclares::of(document.node_objects()))
     }
 
     /// Remove each graph document at `paths`, answering what each held so a refusal can
