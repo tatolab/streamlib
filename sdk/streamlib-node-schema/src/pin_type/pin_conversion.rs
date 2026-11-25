@@ -197,7 +197,7 @@ impl NodeDescriptor {
         let wired_inputs: Vec<&PortDescriptor> = self
             .inputs
             .iter()
-            .filter(|input| input.input_mode.is_none_or(|mode| !mode.is_a_setting()))
+            .filter(|input| !input.is_a_setting())
             .collect();
         let ([wired_input], [output]) = (wired_inputs.as_slice(), self.outputs.as_slice()) else {
             return refused(format!(

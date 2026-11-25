@@ -887,9 +887,12 @@ class _PinReading:
                 raise self._refusal(
                     f"{self._pin_named} carries {entry!r}, which no pin reads. To fix: drop "
                     f"it; a pin reads `NumberRange`, `NumberStep`, `NumberUnit`, `PinMeaning`, "
-                    f"`PinControl`, `FormerlyNamed` and `Description`.",
+                    f"`PinControl`, `FrameRate`, `FrameRateFromSetting`, `FormerlyNamed` and "
+                    f"`Description`.",
                     "pin_annotation_not_taken",
                 )
+            if annotation_name == "frame_rate":
+                self._refuse_a_frame_rate_on_what_is_no_texture_output(entry, row)
             if annotation_name in annotations:
                 raise self._refusal(
                     f"{self._pin_named} carries two `{type(entry).__name__}`s; it takes one. "
@@ -905,6 +908,25 @@ class _PinReading:
                 )
             annotations[annotation_name] = annotation_on_the_wire(entry)
         return annotations
+
+    def _refuse_a_frame_rate_on_what_is_no_texture_output(
+        self, entry: object, row: PinTypeDescription
+    ) -> None:
+        stated = type(entry).__name__
+        if self._direction == "input":
+            raise self._refusal(
+                f"{self._pin_named} carries `{stated}`, and a frame rate is stated by the output "
+                f"whose stream runs at it, not by an input. To fix: drop it, and state it on the "
+                f"Texture output that sends the frames.",
+                "pin_annotation_not_taken",
+            )
+        if "frame_rate" not in row.annotations:
+            raise self._refusal(
+                f"{self._pin_named} carries `{stated}`, and a {row.label} pin has no frame rate; "
+                f"a frame rate is stated on a Texture output. To fix: type it "
+                f"`OutputPin[Annotated[Texture, {stated}(...)]]`, or drop the `{stated}`.",
+                "pin_annotation_not_taken",
+            )
 
     def _default_value(
         self,

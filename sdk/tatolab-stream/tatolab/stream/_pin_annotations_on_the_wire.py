@@ -10,7 +10,14 @@ from typing import Any, Final
 
 from ._contract_pin_types import PinAnnotationName, PinTypeDescription
 from ._number_range import NumberRange
-from ._pin_annotations import NumberStep, NumberUnit, PinControl, PinMeaning
+from ._pin_annotations import (
+    FrameRate,
+    FrameRateFromSetting,
+    NumberStep,
+    NumberUnit,
+    PinControl,
+    PinMeaning,
+)
 
 __all__ = [
     "ANNOTATION_NAME_OF_EACH_CLASS",
@@ -25,6 +32,8 @@ ANNOTATION_NAME_OF_EACH_CLASS: Final[dict[type, PinAnnotationName]] = {
     NumberUnit: "unit",
     PinMeaning: "meaning",
     PinControl: "control",
+    FrameRate: "frame_rate",
+    FrameRateFromSetting: "frame_rate",
 }
 
 
@@ -38,6 +47,12 @@ def annotation_on_the_wire(annotation: object) -> Any:
             }
         case NumberStep():
             return annotation.step
+        case FrameRate():
+            return {
+                "stated": {"numerator": annotation.numerator, "denominator": annotation.denominator}
+            }
+        case FrameRateFromSetting():
+            return {"from_config": {"config_key": annotation.setting}}
         case NumberUnit() | PinMeaning() | PinControl():
             return annotation.text
         case _:
