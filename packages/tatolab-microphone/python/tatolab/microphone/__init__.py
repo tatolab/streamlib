@@ -66,7 +66,7 @@ class MicrophoneSource:
         PinControl("audio_capture_device"),
         Description(
             "Backend-named capture device, as the runtime's `list_audio_capture_devices` lists "
-            "it. Unset: the backend's default device. A name the backend cannot open raises "
+            "it. Unset or empty: the backend's default device. A name the backend cannot open raises "
             "rather than landing on a different device — a wrong device id is a wiring error. "
             "On the PipeWire backend, `<sink>.monitor` captures what that sink is playing, and "
             "`@DEFAULT_MONITOR@` what the default output is playing when the node opens."
@@ -83,7 +83,7 @@ class MicrophoneSource:
         """Lend `audio` to the native half and open the capture stream, so a
         device that cannot be opened refuses the node here."""
         module_host_table = ctx.open_module_host_table(output_ports=[AUDIO_OUTPUT_PORT])
-        self._capture = _native.MicrophoneCapture(module_host_table, self.device_id)
+        self._capture = _native.MicrophoneCapture(module_host_table, self.device_id or None)
         log.info(
             f"MicrophoneSource: capture stream opened on "
             f"{self.device_id or '<default>'} at {self._capture.sample_rate} Hz × "

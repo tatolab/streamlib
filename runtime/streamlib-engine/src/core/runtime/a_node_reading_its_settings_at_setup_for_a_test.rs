@@ -4,8 +4,9 @@
 //! A node type for tests that reads three settings once, at setup, and records each setup it
 //! runs: what a test of a node rebuilt to take a setting read at setup runs; and a node type
 //! whose Integer output, which flows as a value, a test writes, to wire into one of them, with
-//! a setting read at setup of its own that another source's wire may feed; and a node type
-//! like the first whose pin group of Integer layers follows its wires.
+//! a setting read at setup of its own that another source's wire may feed; a node type like the
+//! first whose pin group of Integer layers follows its wires; and one whose pin group of Integer
+//! taps holds as many slots as its count says.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Once};
@@ -470,4 +471,56 @@ fn register_the_layered_node_type_once() {
 pub fn the_node_type_built_for_its_layers() -> NodeClassImportPath {
     register_the_layered_node_type_once();
     the_layered_node_type()
+}
+
+fn the_tapped_node_type() -> NodeClassImportPath {
+    NodeClassImportPath::new(format!("{}::NodeBuiltForItsTaps", module_path!()))
+        .expect("a module path and a type name make an import path")
+}
+
+/// The output pin group of the tapped node type, each slot one Integer `tap`, and the input
+/// setting its count.
+pub const THE_TAPPED_NODES_PIN_GROUP: &str = "taps";
+
+fn register_the_tapped_node_type_once() {
+    static REGISTERED: Once = Once::new();
+    REGISTERED.call_once(|| {
+        let descriptor = NodeDescriptor::new(
+            NodeClassShortName::new("NodeBuiltForItsTaps").expect("a type name is a short name"),
+            the_tapped_node_type(),
+            "a node built for the taps its pin group's count says",
+        )
+        .with_pin_group(PinGroupDescriptor::new(
+            THE_TAPPED_NODES_PIN_GROUP,
+            "each tap",
+            Vec::new(),
+            vec![PortDescriptor::new(
+                "tap",
+                "tap",
+                false,
+                PinDeclaration::exactly(PinType::Integer { exact_size: None }),
+            )],
+        ));
+        let described = descriptor.clone();
+        NODE_REGISTRY
+            .register_with_a_constructor_for_a_test(
+                descriptor,
+                Box::new(move |node: &GraphNode| {
+                    Ok(Box::new(NodeReadingItsSettingsAtSetup {
+                        node_uuid: node.node_uuid,
+                        descriptor: described.clone(),
+                        settings: Map::new(),
+                    }))
+                }),
+            )
+            .expect("register the tapped node type");
+    });
+}
+
+/// The node type built for the taps its output pin group of Integer `tap` outputs holds, as many
+/// as its count input says, recording each setup it runs as the type reading its settings at
+/// setup does; registered once per process.
+pub fn the_node_type_built_for_its_taps() -> NodeClassImportPath {
+    register_the_tapped_node_type_once();
+    the_tapped_node_type()
 }
