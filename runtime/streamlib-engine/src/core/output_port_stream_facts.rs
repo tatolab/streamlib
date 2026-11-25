@@ -423,7 +423,7 @@ mod tests {
             ..ImageStreamFacts::default()
         };
         facts
-            .replace_facts_of("video", measured.clone().into())
+            .replace_facts_of("video", measured.into())
             .expect("an Image port carries Image facts");
         facts.take_the_families_declared_by(
             std::slice::from_ref(&port),

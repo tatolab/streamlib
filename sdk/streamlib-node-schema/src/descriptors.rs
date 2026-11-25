@@ -337,9 +337,11 @@ impl NodeDescriptor {
 
     /// Why an output's frame rate, read from one of the node type's settings, cannot be read: it
     /// names a setting the node type does not declare, or one of a type that holds no frame
-    /// rate; `None` when every such output names a setting that holds one.
+    /// rate; `None` when every such output, its own or one each slot of a pin group holds, names
+    /// a setting that holds one.
     pub fn refusal_of_a_frame_rate_no_setting_holds(&self) -> Option<String> {
-        self.outputs.iter().find_map(|output| {
+        let each_pin_groups_outputs = self.pin_groups.iter().flat_map(|group| &group.outputs);
+        self.outputs.iter().chain(each_pin_groups_outputs).find_map(|output| {
             let declared = output.declared_pin()?;
             let Some(ImageOutputPortFrameRate::FromConfig { config_key }) =
                 declared.annotations.frame_rate.as_ref()
@@ -361,15 +363,25 @@ impl NodeDescriptor {
             let setting_type = setting
                 .declared_pin()
                 .and_then(PinDeclaration::into_resolved)?;
-            let holds_a_frame_rate = matches!(
-                setting_type.pin_type,
-                PinType::Integer { .. } | PinType::Bundle { .. }
-            );
+            let holds_a_frame_rate = match &setting_type.pin_type {
+                PinType::Integer { .. } => true,
+                PinType::Bundle { members, .. } => {
+                    let mut member_names: Vec<&str> = members
+                        .iter()
+                        .filter(|member| matches!(member.member_type, PinType::Integer { .. }))
+                        .map(|member| member.name.as_str())
+                        .collect();
+                    member_names.sort_unstable();
+                    members.len() == 2 && member_names == ["denominator", "numerator"]
+                }
+                _ => false,
+            };
             (!holds_a_frame_rate).then(|| {
                 format!(
                     "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \
                      and that setting is a {}, which holds no frame rate. To fix: type \
-                     {config_key:?} an Integer of frames per second",
+                     {config_key:?} an Integer of frames per second, or a Bundle of an Integer \
+                     `numerator` and an Integer `denominator`",
                     output.name, setting_type.pin_type
                 )
             })
