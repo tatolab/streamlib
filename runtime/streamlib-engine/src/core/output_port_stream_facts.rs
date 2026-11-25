@@ -231,15 +231,22 @@ impl UpstreamStreamFactsByInboundLink {
     }
 }
 
-/// The facts output `port` declares, its family and frame rate resolved against `node_config`.
+/// The facts output `port` declares, its family and frame rate resolved against `node_config`:
+/// the frame rate its pin states, else the one its family declaration states.
 fn the_facts_declared_by(
     port: &PortInfo,
     node_config: Option<&serde_json::Value>,
 ) -> StreamFactsOfOneOutputPort {
     let family = output_port_family_resolved_against_config(&port.family, node_config)
         .unwrap_or(port.family.family);
+    let stated_frame_rate = port
+        .annotations
+        .0
+        .frame_rate
+        .as_ref()
+        .or(port.family.frame_rate.as_ref());
     let declared_frame_rate =
-        output_port_frame_rate_resolved_against_config(&port.family, node_config)
+        output_port_frame_rate_resolved_against_config(stated_frame_rate, node_config)
             .ok()
             .flatten();
     let current_facts = declared_frame_rate.map(|frame_rate| {
@@ -326,6 +333,50 @@ mod tests {
             StreamFactsOfOutputPorts::as_declared_by(&[camera_video], None)
                 .current_facts_of("video"),
             None
+        );
+    }
+
+    /// Mental-revert: reading the frame rate from the family declaration alone gives a port whose
+    /// pin states it, as a Python Texture output's does, no frame rate.
+    #[test]
+    fn an_image_port_carries_the_frame_rate_its_pin_states_stated_or_read_from_a_setting() {
+        let port_stating = |frame_rate: ImageOutputPortFrameRate| PortInfo {
+            annotations: crate::core::graph::PortAnnotations(
+                crate::core::descriptors::PinAnnotations {
+                    frame_rate: Some(frame_rate),
+                    ..Default::default()
+                },
+            ),
+            ..output_port("video", PortFamilyDeclaration::of_family(PortFamily::Image))
+        };
+        let image_facts_at = |numerator, denominator| {
+            Some(PortStreamFacts::Image(ImageStreamFacts {
+                frame_rate: Some(ImageStreamFrameRate {
+                    numerator,
+                    denominator,
+                }),
+                ..ImageStreamFacts::default()
+            }))
+        };
+
+        let stated = port_stating(ImageOutputPortFrameRate::Stated(ImageStreamFrameRate {
+            numerator: 30_000,
+            denominator: 1_001,
+        }));
+        assert_eq!(
+            StreamFactsOfOutputPorts::as_declared_by(&[stated], None).current_facts_of("video"),
+            image_facts_at(30_000, 1_001)
+        );
+        let from_a_setting = port_stating(ImageOutputPortFrameRate::FromConfig {
+            config_key: "frames_per_second".into(),
+        });
+        assert_eq!(
+            StreamFactsOfOutputPorts::as_declared_by(
+                &[from_a_setting],
+                Some(&json!({"frames_per_second": 24}))
+            )
+            .current_facts_of("video"),
+            image_facts_at(24, 1)
         );
     }
 

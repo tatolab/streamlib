@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pin_type::{DeclaredPinType, NodeInputMode, PinDeclaration, PinFlow, PinType};
 use crate::{
-    AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
-    NodeValueLifetime, PortFamilyDeclaration,
+    AudioWindowContract, ImageOutputPortFrameRate, NodeClassImportPath, NodeClassShortName,
+    NodeKind, NodeScheduling, NodeValueLifetime, PortFamilyDeclaration,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -327,6 +327,30 @@ impl NodeDescriptor {
                 | DeclaredPinType::OneOf { .. }
                 | DeclaredPinType::Any => None,
             }
+        })
+    }
+
+    /// Why an output's frame rate, read from one of the node type's settings, cannot be read: it
+    /// names a setting the node type does not declare; `None` when every such output names one.
+    pub fn refusal_of_a_frame_rate_no_setting_holds(&self) -> Option<String> {
+        self.outputs.iter().find_map(|output| {
+            let declared = output.declared_pin()?;
+            let Some(ImageOutputPortFrameRate::FromConfig { config_key }) =
+                declared.annotations.frame_rate.as_ref()
+            else {
+                return None;
+            };
+            let a_setting_holds_it = self.inputs.iter().any(|input| {
+                input.name == *config_key
+                    && input.input_mode.is_some_and(|mode| mode.is_a_setting())
+            });
+            (!a_setting_holds_it).then(|| {
+                format!(
+                    "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \
+                     and the node declares no setting {config_key:?}",
+                    output.name
+                )
+            })
         })
     }
 

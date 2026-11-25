@@ -244,7 +244,7 @@ fn an_image_outputs_frame_rate_resolves_from_its_class_or_its_nodes_config() {
         ..PortFamilyDeclaration::of_family(PortFamily::Image)
     };
     assert_eq!(
-        output_port_frame_rate_resolved_against_config(&stated, None),
+        output_port_frame_rate_resolved_against_config(stated.frame_rate.as_ref(), None),
         Ok(Some(crate::ImageStreamFrameRate {
             numerator: 30_000,
             denominator: 1_001
@@ -257,7 +257,10 @@ fn an_image_outputs_frame_rate_resolves_from_its_class_or_its_nodes_config() {
         ..PortFamilyDeclaration::of_family(PortFamily::Image)
     };
     let resolved = |config: serde_json::Value| {
-        output_port_frame_rate_resolved_against_config(&from_config, Some(&config))
+        output_port_frame_rate_resolved_against_config(
+            from_config.frame_rate.as_ref(),
+            Some(&config),
+        )
     };
     assert_eq!(
         resolved(serde_json::json!({"frames_per_second": 60})),
