@@ -76,9 +76,9 @@ fn an_output_following_an_input_is_judged_by_the_formats_it_hands_on() {
                 connects,
             ) {
                 (Ok(_), true) => {}
-                (Err(Error::PinLinkRefused(refusal)), false) => {
-                    let words = refusal.to_string();
-                    assert!(words.contains("Nv12") || words.contains("nv12"), "{words}");
+                (Err(refused @ (Error::PinLinkRefused(_) | Error::InvalidLink(_))), false) => {
+                    let words = refused.to_string();
+                    assert!(words.contains("nv12"), "{words}");
                 }
                 (outcome, _) => panic!(
                     "the handed-on picture into {sink_type}, passthrough feeding first: \

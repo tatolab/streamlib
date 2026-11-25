@@ -157,7 +157,7 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
                 return Err(format!("port `{name}` names the `pin_type` it carries"));
             }
             (None, Some(family)) => {
-                return Err(the_words_of_a_port_declared_by_family(&name, &family));
+                return Err(the_words_of_a_port_declared_by_family(name, &family));
             }
             (Some(_), Some(_)) => {
                 return Err(format!(
