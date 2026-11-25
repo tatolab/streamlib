@@ -19,6 +19,7 @@ use merged_inputs::{MERGED_INPUTS, MergedInput};
 use node_references_that_became_wires::INPUTS_THAT_HELD_A_NODE_REFERENCE;
 use pin_type_chosen_from_a_family_and_codec::PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC;
 
+mod get_variables_named_by_their_setter;
 mod inputs_moved_onto_pin_group_slots;
 mod interface_pin_type_named_by_its_family;
 mod merged_inputs;
@@ -189,8 +190,9 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
 /// `config` and `pins` fold into `input_values`: a name `input_values` already holds wins, then
 /// `pins`, then `config`. Then the old inputs that became one take it, the merged value or the
 /// combining node a wired part keeps, the numbered inputs that became a pin group's slots
-/// move onto them, wires and values, each node reference that became a wire is wired, and the
-/// family and codec that became a pin type choice are chosen. It never refuses: a node it has
+/// move onto them, wires and values, each node reference that became a wire is wired, each
+/// `GetVariable` naming a variable its level sets names that setter by UUID, and the family and
+/// codec that became a pin type choice are chosen. It never refuses: a node it has
 /// nothing to do for is left as written.
 pub fn upgrade_stream_document_in_place(document: &mut Value) -> bool {
     upgrade_the_document_with(document, MERGED_INPUTS)
@@ -225,6 +227,8 @@ fn upgrade_the_document_with(document: &mut Value, merged_inputs: &[MergedInput]
             &mut links,
             INPUTS_THAT_HELD_A_NODE_REFERENCE,
         );
+        any_changed |=
+            get_variables_named_by_their_setter::the_gets_of_the_level_named_by_their_setter(nodes);
     }
     if had_links || !links.is_empty() {
         level.insert("links".to_owned(), Value::Array(links));

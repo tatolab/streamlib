@@ -4,7 +4,7 @@
 use super::*;
 use crate::core::descriptors::{PinDeclaration, PinType};
 
-fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
+pub(super) fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
     GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
         .with_graph_variables_resolved(
@@ -13,13 +13,13 @@ fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolv
         )
 }
 
-fn refusal_of(graph: serde_json::Value) -> String {
+pub(super) fn refusal_of(graph: serde_json::Value) -> String {
     resolved(graph)
         .expect_err("the graph's variables are refused")
         .to_string()
 }
 
-fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
+pub(super) fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
     GraphSnapshotLink {
         source: LinkPortRefOutput {
             node: source.0.to_string(),
@@ -34,7 +34,7 @@ fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
     }
 }
 
-fn a_camera_variable_read_by_two_displays() -> serde_json::Value {
+pub(super) fn a_camera_variable_read_by_two_displays() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
             {"name": "camera", "type": "rig:Camera"},
@@ -109,7 +109,9 @@ fn a_get_with_no_setter_is_refused_naming_it_and_the_variables_set() {
     );
 }
 
-fn resolved_once_flattened(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
+pub(super) fn resolved_once_flattened(
+    graph: serde_json::Value,
+) -> Result<GraphSnapshotWithVariablesResolved> {
     let flattening = GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
         .with_graph_fragments_flattened(&crate::core::nodes::NodeTypesOneStreamResolves::new())
@@ -122,7 +124,7 @@ fn resolved_once_flattened(graph: serde_json::Value) -> Result<GraphSnapshotWith
         )
 }
 
-fn a_fragment_whose_tint_reads_the_variable_shade(
+pub(super) fn a_fragment_whose_tint_reads_the_variable_shade(
     nodes_beside_the_tint: serde_json::Value,
     links_beside_the_tints: serde_json::Value,
 ) -> serde_json::Value {
@@ -148,7 +150,7 @@ fn a_fragment_whose_tint_reads_the_variable_shade(
     serde_json::json!({"nodes": nodes, "links": links})
 }
 
-fn a_shade_set_inside() -> serde_json::Value {
+pub(super) fn a_shade_set_inside() -> serde_json::Value {
     a_fragment_whose_tint_reads_the_variable_shade(
         serde_json::json!([
             {"name": "palette", "type": "rig:Palette"},
@@ -162,7 +164,7 @@ fn a_shade_set_inside() -> serde_json::Value {
     )
 }
 
-fn a_camera_through(
+pub(super) fn a_camera_through(
     fragments: &[(&str, serde_json::Value)],
     top_level_nodes: serde_json::Value,
     top_level_links: serde_json::Value,
@@ -536,6 +538,7 @@ fn a_get_nothing_reads_is_placed_with_no_setter_and_one_linked_is_refused() {
     assert_eq!(
         resolution.variables_as_drawn.what_each_get_reads["get-camra"],
         WhatAGetVariableReads {
+            variable: Some("camra".to_string()),
             variables_it_may_read: vec!["camera".to_string()],
             value: None,
         }
@@ -578,7 +581,25 @@ fn a_setter_holding_another_variable_node_is_refused() {
         ));
     assert!(refusal_of(graph).contains("holds variable node `get-connection`"));
 }
-fn a_rendered_node(name: &str) -> GraphNodeOutput {
+/// A render of a graph holding `nodes` alone, for a variable's render to go into.
+pub(super) fn a_graph_response_of(nodes: Vec<GraphNodeOutput>) -> GraphResponse {
+    GraphResponse {
+        asset: None,
+        display_name: None,
+        stream: None,
+        clock: Default::default(),
+        condition: None,
+        nodes,
+        links: Vec::new(),
+        references: Vec::new(),
+        machine: "vm".to_string(),
+        groups: Vec::new(),
+        studio: None,
+        function_node_pool: None,
+    }
+}
+
+pub(super) fn a_rendered_node(name: &str) -> GraphNodeOutput {
     GraphNodeOutput {
         id: format!("id-{name}"),
         node_type: NodeClassImportPath::new("rig:Node").unwrap(),

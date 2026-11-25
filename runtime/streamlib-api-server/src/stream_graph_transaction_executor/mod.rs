@@ -17,12 +17,13 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_control_contract::GraphEditMode;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, GRAPH_DOCUMENT_FILE_SUFFIX, GraphEditStream,
-    PREVIOUS_VALUE_NODE_INPUT_PORT, PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE,
-    ProjectAction, ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation,
-    ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered,
-    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
+    AppliedProjectTransaction, GET_VARIABLE_NODE_TYPE, GRAPH_DOCUMENT_FILE_SUFFIX,
+    GRAPH_VARIABLE_NAME_CONFIG_KEY, GraphEditStream, PREVIOUS_VALUE_NODE_INPUT_PORT,
+    PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE, ProjectAction,
+    ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation, ProjectRelativeAssetPath,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
+    ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
     ProjectTransactionNodeInsertedOnALink, ProjectTransactionReversal,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction,
     StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
@@ -35,7 +36,8 @@ use streamlib_project_repository::{
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
     input_values_after_the_set, is_a_node_type_of_the_graph_itself,
     stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
-    the_stream_document_of_an_import, the_value_held_on_the_input_or_its_member,
+    the_input_values_of_a_get_reading, the_stream_document_of_an_import,
+    the_value_held_on_the_input_or_its_member,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,

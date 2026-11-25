@@ -261,6 +261,56 @@ fn an_unlocked_placed_stream_puts_a_copy_of_its_nodes_in_place_and_its_undo_plac
     );
 }
 
+/// A placed stream holding a `SetVariable` and a `GetVariable` naming it, unlocked, puts the
+/// getter in place naming its setter's copy.
+///
+/// Mental-revert: copying a node under a new UUID without its getters' `set_variable` leaves the
+/// getter naming the held stream's setter, which the level does not hold.
+#[test]
+fn an_unlocked_placed_stream_keeps_each_getter_naming_its_setters_copy() {
+    const SETTER: &str = "00000000-0000-4000-8000-0000000000f1";
+    const GETTER: &str = "00000000-0000-4000-8000-0000000000f2";
+    let document = a_chain_of_five_nodes();
+    let collapse = collapse_blur_and_tint(&document);
+    let collapsed = applied(&document, &the_fold_of(&collapse));
+    let mut saved = collapse.placed_stream_document.clone();
+    let nodes = saved["nodes"].as_array_mut().unwrap();
+    nodes.push(
+        json!({ "id": SETTER, "name": "set_glow", "type": "tatolab.stream:SetVariable",
+                       "input_values": { "variable": "glow" } }),
+    );
+    nodes.push(
+        json!({ "id": GETTER, "name": "get_glow", "type": "tatolab.stream:GetVariable",
+                       "input_values": { "set_variable": SETTER } }),
+    );
+    let saved = StreamGraphDocument::from_value(saved).unwrap();
+    let unlock = StreamGraphOperation::UnfoldFragment {
+        fold: collapsed
+            .the_fold_a_fragment_unfolds(
+                Uuid::from_u128(0x99),
+                &|_: &Value| Ok(saved.clone()),
+                &mut fresh_uuids(),
+            )
+            .unwrap(),
+    };
+
+    let unlocked = applied(&collapsed, &unlock);
+
+    let copy_named = |name: &str| {
+        unlocked
+            .nodes()
+            .into_iter()
+            .find(|node| node.name == name)
+            .unwrap_or_else(|| panic!("`{name}` is copied in place"))
+    };
+    let setter = copy_named("set_glow");
+    assert_ne!(setter.id, uuid(SETTER));
+    assert_eq!(
+        copy_named("get_glow").input_values["set_variable"],
+        json!(setter.id.to_string())
+    );
+}
+
 #[test]
 fn an_unlocked_placed_stream_passing_its_input_straight_to_its_output_links_the_source_to_the_reader()
  {

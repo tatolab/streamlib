@@ -594,8 +594,9 @@ fn a_copy_under_new_uuids(level: Value, new_uuid: &mut dyn FnMut() -> Uuid) -> V
     json!({ "nodes": nodes, "links": links })
 }
 
-/// Give each of `nodes` a UUID `new_uuid` makes, each of `links`' ends its node's new one, and
-/// every level a node's subgraph holds the same, its groups and their members included.
+/// Give each of `nodes` a UUID `new_uuid` makes, each of `links`' ends and each `GetVariable`'s
+/// setter its node's new one, and every level a node's subgraph holds the same, its groups and
+/// their members included.
 fn each_node_and_link_end_under_new_uuids(
     nodes: &mut [Value],
     links: &mut [Value],
@@ -610,6 +611,22 @@ fn each_node_and_link_end_under_new_uuids(
         }
         if let Some(Value::Object(subgraph)) = node.get_mut("fragment") {
             each_node_and_group_of_a_subgraph_under_new_uuids(subgraph, new_uuid);
+        }
+    }
+    for get_variable in nodes.iter_mut().filter(|node| {
+        node.get("type").and_then(Value::as_str)
+            == Some(crate::stream_graph_default_port_and_variable_names::GET_VARIABLE_NODE_TYPE)
+    }) {
+        if let Some(Value::String(setter)) = get_variable
+            .get_mut(crate::stream_document_upgrade::NODE_INPUT_VALUES_KEY)
+            .and_then(|input_values| {
+                input_values.get_mut(
+                    crate::stream_graph_default_port_and_variable_names::GET_VARIABLE_SET_VARIABLE_CONFIG_KEY,
+                )
+            })
+            && let Some(fresh) = new_uuid_of_each_held_node.get(setter.as_str())
+        {
+            *setter = fresh.clone();
         }
     }
     for link in links {

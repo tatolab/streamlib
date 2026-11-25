@@ -111,7 +111,7 @@ fn an_image_variable_read_twice_runs_as_two_links_and_renders_as_drawn() {
     }
 
     assert_eq!(
-        the_spec_without_its_node_uuids_in(rendered.clone()),
+        the_spec_naming_each_get_by_its_variable_in(rendered.clone()),
         the_spec_in(graph),
         "graph renders the variables as drawn"
     );
@@ -196,7 +196,7 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
         ])
     );
     assert_eq!(
-        the_spec_without_its_node_uuids_in(rendered.clone()),
+        the_spec_naming_each_get_by_its_variable_in(rendered.clone()),
         the_spec_in(graph)
     );
 

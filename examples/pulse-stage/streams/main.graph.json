@@ -436,7 +436,7 @@
     {
       "id": "3a31e146-2669-5aec-9ced-321c3e4fc041",
       "input_values": {
-        "variable": "clock"
+        "set_variable": "cd97112b-52a7-51fc-b1cd-9e7fe606b05b"
       },
       "name": "get_clock",
       "studio": {
@@ -452,7 +452,7 @@
     {
       "id": "c87ab3e6-cd7a-57fc-946e-421612ae046e",
       "input_values": {
-        "variable": "pulse"
+        "set_variable": "104b3b9d-0104-5a1c-bd3f-aadb796b2210"
       },
       "name": "get_pulse",
       "studio": {

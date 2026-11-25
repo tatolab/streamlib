@@ -13,6 +13,10 @@ pub use streamlib_node_schema::{GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE};
 /// The config key both variable nodes name their variable under.
 pub const GRAPH_VARIABLE_NAME_CONFIG_KEY: &str = "variable";
 
+/// The config key a `GetVariable` names the `SetVariable` node it reads under, by that node's
+/// UUID, so renaming the variable keeps every get reading it.
+pub const GET_VARIABLE_SET_VARIABLE_CONFIG_KEY: &str = "set_variable";
+
 /// The name a `GraphInput` added with none takes: `input` and the first number from 1 no other
 /// `GraphInput` of its level declares.
 const DEFAULT_GRAPH_INPUT_PORT_NAME_PREFIX: &str = "input";
@@ -26,8 +30,9 @@ const DEFAULT_GRAPH_VARIABLE_NAME_PREFIX: &str = "var";
 /// `config`, of a node of `node_type` being added to `level`, holding the name the node takes
 /// when `config` names none: a `GraphInput` the next free `input1`, `input2` …, a `GraphOutput`
 /// the next free `output1` …, a `SetVariable` the next free `var1` …, each unique among its
-/// kind on the level, and a `GetVariable` the variable of the level's last `SetVariable`. Any
-/// other node's config, and a config that names one, is returned as it is.
+/// kind on the level, and a `GetVariable` the level's last `SetVariable`, by its UUID, as
+/// [`the_input_values_of_a_get_reading`] names one. Any other node's config, and a config that
+/// names one, is returned as it is.
 pub fn config_holding_the_default_name_of_a_graph_port_or_variable(
     node_type: &str,
     mut config: Map<String, Value>,
@@ -62,6 +67,11 @@ pub fn config_holding_the_default_name_of_a_graph_port_or_variable(
             ),
         ),
         GET_VARIABLE_NODE_TYPE => {
+            if config.contains_key(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY)
+                || config.contains_key(GRAPH_VARIABLE_NAME_CONFIG_KEY)
+            {
+                return config;
+            }
             let Some(variable_of_the_last_setter) = the_names_nodes_of_the_type_hold(
                 level,
                 SET_VARIABLE_NODE_TYPE,
@@ -70,7 +80,11 @@ pub fn config_holding_the_default_name_of_a_graph_port_or_variable(
             .pop() else {
                 return config;
             };
-            (GRAPH_VARIABLE_NAME_CONFIG_KEY, variable_of_the_last_setter)
+            config.extend(the_input_values_of_a_get_reading(
+                &variable_of_the_last_setter,
+                level,
+            ));
+            return config;
         }
         _ => return config,
     };
@@ -83,6 +97,40 @@ pub fn config_holding_the_default_name_of_a_graph_port_or_variable(
         config.insert(name_key.to_owned(), Value::String(default_name));
     }
     config
+}
+
+/// The input values of a `GetVariable` on `level` reading `variable`: the UUID of the level's
+/// one `SetVariable` of it, so renaming the variable keeps the get reading it, or, while no
+/// setter on `level` sets it, as one of an enclosing level may, or two do, the variable by its
+/// name.
+pub fn the_input_values_of_a_get_reading(
+    variable: &str,
+    level: &StreamGraphDocument,
+) -> Map<String, Value> {
+    let nodes = level.nodes();
+    let mut setters_of_it = nodes.iter().filter(|node| {
+        node.node_type == SET_VARIABLE_NODE_TYPE
+            && node
+                .input_values
+                .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
+                .and_then(Value::as_str)
+                == Some(variable)
+    });
+    match (setters_of_it.next(), setters_of_it.next()) {
+        (Some(setter), None) => the_input_values_naming_the_setter(&setter.id.to_string()),
+        _ => Map::from_iter([(
+            GRAPH_VARIABLE_NAME_CONFIG_KEY.to_owned(),
+            Value::String(variable.to_owned()),
+        )]),
+    }
+}
+
+/// The input values of a `GetVariable` naming the `SetVariable` node of `setter_uuid`.
+pub(crate) fn the_input_values_naming_the_setter(setter_uuid: &str) -> Map<String, Value> {
+    Map::from_iter([(
+        GET_VARIABLE_SET_VARIABLE_CONFIG_KEY.to_owned(),
+        Value::String(setter_uuid.to_owned()),
+    )])
 }
 
 /// The non-empty string each node of `node_type` on `level` holds at `name_key`, in the order
@@ -223,7 +271,27 @@ mod tests {
         );
         assert_eq!(
             the_default_named(GET_VARIABLE_NODE_TYPE, json!({}), &level),
-            json!({"variable": "blur"})
+            json!({"set_variable": "00000000-0000-0000-0000-000000000002"})
+        );
+    }
+
+    #[test]
+    fn a_get_reading_a_variable_no_one_setter_of_the_level_sets_keeps_its_name() {
+        let level = a_level_holding(json!([
+            {"id": "00000000-0000-0000-0000-000000000001", "name": "setvariable",
+             "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "blur"}},
+            {"id": "00000000-0000-0000-0000-000000000002", "name": "setvariable-2",
+             "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "blur"}},
+        ]));
+        assert_eq!(
+            Value::Object(the_input_values_of_a_get_reading("blur", &level)),
+            json!({"variable": "blur"}),
+            "the stream refuses two setters of one variable on a level, naming both"
+        );
+        assert_eq!(
+            Value::Object(the_input_values_of_a_get_reading("outer", &level)),
+            json!({"variable": "outer"}),
+            "a variable no setter of the level sets may be an enclosing level's"
         );
     }
 

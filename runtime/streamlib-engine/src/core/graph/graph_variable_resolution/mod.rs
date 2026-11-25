@@ -16,9 +16,7 @@ use streamlib_node_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_value_re
 
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::PortInfo;
-use crate::core::graph::graph_fragment_flattening::{
-    GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
-};
+use crate::core::graph::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph::input_values::{
     TakesAWireRendered, the_settings_rendered_reading_the_values_held,
@@ -35,10 +33,14 @@ use crate::core::nodes::{
     the_value_port_of_a_graph_variable_node,
 };
 use crate::core::{Error, Result};
+use graph_levels::GraphLevelsOfFlattenedFragments;
 use streamlib_runtime_client_contract::local_api_wire_contract::GraphVariableOnTheWire;
 
+mod graph_levels;
+
 pub use streamlib_project_repository::{
-    GET_VARIABLE_NODE_TYPE, GRAPH_VARIABLE_NAME_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
+    GET_VARIABLE_NODE_TYPE, GET_VARIABLE_SET_VARIABLE_CONFIG_KEY, GRAPH_VARIABLE_NAME_CONFIG_KEY,
+    SET_VARIABLE_NODE_TYPE,
 };
 
 /// The config key a `SetVariable` holding a node reference holds it under.
@@ -74,6 +76,9 @@ pub struct GraphVariablesAsDrawn {
 /// its level or an enclosing one sets, which it may read instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhatAGetVariableReads {
+    /// The variable it reads: the one its setter sets now, when it names its setter, or the
+    /// one it names; `None` while the setter it names is gone.
+    pub variable: Option<String>,
     /// Every variable it may read, sorted.
     pub variables_it_may_read: Vec<String>,
     /// What the setter of its variable holds; `None` while no setter sets it.
@@ -130,10 +135,15 @@ impl GraphVariablesAsDrawn {
             .variable_nodes
             .iter()
             .filter_map(|node| {
-                node.input_values
-                    .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
-                    .and_then(serde_json::Value::as_str)
-                    .map(|variable| (cast(&node.name), variable))
+                let node_cast = cast(&node.name);
+                let variable = match self.what_each_get_reads.get(&node_cast) {
+                    Some(reads) => reads.variable.as_deref(),
+                    None => node
+                        .input_values
+                        .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
+                        .and_then(serde_json::Value::as_str),
+                };
+                variable.map(|variable| (node_cast, variable))
             })
             .collect();
         for (drawn, drawn_position) in self
@@ -234,9 +244,16 @@ impl GraphVariablesAsDrawn {
                     .unwrap_or(&[])
                     .to_vec(),
             };
+            let mut values_its_settings_read = variable_node.input_values.clone();
+            if let Some(variable) = what_the_get_reads.and_then(|reads| reads.variable.as_ref()) {
+                values_its_settings_read.insert(
+                    GRAPH_VARIABLE_NAME_CONFIG_KEY.to_string(),
+                    serde_json::Value::String(variable.clone()),
+                );
+            }
             let settings = the_settings_rendered_reading_the_values_held(
                 &settings_declared,
-                &variable_node.input_values,
+                &values_its_settings_read,
                 TakesAWireRendered::ByTheRuleOnANodeOf(&variable_node.node_type),
             )
             .into_iter();
@@ -371,7 +388,16 @@ pub struct SetVariableAndTheValueItHolds {
 
 struct OneSetter<'graph> {
     node: &'graph GraphSnapshotNode,
+    variable: String,
     holds: ValueASetVariableHolds,
+}
+
+/// The setter a `GetVariable` reads: the `SetVariable` node of a UUID, whatever variable it
+/// sets, or, in a document written before a get named its setter, the setter of a variable.
+#[derive(Debug, Clone)]
+enum SetterAGetNames {
+    OfUuid(uuid::Uuid),
+    OfVariable(String),
 }
 
 impl GraphSnapshot {
@@ -421,22 +447,27 @@ impl GraphSnapshot {
             .map(|node| cast_of(&node.name))
             .collect::<Result<_>>()?;
         let levels = GraphLevelsOfFlattenedFragments::of(fragments_flattened);
-        let mut variable_of_each_get_by_cast: HashMap<String, String> = HashMap::new();
+        let mut setter_of_each_get_by_cast: HashMap<String, SetterAGetNames> = HashMap::new();
         let mut setters_by_level_and_variable: HashMap<(String, String), OneSetter<'_>> =
             HashMap::new();
         for node in &variable_nodes {
-            let variable = variable_a_node_names(node)?;
             if node.node_type.as_str() == GET_VARIABLE_NODE_TYPE {
                 refuse_a_key_a_variable_node_does_not_take(
                     node,
-                    &[GRAPH_VARIABLE_NAME_CONFIG_KEY],
+                    &[
+                        GRAPH_VARIABLE_NAME_CONFIG_KEY,
+                        GET_VARIABLE_SET_VARIABLE_CONFIG_KEY,
+                    ],
                 )?;
-                variable_of_each_get_by_cast.insert(cast_of(&node.name)?, variable);
+                setter_of_each_get_by_cast
+                    .insert(cast_of(&node.name)?, the_setter_a_get_names(node)?);
                 continue;
             }
+            let variable = variable_a_node_names(node)?;
             let setter = OneSetter {
                 node,
                 holds: value_one_setter_holds(self, node, &variable, &is_a_get, &is_a_set)?,
+                variable: variable.clone(),
             };
             if let Some(first) = setters_by_level_and_variable.insert(
                 (levels.level_of(&node.name).to_string(), variable.clone()),
@@ -468,12 +499,21 @@ impl GraphSnapshot {
             }
             sorted(variables.iter())
         };
-        let setter_of = |get_node: &str, variable: &str| -> Result<&OneSetter<'_>> {
+        let setter_of = |get_node: &str, names: &SetterAGetNames| -> Result<&OneSetter<'_>> {
             let mut level = levels.level_of(get_node);
             loop {
-                if let Some(setter) =
-                    setters_by_level_and_variable.get(&(level.to_string(), variable.to_string()))
-                {
+                let found = match names {
+                    SetterAGetNames::OfVariable(variable) => {
+                        setters_by_level_and_variable.get(&(level.to_string(), variable.clone()))
+                    }
+                    SetterAGetNames::OfUuid(setter_uuid) => setters_by_level_and_variable
+                        .iter()
+                        .find(|((setter_level, _), setter)| {
+                            setter_level == level && setter.node.id == Some(*setter_uuid)
+                        })
+                        .map(|(_, setter)| setter),
+                };
+                if let Some(setter) = found {
                     return Ok(setter);
                 }
                 if level.is_empty() {
@@ -481,11 +521,19 @@ impl GraphSnapshot {
                 }
                 level = levels.level_of(level);
             }
-            Err(Error::GraphError(format!(
-                "`GetVariable` node `{get_node}` reads the variable `{variable}`, which no \
-                 `SetVariable` on its level or an enclosing one sets. It can read: {}",
-                names_listed_for_a_refusal(variables_a_get_may_read(get_node), "no variable")
-            )))
+            let can_read =
+                names_listed_for_a_refusal(variables_a_get_may_read(get_node), "no variable");
+            Err(Error::GraphError(match names {
+                SetterAGetNames::OfVariable(variable) => format!(
+                    "`GetVariable` node `{get_node}` reads the variable `{variable}`, which no \
+                     `SetVariable` on its level or an enclosing one sets. It can read: {can_read}"
+                ),
+                SetterAGetNames::OfUuid(setter_uuid) => format!(
+                    "`GetVariable` node `{get_node}` reads the `SetVariable` node `{setter_uuid}`, \
+                     which is gone from its level and every enclosing one. It can read: \
+                     {can_read}"
+                ),
+            }))
         };
 
         let mut what_each_get_reads = HashMap::new();
@@ -493,14 +541,21 @@ impl GraphSnapshot {
             .iter()
             .filter(|node| node.node_type.as_str() == GET_VARIABLE_NODE_TYPE)
         {
-            let value = setter_of(&get_node.name, &variable_a_node_names(get_node)?)
-                .ok()
-                .map(|setter| setter.holds.clone());
+            let get_cast = cast_of(&get_node.name)?;
+            let Some(names) = setter_of_each_get_by_cast.get(&get_cast) else {
+                continue;
+            };
+            let setter = setter_of(&get_node.name, names).ok();
             what_each_get_reads.insert(
-                cast_of(&get_node.name)?,
+                get_cast,
                 WhatAGetVariableReads {
+                    variable: match (setter, names) {
+                        (Some(setter), _) => Some(setter.variable.clone()),
+                        (None, SetterAGetNames::OfVariable(variable)) => Some(variable.clone()),
+                        (None, SetterAGetNames::OfUuid(_)) => None,
+                    },
                     variables_it_may_read: variables_a_get_may_read(&get_node.name),
-                    value,
+                    value: setter.map(|setter| setter.holds.clone()),
                 },
             );
         }
@@ -545,11 +600,12 @@ impl GraphSnapshot {
             if is_a_set(&target_cast) {
                 continue;
             }
-            let Some(variable) = variable_of_each_get_by_cast.get(&source_cast) else {
+            let Some(names) = setter_of_each_get_by_cast.get(&source_cast) else {
                 continue;
             };
             refuse_a_variable_port_other_than_value(&link.source, "a link leaves")?;
-            let setter = setter_of(&link.source.node, variable)?;
+            let setter = setter_of(&link.source.node, names)?;
+            let variable = &setter.variable;
             let setter_source = match &setter.holds {
                 ValueASetVariableHolds::PortOutput(setter_source) => setter_source,
                 ValueASetVariableHolds::NodeReference(_) => {
@@ -600,10 +656,11 @@ impl GraphSnapshot {
                         node.name
                     )));
                 }
-                let Some(variable) = variable_of_each_get_by_cast.get(&referenced_cast) else {
+                let Some(names) = setter_of_each_get_by_cast.get(&referenced_cast) else {
                     return Ok(None);
                 };
-                let setter = setter_of(referenced, variable)?;
+                let setter = setter_of(referenced, names)?;
+                let variable = &setter.variable;
                 let referenced_node = match &setter.holds {
                     ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
                     ValueASetVariableHolds::PortOutput(_) => {
@@ -831,6 +888,29 @@ fn resolve_each_config_value_naming_a_get(
     Ok(())
 }
 
+/// The setter `get_node` names: the `SetVariable` node of the UUID its `set_variable` holds,
+/// or else the setter of the variable its `variable` names.
+fn the_setter_a_get_names(get_node: &GraphSnapshotNode) -> Result<SetterAGetNames> {
+    let Some(named) = get_node
+        .input_values
+        .get(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY)
+        .filter(|value| !value.is_null())
+    else {
+        return variable_a_node_names(get_node).map(SetterAGetNames::OfVariable);
+    };
+    named
+        .as_str()
+        .and_then(|named| uuid::Uuid::parse_str(named).ok())
+        .map(SetterAGetNames::OfUuid)
+        .ok_or_else(|| {
+            Error::GraphError(format!(
+                "`GetVariable` node `{}`'s `{GET_VARIABLE_SET_VARIABLE_CONFIG_KEY}` holds \
+                 {named}, and it holds the UUID of the `SetVariable` node it reads",
+                get_node.name
+            ))
+        })
+}
+
 fn variable_a_node_names(node: &GraphSnapshotNode) -> Result<String> {
     node.input_values
         .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
@@ -896,43 +976,7 @@ fn sorted<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
     names
 }
 
-/// The levels a flattened graph's nodes run on: the stream's own, named `""`, and each
-/// fragment's, named by its path of names.
-struct GraphLevelsOfFlattenedFragments {
-    fragment_paths_of_names: HashSet<String>,
-}
-
-impl GraphLevelsOfFlattenedFragments {
-    fn of(fragments_flattened: &GraphFragmentsAsDrawn) -> Self {
-        let mut fragment_paths_of_names = HashSet::new();
-        let mut fragments_to_visit: Vec<_> = fragments_flattened.fragments.iter().collect();
-        while let Some(fragment) = fragments_to_visit.pop() {
-            fragment_paths_of_names.insert(fragment.path_of_names.clone());
-            fragments_to_visit.extend(&fragment.fragments_it_holds);
-        }
-        Self {
-            fragment_paths_of_names,
-        }
-    }
-
-    /// The level `node_name` runs on: the innermost fragment whose path of names prefixes
-    /// it, or the stream's own. Asked of a level, it answers the level enclosing it.
-    fn level_of<'name>(&self, node_name: &'name str) -> &'name str {
-        let mut prefix_end = node_name.len();
-        while let Some(separator) =
-            node_name[..prefix_end].rfind(GRAPH_FRAGMENT_NODE_PATH_SEPARATOR)
-        {
-            if self
-                .fragment_paths_of_names
-                .contains(&node_name[..separator])
-            {
-                return &node_name[..separator];
-            }
-            prefix_end = separator;
-        }
-        ""
-    }
-}
-
+#[cfg(test)]
+mod gets_naming_their_setter_tests;
 #[cfg(test)]
 mod tests;

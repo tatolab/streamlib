@@ -304,6 +304,19 @@ pub(super) fn graph_operation_for_the_request(
                     run_the_graph_generator,
                 );
             }
+            if let Some(to) = the_input_values_of_a_get_choosing_a_variable(
+                &held,
+                &input,
+                member.as_deref(),
+                value.as_ref(),
+                staged_graph,
+            ) {
+                return Ok(StreamGraphOperation::SetNodeConfig {
+                    node: held.id,
+                    from: Value::Object(held.input_values),
+                    to: Value::Object(to),
+                });
+            }
             Ok(StreamGraphOperation::set_node_input_value_of(
                 &held, input, member, value,
             ))
@@ -834,4 +847,22 @@ struct StreamGraphFragmentNodeAGeneratorRunPlaced {
     #[serde(default)]
     input_values: Map<String, Value>,
     fragment: Value,
+}
+
+/// The input values a `GetVariable` takes when `value` is set on its `variable`, the variable
+/// it reads chosen by name: the UUID of the setter of it on `staged_graph`'s level, so renaming
+/// the variable later keeps the get reading it, in place of whichever setter it named; `None`
+/// for any other set.
+fn the_input_values_of_a_get_choosing_a_variable(
+    held: &StreamGraphDocumentNode,
+    input: &str,
+    member: Option<&str>,
+    value: Option<&Value>,
+    staged_graph: &StreamGraphDocument,
+) -> Option<Map<String, Value>> {
+    let variable = value?.as_str().filter(|variable| !variable.is_empty())?;
+    (held.node_type == GET_VARIABLE_NODE_TYPE
+        && input == GRAPH_VARIABLE_NAME_CONFIG_KEY
+        && member.is_none())
+    .then(|| the_input_values_of_a_get_reading(variable, staged_graph))
 }
