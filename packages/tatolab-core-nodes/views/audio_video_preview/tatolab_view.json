@@ -1,5 +1,6 @@
 {
   "contract": "1.1",
+  "view": "3c8e1f47-9a2d-4b65-8e07-d14f6a2b9c58",
   "title": "Audio Video Preview",
   "description": "Watch and listen to what the stream makes: wire a picture into video and a sound into audio. Either can be left unwired.",
   "entry": "index.html",

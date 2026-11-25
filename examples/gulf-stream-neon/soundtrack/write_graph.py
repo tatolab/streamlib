@@ -26,7 +26,10 @@ import uuid
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
-STAGE_VIEW = json.loads((PROJECT / "tatolab-project.json").read_text())["project"] + ":stage"
+STAGE_VIEW = json.loads((PROJECT / "views" / "stage" / "tatolab_view.json").read_text())["view"]
+AUDIO_VIDEO_PREVIEW_VIEW = json.loads(
+    (PROJECT.parent.parent / "packages" / "tatolab-core-nodes" / "views" / "audio_video_preview" / "tatolab_view.json").read_text()
+)["view"]
 FPS = 60
 STEP_NS = round(1e9 / FPS)
 # The trails keep the same length in seconds at any frame rate: 0.86 a frame at 30.
@@ -138,7 +141,7 @@ def graph(
         add("stage_look", "nodes.take_functions:StageLook", 2.0, 8.5)
         add("smooth_camera", "nodes.take_functions:SmoothCamera", 11, 3.2, seconds=0.18)
     else:
-        add("audio_video_preview", "ba5fc2b1-df25-4e86-bec3-aba1564d6233:audio_video_preview", 12, 0.5)
+        add("audio_video_preview", AUDIO_VIDEO_PREVIEW_VIEW, 12, 0.5)
 
     wire("take_clock", "result", "soundtrack_beat", "seconds")
     if not stage:

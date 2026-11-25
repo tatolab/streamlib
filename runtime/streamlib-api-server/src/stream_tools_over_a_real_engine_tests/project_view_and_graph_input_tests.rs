@@ -91,6 +91,19 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     .await
     .expect("the cell's views are listed");
 
+    let deck_manifest_once_listed: Value = serde_json::from_slice(
+        &std::fs::read(cell.path().join("views/deck/tatolab_view.json"))
+            .expect("the deck's manifest reads"),
+    )
+    .expect("the deck's manifest is JSON");
+    let deck_view = deck_manifest_once_listed["view"]
+        .as_str()
+        .expect("the project gives its own view naming no UUID one as it opens")
+        .to_owned();
+    let mut deck_manifest_given_its_uuid = deck_manifest.clone();
+    deck_manifest_given_its_uuid["view"] = json!(deck_view);
+    assert_eq!(deck_manifest_once_listed, deck_manifest_given_its_uuid);
+
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
     let views = listed["views"].as_array().expect("a list of views");
@@ -98,7 +111,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     assert_eq!(
         views[0],
         json!({
-            "view_type": format!("{}:deck", cell.project),
+            "view_type": deck_view,
             "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
             "view_folder_in_the_project": "views/deck",
             "opens": true, "not_opened_because": null,
@@ -108,12 +121,17 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
                          "description": null, "range": null }],
             "outputs": [{ "name": "crossfader", "pin_type": { "type": "tensor" },
                           "description": null, "range": [-1.0, 1.0] }],
-            "manifest": deck_manifest,
+            "manifest": deck_manifest_given_its_uuid,
         })
     );
+    assert!(
+        views[1]["view_type"]
+            .as_str()
+            .is_some_and(|view_type| Uuid::parse_str(view_type).is_ok()),
+        "a view whose manifest does not read is given a UUID too: {listed}"
+    );
     assert_eq!(
-        views[1]["view_type"],
-        format!("{}:older", cell.project),
+        views[1]["view_type"], views[1]["manifest"]["view"],
         "{listed}"
     );
     assert_eq!(views[1]["opens"], false, "{listed}");
@@ -160,6 +178,9 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
 /// runtime's own words.
 /// The UUID the graph document of the view-node test gives its `deck`.
 const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
+
+/// The UUID the manifest of the view-node test's `deck` names.
+const DECK_VIEW_UUID: &str = "5d1e4a7c-9b3f-4e26-a8d0-c7f2b1e94a63";
 
 /// A graph document holding a node of the project's view `deck` loads it with the view's ports,
 /// each of the pin type its manifest names, and the graph document on disk is unchanged by the
@@ -226,7 +247,8 @@ async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config(
         project.path(),
         "deck",
         &json!({
-            "contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node",
+            "contract": "1.1", "view": DECK_VIEW_UUID, "title": "Deck", "entry": "index.html",
+            "placement": "node",
             "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" } }],
             "settings": { "type": "object", "properties": {
                 "bpm": { "type": "number", "default": 120, "description": "Beats a minute." },

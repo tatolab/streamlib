@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::stream_fragment_references::each_view_placed_by_its_projects_name_placed_by_its_type;
+use crate::stream_fragment_references::each_view_placed_by_its_folder_placed_by_its_type;
 
 impl ProjectRepository {
     /// Every asset, ordered by UUID: each sidecar's, and each stream's, read from its graph
@@ -280,7 +280,7 @@ impl ProjectRepository {
                 why,
             }
         })?;
-        each_view_placed_by_its_projects_name_placed_by_its_type(
+        each_view_placed_by_its_folder_placed_by_its_type(
             &self.project_directory,
             document.node_values_mut(),
         );

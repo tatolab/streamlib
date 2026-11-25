@@ -5442,7 +5442,8 @@ export interface ListProjectViewsToolResult {
  */
 export interface ProjectViewListed {
   /**
-   * The view type's id, `<project uuid>:<view folder>`, the node type a node of the view is;
+   * The view type's id, the view's own UUID (`<project uuid>:<view folder>` for a view whose
+   * manifest names none), the node type a node of the view is;
    * `project_name` only shows.
    */
   view_type: string;
@@ -7538,7 +7539,7 @@ export interface ControlOperations {
   /**
    * List the Tato Studio views a project brings.
    *
-   * List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project uuid>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, its `pin_type`, a `description` and the `range` its manifest states; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.
+   * List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, the view's own UUID, the `view` its manifest names and the runtime writes into a view of the project's own naming none the first time the project opens (`<project uuid>:<view folder>` for a view still naming none), which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, its `pin_type`, a `description` and the `range` its manifest states; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.
    *
    * Since contract version 1, stable.
    */
@@ -7713,7 +7714,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 4;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 0;
+export declare const CONTROL_CONTRACT_REVISION: 1;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

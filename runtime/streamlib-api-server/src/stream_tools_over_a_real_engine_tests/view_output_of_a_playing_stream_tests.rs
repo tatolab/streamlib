@@ -40,7 +40,8 @@ fn a_project_bringing_the_deck_whose_stream_holds(nodes: Value) -> ProjectWithGr
     std::fs::write(
         folder.join("tatolab_view.json"),
         json!({
-            "contract": "1.1", "title": "Deck", "entry": "index.html", "placement": "node",
+            "contract": "1.1", "view": "8a2c6e1f-4d7b-4b93-9e05-f3a1c8d2b764", "title": "Deck",
+            "entry": "index.html", "placement": "node",
             "outputs": [{ "name": "cue", "pin_type": { "type": "string" } },
                         { "name": "fader", "pin_type": { "type": "tensor" } }],
         })

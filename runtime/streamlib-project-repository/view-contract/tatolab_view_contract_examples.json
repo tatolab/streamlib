@@ -5,6 +5,7 @@
       "named": "a node view declaring every field",
       "manifest": {
         "contract": "1.1",
+        "view": "2f6b9d14-8c3a-4e57-b1d0-7a9e5c3f2b68",
         "title": "Stage rig",
         "description": "Fixtures on a stage, with a master fader.",
         "icon": "icon.svg",
@@ -106,6 +107,18 @@
       },
       "opens": false,
       "refused_at": "outputs[0]"
+    },
+    {
+      "named": "a view whose own id is not a UUID",
+      "manifest": {
+        "contract": "1.1",
+        "view": "stage",
+        "title": "Stage",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "view"
     },
     {
       "named": "a 1.0 view whose port is declared by the older family alone",

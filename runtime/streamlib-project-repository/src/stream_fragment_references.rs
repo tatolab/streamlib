@@ -12,7 +12,7 @@ use crate::project_file::TatolabProjectFile;
 use crate::project_import_folders::the_folder_of_an_import;
 use crate::project_stream_document::{ProjectStreamDocument, project_stream_documents};
 use crate::project_views::{
-    retype_each_node_at_every_level, the_type_of_each_view_placed_by_its_projects_name,
+    retype_each_node_at_every_level, the_type_of_each_view_placed_by_its_folder,
 };
 use crate::stream_document_upgrade::{NODE_INPUT_VALUES_KEY, stream_document_in_the_current_shape};
 use crate::stream_graph_document::{
@@ -99,10 +99,11 @@ fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTree
 /// that import with `from`, and each node type an import's own node code defines is led by the
 /// import's folder, `imports/<folder>/<module>:<qualname>`, so it is imported from there. Refused, naming each stream, when a stream holds itself, directly
 /// or through another stream, and when a held stream does not read. A node, at any level, that
-/// is typed `<project name>:<view folder>` for a view the project or one of its imports brings
-/// takes that view's type. A link onto a stream fragment naming its port by the UUID of a
-/// `GraphInput` or `GraphOutput` node of the stream it places names the port that node declares,
-/// and is refused, naming the fragment, when that stream holds no such node.
+/// is typed `<project name>:<view folder>` or `<project uuid>:<view folder>` for a view the
+/// project or one of its imports brings takes that view's type. A link onto a stream fragment
+/// naming its port by the UUID of a `GraphInput` or `GraphOutput` node of the stream it places
+/// names the port that node declares, and is refused, naming the fragment, when that stream
+/// holds no such node.
 pub fn graph_document_as_its_project_reads_it(
     project_directory: &Path,
     graph_document: &Value,
@@ -112,16 +113,17 @@ pub fn graph_document_as_its_project_reads_it(
         graph_document,
     )?;
     if let Some(node_values) = read.get_mut("nodes").and_then(Value::as_array_mut) {
-        each_view_placed_by_its_projects_name_placed_by_its_type(project_directory, node_values);
+        each_view_placed_by_its_folder_placed_by_its_type(project_directory, node_values);
     }
     Ok(read)
 }
 
-/// Retype each node of `node_values`, at every level, typed `<project name>:<view folder>` for
-/// a view the project at `project_directory` or one of its imports brings to that view's type;
+/// Retype each node of `node_values`, at every level, typed `<project name>:<view folder>` or
+/// `<project uuid>:<view folder>` for a view the project at `project_directory` or one of its
+/// imports brings to that view's type, its own UUID when it names one;
 /// nothing changes when no node is so typed or the projects are not read, which the load
 /// refuses on its own.
-pub(crate) fn each_view_placed_by_its_projects_name_placed_by_its_type(
+pub(crate) fn each_view_placed_by_its_folder_placed_by_its_type(
     project_directory: &Path,
     node_values: &mut [Value],
 ) {
@@ -133,10 +135,7 @@ pub(crate) fn each_view_placed_by_its_projects_name_placed_by_its_type(
     if parts_before_the_colon.is_empty() {
         return;
     }
-    match the_type_of_each_view_placed_by_its_projects_name(
-        project_directory,
-        &parts_before_the_colon,
-    ) {
+    match the_type_of_each_view_placed_by_its_folder(project_directory, &parts_before_the_colon) {
         Ok(retyped) if !retyped.is_empty() => {
             retype_each_node_at_every_level(node_values, &retyped);
         }
@@ -150,7 +149,7 @@ pub(crate) fn each_view_placed_by_its_projects_name_placed_by_its_type(
 }
 
 /// Add to `parts` the part before the `:` of each node type of `node_values`, and of each
-/// fragment one of them places, that is not a UUID.
+/// fragment one of them places.
 fn each_part_before_the_colon_of_a_node_type_at_every_level(
     node_values: &[Value],
     parts: &mut HashSet<String>,
@@ -160,7 +159,6 @@ fn each_part_before_the_colon_of_a_node_type_at_every_level(
             .get("type")
             .and_then(Value::as_str)
             .and_then(|node_type| node_type.split_once(':'))
-            && Uuid::parse_str(before_the_colon).is_err()
         {
             parts.insert(before_the_colon.to_owned());
         }

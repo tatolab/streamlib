@@ -349,16 +349,51 @@ fn a_rename_keeps_each_view_type_and_a_duplicate_places_its_own_views_by_its_own
     );
 }
 
-/// A stream placing its project's view by `<project name>:<view folder>` reads, for an edit, as
-/// placing it by the view's type, and the edit saves it so.
+/// A stream placing its project's view by `<project name>:<view folder>` or by
+/// `<project uuid>:<view folder>` reads, for an edit, as placing it by the UUID the view is given
+/// when the project opens, and the edit saves it so.
 ///
-/// Mental-revert: reading the stream as it is on disk saves the name the edit never touched.
+/// Mental-revert: reading the stream as it is on disk saves the folder the edit never touched.
 #[test]
-fn an_edit_of_a_stream_placing_a_view_by_its_projects_name_saves_it_placed_by_its_type() {
+fn an_edit_of_a_stream_placing_a_view_by_its_folder_saves_it_placed_by_the_views_uuid() {
+    for placed_by_its_projects_uuid in [false, true] {
+        an_edit_of_a_stream_placing_its_stage_saves_it_placed_by_the_views_uuid(
+            placed_by_its_projects_uuid,
+        );
+    }
+}
+
+fn an_edit_of_a_stream_placing_its_stage_saves_it_placed_by_the_views_uuid(
+    placed_by_its_projects_uuid: bool,
+) {
     let (project, repository) = ProjectInATemporaryRoot::created();
-    let stage = the_view_type_of(repository.project_file().project, "stage");
-    a_stage_view_and_a_stream_placing_it_as(&project.project_directory, "Robot cell:stage");
+    let placed_as = if placed_by_its_projects_uuid {
+        the_view_type_of(repository.project_file().project, "stage")
+    } else {
+        "Robot cell:stage".to_owned()
+    };
+    a_stage_view_and_a_stream_placing_it_as(&project.project_directory, &placed_as);
     let mut repository = ProjectRepository::open(&project.project_directory).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            project
+                .project_directory
+                .join("views/stage/tatolab_view.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let stage = manifest["view"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        repository.history().commits_newest_first().unwrap()[0].message,
+        "give_each_view_its_uuid Robot cell",
+        "the UUID the view is given is committed on its own"
+    );
     let show: serde_json::Value = serde_json::from_slice(
         &std::fs::read(project.project_directory.join("streams/show.graph.json")).unwrap(),
     )
