@@ -7,7 +7,8 @@
 //! the control operation registry's agent surface ([`crate::mcp_agent_tools`]): the operations
 //! the registry lists as tools of their own, and `list_operation_groups`,
 //! `describe_operations` and `call_operation`, which reach every other operation. Beside them
-//! it serves the node catalog and the live graph as resources ([`crate::mcp_resources`]).
+//! it serves the live graph and the stream actions under way as resources
+//! ([`crate::mcp_resources`]).
 //! `rmcp` owns the protocol; this module owns only what the runtime says through it.
 //!
 //! A graph edit answers when the engine accepted the change into its graph;
@@ -41,8 +42,8 @@ use streamlib::sdk::runtime::{
 use streamlib_control_contract::ControlOperationCall;
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, DescribeStreamActionToolResult,
-    DescribeStreamActionToolResultStream, ProjectActionRefusalOnTheWire, ProjectVenvSyncOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, DescribeStreamActionToolResult,
+    DescribeStreamActionToolResultStream, ProjectVenvSyncOnTheWire,
     ProjectVenvSyncPackageKindOnTheWire, ProjectVenvSyncPackageOnTheWire,
     ProjectVenvSyncPackageStateOnTheWire, ProjectVenvSyncPhaseOnTheWire, StreamActionKindOnTheWire,
     StreamActionStateOnTheWire,
@@ -245,7 +246,7 @@ pub(crate) fn local_api_mcp_streamable_http_service(
 // ============================================================================
 
 /// A tool's answer: its result, or the refusal an `isError` result carries.
-pub(crate) type ToolCallAnswer = Result<CallToolResult, Box<ProjectActionRefusalOnTheWire>>;
+pub(crate) type ToolCallAnswer = Result<CallToolResult, Box<ControlOperationRefusalOnTheWire>>;
 
 /// A stream action's state as the local API spells it.
 pub(crate) fn stream_action_state_on_the_wire(
@@ -525,7 +526,7 @@ pub(crate) fn serialized_tool_result(
     tool_result: &impl Serialize,
 ) -> ToolCallAnswer {
     let tool_result_json = serde_json::to_value(tool_result).map_err(|e| {
-        Box::new(ProjectActionRefusalOnTheWire::of_the_action(
+        Box::new(ControlOperationRefusalOnTheWire::of_the_action(
             tool_name,
             ControlOperationRefusalCode::RuntimeFailed,
             format!("{tool_name} result serialization failed: {e}"),

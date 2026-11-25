@@ -251,8 +251,8 @@ fn an_image_outputs_frame_rate_resolves_from_its_class_or_its_nodes_config() {
         }))
     );
     let from_config = PortFamilyDeclaration {
-        frame_rate: Some(ImageOutputPortFrameRate::FromConfig {
-            config_key: "frames_per_second".into(),
+        frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
+            setting: "frames_per_second".into(),
         }),
         ..PortFamilyDeclaration::of_family(PortFamily::Image)
     };
@@ -664,12 +664,12 @@ mod contract_json_schema {
             denominator: 1,
         };
         assert_serializes_as_a_variant_of_the_schema(ImageOutputPortFrameRate::Stated(frame_rate));
-        assert_serializes_as_a_variant_of_the_schema(ImageOutputPortFrameRate::FromConfig {
-            config_key: "fps".into(),
+        assert_serializes_as_a_variant_of_the_schema(ImageOutputPortFrameRate::FromSetting {
+            setting: "fps".into(),
         });
         assert_serializes_as_a_variant_of_the_schema(ChannelsOutputPortSampleRate::Stated(48_000));
-        assert_serializes_as_a_variant_of_the_schema(ChannelsOutputPortSampleRate::FromConfig {
-            config_key: "rate".into(),
+        assert_serializes_as_a_variant_of_the_schema(ChannelsOutputPortSampleRate::FromSetting {
+            setting: "rate".into(),
         });
         let frame_rate_schema = schema_of::<ImageStreamFrameRate>();
         let written = serde_json::to_value(frame_rate).expect("writes");

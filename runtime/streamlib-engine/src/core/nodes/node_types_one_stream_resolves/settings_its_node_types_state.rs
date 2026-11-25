@@ -37,12 +37,4 @@ impl NodeTypesOneStreamResolves {
                     .is_some_and(|properties| properties.contains_key(name))
             })
     }
-
-    /// Whether this stream describes `node_type`: its node code described it and the stream
-    /// resolves its ports.
-    pub(crate) fn describes(&self, node_type: &NodeClassImportPath) -> bool {
-        self.placeholder_of_the_node_type_not_described(node_type)
-            .is_none()
-            && self.port_info(node_type).is_some()
-    }
 }

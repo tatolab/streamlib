@@ -19,20 +19,19 @@ use crate::control_operation_requests::{
     DuplicateProjectRequest, GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest,
     ImportProjectRequest, ListAssetsRequest, ListAudioCaptureDevicesRequest,
     ListDependenciesRequest, ListNodeTypesRequest, ListPinTypesRequest, ListProjectFilesRequest,
-    ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest, ListProjectViewsRequest,
-    ListSamplesRequest, ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest,
-    OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
-    OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest,
-    RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest,
-    RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest,
-    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
-    SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    ListProjectNodeUiElementsRequest, ListProjectViewsRequest, ListSamplesRequest,
+    ListStreamsRequest, LogsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
+    OneProjectByItsDirectoryRequest, OneStreamActionRequest, OpenViewerRequest,
+    ReadAssetPreviewRequest, ReadProjectFileRequest, RefreshFragmentsRequest, RelocateAssetRequest,
+    RemoveDependencyRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
+    RenameProjectRequest, ReplaceAssetRequest, SetAssetSettingsRequest, SetGroupFieldsRequest,
+    SetNodeInputValueRequest, SetNodeTypeGroupRequest, SetNoteFieldsRequest,
     SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
     SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
     SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
     SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
     UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
-    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    WriteProjectFileRequest,
 };
 
 mod assets_and_streams;
@@ -61,8 +60,8 @@ pub use discovery_and_subscriptions::{
 pub use graph_edits::{
     AddGroup, AddNode, AddNote, CheckLink, CheckLinkCandidates, CollapseSelectionIntoSubgraph,
     Connect, Disconnect, ImportGraphGenerator, Redo, RemoveGroup, RemoveNode, RemoveNote,
-    RenameNode, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
-    SetNoteFields, SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
+    RenameNode, SetGroupFields, SetNodeInputValue, SetNoteFields, SetStudioFields, Transact, Undo,
+    UnlockSubgraph,
 };
 pub use node_types::{DescribeNodeTypes, ListNodeTypes, ListPinTypes, SetNodeTypeGroup};
 pub use playback_and_stream_actions::{
@@ -71,8 +70,7 @@ pub use playback_and_stream_actions::{
 };
 pub use project_files_and_views::{
     CheckProjectCode, CloseViewer, CreateNodeFile, CreateNodeUiElement, ListProjectFiles,
-    ListProjectNodeTypes, ListProjectNodeUiElements, ListProjectViews, OpenViewer, ReadProjectFile,
-    WriteProjectFile, WriteStudioViewOutput,
+    ListProjectNodeUiElements, ListProjectViews, OpenViewer, ReadProjectFile, WriteProjectFile,
 };
 pub use project_lifecycle::{
     CloseProject, CreateProject, DeleteProject, DuplicateProject, ImportProject, ListSamples,
@@ -81,10 +79,10 @@ pub use project_lifecycle::{
 };
 
 /// The contract's version: bumped only by a breaking change to an operation already in it.
-pub const CONTROL_CONTRACT_VERSION: u32 = 3;
+pub const CONTROL_CONTRACT_VERSION: u32 = 4;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 52;
+pub const CONTROL_CONTRACT_REVISION: u32 = 0;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -117,12 +115,9 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<ImportGraphGenerator>(),
     ControlOperationDeclaration::of::<RemoveNode>(),
     ControlOperationDeclaration::of::<Disconnect>(),
-    ControlOperationDeclaration::of::<SetNodeConfig>(),
-    ControlOperationDeclaration::of::<SetPinValue>(),
     ControlOperationDeclaration::of::<SetNodeInputValue>(),
     ControlOperationDeclaration::of::<RenameNode>(),
     ControlOperationDeclaration::of::<SetStudioFields>(),
-    ControlOperationDeclaration::of::<SetExposedConfigFields>(),
     ControlOperationDeclaration::of::<AddGroup>(),
     ControlOperationDeclaration::of::<SetGroupFields>(),
     ControlOperationDeclaration::of::<CollapseSelectionIntoSubgraph>(),
@@ -169,15 +164,12 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<CreateNodeUiElement>(),
     ControlOperationDeclaration::of::<WriteProjectFile>(),
     ControlOperationDeclaration::of::<CheckProjectCode>(),
-    ControlOperationDeclaration::of::<ListProjectNodeTypes>(),
     ControlOperationDeclaration::of::<ListPinTypes>(),
     ControlOperationDeclaration::of::<ListNodeTypes>(),
     ControlOperationDeclaration::of::<DescribeNodeTypes>(),
     ControlOperationDeclaration::of::<SetNodeTypeGroup>(),
     ControlOperationDeclaration::of::<ListProjectViews>(),
     ControlOperationDeclaration::of::<ListProjectNodeUiElements>(),
-    ControlOperationDeclaration::of::<WriteStudioViewOutput>(),
-    ControlOperationDeclaration::of::<WriteGraphInput>(),
     ControlOperationDeclaration::of::<ImportProject>(),
     ControlOperationDeclaration::of::<Logs>(),
     ControlOperationDeclaration::of::<OpenViewer>(),
@@ -230,18 +222,12 @@ pub enum ControlOperationCall {
     RemoveNode(OneNodeGraphEditRequest),
     /// A `disconnect` call.
     Disconnect(OneLinkGraphEditRequest),
-    /// A `set_node_config` call.
-    SetNodeConfig(SetNodeConfigRequest),
-    /// A `set_pin_value` call.
-    SetPinValue(SetPinValueRequest),
     /// A `set_node_input_value` call.
     SetNodeInputValue(SetNodeInputValueRequest),
     /// A `rename_node` call.
     RenameNode(RenameNodeRequest),
     /// A `set_studio_fields` call.
     SetStudioFields(SetStudioFieldsRequest),
-    /// A `set_exposed_config_fields` call.
-    SetExposedConfigFields(SetExposedConfigFieldsRequest),
     /// A `add_group` call.
     AddGroup(AddGroupRequest),
     /// A `set_group_fields` call.
@@ -334,8 +320,6 @@ pub enum ControlOperationCall {
     WriteProjectFile(WriteProjectFileRequest),
     /// A `check_project_code` call.
     CheckProjectCode(CheckProjectCodeRequest),
-    /// A `list_project_node_types` call.
-    ListProjectNodeTypes(ListProjectNodeTypesRequest),
     /// A `list_pin_types` call.
     ListPinTypes(ListPinTypesRequest),
     /// A `list_node_types` call.
@@ -348,10 +332,6 @@ pub enum ControlOperationCall {
     ListProjectViews(ListProjectViewsRequest),
     /// A `list_project_node_ui_elements` call.
     ListProjectNodeUiElements(ListProjectNodeUiElementsRequest),
-    /// A `write_studio_view_output` call.
-    WriteStudioViewOutput(WriteStudioViewOutputRequest),
-    /// A `write_graph_input` call.
-    WriteGraphInput(WriteGraphInputRequest),
     /// A `import_project` call.
     ImportProject(ImportProjectRequest),
     /// A `logs` call.
@@ -465,21 +445,12 @@ impl ControlOperationCall {
             }
             RemoveNode::METHOD_NAME => the_request_of::<RemoveNode>(params).map(Self::RemoveNode),
             Disconnect::METHOD_NAME => the_request_of::<Disconnect>(params).map(Self::Disconnect),
-            SetNodeConfig::METHOD_NAME => {
-                the_request_of::<SetNodeConfig>(params).map(Self::SetNodeConfig)
-            }
-            SetPinValue::METHOD_NAME => {
-                the_request_of::<SetPinValue>(params).map(Self::SetPinValue)
-            }
             SetNodeInputValue::METHOD_NAME => {
                 the_request_of::<SetNodeInputValue>(params).map(Self::SetNodeInputValue)
             }
             RenameNode::METHOD_NAME => the_request_of::<RenameNode>(params).map(Self::RenameNode),
             SetStudioFields::METHOD_NAME => {
                 the_request_of::<SetStudioFields>(params).map(Self::SetStudioFields)
-            }
-            SetExposedConfigFields::METHOD_NAME => {
-                the_request_of::<SetExposedConfigFields>(params).map(Self::SetExposedConfigFields)
             }
             AddGroup::METHOD_NAME => the_request_of::<AddGroup>(params).map(Self::AddGroup),
             SetGroupFields::METHOD_NAME => {
@@ -612,9 +583,6 @@ impl ControlOperationCall {
             CheckProjectCode::METHOD_NAME => {
                 the_request_of::<CheckProjectCode>(params).map(Self::CheckProjectCode)
             }
-            ListProjectNodeTypes::METHOD_NAME => {
-                the_request_of::<ListProjectNodeTypes>(params).map(Self::ListProjectNodeTypes)
-            }
             ListPinTypes::METHOD_NAME => {
                 the_request_of::<ListPinTypes>(params).map(Self::ListPinTypes)
             }
@@ -633,12 +601,6 @@ impl ControlOperationCall {
             ListProjectNodeUiElements::METHOD_NAME => {
                 the_request_of::<ListProjectNodeUiElements>(params)
                     .map(Self::ListProjectNodeUiElements)
-            }
-            WriteStudioViewOutput::METHOD_NAME => {
-                the_request_of::<WriteStudioViewOutput>(params).map(Self::WriteStudioViewOutput)
-            }
-            WriteGraphInput::METHOD_NAME => {
-                the_request_of::<WriteGraphInput>(params).map(Self::WriteGraphInput)
             }
             ImportProject::METHOD_NAME => {
                 the_request_of::<ImportProject>(params).map(Self::ImportProject)
@@ -689,12 +651,9 @@ impl ControlOperationCall {
             Self::ImportGraphGenerator(_) => ImportGraphGenerator::METHOD_NAME,
             Self::RemoveNode(_) => RemoveNode::METHOD_NAME,
             Self::Disconnect(_) => Disconnect::METHOD_NAME,
-            Self::SetNodeConfig(_) => SetNodeConfig::METHOD_NAME,
-            Self::SetPinValue(_) => SetPinValue::METHOD_NAME,
             Self::SetNodeInputValue(_) => SetNodeInputValue::METHOD_NAME,
             Self::RenameNode(_) => RenameNode::METHOD_NAME,
             Self::SetStudioFields(_) => SetStudioFields::METHOD_NAME,
-            Self::SetExposedConfigFields(_) => SetExposedConfigFields::METHOD_NAME,
             Self::AddGroup(_) => AddGroup::METHOD_NAME,
             Self::SetGroupFields(_) => SetGroupFields::METHOD_NAME,
             Self::CollapseSelectionIntoSubgraph(_) => CollapseSelectionIntoSubgraph::METHOD_NAME,
@@ -741,15 +700,12 @@ impl ControlOperationCall {
             Self::CreateNodeUiElement(_) => CreateNodeUiElement::METHOD_NAME,
             Self::WriteProjectFile(_) => WriteProjectFile::METHOD_NAME,
             Self::CheckProjectCode(_) => CheckProjectCode::METHOD_NAME,
-            Self::ListProjectNodeTypes(_) => ListProjectNodeTypes::METHOD_NAME,
             Self::ListPinTypes(_) => ListPinTypes::METHOD_NAME,
             Self::ListNodeTypes(_) => ListNodeTypes::METHOD_NAME,
             Self::DescribeNodeTypes(_) => DescribeNodeTypes::METHOD_NAME,
             Self::SetNodeTypeGroup(_) => SetNodeTypeGroup::METHOD_NAME,
             Self::ListProjectViews(_) => ListProjectViews::METHOD_NAME,
             Self::ListProjectNodeUiElements(_) => ListProjectNodeUiElements::METHOD_NAME,
-            Self::WriteStudioViewOutput(_) => WriteStudioViewOutput::METHOD_NAME,
-            Self::WriteGraphInput(_) => WriteGraphInput::METHOD_NAME,
             Self::ImportProject(_) => ImportProject::METHOD_NAME,
             Self::Logs(_) => Logs::METHOD_NAME,
             Self::OpenViewer(_) => OpenViewer::METHOD_NAME,

@@ -104,7 +104,7 @@ fn two_settings_set_one_at_a_time_while_paused_are_both_held_once_resumed() {
                 .iter()
                 .find(|rendered| rendered["id"] == node.to_string())
         })
-        .map(|rendered| rendered["config"].clone())
+        .map(|rendered| rendered["input_values"].clone())
         .expect("the graph holds the node");
     assert_eq!(
         config,

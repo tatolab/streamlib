@@ -26,7 +26,7 @@ test("a key the contract does not name is an issue in what is sent and ignored i
 });
 
 test("an open map takes any key both ways", () => {
-  assert.deepEqual(controlContractIssues("AddNodeRequest", { stream: STREAM, type: "t", pins: { anything: 1 } }, "sent"), []);
+  assert.deepEqual(controlContractIssues("SuggestedOperationCall", { operation: "add_node", params: { anything: 1 } }, "sent"), []);
 });
 
 test("a tagged union is read by its tag, and a wrong field names the alternative its tag chose", () => {
@@ -68,19 +68,19 @@ test("a wide integer takes a bigint, a narrow one refuses it, and a format bound
 
 test("a set that may grow reads a member it does not name as its fallback, and the guard holds only the value as it stands", () => {
   const refusal = { refusal_code: "a_code_added_after_this_client", action: "open_project", runtime_words: "refused" };
-  assert.deepEqual(readControlContractValue("ProjectActionRefusalOnTheWire", refusal), { read: true, value: { ...refusal, refusal_code: "refused" } });
-  assert.equal(isControlContractValue("ProjectActionRefusalOnTheWire", refusal), false);
+  assert.deepEqual(readControlContractValue("ControlOperationRefusalOnTheWire", refusal), { read: true, value: { ...refusal, refusal_code: "refused" } });
+  assert.equal(isControlContractValue("ControlOperationRefusalOnTheWire", refusal), false);
   const withNoCode = { action: "open_project", runtime_words: "refused" };
-  assert.deepEqual(readControlContractValue("ProjectActionRefusalOnTheWire", withNoCode), { read: true, value: { ...withNoCode, refusal_code: "refused" } });
-  assert.equal(isControlContractValue("ProjectActionRefusalOnTheWire", { ...withNoCode, refusal_code: "refused" }), true);
-  const notAString = readControlContractValue("ProjectActionRefusalOnTheWire", { ...withNoCode, refusal_code: 42 });
+  assert.deepEqual(readControlContractValue("ControlOperationRefusalOnTheWire", withNoCode), { read: true, value: { ...withNoCode, refusal_code: "refused" } });
+  assert.equal(isControlContractValue("ControlOperationRefusalOnTheWire", { ...withNoCode, refusal_code: "refused" }), true);
+  const notAString = readControlContractValue("ControlOperationRefusalOnTheWire", { ...withNoCode, refusal_code: 42 });
   assert.equal(notAString.read, false);
   assert.deepEqual(controlContractIssues("ControlOperationRefusalCode", "a_code_added_after_this_client", "sent").map((issue) => issue.code), ["no_alternative"]);
 });
 
 test("reading leaves the value it was given untouched", () => {
   const refusal = Object.freeze({ action: "open_project", runtime_words: "refused" });
-  readControlContractValue("ProjectActionRefusalOnTheWire", refusal);
+  readControlContractValue("ControlOperationRefusalOnTheWire", refusal);
   assert.equal("refusal_code" in refusal, false);
 });
 
@@ -97,7 +97,7 @@ const VALID_VALUES_BY_COMPONENT = {
   PinType: { type: "boolean" },
   AddNodeRequest: { stream: STREAM, type: "nodes.grayscale_effect:GrayscaleEffect" },
   DescribeRuntimeToolResult: { version: "0.68.82", build_id: "stand-in", up_for_ms: 3, machine: "rig" },
-  ProjectActionRefusalOnTheWire: { action: "open_project", runtime_words: "refused", refusal_code: "refused" },
+  ControlOperationRefusalOnTheWire: { action: "open_project", runtime_words: "refused", refusal_code: "refused" },
   ProjectChangeFeedEntryOnTheWire: {
     status: "applied",
     format_version: 1,
@@ -109,7 +109,7 @@ const VALID_VALUES_BY_COMPONENT = {
     inverse_operations: [],
     applied_at: "2026-11-17T00:00:00Z",
   },
-  NodeTypeOfOneProjectSource: { type: "nodes.grayscale_effect:GrayscaleEffect", description: "Grays a frame.", source: "dependency", project: "p", folder: "f", version: "1.0.0" },
+  NodeTypeOfOneProjectSource: { node_type: "nodes.grayscale_effect:GrayscaleEffect", documentation: "Grays a frame.", described_from: "source", source: "dependency", project: "p", folder: "f", version: "1.0.0" },
 };
 
 test("a representative valid value of each kind of component reads clean both ways", () => {
@@ -135,7 +135,8 @@ test("a wrong field in a feed entry names that field, under the alternative its 
 });
 
 test("a bigint on a narrow integer field is refused as a bigint, whatever its size", () => {
-  const [issue] = controlContractIssues("NodeTypeOfOneProjectSource", { ...VALID_VALUES_BY_COMPONENT.NodeTypeOfOneProjectSource, line: 3n }, "read");
+  const generator = { generator: "glow_look", description: "A glow.", promoted_settings: [], path: "nodes/looks.py", line: 3n };
+  const [issue] = controlContractIssues("GraphGeneratorListed", generator, "read");
   assert.deepEqual(issue.path, ["line"]);
   assert.doesNotMatch(issue.message, /2\^53/);
   assert.match(issue.message, /bigint/);

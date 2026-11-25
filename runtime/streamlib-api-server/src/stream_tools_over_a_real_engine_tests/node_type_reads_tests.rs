@@ -503,10 +503,8 @@ async fn a_project_node_type_is_described_from_source_or_says_why_it_is_not() {
             "category": "Audio", "category_from": "declaration", "kind": "function",
             "declared_at": { "path": "nodes/mix.py", "line": 7 },
             "inputs": [{ "name": "level", "documentation": "the level",
-                         "family": { "family": "channels" }, "annotation": "float",
                          "takes_a_wire": true, "default_value": 0.5 }],
-            "outputs": [{ "name": "mixed", "documentation": "",
-                          "family": { "family": "channels" } }],
+            "outputs": [{ "name": "mixed", "documentation": "" }],
         })
     );
 }
@@ -555,12 +553,12 @@ async fn a_node_type_not_offered_refuses_the_call_suggesting_list_node_types() {
 #[test]
 fn a_project_node_type_an_interpreter_described_is_described_from_that_description() {
     use streamlib_runtime_client_contract::local_api_wire_contract::{
-        ListProjectNodeTypesToolResult, NodeTypeDescribedOrWhyNot,
+        NodeTypeDescribedOrWhyNot, ProjectNodeTypesReadFromSource,
     };
 
     register_the_input_value_test_node_once();
     let node_type = InputValueTestNode::node_class_import_path();
-    let listing: ListProjectNodeTypesToolResult = serde_json::from_value(json!({
+    let listing: ProjectNodeTypesReadFromSource = serde_json::from_value(json!({
         "project_directory": "/projects/cell", "project": Uuid::new_v4(), "project_name": "cell",
         "sources": [{
             "source": "project",

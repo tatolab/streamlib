@@ -1,11 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Resources: the server instructions, and the catalog and live-graph resources.
+//! Resources: the server instructions, and the live-graph and stream-action resources.
 
 use super::*;
-use streamlib::sdk::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
-use streamlib::sdk::nodes::NODE_REGISTRY;
 
 /// The control vocabulary tells an agent to confirm `wired` in `graph`. A
 /// link onto a helper is not wired when `connect` returns, so the same text
@@ -37,7 +35,7 @@ async fn listed_resource_templates_result(
 }
 
 #[tokio::test]
-async fn resources_list_names_the_node_catalog_the_live_graph_and_the_actions_under_way() {
+async fn resources_list_names_the_live_graph_and_the_actions_under_way() {
     let result = listed_resources_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
 
     let uris: Vec<&str> = result["resources"]
@@ -46,14 +44,7 @@ async fn resources_list_names_the_node_catalog_the_live_graph_and_the_actions_un
         .iter()
         .map(|resource| resource["uri"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        uris,
-        [
-            "streamlib://node-catalog",
-            "streamlib://graph",
-            "streamlib://stream-actions"
-        ]
-    );
+    assert_eq!(uris, ["streamlib://graph", "streamlib://stream-actions"]);
     for resource in result["resources"].as_array().unwrap() {
         assert_eq!(resource["mimeType"], "application/json", "{resource}");
         assert!(
@@ -78,69 +69,6 @@ async fn resources_list_names_the_node_catalog_the_live_graph_and_the_actions_un
             "streamlib://stream-action/{action}"
         ],
         "{templates}"
-    );
-}
-
-/// Mental revert: render the catalog once at startup and cache it, and the
-/// second read misses the type registered after the first.
-#[tokio::test]
-async fn the_catalog_resource_renders_the_registry_as_it_stands_at_each_read() {
-    let class_import_path = "streamlib_api_server::catalog_resource_probe::RegisteredBetweenReads";
-    let entry_for_the_probe = |catalog: &Value| {
-        catalog["nodes"]
-            .as_array()
-            .expect("a node type list")
-            .iter()
-            .find(|entry| entry["type"] == class_import_path)
-            .cloned()
-    };
-
-    let before = resource_document(
-        Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-        "streamlib://node-catalog",
-    )
-    .await;
-    assert!(entry_for_the_probe(&before).is_none());
-
-    let config_schema = json!({
-        "type": "object",
-        "properties": { "strength": { "type": "number", "default": 0.5 } }
-    });
-    NODE_REGISTRY
-        .register_descriptor_only(
-            NodeDescriptor::new(
-                NodeClassShortName::new("RegisteredBetweenReads").unwrap(),
-                NodeClassImportPath::new(class_import_path).unwrap(),
-                "registered after the first read",
-            )
-            .with_config_schema(config_schema.clone())
-            .with_input(
-                PortDescriptor::new(
-                    "video_from_upstream",
-                    "",
-                    true,
-                    streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-                        streamlib::sdk::descriptors::PortFamily::Image,
-                    ),
-                )
-                .with_delivery_profile("newest"),
-            ),
-        )
-        .expect("the probe's path is registered by this test alone");
-
-    let after = resource_document(
-        Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-        "streamlib://node-catalog",
-    )
-    .await;
-    let entry = entry_for_the_probe(&after).expect("the type registered between reads");
-    assert_eq!(entry["config_schema"], config_schema);
-    assert_eq!(entry["inputs"][0]["name"], "video_from_upstream");
-    assert_eq!(entry["inputs"][0]["delivery_profile"], "newest");
-    assert_eq!(
-        after["streams"],
-        json!([{ "stream": STUB_STREAM_ID, "nodes": [], "installed": [] }]),
-        "each loaded stream lists the types its own interpreter described"
     );
 }
 

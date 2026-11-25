@@ -14,7 +14,7 @@ use streamlib_project_repository::{
 
 use super::input_value_set_tests::{
     InputValueTestNode, MIXER_NODE_UUID, register_the_input_value_test_node_once,
-    the_input_values_of, the_pin_values_of,
+    the_input_values_of,
 };
 use super::*;
 
@@ -110,17 +110,9 @@ async fn undo_reaches_back_through_recorded_edits_and_stops_at_an_input_the_node
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let undo = json!({ "project_directory": project.path(), "author": an_agent_named("alice") });
 
-    for (each_value_undone_to, config_undone_to, pins_undone_to) in [
-        (
-            json!({ "gain": 0.75, "frame_width": 1280 }),
-            json!({ "frame_width": 1280 }),
-            json!({ "gain": 0.75 }),
-        ),
-        (
-            json!({ "gain": 0.25, "frame_width": 640 }),
-            json!({ "frame_width": 640 }),
-            json!({ "gain": 0.25 }),
-        ),
+    for each_value_undone_to in [
+        json!({ "gain": 0.75, "frame_width": 1280 }),
+        json!({ "gain": 0.25, "frame_width": 640 }),
     ] {
         let undone = engine
             .the_answer_or_the_refusal_of("undo", undo.clone())
@@ -139,8 +131,7 @@ async fn undo_reaches_back_through_recorded_edits_and_stops_at_an_input_the_node
             each_value_undone_to
         );
         let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
-        assert_eq!(mixer["config"], config_undone_to, "{mixer}");
-        assert_eq!(the_pin_values_of(&mixer), pins_undone_to, "{mixer}");
+        assert_eq!(mixer["input_values"], each_value_undone_to, "{mixer}");
     }
 
     let refused = engine
@@ -157,5 +148,9 @@ async fn undo_reaches_back_through_recorded_edits_and_stops_at_an_input_the_node
         "the refused undo changes nothing"
     );
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
-    assert_eq!(mixer["config"], json!({ "frame_width": 640 }), "{mixer}");
+    assert_eq!(
+        mixer["input_values"],
+        json!({ "gain": 0.25, "frame_width": 640 }),
+        "{mixer}"
+    );
 }

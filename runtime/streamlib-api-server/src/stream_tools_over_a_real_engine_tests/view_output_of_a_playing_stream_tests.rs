@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A view node's output written by a panel on a playing stream, over a real engine:
-//! `write_studio_view_output` sets the view node's input of the output's name live, the node
-//! publishes each write on the output, a viewer opened later reads the last, and a value no panel
-//! writes there, or a saved value on that input, is refused naming why.
+//! a live `set_node_input_value` on the view node's input of the output's name is what a panel
+//! writes, the node publishes each write on the output, a viewer opened later reads the last, and
+//! a value the output does not carry, or a saved value on that input, is refused naming why.
 
 use std::time::Instant;
 
 use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire,
 };
 
 use super::input_value_set_tests::the_input_named;
@@ -51,18 +51,18 @@ fn a_project_bringing_the_deck_whose_stream_holds(nodes: Value) -> ProjectWithGr
 }
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
-    /// The answer of `write_studio_view_output` writing `value` onto output `port` of the deck
-    /// of `project`'s stream `main`, or its refusal.
+    /// The answer of a live `set_node_input_value` writing `value` onto output `port` of the deck
+    /// of `project`'s stream `main`, as a panel writes it, or its refusal.
     async fn write_onto_the_deck(
         &self,
         project: &ProjectWithGraphDocuments,
         port: &str,
         value: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         self.the_answer_or_the_refusal_of(
-            "write_studio_view_output",
+            "set_node_input_value",
             json!({ "stream": project.stream_id_of("main"), "node": DECK_NODE_UUID,
-                    "port": port, "value": value }),
+                    "input": port, "value": value, "mode": "live" }),
         )
         .await
     }
@@ -134,7 +134,7 @@ async fn a_write_onto_a_view_output_is_its_inputs_live_value_and_reaches_a_viewe
         .write_onto_the_deck(&project, "cue", cue.clone())
         .await
         .expect("a playing view node's output takes a string");
-    assert_eq!(answer["port"], "cue", "{answer}");
+    assert_eq!(answer["mode"], "live", "{answer}");
     let (_viewer, mut reader) = engine.a_viewer_of_the_deck(&project, "cue").await;
     assert_eq!(
         the_record_of(&the_next_message_read(&mut reader).await),
@@ -162,10 +162,10 @@ async fn a_write_onto_a_view_output_is_its_inputs_live_value_and_reaches_a_viewe
 }
 
 /// A value the output's pin type does not take is refused as a value its input does not take, at
-/// `/value`; `null` is refused in the words of the output's family; and a value saved on the
-/// input of an output, by a `commit`, is refused by name, since it holds no saved value.
+/// `/value`; and a value saved on the input of an output, by a `commit`, is refused by name,
+/// since it holds no saved value.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_write_no_panel_makes_or_a_saved_value_on_a_view_outputs_input_is_refused() {
+async fn a_value_the_output_does_not_carry_or_a_saved_value_on_its_input_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_stream_holds_the_deck();
     engine.playing(&project).await;
@@ -185,22 +185,7 @@ async fn a_write_no_panel_makes_or_a_saved_value_on_a_view_outputs_input_is_refu
         Some("/value"),
         "{refusal:?}"
     );
-    assert!(
-        refusal.runtime_words.contains("`fader`")
-            && refusal.runtime_words.contains("carries Array"),
-        "{refusal:?}"
-    );
-
-    let refusal = engine
-        .write_onto_the_deck(&project, "cue", Value::Null)
-        .await
-        .expect_err("null sets no value");
-    assert!(
-        refusal.runtime_words.contains(
-            "output `cue` of node `deck` carries Records, and a Records value is a JSON object"
-        ),
-        "{refusal:?}"
-    );
+    assert!(refusal.runtime_words.contains("`fader`"), "{refusal:?}");
 
     let refusal = engine
         .the_answer_or_the_refusal_of(
@@ -227,43 +212,6 @@ async fn a_write_no_panel_makes_or_a_saved_value_on_a_view_outputs_input_is_refu
         .await;
 }
 
-/// An `add_node` of the deck saving a value on the input of its output `cue` is refused as
-/// `input_takes_no_value`, at `/pins/cue`, and the graph document keeps nothing of it.
-///
-/// Mental-revert: an `add_node` whose pins go unchecked saves a value the input never holds.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_add_node_saving_a_value_on_a_view_outputs_input_is_refused() {
-    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = a_project_bringing_the_deck_whose_stream_holds(json!([]));
-    engine.playing(&project).await;
-    let document_before = project.the_graph_document_of("main");
-
-    let refusal = engine
-        .the_answer_or_the_refusal_of(
-            "add_node",
-            json!({ "stream": project.stream_asset_of("main"),
-                    "type": format!("{}:deck", project.project), "name": "deck",
-                    "pins": { "cue": "intro" } }),
-        )
-        .await
-        .expect_err("the input of a view's output holds no saved value");
-
-    assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::InputTakesNoValue,
-        "{refusal:?}"
-    );
-    assert_eq!(
-        refusal.refused_params_pointer.as_deref(),
-        Some("/pins/cue"),
-        "{refusal:?}"
-    );
-    assert_eq!(project.the_graph_document_of("main"), document_before);
-    engine
-        .the_project_action_done("stop_playback", &project)
-        .await;
-}
-
 /// A graph document saving a value on the input of a view node's output loads, the value
 /// dropped: the input renders no saved value.
 #[tokio::test(flavor = "multi_thread")]
@@ -279,7 +227,7 @@ async fn a_document_saving_a_value_on_a_view_outputs_input_loads_with_the_value_
     let deck = the_node_named(&live_graph, "deck");
     let cue_input = the_input_named(&deck, "cue");
     assert_ne!(cue_input["value_comes_from"], "saved", "{cue_input}");
-    assert!(deck["pins"].get("cue").is_none(), "{deck}");
+    assert!(deck["input_values"].get("cue").is_none(), "{deck}");
     engine
         .the_project_action_done("stop_playback", &project)
         .await;
@@ -314,7 +262,7 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
     assert_eq!(deck["id"], deck_id_before, "the reload reconciles: {deck}");
     let cue_input = the_input_named(&deck, "cue");
     assert_ne!(cue_input["value_comes_from"], "saved", "{cue_input}");
-    assert!(deck["pins"].get("cue").is_none(), "{deck}");
+    assert!(deck["input_values"].get("cue").is_none(), "{deck}");
     engine
         .the_project_action_done("stop_playback", &project)
         .await;
@@ -322,13 +270,13 @@ async fn a_reload_saving_a_value_on_a_view_outputs_input_reconciles_with_the_val
 
 /// A `live` transaction setting the deck's `cue` twice is refused at its second set before
 /// anything is applied, naming the node and the input, whatever else it holds: two sets alone,
-/// which the stream sets apart from the graph, a config set before them, which takes the
-/// staged path, and two sets of a deck an `add_node` names by its `as`. Without the refusal the
+/// which the stream sets apart from the graph, and two sets of a deck an `add_node` names by its
+/// `as`, which takes the staged path. Without the refusal the
 /// second value would replace the first before the node is handed either, so the first would
 /// never be published.
 ///
 /// Mental-revert: checking the sets on the path that sets values apart from the graph alone lets
-/// the second and third transactions through, the deck handed the second value alone.
+/// the second transaction through, the deck handed the second value alone.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_is_applied() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -341,8 +289,6 @@ async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_i
     };
     let intro = json!("intro");
     let drop = json!("drop");
-    let configuring_the_deck = json!({ "operation": "set_node_config", "stream": stream_asset,
-                                       "node": DECK_NODE_UUID, "config": {} });
     let adding_a_second_deck = json!({ "operation": "add_node", "stream": stream_asset,
                                        "type": format!("{}:deck", project.project),
                                        "name": "second", "as": "second" });
@@ -354,15 +300,6 @@ async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_i
                 set_cue_on(DECK_NODE_UUID, drop.clone())
             ]),
             1,
-            "deck",
-        ),
-        (
-            json!([
-                configuring_the_deck,
-                set_cue_on(DECK_NODE_UUID, intro.clone()),
-                set_cue_on(DECK_NODE_UUID, drop.clone())
-            ]),
-            2,
             "deck",
         ),
         (

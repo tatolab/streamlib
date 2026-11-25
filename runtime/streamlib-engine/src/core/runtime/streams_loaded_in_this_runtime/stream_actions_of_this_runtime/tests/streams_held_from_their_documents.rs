@@ -128,8 +128,10 @@ fn a_node_of_a_type_not_described_renders_each_value_not_known_as_config_on_an_i
         .iter()
         .find(|node| node["name"] == "absent")
         .expect("the node of the type not described renders");
-    assert_eq!(absent["config"], serde_json::json!({"strength": 3}));
-    assert_eq!(absent["pins"], serde_json::json!({"gain": 2}));
+    assert_eq!(
+        absent["input_values"],
+        serde_json::json!({"strength": 3, "gain": 2})
+    );
     let inputs: Vec<&str> = absent["ports"]["inputs"]
         .as_array()
         .unwrap()
@@ -931,7 +933,7 @@ fn a_saved_graph_placing_a_built_in_this_runtime_lacks_opens_holding_it_in_error
         assert_eq!(removed["type"], removed_node_type, "{removed}");
         assert_eq!(removed["components"]["state"], "Error", "{removed}");
         assert_eq!(
-            removed["pins"],
+            removed["input_values"],
             serde_json::json!({"channel_names": ["level"]}),
             "{removed}"
         );

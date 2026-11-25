@@ -308,7 +308,7 @@ fn a_node_type_source_spells_its_origin_flat_and_keeps_a_null_default() {
             "description": "",
             "category": null,
             "category_from": null,
-            "inputs": [{"name": "grip", "family": "channels", "description": "", "annotation": "float | None", "pin_default": null}],
+            "inputs": [{"name": "grip", "description": "", "annotation": "float | None", "pin_default": null}],
             "outputs": null,
             "path": "nodes/gripper.py",
             "line": 4,
@@ -358,7 +358,7 @@ fn an_imports_source_listed_with_no_project_name_reads_with_none() {
 
 #[test]
 fn a_refusal_carries_its_code_and_leaves_out_every_place_it_does_not_name() {
-    let refusal = ProjectActionRefusalOnTheWire::of_the_action(
+    let refusal = ControlOperationRefusalOnTheWire::of_the_action(
         "transact",
         ControlOperationRefusalCode::ParamsDoNotMatchSchema,
         "missing field `stream`",
@@ -376,7 +376,7 @@ fn a_refusal_carries_its_code_and_leaves_out_every_place_it_does_not_name() {
 
 #[test]
 fn a_refusal_code_a_client_does_not_know_reads_as_refused() {
-    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+    let refusal: ControlOperationRefusalOnTheWire = serde_json::from_value(serde_json::json!({
         "refusal_code": "a_code_added_after_this_client",
         "action": "transact",
         "runtime_words": "no",
@@ -388,7 +388,7 @@ fn a_refusal_code_a_client_does_not_know_reads_as_refused() {
 
 #[test]
 fn a_refusal_from_a_runtime_that_sends_no_code_reads_as_refused() {
-    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+    let refusal: ControlOperationRefusalOnTheWire = serde_json::from_value(serde_json::json!({
         "action": "transact",
         "refused_operation_index": 1,
         "runtime_words": "no",
@@ -401,7 +401,7 @@ fn a_refusal_from_a_runtime_that_sends_no_code_reads_as_refused() {
 
 #[test]
 fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
-    let refusal = ProjectActionRefusalOnTheWire {
+    let refusal = ControlOperationRefusalOnTheWire {
         refused_params_pointer: Some("/operations/0/stream".to_owned()),
         refused_file: Some(ProjectFilePlaceOnTheWire {
             path: "nodes/blur.py".to_owned(),
@@ -415,7 +415,7 @@ fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
                 serde_json::Value::from("nodes/blur.py"),
             )]),
         }),
-        ..ProjectActionRefusalOnTheWire::of_the_action(
+        ..ControlOperationRefusalOnTheWire::of_the_action(
             "write_project_file",
             ControlOperationRefusalCode::Refused,
             "changed since it was read",
@@ -437,7 +437,7 @@ fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
         serde_json::json!({"operation": "read_project_file", "params": {"path": "nodes/blur.py"}})
     );
     assert_eq!(
-        serde_json::from_value::<ProjectActionRefusalOnTheWire>(on_the_wire).unwrap(),
+        serde_json::from_value::<ControlOperationRefusalOnTheWire>(on_the_wire).unwrap(),
         refusal
     );
 }
@@ -451,8 +451,6 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             "type": "tatolab.stream:Mixer",
             "kind": "process",
             "name": "mixer",
-            "config": {"frame_width": 640},
-            "config_checksum": 13757715674185714284_u64,
             "ports": {
                 "inputs": [
                     {"name": "gain", "description": "", "port_kind": "data",
@@ -477,11 +475,10 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
                 ],
                 "outputs": [
                     {"name": "out", "description": "", "port_kind": "data",
-                     "delivery_profile": null, "family": {"family": "channels"}},
+                     "delivery_profile": null},
                 ],
             },
             "input_values": {"frame_width": 640, "trim": 0.5},
-            "pins": {"trim": 0.5},
             "components": {
                 "state": "Running",
                 "failed_because": null,
@@ -761,18 +758,8 @@ fn a_listing_from_a_runtime_before_conditions_reads_with_none() {
     assert_eq!(listed.condition, None);
 }
 
-/// `facts` as `graph` serves them on a port of `pin`.
-fn the_facts_named_by_the_pin_of_their_port(
-    facts: streamlib_node_schema::PortStreamFacts,
-    pin: Option<&streamlib_node_schema::pin_type::ResolvedPin>,
-) -> PortStreamFactsOnTheWire {
-    let mut named = PortStreamFactsOnTheWire::from(facts);
-    named.name_the_pin_type_of_the_port_of(pin);
-    named
-}
-
 #[test]
-fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_back() {
+fn stream_facts_are_tagged_by_the_pin_type_they_describe_alone_and_read_back() {
     use streamlib_node_schema::pin_type::{PinFlow, PinType, ResolvedPin};
     use streamlib_node_schema::{ImageStreamFacts, ImageStreamFrameRate, PacketsStreamFacts};
 
@@ -789,14 +776,16 @@ fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_bac
         },
         flow: PinFlow::Stream,
     };
-    let named =
-        the_facts_named_by_the_pin_of_their_port(thirty_frames_a_second.clone(), Some(&texture));
+    let named = PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(
+        thirty_frames_a_second.clone(),
+        Some(&texture),
+    )
+    .unwrap();
     let rendered = serde_json::to_value(&named).unwrap();
     assert_eq!(
         rendered,
         serde_json::json!({
             "type": "texture",
-            "family": "image",
             "frame_rate": {"numerator": 30, "denominator": 1},
         })
     );
@@ -814,33 +803,37 @@ fn stream_facts_name_the_pin_type_they_describe_beside_their_family_and_read_bac
         flow: PinFlow::Stream,
     };
     assert_eq!(
-        serde_json::to_value(the_facts_named_by_the_pin_of_their_port(
-            opus.clone(),
-            Some(&encoded_audio)
-        ))
+        serde_json::to_value(
+            PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(opus.clone(), Some(&encoded_audio))
+                .unwrap()
+        )
         .unwrap(),
-        serde_json::json!({"type": "encoded_audio", "family": "packets", "rfc6381_codec": "opus"})
+        serde_json::json!({"type": "encoded_audio", "rfc6381_codec": "opus"})
     );
 
-    let untyped =
-        serde_json::to_value(the_facts_named_by_the_pin_of_their_port(opus.clone(), None)).unwrap();
     assert_eq!(
-        untyped,
-        serde_json::json!({"family": "packets", "rfc6381_codec": "opus"}),
-        "a port with no pin type keeps its facts under `family` alone"
+        PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(opus.clone(), None),
+        None,
+        "a port with no pin type serves no facts"
     );
     assert_eq!(
-        serde_json::from_value::<PortStreamFactsOnTheWire>(untyped)
-            .unwrap()
-            .pin_type,
-        None
+        PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(opus, Some(&texture)),
+        None,
+        "facts its pin type does not describe are not served"
     );
     assert!(
         serde_json::from_value::<PortStreamFactsOnTheWire>(
-            serde_json::json!({"type": "texture", "family": "image", "fps": 30})
+            serde_json::json!({"type": "texture", "fps": 30})
         )
         .is_err(),
         "a key the facts do not have is still refused"
+    );
+    assert!(
+        serde_json::from_value::<PortStreamFactsOnTheWire>(
+            serde_json::json!({"family": "image", "frame_rate": {"numerator": 30, "denominator": 1}})
+        )
+        .is_err(),
+        "facts tagged by their family alone are no longer read"
     );
 }
 

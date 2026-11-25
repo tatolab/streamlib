@@ -152,8 +152,8 @@ fn annotations_stating(name: PinAnnotationName) -> PinAnnotations {
             ..none
         },
         PinAnnotationName::FrameRate => PinAnnotations {
-            frame_rate: Some(crate::ImageOutputPortFrameRate::FromConfig {
-                config_key: "fps".into(),
+            frame_rate: Some(crate::ImageOutputPortFrameRate::FromSetting {
+                setting: "fps".into(),
             }),
             ..none
         },
@@ -184,8 +184,8 @@ fn each_annotation_name_is_the_key_of_the_one_field_it_names() {
         unit: Some("Hz".into()),
         meaning: Some("frequency".into()),
         control: Some("slider".into()),
-        frame_rate: Some(crate::ImageOutputPortFrameRate::FromConfig {
-            config_key: "fps".into(),
+        frame_rate: Some(crate::ImageOutputPortFrameRate::FromSetting {
+            setting: "fps".into(),
         }),
         sample_rate: Some(crate::ChannelsOutputPortSampleRate::Stated(48_000)),
         sample_type: Some(crate::ChannelsOutputPortSampleType::F32),
@@ -366,11 +366,31 @@ fn an_asset_that_is_not_a_uuid_is_refused() {
     );
 }
 
+/// A rate read from a setting is written `from_setting`, and the `from_config` an older
+/// declaration wrote still reads.
+#[test]
+fn a_rate_read_from_a_setting_is_written_from_setting_and_reads_its_older_spelling() {
+    let read_from_rate = crate::ChannelsOutputPortSampleRate::FromSetting {
+        setting: "rate".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&read_from_rate).unwrap(),
+        json!({ "from_setting": { "setting": "rate" } })
+    );
+    assert_eq!(
+        serde_json::from_value::<crate::ChannelsOutputPortSampleRate>(
+            json!({ "from_config": { "config_key": "rate" } })
+        )
+        .unwrap(),
+        read_from_rate
+    );
+}
+
 #[test]
 fn a_pin_annotation_reuses_the_port_stream_fact_forms() {
     let annotations: PinAnnotations = serde_json::from_value(json!({
         "frame_rate": { "stated": { "numerator": 30000, "denominator": 1001 } },
-        "sample_rate": { "from_config": { "config_key": "rate" } },
+        "sample_rate": { "from_setting": { "setting": "rate" } },
         "sample_type": "f32",
         "residency": "gpu",
     }))
@@ -386,8 +406,8 @@ fn a_pin_annotation_reuses_the_port_stream_fact_forms() {
     );
     assert_eq!(
         annotations.sample_rate,
-        Some(crate::ChannelsOutputPortSampleRate::FromConfig {
-            config_key: "rate".into()
+        Some(crate::ChannelsOutputPortSampleRate::FromSetting {
+            setting: "rate".into()
         })
     );
 }

@@ -26,7 +26,8 @@ use crate::core::graph::input_values::{
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeComponentsOnTheWire, GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
-    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, redraw_a_node_over_its_pins,
+    GraphResponse, LinkOutput, LinkPortRefOutput, redraw_a_node_over_the_values_its_inputs_hold,
+    the_values_held_on_no_input_of,
 };
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
@@ -193,18 +194,15 @@ impl GraphVariablesAsDrawn {
             else {
                 continue;
             };
-            let running_config = node
-                .config
-                .clone()
-                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-            let resolved_as_drawn: serde_json::Map<String, serde_json::Value> = config_naming_a_get
+            let running_settings = the_values_held_on_no_input_of(node);
+            let resolved_settings: serde_json::Map<String, serde_json::Value> = config_naming_a_get
                 .as_resolved
                 .iter()
-                .filter(|(name, _)| !node.pins.contains_key(*name))
+                .filter(|(name, _)| !node.ports.inputs.iter().any(|input| &input.name == *name))
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect();
-            if serde_json::Value::Object(resolved_as_drawn) == running_config {
-                redraw_a_node_over_its_pins(node, &config_naming_a_get.as_drawn);
+            if resolved_settings == running_settings {
+                redraw_a_node_over_the_values_its_inputs_hold(node, &config_naming_a_get.as_drawn);
             }
         }
         for (variable_node, drawn_position) in self
@@ -242,8 +240,6 @@ impl GraphVariablesAsDrawn {
                 TakesAWireRendered::ByTheRuleOnANodeOf(&variable_node.node_type),
             )
             .into_iter();
-            let values =
-                InputValuesRendered::of_a_node_holding_no_pin_value(&variable_node.input_values);
             let position = (*drawn_position).min(graph_response.nodes.len());
             graph_response.nodes.insert(
                 position,
@@ -256,8 +252,6 @@ impl GraphVariablesAsDrawn {
                     kind: None,
                     language: None,
                     name: variable_node_cast,
-                    config: Some(values.config),
-                    config_checksum: values.config_checksum,
                     ports: GraphNodePortsOnTheWire {
                         inputs: if is_a_setter {
                             settings.chain([value_port.clone()]).collect()
@@ -270,9 +264,7 @@ impl GraphVariablesAsDrawn {
                             vec![value_port]
                         },
                     },
-                    input_values: values.input_values,
-                    pins: values.pins,
-                    exposed_config_fields: variable_node.exposed_config_fields.clone(),
+                    input_values: variable_node.input_values.clone(),
                     studio: variable_node.studio.clone(),
                     inputs_waiting_for_a_value: Vec::new(),
                     components,
@@ -634,13 +626,13 @@ impl GraphSnapshot {
                 named_a_get = true;
                 Ok(Some(referenced_node.clone()))
             };
-            let older_keys = crate::core::json_schema::OlderGraphKeysOfANodeType::of(
+            let inputs_and_settings = crate::core::json_schema::InputsAndSettingsOfANodeType::of(
                 node_types,
                 &node.node_type,
             );
             for (input, value) in resolved_input_values
                 .iter_mut()
-                .filter(|(input, _)| older_keys.renders_under_config(input))
+                .filter(|(input, _)| inputs_and_settings.is_a_settings_value(input))
             {
                 resolve_each_config_value_naming_a_get(
                     value,

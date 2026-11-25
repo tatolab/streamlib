@@ -92,14 +92,76 @@ fn a_set_node_config_that_names_no_value_stays_as_written() {
 }
 
 #[test]
-fn a_set_node_config_action_and_a_config_that_is_no_object_stay_as_written() {
+fn a_set_node_config_that_is_no_object_stays_as_written() {
     let transaction = json!({
         "operations": [{ "stream": STREAM, "operation": "set_node_config", "node": NODE,
                          "from": 3, "to": { "gain": 0.25 } }],
-        "actions": [{ "operation": "set_node_config", "stream": STREAM, "node": NODE,
-                      "config": { "gain": 0.25 } }],
     });
     assert_eq!(upgraded(transaction), None);
+}
+
+#[test]
+fn a_set_node_config_action_reads_as_a_set_of_each_name_it_sent() {
+    let transaction = json!({
+        "actions": [{ "operation": "set_node_config", "stream": STREAM, "node": NODE,
+                      "config": { "gain": 0.25, "mode": null } }],
+    });
+    assert_eq!(
+        upgraded(transaction),
+        Some(json!({
+            "actions": [
+                { "operation": "set_node_input_value", "stream": STREAM, "node": NODE,
+                  "input": "gain", "value": 0.25 },
+                { "operation": "set_node_input_value", "stream": STREAM, "node": NODE,
+                  "input": "mode" },
+            ],
+        }))
+    );
+}
+
+#[test]
+fn a_set_exposed_config_fields_reads_as_an_edit_that_changes_nothing() {
+    let transaction = json!({
+        "operations": [{ "stream": STREAM, "operation": "set_exposed_config_fields",
+                         "node": NODE, "from": [], "to": ["gain"] }],
+        "inverse_operations": [{ "stream": STREAM, "operation": "set_exposed_config_fields",
+                                 "node": NODE, "from": ["gain"], "to": [] }],
+        "actions": [{ "operation": "set_exposed_config_fields", "stream": STREAM, "node": NODE,
+                      "exposed_config_fields": ["gain"] }],
+    });
+    let change_of_nothing = json!({ "stream": STREAM, "operation": "set_node_config",
+                                    "node": NODE, "from": {}, "to": {} });
+    assert_eq!(
+        upgraded(transaction),
+        Some(json!({
+            "operations": [change_of_nothing.clone()],
+            "inverse_operations": [change_of_nothing],
+            "actions": [],
+        }))
+    );
+}
+
+#[test]
+fn an_add_node_and_an_import_read_without_the_keys_no_action_takes_now() {
+    let transaction = json!({
+        "actions": [
+            { "operation": "add_node", "stream": STREAM, "type": "Tone", "as": "tone",
+              "config": { "pitch": 440 }, "pins": { "gain": 0.5 },
+              "exposed_config_fields": ["pitch"] },
+            { "operation": "import_graph_generator", "stream": STREAM,
+              "generator": "generators.looks:soft_look", "config": { "strength": 2 } },
+        ],
+    });
+    assert_eq!(
+        upgraded(transaction),
+        Some(json!({
+            "actions": [
+                { "operation": "add_node", "stream": STREAM, "type": "Tone", "as": "tone" },
+                { "operation": "import_graph_generator", "stream": STREAM,
+                  "generator": "generators.looks:soft_look" },
+            ],
+        }))
+    );
 }
 
 #[test]

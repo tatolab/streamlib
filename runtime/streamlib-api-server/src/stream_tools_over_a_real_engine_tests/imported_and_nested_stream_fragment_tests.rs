@@ -353,10 +353,13 @@ async fn a_stream_fragment_that_would_close_a_cycle_is_refused_naming_each_strea
     let refusal = tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
-            "add_node",
-            json!({ "stream": main_asset, "type": STREAM_FRAGMENT_NODE_TYPE, "name": "left",
-                    "config": { "stream": { "asset": cell.stream_asset_of("left") } },
-                    "author": an_agent_named("alice") }),
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": main_asset, "type": STREAM_FRAGMENT_NODE_TYPE,
+                  "name": "left", "as": "left" },
+                { "operation": "set_node_input_value", "stream": main_asset, "node": "left",
+                  "input": "stream", "value": { "asset": cell.stream_asset_of("left") } },
+            ], "author": an_agent_named("alice") }),
         )
         .await,
     )
@@ -397,11 +400,14 @@ async fn a_stream_an_edit_places_runs_only_where_it_is_placed_until_the_edit_is_
     tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "add_node",
-            json!({ "stream": project.stream_asset_of("main"), "type": STREAM_FRAGMENT_NODE_TYPE,
-                    "name": "look",
-                    "config": { "stream": { "asset": project.stream_asset_of("look") } },
-                    "author": an_agent_named("alice") }),
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": project.stream_asset_of("main"),
+                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "look", "as": "look" },
+                { "operation": "set_node_input_value", "stream": project.stream_asset_of("main"),
+                  "node": "look", "input": "stream",
+                  "value": { "asset": project.stream_asset_of("look") } },
+            ], "author": an_agent_named("alice") }),
         )
         .await,
     )

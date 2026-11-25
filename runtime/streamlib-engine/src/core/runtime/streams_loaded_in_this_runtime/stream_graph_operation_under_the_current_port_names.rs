@@ -149,20 +149,6 @@ pub(crate) fn the_operation_under_the_current_port_names(
         StreamGraphOperation::Disconnect { link } => StreamGraphOperation::Disconnect {
             link: current_link(link),
         },
-        StreamGraphOperation::SetPinValue {
-            node,
-            input,
-            from,
-            to,
-        } => {
-            let input = current_name(node, input, PortDirection::Input);
-            StreamGraphOperation::SetPinValue {
-                from: the_value_in_the_form_it_takes_now(&ports_of, node, &input, from),
-                to: the_value_in_the_form_it_takes_now(&ports_of, node, &input, to),
-                input,
-                node,
-            }
-        }
         StreamGraphOperation::SetNodeInputValue {
             node,
             input,

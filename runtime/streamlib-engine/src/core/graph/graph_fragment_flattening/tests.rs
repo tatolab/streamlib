@@ -285,7 +285,7 @@ fn rendered_as_running(node: &GraphSnapshotNode) -> GraphNodeOutput {
             state: Some(NodeStateOnTheWire::Running),
             ..GraphNodeComponentsOnTheWire::default()
         },
-        ..rendered_as_stored(node, &NodeTypesOneStreamResolves::new())
+        ..rendered_as_stored(node)
     }
 }
 
@@ -319,9 +319,7 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
     let flattening =
         flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     let names: Vec<&str> = render.nodes.iter().map(|node| node.name.as_str()).collect();
     assert_eq!(names, ["camera", "look", "display"]);
@@ -381,11 +379,11 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
     );
     assert_eq!(blur_into_tint.state, LinkStateOutput::Wired);
     assert_eq!(
-        soft_holds.nodes[2].config,
-        Some(serde_json::json!({
+        serde_json::Value::Object(soft_holds.nodes[2].input_values.clone()),
+        serde_json::json!({
             "reads_radius_of": {"node": "blur"},
             "label_shaped_like_a_reference": {"node": "blur"},
-        }))
+        })
     );
     let outer_links: Vec<(&str, &str)> = render
         .links
@@ -427,9 +425,7 @@ fn each_drawn_link_through_a_fragment_renders_the_running_link_it_stands_for() {
     let flattening =
         flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     let camera_into_blur = ("camera->look/soft/blur", LinkStateOutput::Wired);
     let tint_into_display = ("look/soft/tint->display", LinkStateOutput::Wired);
@@ -469,9 +465,7 @@ fn a_drawn_link_into_a_fragment_renders_pending_while_the_link_it_stands_for_is(
             link.state = LinkStateOutput::Pending;
         }
     }
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     assert_eq!(
         ids_and_states_of(&render.links),
@@ -490,9 +484,7 @@ fn a_drawn_link_into_a_fragment_port_nothing_runs_behind_renders_with_its_ends_a
     render
         .links
         .retain(|link| link.id != "camera->look/soft/blur");
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     let camera_into_look = &render.links[0];
     assert_eq!(camera_into_look.id, "");
@@ -535,40 +527,6 @@ fn a_node_inside_a_fragment_is_read_only_to_a_live_removal_or_rename() {
     );
 }
 
-/// A stream that described `Blur`, whose config schema lists `radius` and which has an input
-/// `amount`.
-fn node_types_describing_a_blur_with_an_input() -> NodeTypesOneStreamResolves {
-    use crate::core::descriptors::{
-        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
-        PortFamilyDeclaration,
-    };
-    let node_types = NodeTypesOneStreamResolves::new();
-    let descriptor = NodeDescriptor::new(
-        NodeClassShortName::new("Blur").unwrap(),
-        NodeClassImportPath::new("looks.nodes:Blur").unwrap(),
-        "fragment rendering test",
-    )
-    .with_config_schema(serde_json::json!({
-        "type": "object",
-        "properties": {"radius": {"type": "integer"}},
-    }))
-    .with_input(PortDescriptor::new(
-        "amount",
-        "how much to blur",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Channels),
-    ));
-    node_types
-        .register_a_type_described_in_this_streams_node_interpreter(
-            descriptor,
-            crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
-                Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
-            ),
-        )
-        .expect("the type is described into the stream");
-    node_types
-}
-
 #[test]
 fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_pin() {
     let mut graph = a_camera_through_look_holding_soft_into_a_display();
@@ -578,15 +536,12 @@ fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_
     let flattening = flattened(graph).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
     render.nodes.retain(|node| node.id != BLUR_UUID);
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &node_types_describing_a_blur_with_an_input());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     let look = &render.nodes[1];
-    assert_eq!(look.config, Some(serde_json::json!({"strength": 2})));
     assert_eq!(
-        serde_json::Value::Object(look.pins.clone()),
-        serde_json::json!({"video": 1})
+        serde_json::Value::Object(look.input_values.clone()),
+        serde_json::json!({"strength": 2, "video": 1})
     );
     let soft_holds = look.fragment.as_ref().expect("look holds").nodes[1]
         .fragment
@@ -594,10 +549,9 @@ fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_
         .expect("soft holds");
     let blur = &soft_holds.nodes[1];
     assert_eq!(blur.name, "blur");
-    assert_eq!(blur.config, Some(serde_json::json!({"radius": 8})));
     assert_eq!(
-        serde_json::Value::Object(blur.pins.clone()),
-        serde_json::json!({"amount": 3})
+        serde_json::Value::Object(blur.input_values.clone()),
+        serde_json::json!({"radius": 8, "amount": 3})
     );
 }
 
@@ -655,9 +609,7 @@ fn a_drawn_link_into_a_fragment_says_what_any_running_link_it_stands_for_convert
             other => panic!("no running link {other} in this graph"),
         }
     }
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     let camera_into_look = &render.links[0];
     assert_eq!(
@@ -688,9 +640,7 @@ fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_p
     graph["nodes"][1]["input_values"] = serde_json::json!({"stream": placed_asset});
     let flattening = flattened(graph).expect("flattens");
     let mut render = a_render_of(&flattening.graph_the_runtime_runs);
-    flattening
-        .fragments_as_drawn
-        .render_into(&mut render, &NodeTypesOneStreamResolves::new());
+    flattening.fragments_as_drawn.render_into(&mut render);
 
     let placed = &render.nodes[1];
     let input_names: Vec<&str> = placed
@@ -715,9 +665,8 @@ fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_p
         Some(placed_asset.clone())
     );
     assert_eq!(
-        placed.config,
-        Some(serde_json::json!({"stream": placed_asset})),
-        "the config `graph` serves keeps its keys"
+        placed.input_values["stream"], placed_asset,
+        "the input values `graph` serves keep their keys"
     );
 }
 

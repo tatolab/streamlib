@@ -47,13 +47,12 @@ pub(super) fn set_on_warmth_base(stream: Uuid, input: &str, value: Value) -> Val
             "node": WARMTH_BASE_NODE_UUID, "input": input, "value": value })
 }
 
-/// A Float `GraphInput` renders its saved value under `config.default`, the key a published Tato
-/// Studio reads, and once cleared renders no value, under `value` or under `default`, so the clear
-/// holds; and one `transact` clearing its value and range and
+/// A Float `GraphInput` renders its saved value under `input_values.value`, and once cleared
+/// renders no value, so the clear holds; and one `transact` clearing its value and range and
 /// choosing a String takes.
 ///
-/// Mental-revert: keeping the `default` the config itself holds draws the cleared value back from
-/// the rendering, and the String is refused for holding 0.1.
+/// Mental-revert: drawing the cleared value back from the node type's default renders 0.1 again,
+/// and the String is refused for holding it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cleared_graph_input_value_stays_cleared_and_a_transact_clearing_it_retypes_it() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -69,18 +68,12 @@ async fn a_cleared_graph_input_value_stays_cleared_and_a_transact_clearing_it_re
     };
 
     let set = the_node_named(&engine.the_live_graph_of(&stream_id), "warmth_base");
-    assert_eq!(
-        set["config"]["default"],
-        json!(0.1),
-        "a published Studio reads it: {set}"
-    );
+    assert_eq!(set["input_values"]["value"], json!(0.1), "{set}");
 
     tool_answer(&transact(json!([set_on_warmth_base(stream, "value", Value::Null)])).await)
         .expect("the value is cleared");
     let cleared = the_node_named(&engine.the_live_graph_of(&stream_id), "warmth_base");
     assert!(cleared["input_values"].get("value").is_none(), "{cleared}");
-    assert!(cleared["config"].get("default").is_none(), "{cleared}");
-    assert!(cleared["config"].get("value").is_none(), "{cleared}");
 
     let string = json!({ "type": "string" });
     tool_answer(
@@ -484,8 +477,8 @@ pub(super) fn as_a_percentage(value: &Value) -> std::result::Result<Value, Saved
     )))
 }
 
-/// On a running stream, a `set_node_config` choosing a String for a Float `GraphInput` and saving
-/// `"x"` saves both, the node rebuilt for its new type, and the next value set takes.
+/// On a running stream, a `transact` choosing a String for a Float `GraphInput` and saving `"x"`
+/// saves both, the node rebuilt for its new type, and the next value set takes.
 ///
 /// Mental-revert: handing `"x"` to the running node before it is rebuilt refuses it for the
 /// Channels its output still carries.
@@ -494,7 +487,7 @@ pub(super) fn as_a_percentage(value: &Value) -> std::result::Result<Value, Saved
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_config_retyping_a_running_graph_input_saves_its_new_value_and_the_next_set_takes() {
+async fn a_transact_retyping_a_running_graph_input_saves_its_new_value_and_the_next_set_takes() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_an_input_saving(
         json!({ "type": "float" }),
@@ -511,8 +504,8 @@ async fn a_config_retyping_a_running_graph_input_saves_its_new_value_and_the_nex
     };
 
     let retyped = answered_within_a_minute(json!([
-        { "operation": "set_node_config", "stream": stream, "node": WARMTH_BASE_NODE_UUID,
-          "config": { "port": "warmth_base", "pin_type": { "type": "string" }, "value": "x" } },
+        set_on_warmth_base(stream, "pin_type", json!({ "type": "string" })),
+        set_on_warmth_base(stream, "value", json!("x")),
     ]))
     .await
     .expect("the transaction answers");

@@ -9,7 +9,7 @@ import {
   type ControlContractComponentName,
   type ControlContractIssue,
   type PinType,
-  type ProjectActionRefusalOnTheWire,
+  type ControlOperationRefusalOnTheWire,
 } from "../contract.js";
 
 export function aPageReadingValuesWithTheContract(sent: unknown): void {
@@ -17,9 +17,9 @@ export function aPageReadingValuesWithTheContract(sent: unknown): void {
     const pinType: PinType = sent;
     void pinType.type;
   }
-  const refusalReading = readControlContractValue("ProjectActionRefusalOnTheWire", sent);
+  const refusalReading = readControlContractValue("ControlOperationRefusalOnTheWire", sent);
   if (refusalReading.read) {
-    const refusal: ProjectActionRefusalOnTheWire = refusalReading.value;
+    const refusal: ControlOperationRefusalOnTheWire = refusalReading.value;
     void refusal.refusal_code;
   } else {
     const firstIssue: ControlContractIssue | undefined = refusalReading.issues[0];

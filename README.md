@@ -379,12 +379,11 @@ file from the runtime's node template; `start_playback` and `stop_playback`, whi
 playback of a whole open project and its end, `pause_playback` and `resume_playback`, which pause
 and resume it at once, `close_project`, which ends its playback and unloads it, `remove_project`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
-machine, naming the node by the `id` `graph` lists, and `write_studio_view_output` to hand a
-node of one of the project's Tato Studio views a value it publishes on an output. Every tool
-about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
-them the runtime serves the node catalog — every
-node type it can add, with its description, config schema and ports — and the live graph as
-resources, and four prompts whose every step is a tool call. An agent can write a
+machine, naming the node by the `id` `graph` lists; `set_node_input_value` sets the value of any
+input, and set live on a node of one of the project's Tato Studio views it is a value the view
+publishes on its output of that name. Every tool about one stream names it with `stream`, and
+`connect` links two ports of that one stream. Beside them the runtime serves the live graph and
+the stream actions under way as resources, and four prompts whose every step is a tool call. An agent can write a
 node class into a module of the project, or `uv add` a package that ships one, then add it by
 its `module:ClassName` path and connect it into the running stream. The runtime never imports it:
 the class runs in its own process, started from the stream's venv, like every other Python node.

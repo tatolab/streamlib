@@ -96,7 +96,6 @@ pub(crate) fn the_http_status_mapped_to_a_refusal_code(refusal_code: &str) -> Op
         | LinkNeedsAModuleConversion
         | InputTakesNoWire
         | LinkStreamsIntoASetting
-        | LinkFromAFunctionNodeIntoASetting
         | Refused => Some(422),
         RuntimeFailed | CheckRanOutOfTime | ExtensionSdkNotFound => Some(500),
         _ => None,
@@ -279,7 +278,7 @@ pub(crate) fn the_statuses_an_error_may_answer(
 }
 
 /// The schema of the refusal an error's `data` carries, `refusal_code` among its fields.
-const REFUSAL_SCHEMA_NAME: &str = "ProjectActionRefusalOnTheWire";
+const REFUSAL_SCHEMA_NAME: &str = "ControlOperationRefusalOnTheWire";
 
 /// The error bodies a route may answer, by the HTTP status each answers with: the method's own
 /// errors, then the two any request may meet before it names one call.

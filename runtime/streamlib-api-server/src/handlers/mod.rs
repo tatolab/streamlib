@@ -1,19 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The local API's router, built by [`build_router`], and the graph and node catalog renderings
-//! the control operations and the MCP resources share.
+//! The local API's router, built by [`build_router`], and the graph rendering the control
+//! operations and the MCP resources share.
 
 use axum::{Router, routing::get};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use streamlib::sdk::descriptors::NodeDescriptor;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::json_schema::{
-    MachineWideRegistryResponse, NodeDescriptorOutput, NodeTypeAnInstalledModuleDeclaresOutput,
-    NodeTypesDescribedInOneStreamOutput, PortFamilyDescriptorOutput, RegistryResponse,
-};
-use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, StreamListing};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
@@ -184,56 +178,6 @@ pub(crate) fn give_the_stream_graph_its_listed_condition(
             "the stream `{}`'s condition was left out of its graph: {not_serialized}",
             listing.stream_id
         ),
-    }
-}
-
-/// The native node types every stream can add, then each loaded stream's types described in its
-/// own interpreter: what the `streamlib://node-catalog` resource answers. A stream unloaded while
-/// this renders is left out.
-pub(crate) fn machine_wide_registry_response(
-    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-) -> MachineWideRegistryResponse {
-    MachineWideRegistryResponse {
-        nodes: node_catalog_response(&NODE_REGISTRY.list_registered()).nodes,
-        families: PortFamilyDescriptorOutput::every_port_family(),
-        streams: operations_on_the_loaded_streams
-            .ids_of_the_loaded_streams()
-            .into_iter()
-            .filter_map(|stream_id| {
-                let described = operations_on_the_loaded_streams
-                    .node_types_described_in_the_interpreter_of_the_stream_a_call_names(&stream_id)
-                    .ok()?;
-                let installed = operations_on_the_loaded_streams
-                    .node_types_installed_modules_declare_in_the_stream_a_call_names(&stream_id)
-                    .ok()?;
-                Some(NodeTypesDescribedInOneStreamOutput {
-                    stream: stream_id,
-                    nodes: node_catalog_response(&described).nodes,
-                    installed: installed
-                        .iter()
-                        .map(|(descriptor, installed_module)| {
-                            NodeTypeAnInstalledModuleDeclaresOutput {
-                                distribution: installed_module.distribution.clone(),
-                                distribution_version: installed_module.distribution_version.clone(),
-                                entry_point: installed_module.entry_point.clone(),
-                                node: NodeDescriptorOutput::from(descriptor),
-                            }
-                        })
-                        .collect(),
-                })
-            })
-            .collect(),
-    }
-}
-
-/// A node catalog, rendered as the MCP node catalog resource serves each of its lists.
-pub(crate) fn node_catalog_response(node_catalog: &[NodeDescriptor]) -> RegistryResponse {
-    RegistryResponse {
-        nodes: node_catalog
-            .iter()
-            .map(NodeDescriptorOutput::from)
-            .collect(),
-        families: PortFamilyDescriptorOutput::every_port_family(),
     }
 }
 

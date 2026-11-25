@@ -52,6 +52,8 @@ pub(crate) fn config_keys_of_a_node_type_holding_a_node_reference(
 /// under requires.
 pub(crate) struct ConfigNodeReferenceEdgeOfOneNode {
     pub(crate) edge: ConfigNodeReferenceEdgeOnTheWire,
+    /// The setting the reference sits under, by its key in the node's settings.
+    pub(crate) config_key: String,
     pub(crate) referenced_node_type_import_path: Option<String>,
     pub(crate) one_referrer_per_referenced_node: bool,
 }
@@ -88,9 +90,9 @@ pub(crate) fn config_node_reference_edges_of_one_node(
         edges.push(ConfigNodeReferenceEdgeOfOneNode {
             edge: ConfigNodeReferenceEdgeOnTheWire {
                 node: node_name.to_string(),
-                config_key,
                 referenced_node: referenced_node.to_string(),
             },
+            config_key,
             referenced_node_type_import_path,
             one_referrer_per_referenced_node,
         });
@@ -111,9 +113,9 @@ pub(crate) fn refuse_a_second_referrer_of_a_node_that_takes_one<'edge>(
         }
         let ConfigNodeReferenceEdgeOnTheWire {
             node,
-            config_key,
             referenced_node,
         } = &reference.edge;
+        let config_key = &reference.config_key;
         let key_and_referenced_node = (
             config_key.clone(),
             cast_exposed_name_to_url_safe(referenced_node)?.into_owned(),
@@ -147,9 +149,9 @@ pub(crate) fn refuse_a_reference_to_a_node_of_the_wrong_type(
     }
     let ConfigNodeReferenceEdgeOnTheWire {
         node,
-        config_key,
         referenced_node,
     } = &reference.edge;
+    let config_key = &reference.config_key;
     Err(Error::GraphError(format!(
         "node `{node}`'s config key `{config_key}` names node `{referenced_node}`, which is a \
          `{referenced_node_type}`, and the key takes a `{required_type}`"
@@ -194,7 +196,7 @@ pub(crate) fn refuse_input_values_naming_a_node_the_graph_does_not_hold(
             return Err(Error::GraphError(format!(
                 "input `{}` of node `{}` names node `{referenced_node}`, which the graph \
                  does not hold. The graph holds: {}",
-                reference.edge.config_key,
+                reference.config_key,
                 reference.edge.node,
                 names_listed_for_a_refusal(
                     {

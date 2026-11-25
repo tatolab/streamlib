@@ -2,10 +2,10 @@
   "openrpc": "1.3.2",
   "info": {
     "title": "StreamLib runtime control API",
-    "version": "3",
+    "version": "4",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
-    "x-contract-version": 3,
-    "x-contract-revision": 52
+    "x-contract-version": 4,
+    "x-contract-revision": 0
   },
   "methods": [
     {
@@ -33,21 +33,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -93,21 +93,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -153,21 +153,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -213,21 +213,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -239,7 +239,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "observe",
       "x-exposures": [
         "studio",
@@ -273,21 +273,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -333,21 +333,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -393,21 +393,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -465,21 +465,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -560,21 +560,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -665,21 +665,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -830,21 +830,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1008,21 +1008,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1084,21 +1084,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1166,21 +1166,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1192,7 +1192,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "graph",
       "x-exposures": [
         "studio",
@@ -1284,21 +1284,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1310,7 +1310,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "graph",
       "x-exposures": [
         "studio",
@@ -1432,21 +1432,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1508,21 +1508,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1583,21 +1583,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1641,130 +1641,6 @@
       ]
     },
     {
-      "name": "set_node_config",
-      "summary": "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.",
-      "description": "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.",
-      "paramStructure": "by-name",
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/SetNodeConfigRequest"
-          }
-        }
-      ],
-      "result": {
-        "name": "set_node_config_result",
-        "schema": {
-          "$ref": "#/components/schemas/GraphTransactionToolResult"
-        }
-      },
-      "errors": [
-        {
-          "code": 1,
-          "message": "refused",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 2,
-          "message": "failed",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": -32602,
-          "message": "params do not match",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 3,
-          "message": "contract mismatch",
-          "data": {
-            "$ref": "#/components/schemas/ControlContractVersionMismatch"
-          }
-        }
-      ],
-      "x-since": 1,
-      "x-stability": "stable",
-      "x-group": "graph",
-      "x-exposures": [
-        "studio",
-        "agent",
-        "public"
-      ],
-      "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
-      "x-replaced-by": "set_node_input_value"
-    },
-    {
-      "name": "set_pin_value",
-      "summary": "Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.",
-      "description": "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.",
-      "paramStructure": "by-name",
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/SetPinValueRequest"
-          }
-        }
-      ],
-      "result": {
-        "name": "set_pin_value_result",
-        "schema": {
-          "$ref": "#/components/schemas/GraphTransactionToolResult"
-        }
-      },
-      "errors": [
-        {
-          "code": 1,
-          "message": "refused",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 2,
-          "message": "failed",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": -32602,
-          "message": "params do not match",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 3,
-          "message": "contract mismatch",
-          "data": {
-            "$ref": "#/components/schemas/ControlContractVersionMismatch"
-          }
-        }
-      ],
-      "x-since": 1,
-      "x-stability": "stable",
-      "x-group": "graph",
-      "x-exposures": [
-        "studio",
-        "agent",
-        "public"
-      ],
-      "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
-      "x-replaced-by": "set_node_input_value"
-    },
-    {
       "name": "set_node_input_value",
       "summary": "Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.",
       "description": "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A set on a setting read at setup that a link feeds is kept and answered there too, its node built with the value the link last carried. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A set of the `pin_type` of a top-level `GraphInput` that saves a value carries that value into the new type in the same commit, which one undo reverses whole: when exactly one conversion the stream registers takes the former type and gives the new one, the value is cast by it and then held within the Input's `range`, among them the built-in `FloatToInteger`, which truncates toward zero within an Integer's range, `IntegerToFloat`, exact, and `BooleanToInteger`, `IntegerToBoolean`, `BooleanToFloat` and `FloatToBoolean`, 0 and 1; with none, or when the one that fits is a module's, a node body that converts only inside a started stream, a value the new type takes as it is is kept; otherwise the value gives way to the new type's default, no saved value, as it does when more than one conversion fits, the cast is refused, or an Integer's `range` holds no whole number. Each such value is answered under `saved_values_retyped`: its `value_before`, the `value` it now saves and the conversion under `cast_by`, or why it took the default under `default_because` with each conversion that fits under `conversions_that_fit`. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.",
@@ -1789,21 +1665,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1815,7 +1691,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "graph",
       "x-exposures": [
         "studio",
@@ -1866,21 +1742,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -1942,21 +1818,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2000,68 +1876,6 @@
       ]
     },
     {
-      "name": "set_exposed_config_fields",
-      "summary": "Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.",
-      "description": "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value. Replaced by `set_node_input_value`: a typed node declares each input that takes a link as a port, and every setting is set by `set_node_input_value`.",
-      "paramStructure": "by-name",
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/SetExposedConfigFieldsRequest"
-          }
-        }
-      ],
-      "result": {
-        "name": "set_exposed_config_fields_result",
-        "schema": {
-          "$ref": "#/components/schemas/GraphTransactionToolResult"
-        }
-      },
-      "errors": [
-        {
-          "code": 1,
-          "message": "refused",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 2,
-          "message": "failed",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": -32602,
-          "message": "params do not match",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 3,
-          "message": "contract mismatch",
-          "data": {
-            "$ref": "#/components/schemas/ControlContractVersionMismatch"
-          }
-        }
-      ],
-      "x-since": 1,
-      "x-stability": "stable",
-      "x-group": "graph",
-      "x-exposures": [
-        "studio",
-        "agent",
-        "public"
-      ],
-      "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
-      "x-replaced-by": "set_node_input_value"
-    },
-    {
       "name": "add_group",
       "summary": "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.",
       "description": "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`.",
@@ -2086,21 +1900,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2166,21 +1980,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2242,21 +2056,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2321,21 +2135,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2396,21 +2210,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2479,21 +2293,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2555,21 +2369,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2630,21 +2444,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2705,21 +2519,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2779,21 +2593,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2853,21 +2667,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -2927,21 +2741,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3001,21 +2815,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3075,21 +2889,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3149,21 +2963,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3223,21 +3037,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3297,21 +3111,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3371,21 +3185,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3445,21 +3259,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3520,21 +3334,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3595,21 +3409,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3670,21 +3484,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3745,21 +3559,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3819,21 +3633,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3894,21 +3708,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -3954,21 +3768,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4029,21 +3843,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4104,21 +3918,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4180,21 +3994,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4256,21 +4070,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4331,21 +4145,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4409,21 +4223,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4485,21 +4299,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4561,21 +4375,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4636,21 +4450,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4712,21 +4526,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4787,21 +4601,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4862,21 +4676,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -4937,21 +4751,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5012,21 +4826,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5089,21 +4903,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5164,21 +4978,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5241,7 +5055,7 @@
     {
       "name": "create_node_file",
       "summary": "Create a node file in a project from the template, as one transaction.",
-      "description": "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.",
+      "description": "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5263,21 +5077,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5355,21 +5169,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5450,21 +5264,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5529,7 +5343,7 @@
     {
       "name": "check_project_code",
       "summary": "Check a project's code on disk without running a stream, answering each finding as data.",
-      "description": "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, or a retired name a module imports, is an `error` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.",
+      "description": "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as the project's source reads it, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as the project's source reads it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as `list_node_types` names it among `unreadable_modules`, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When the project's source is not read, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, or a retired name a module imports, is an `error` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5551,21 +5365,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5649,68 +5463,6 @@
       }
     },
     {
-      "name": "list_project_node_types",
-      "summary": "List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.",
-      "description": "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.",
-      "paramStructure": "by-name",
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/ListProjectNodeTypesRequest"
-          }
-        }
-      ],
-      "result": {
-        "name": "list_project_node_types_result",
-        "schema": {
-          "$ref": "#/components/schemas/ListProjectNodeTypesToolResult"
-        }
-      },
-      "errors": [
-        {
-          "code": 1,
-          "message": "refused",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 2,
-          "message": "failed",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": -32602,
-          "message": "params do not match",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 3,
-          "message": "contract mismatch",
-          "data": {
-            "$ref": "#/components/schemas/ControlContractVersionMismatch"
-          }
-        }
-      ],
-      "x-since": 1,
-      "x-stability": "stable",
-      "x-group": "node_type",
-      "x-exposures": [
-        "studio",
-        "agent",
-        "public"
-      ],
-      "x-effect": "reads_only",
-      "x-agent-tool-listing": "reached_through_call_operation",
-      "x-replaced-by": "list_node_types"
-    },
-    {
       "name": "list_pin_types",
       "summary": "List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.",
       "description": "List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. `named_pin_types` lists each named type a module of the project, an import or an installed distribution declares with `@named_pin_type`, read from source without running it: the source it comes from as `list_node_types` names one, the `pin_type` a pin of it states (`{\"type\": \"named\", \"named_pin_type\": \"<module>:<class>\"}`, its class's import path), its `documentation`, and the `path` and `line` declaring it. A pin of a named type carries the bytes its class packs and links only to a pin of the same name or an input of any type, never to a port that states no pin type. When the project's node code does not list, `named_pin_types` is empty and `named_pin_types_not_listed_because` says why; the built-in types are listed regardless.",
@@ -5735,21 +5487,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5761,7 +5513,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "node_type",
       "x-exposures": [
         "studio",
@@ -5809,21 +5561,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5835,7 +5587,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "node_type",
       "x-exposures": [
         "studio",
@@ -5914,7 +5666,7 @@
     {
       "name": "describe_node_types",
       "summary": "Describe the inputs and outputs of the node types named, each with its pin type.",
-      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup`, which takes a link from an output that flows as a `value` and rebuilds its node on each change, or `each_run`, which takes no link), `takes_a_wire`, whether a link may end at it: false for a setting read each run, a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and states what it carries in the older fields its schema marks `x-removed-in`; its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
+      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup`, which takes a link from an output that flows as a `value` and rebuilds its node on each change, or `each_run`, which takes no link), `takes_a_wire`, whether a link may end at it: false for a setting read each run, a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5936,21 +5688,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -5962,7 +5714,7 @@
         }
       ],
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-group": "node_type",
       "x-exposures": [
         "studio",
@@ -6071,7 +5823,7 @@
     {
       "name": "set_node_type_group",
       "summary": "File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.",
-      "description": "File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types`, `describe_node_types` and `list_project_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.",
+      "description": "File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types` and `describe_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -6093,21 +5845,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6169,21 +5921,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6243,21 +5995,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6340,130 +6092,6 @@
       }
     },
     {
-      "name": "write_studio_view_output",
-      "summary": "Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.",
-      "description": "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project uuid>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. Each Array, Channels or Records output of a view node has an input of its name, a setting read each run that takes no wire and holds no saved value, whose value the node publishes on the output; this call sets that input. Every write is published, stamped with stream time now, the same value written again as much as a new one, a Channels block starting where the last one written ended. A write is live data: the last value written is what a reader keeps, and a reader that connects later reads it, many panels may write one node and the last write wins, nothing is recorded in the graph document or the project's history, and the input returns to no value at Stop; a saved value on that input, by a `commit` set or an `add_node`'s `pins`, is refused, and one a graph document holds is dropped as the stream loads, with a warning naming the node and the input. `graph` renders the value as the input's live value. An Image or Packets output, which has no such input, is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; a node with no such output; `null`, which sets no value; and a value its port's family does not take, as `input_value_not_valid` at `/value`. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming the view node as `node` and the output as `input`.",
-      "paramStructure": "by-name",
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/WriteStudioViewOutputRequest"
-          }
-        }
-      ],
-      "result": {
-        "name": "write_studio_view_output_result",
-        "schema": {
-          "$ref": "#/components/schemas/WriteStudioViewOutputToolResult"
-        }
-      },
-      "errors": [
-        {
-          "code": 1,
-          "message": "refused",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 2,
-          "message": "failed",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": -32602,
-          "message": "params do not match",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 3,
-          "message": "contract mismatch",
-          "data": {
-            "$ref": "#/components/schemas/ControlContractVersionMismatch"
-          }
-        }
-      ],
-      "x-since": 1,
-      "x-stability": "stable",
-      "x-group": "view",
-      "x-exposures": [
-        "studio",
-        "agent",
-        "public"
-      ],
-      "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
-      "x-replaced-by": "set_node_input_value"
-    },
-    {
-      "name": "write_graph_input",
-      "summary": "Write a value onto one of a loaded stream's graph inputs. Replaced by `set_node_input_value`.",
-      "description": "Hand a value to the Input `input` of the stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process; every write is published, the same value written again as much as a new one, and a node linked later reads the last value set. A write is live data: many clients may write one Input and the last write wins, and nothing is recorded in the graph document or the project's history. An Input whose config's `lifetime` is `kept`, the default, keeps the last value in the project's store, so it carries it again after a Stop, a reload and a restart of the runtime; a `reset` Input returns to its saved value, its `default`, at Stop. While the project is stopped, a `kept` Input takes the value and carries it at the next Play, and `graph` shows it; a `reset` Input is refused as `playback_stopped`. Until a write, the Input carries its saved value, if it holds one. `graph` renders the value an Input carries now, or carries at the next Play while stopped, under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for an Input no top-level `GraphInput` declares, and a value its family does not take. A refusal because the Input's node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming no node and the Input as `input`.",
-      "paramStructure": "by-name",
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/WriteGraphInputRequest"
-          }
-        }
-      ],
-      "result": {
-        "name": "write_graph_input_result",
-        "schema": {
-          "$ref": "#/components/schemas/WriteGraphInputToolResult"
-        }
-      },
-      "errors": [
-        {
-          "code": 1,
-          "message": "refused",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 2,
-          "message": "failed",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": -32602,
-          "message": "params do not match",
-          "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
-          }
-        },
-        {
-          "code": 3,
-          "message": "contract mismatch",
-          "data": {
-            "$ref": "#/components/schemas/ControlContractVersionMismatch"
-          }
-        }
-      ],
-      "x-since": 1,
-      "x-stability": "stable",
-      "x-group": "view",
-      "x-exposures": [
-        "studio",
-        "agent",
-        "public"
-      ],
-      "x-effect": "changes",
-      "x-agent-tool-listing": "reached_through_call_operation",
-      "x-replaced-by": "set_node_input_value"
-    },
-    {
       "name": "import_project",
       "summary": "Import a project from an archive into a folder that does not exist yet.",
       "description": "Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: open it with `open_project`, and `start_playback` plays it. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.",
@@ -6488,21 +6116,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6563,21 +6191,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6640,21 +6268,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6716,21 +6344,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6790,21 +6418,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6865,21 +6493,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -6939,21 +6567,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -7011,21 +6639,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -7088,21 +6716,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -7200,21 +6828,21 @@
           "code": 1,
           "message": "refused",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": 2,
           "message": "failed",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
           "code": -32602,
           "message": "params do not match",
           "data": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
           }
         },
         {
@@ -7312,7 +6940,7 @@
       ],
       "x-subscribed-by": "subscribe_input_value_changes",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "x-exposures": [
         "studio",
         "public"
@@ -7414,7 +7042,7 @@
       ],
       "typescript_form": "\"boolean\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/BooleanPinValue"
       }
@@ -7447,7 +7075,7 @@
       ],
       "typescript_form": "\"integer\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/IntegerPinValue"
       }
@@ -7474,7 +7102,7 @@
       ],
       "typescript_form": "\"float\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/FloatPinValue"
       }
@@ -7497,7 +7125,7 @@
       ],
       "typescript_form": "\"string\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/StringPinValue"
       }
@@ -7519,7 +7147,7 @@
       ],
       "typescript_form": "\"menu\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/MenuPinValue"
       }
@@ -7541,7 +7169,7 @@
       ],
       "typescript_form": "\"color\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/ColorPinValue"
       }
@@ -7565,7 +7193,7 @@
       ],
       "typescript_form": "\"vector\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/VectorPinValue"
       }
@@ -7587,7 +7215,7 @@
       ],
       "typescript_form": "\"rectangle\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/RectanglePinValue"
       }
@@ -7609,7 +7237,7 @@
       ],
       "typescript_form": "\"transform\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/TransformPinValue"
       }
@@ -7632,7 +7260,7 @@
       ],
       "typescript_form": "\"texture\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "audio",
@@ -7652,7 +7280,7 @@
       ],
       "typescript_form": "\"audio\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "encoded_video",
@@ -7669,7 +7297,7 @@
       ],
       "typescript_form": "\"encoded_video\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "encoded_audio",
@@ -7686,7 +7314,7 @@
       ],
       "typescript_form": "\"encoded_audio\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "tensor",
@@ -7705,7 +7333,7 @@
       ],
       "typescript_form": "\"tensor\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "asset",
@@ -7724,7 +7352,7 @@
       ],
       "typescript_form": "\"asset\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/AssetPinValue"
       }
@@ -7745,7 +7373,7 @@
       ],
       "typescript_form": "\"trigger\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "list_of",
@@ -7764,7 +7392,7 @@
       ],
       "typescript_form": "\"list_of\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/ListPinValue"
       }
@@ -7785,7 +7413,7 @@
       ],
       "typescript_form": "\"bundle\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/BundlePinValue"
       }
@@ -7806,7 +7434,7 @@
       ],
       "typescript_form": "\"named\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "connection",
@@ -7821,7 +7449,7 @@
       ],
       "typescript_form": "\"connection\"",
       "x-since": 3,
-      "x-stability": "experimental"
+      "x-stability": "stable"
     },
     {
       "name": "node_reference",
@@ -7836,7 +7464,7 @@
       ],
       "typescript_form": "\"node_reference\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/NodeReferenceInConfig"
       }
@@ -7854,7 +7482,7 @@
       ],
       "typescript_form": "\"pin_type_choice\"",
       "x-since": 3,
-      "x-stability": "experimental",
+      "x-stability": "stable",
       "value_json_schema": {
         "$ref": "#/components/schemas/PinType"
       }
@@ -7862,7 +7490,7 @@
   ],
   "components": {
     "schemas": {
-      "ProjectActionRefusalOnTheWire": {
+      "ControlOperationRefusalOnTheWire": {
         "type": "object",
         "properties": {
           "refusal_code": {
@@ -7901,13 +7529,12 @@
             ],
             "description": "The link the refused operation names."
           },
-          "refused_field": {
+          "refused_input": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The node's input or config field the refused operation names.",
-            "x-removed-in": 4
+            "description": "The node's input the refused operation names."
           },
           "refused_params_pointer": {
             "type": [
@@ -8035,18 +7662,12 @@
           {
             "type": "string",
             "const": "input_takes_no_wire",
-            "description": "The link sent ends at an input that takes no link: a setting read each run, a setting of\na type no message carries, or a setting of a `GraphInput`, `GraphOutput`, `SetVariable`\nor `GetVariable`; `refused_field` names it."
+            "description": "The link sent ends at an input that takes no link: a setting read each run, a setting of\na type no message carries, or a setting of a `GraphInput`, `GraphOutput`, `SetVariable`\nor `GetVariable`; `refused_input` names it."
           },
           {
             "type": "string",
             "const": "link_streams_into_a_setting",
-            "description": "The link sent carries a Stream or a Trigger into a setting read at setup, which takes a\nValue wire only, since each change of what it carries rebuilds the setting's node;\n`refused_field` names the setting, and the runtime's words the node to place between them."
-          },
-          {
-            "type": "string",
-            "const": "link_from_a_function_node_into_a_setting",
-            "description": "Never answered: a link from a function or shader node into a setting read at setup\nconnects. Listed for a client of an earlier revision until contract version 4.",
-            "x-removed-in": 4
+            "description": "The link sent carries a Stream or a Trigger into a setting read at setup, which takes a\nValue wire only, since each change of what it carries rebuilds the setting's node;\n`refused_input` names the setting, and the runtime's words the node to place between them."
           },
           {
             "type": "string",
@@ -9377,18 +8998,6 @@
             "type": "string",
             "description": "The node's name, unique in its graph and cast to lowercase URL-safe: what a link end, an\nexposure and a port address name it by."
           },
-          "config": {
-            "description": "The input values a node type not yet typed takes whole as its config, the rest of\n`input_values` being its `pins`. Served for a client that reads no `input_values`.",
-            "x-removed-in": 4
-          },
-          "config_checksum": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "description": "A checksum of `config`, for change detection.",
-            "default": 0,
-            "x-removed-in": 4
-          },
           "ports": {
             "$ref": "#/components/schemas/GraphNodePortsOnTheWire",
             "description": "Every input port and output port."
@@ -9398,21 +9007,6 @@
             "additionalProperties": true,
             "description": "The values the node's graph document holds for its inputs, by input name: a sparse map,\nso an input it leaves out reads its default. A value set live shows only as its input's\n`value`.",
             "default": {}
-          },
-          "pins": {
-            "type": "object",
-            "additionalProperties": true,
-            "description": "The input values that are no config field, by input name; empty when none is saved.\nServed for a client that reads no `input_values`.",
-            "default": {},
-            "x-removed-in": 4
-          },
-          "exposed_config_fields": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The config fields the node takes as inputs too, each an input of the field's name.",
-            "x-removed-in": 4
           },
           "studio": {
             "type": "object",
@@ -9559,7 +9153,7 @@
             "description": "The window contract an audio input port declares, tagged by `resolved_from`; absent on\na port that declares none."
           },
           "stream_facts": {
-            "description": "The stream facts this output port carries now, with the name of the port's pin type as\n`type` on a port whose pin type they describe; absent on a port that states none."
+            "description": "The stream facts this output port carries now, tagged by the name of the port's pin type\nas `type`; absent on a port that states none, and on one whose pin type they do not\ndescribe."
           },
           "values_checked": {
             "type": [
@@ -9567,10 +9161,6 @@
               "null"
             ],
             "description": "`false` on a port whose values no pin type checks; absent on every other port."
-          },
-          "family": {
-            "description": "The port family this port declares and its family's keys. Absent on a graph variable's\nvalue port, which keeps the family of the setter's source port. Served for a client that\nreads no `pin_type`.",
-            "x-removed-in": 4
           },
           "pin_default": {
             "description": "The value this input reads while nothing is linked into it and no value is set on its\nnode, null when it declares a null default; absent on a port that declares none."
@@ -10940,26 +10530,25 @@
             "additionalProperties": false
           },
           {
-            "description": "The value of the node's config key of this name.",
+            "description": "The value of the node's setting of this name.",
             "type": "object",
             "properties": {
-              "from_config": {
+              "from_setting": {
                 "type": "object",
                 "properties": {
-                  "config_key": {
+                  "setting": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "config_key"
+                  "setting"
                 ]
               }
             },
             "required": [
-              "from_config"
+              "from_setting"
             ],
-            "additionalProperties": false,
-            "x-removed-in": 4
+            "additionalProperties": false
           }
         ],
         "description": "The frame rate a Texture output states, written on the class or read from one of its node's settings."
@@ -11003,26 +10592,25 @@
             "additionalProperties": false
           },
           {
-            "description": "The value of the node's config key of this name.",
+            "description": "The value of the node's setting of this name.",
             "type": "object",
             "properties": {
-              "from_config": {
+              "from_setting": {
                 "type": "object",
                 "properties": {
-                  "config_key": {
+                  "setting": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "config_key"
+                  "setting"
                 ]
               }
             },
             "required": [
-              "from_config"
+              "from_setting"
             ],
-            "additionalProperties": false,
-            "x-removed-in": 4
+            "additionalProperties": false
           }
         ],
         "description": "The sample rate an Audio output states, written on the class or read from one of its node's settings."
@@ -11692,14 +11280,6 @@
             "type": "string",
             "description": "The port's name on the stream."
           },
-          "family": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The port family the port carries; null while the runtime waits for a link to settle it.",
-            "x-removed-in": 4
-          },
           "pin_type": {
             "anyOf": [
               {
@@ -11709,7 +11289,7 @@
                 "type": "null"
               }
             ],
-            "description": "The pin type the port carries: the one its node's `pin_type` setting chooses, else the\none the port's older field states exactly, as a port carrying frames is a Texture.\nAbsent on any other port."
+            "description": "The pin type the port carries, the one its node's `pin_type` setting chooses; absent\nwhile the runtime waits for a link to settle it."
           },
           "current_value": {
             "description": "On a `GraphInput` node, the value its `value` input reads now: the one set live, else its\nsaved one. Absent elsewhere, and where it reads none."
@@ -12195,11 +11775,6 @@
             "type": "string",
             "description": "The name of the node whose setting holds the reference."
           },
-          "config_key": {
-            "type": "string",
-            "description": "The setting the reference sits under, by its key in the node's settings.",
-            "x-removed-in": 4
-          },
           "referenced_node": {
             "type": "string",
             "description": "The name of the node the reference names."
@@ -12207,7 +11782,6 @@
         },
         "required": [
           "node",
-          "config_key",
           "referenced_node"
         ],
         "description": "One reference edge: a setting of node `node` names node `referenced_node`. It carries no\ndata and is never a link."
@@ -12299,7 +11873,7 @@
               },
               "type": {
                 "type": "string",
-                "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
+                "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `list_node_types` lists it."
               },
               "name": {
                 "type": [
@@ -12307,35 +11881,6 @@
                   "null"
                 ],
                 "description": "The node's name, a label: cast to lowercase URL-safe and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …"
-              },
-              "config": {
-                "type": [
-                  "object",
-                  "null"
-                ],
-                "additionalProperties": true,
-                "description": "The node's config, as the keys its type's schema declares. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is.",
-                "x-removed-in": 4
-              },
-              "pins": {
-                "type": [
-                  "object",
-                  "null"
-                ],
-                "additionalProperties": true,
-                "description": "The value on each unlinked input, by input name.",
-                "x-removed-in": 4
-              },
-              "exposed_config_fields": {
-                "type": [
-                  "array",
-                  "null"
-                ],
-                "items": {
-                  "type": "string"
-                },
-                "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.",
-                "x-removed-in": 4
               },
               "studio": {
                 "type": [
@@ -12490,86 +12035,6 @@
                 "type": "string",
                 "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
               },
-              "config": {
-                "type": "object",
-                "additionalProperties": true,
-                "description": "The node's new config, as the keys its type's schema declares."
-              },
-              "operation": {
-                "type": "string",
-                "const": "set_node_config"
-              }
-            },
-            "required": [
-              "operation",
-              "stream",
-              "node",
-              "config"
-            ],
-            "description": "Replace a node's config whole.",
-            "x-removed-in": 4
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "stream": {
-                "type": "string",
-                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
-              },
-              "level": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
-              },
-              "node": {
-                "type": "string",
-                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
-              },
-              "input": {
-                "type": "string",
-                "description": "The input's name, as `graph` lists it under the node's `ports.inputs`."
-              },
-              "value": {
-                "description": "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
-              },
-              "operation": {
-                "type": "string",
-                "const": "set_pin_value"
-              }
-            },
-            "required": [
-              "operation",
-              "stream",
-              "node",
-              "input"
-            ],
-            "description": "Set the value on one of a node's inputs.",
-            "x-removed-in": 4
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "stream": {
-                "type": "string",
-                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
-              },
-              "level": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
-              },
-              "node": {
-                "type": "string",
-                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
-              },
               "name": {
                 "type": "string",
                 "description": "The node's new name: cast to lowercase URL-safe, refused when another node has it."
@@ -12644,15 +12109,6 @@
                 ],
                 "description": "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import."
               },
-              "config": {
-                "type": [
-                  "object",
-                  "null"
-                ],
-                "additionalProperties": true,
-                "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.",
-                "x-removed-in": 4
-              },
               "as": {
                 "type": [
                   "string",
@@ -12671,47 +12127,6 @@
               "generator"
             ],
             "description": "Run one of the project's graph generators and place what it builds as a fragment, or\nrefresh the fragment of that name with a fresh run."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "stream": {
-                "type": "string",
-                "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
-              },
-              "level": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
-              },
-              "node": {
-                "type": "string",
-                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
-              },
-              "exposed_config_fields": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
-              },
-              "operation": {
-                "type": "string",
-                "const": "set_exposed_config_fields"
-              }
-            },
-            "required": [
-              "operation",
-              "stream",
-              "node",
-              "exposed_config_fields"
-            ],
-            "description": "Replace the config fields a node takes as inputs whole.",
-            "x-removed-in": 4
           },
           {
             "type": "object",
@@ -13583,7 +12998,7 @@
           },
           "type": {
             "type": "string",
-            "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
+            "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `list_node_types` lists it."
           },
           "name": {
             "type": [
@@ -13591,35 +13006,6 @@
               "null"
             ],
             "description": "The node's name, a label: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`) and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …"
-          },
-          "config": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "additionalProperties": true,
-            "description": "The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is.",
-            "x-removed-in": 4
-          },
-          "pins": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "additionalProperties": true,
-            "description": "The value on each unlinked input, by input name.",
-            "x-removed-in": 4
-          },
-          "exposed_config_fields": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "type": "string"
-            },
-            "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.",
-            "x-removed-in": 4
           },
           "studio": {
             "type": [
@@ -13785,7 +13171,7 @@
           "refusal": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+                "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
               },
               {
                 "type": "null"
@@ -14117,15 +13503,6 @@
             ],
             "description": "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import."
           },
-          "config": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "additionalProperties": true,
-            "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.",
-            "x-removed-in": 4
-          },
           "mode": {
             "anyOf": [
               {
@@ -14220,138 +13597,6 @@
           "node"
         ],
         "description": "`remove_node`'s params."
-      },
-      "SetNodeConfigRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
-          },
-          "level": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
-          },
-          "node": {
-            "type": "string",
-            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
-          },
-          "config": {
-            "type": "object",
-            "additionalProperties": true,
-            "description": "The node's new config, as the keys its type's schema declares; it replaces the old one whole."
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GraphEditMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends."
-          },
-          "author": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
-          },
-          "idempotency_key": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
-          }
-        },
-        "required": [
-          "stream",
-          "node",
-          "config"
-        ],
-        "description": "`set_node_config`'s params."
-      },
-      "SetPinValueRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
-          },
-          "level": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
-          },
-          "node": {
-            "type": "string",
-            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
-          },
-          "input": {
-            "type": "string",
-            "description": "The input's name, as `graph` lists it under the node's `ports.inputs`."
-          },
-          "value": {
-            "description": "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GraphEditMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends."
-          },
-          "author": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
-          },
-          "idempotency_key": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
-          }
-        },
-        "required": [
-          "stream",
-          "node",
-          "input"
-        ],
-        "description": "`set_pin_value`'s params."
       },
       "SetNodeInputValueRequest": {
         "type": "object",
@@ -14557,73 +13802,6 @@
           "studio"
         ],
         "description": "`set_studio_fields`'s params."
-      },
-      "SetExposedConfigFieldsRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
-          },
-          "level": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
-          },
-          "node": {
-            "type": "string",
-            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
-          },
-          "exposed_config_fields": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GraphEditMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends."
-          },
-          "author": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
-          },
-          "idempotency_key": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
-          }
-        },
-        "required": [
-          "stream",
-          "node",
-          "exposed_config_fields"
-        ],
-        "description": "`set_exposed_config_fields`'s params."
       },
       "AddGroupRequest": {
         "type": "object",
@@ -16512,7 +15690,7 @@
             "description": "The key the caller sent it under, when it sent one."
           },
           "refusal": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire",
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire",
             "description": "What the runtime refused, in its own words."
           },
           "refused_at": {
@@ -18038,7 +17216,7 @@
           "not_checked_because": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+                "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire"
               },
               {
                 "type": "null"
@@ -18204,446 +17382,6 @@
           "content_sha256"
         ],
         "description": "A file a check finished, and the hash of the bytes it checked."
-      },
-      "ListProjectNodeTypesRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "project_directory": {
-            "type": "string",
-            "description": "The project, by absolute path: a folder holding `tatolab-project.json`."
-          }
-        },
-        "required": [
-          "project_directory"
-        ],
-        "description": "`list_project_node_types`'s params."
-      },
-      "ListProjectNodeTypesToolResult": {
-        "type": "object",
-        "properties": {
-          "project_directory": {
-            "type": "string",
-            "description": "The project directory, symlinks resolved."
-          },
-          "project": {
-            "type": "string",
-            "description": "The project's UUID, from its `tatolab-project.json`."
-          },
-          "project_name": {
-            "type": "string",
-            "description": "The project's name."
-          },
-          "sources": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NodeTypeSourceReadWithoutRunningIt"
-            },
-            "description": "The project first, then each import, then each installed distribution."
-          }
-        },
-        "required": [
-          "project_directory",
-          "project",
-          "project_name",
-          "sources"
-        ],
-        "description": "The `list_project_node_types` tool's result: what a project and each source it draws node\ncode from declares, read from source without running it."
-      },
-      "NodeTypeSourceReadWithoutRunningIt": {
-        "type": "object",
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "source": {
-                "type": "string",
-                "const": "project"
-              }
-            },
-            "required": [
-              "source"
-            ],
-            "description": "The project's own node code, outside `imports/`."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "project": {
-                "type": "string",
-                "description": "The imported project's UUID."
-              },
-              "folder": {
-                "type": "string",
-                "description": "Its folder under `imports/`."
-              },
-              "version": {
-                "type": "string",
-                "description": "The version its copy carried."
-              },
-              "project_name": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
-              },
-              "source": {
-                "type": "string",
-                "const": "dependency"
-              }
-            },
-            "required": [
-              "source",
-              "project",
-              "folder",
-              "version"
-            ],
-            "description": "An import's node code as its folder under `imports/` holds it now."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "distribution": {
-                "type": "string",
-                "description": "The distribution's name."
-              },
-              "distribution_version": {
-                "type": "string",
-                "description": "The distribution's version."
-              },
-              "source": {
-                "type": "string",
-                "const": "installed_distribution"
-              }
-            },
-            "required": [
-              "source",
-              "distribution",
-              "distribution_version"
-            ],
-            "description": "An installed distribution that declares `tatolab.nodes` entry points."
-          }
-        ],
-        "description": "One source's node types, graph generators, and the modules of it that could not be read.",
-        "properties": {
-          "node_types": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NodeTypeReadFromSource"
-            },
-            "description": "Each node type declared, by type."
-          },
-          "graph_generators": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GraphGeneratorReadFromSource"
-            },
-            "description": "Each `@graph_generator` declared, by import path."
-          },
-          "named_pin_types": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NamedPinTypeReadFromSource"
-            },
-            "description": "Each `@named_pin_type` class declared, by import path.",
-            "default": []
-          },
-          "unreadable_modules": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NodeModuleNotReadable"
-            },
-            "description": "Each module that does not parse, with why and where; the rest of the source still lists."
-          }
-        },
-        "required": [
-          "node_types",
-          "graph_generators",
-          "unreadable_modules"
-        ]
-      },
-      "NodeTypeReadFromSource": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "description": "The type `add_node` takes: the import path `<module>:<qualname>`."
-          },
-          "kind": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`process`, `function` or `shader`; `None` for an entry point whose declaration source does not show."
-          },
-          "description": {
-            "type": "string",
-            "description": "The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it."
-          },
-          "category": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it."
-          },
-          "category_from": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/NodeTypeCategoryFrom"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Who filed it under `category`; null when nothing files it.",
-            "default": null
-          },
-          "inputs": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "$ref": "#/components/schemas/NodeTypePortReadFromSource"
-            },
-            "description": "The input ports, `None` where only the node's native half states them."
-          },
-          "outputs": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "$ref": "#/components/schemas/NodeTypePortReadFromSource"
-            },
-            "description": "The output ports, `None` where only the node's native half states them."
-          },
-          "path": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The file declaring it, relative to its source's root."
-          },
-          "line": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The line of its `class`, `def` or assignment."
-          }
-        },
-        "required": [
-          "type",
-          "description"
-        ],
-        "description": "One node type as its declaration states it in source."
-      },
-      "NodeTypeCategoryFrom": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "project",
-            "description": "The project moved it there with `set_node_type_group`; clearing that puts it back where\nan import or its author files it."
-          },
-          {
-            "type": "string",
-            "const": "import",
-            "description": "A project the project imports moved it there, and the project has not."
-          },
-          {
-            "type": "string",
-            "const": "declaration",
-            "description": "Its author declared it, with `@node.meta(category=…)` or `#[meta(category = …)]`."
-          }
-        ],
-        "description": "Who filed a node type under the group it is listed in."
-      },
-      "NodeTypePortReadFromSource": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The port's name, cast as every exposed name is."
-          },
-          "family": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The port family's wire name, `None` where source alone does not say.",
-            "x-removed-in": 4
-          },
-          "description": {
-            "type": "string",
-            "description": "The port's declared description."
-          },
-          "annotation": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A function or shader port's annotation as written; `None` for a process node's port."
-          },
-          "pin_default": {
-            "description": "A function input's default pin value, where it is a literal."
-          },
-          "pin_default_as_written": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A function input's default as written, where it is not a literal."
-          }
-        },
-        "required": [
-          "name",
-          "description"
-        ],
-        "description": "One port as its declaration states it in source."
-      },
-      "GraphGeneratorReadFromSource": {
-        "type": "object",
-        "properties": {
-          "generator": {
-            "type": "string",
-            "description": "The import path `import_graph_generator` takes: `<module>:<function>`."
-          },
-          "description": {
-            "type": "string",
-            "description": "Its docstring."
-          },
-          "promoted_config": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GraphGeneratorPromotedSettingReadFromSource"
-            },
-            "description": "Each parameter after the builder: a setting the fragment promotes."
-          },
-          "path": {
-            "type": "string",
-            "description": "The file declaring it, relative to its source's root."
-          },
-          "line": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The line of its `def`."
-          }
-        },
-        "required": [
-          "generator",
-          "description",
-          "promoted_config",
-          "path",
-          "line"
-        ],
-        "description": "One `@graph_generator` as its declaration states it in source."
-      },
-      "GraphGeneratorPromotedSettingReadFromSource": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The parameter's name."
-          },
-          "annotation": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Its annotation as written."
-          },
-          "default": {
-            "description": "Its default, where it is a literal."
-          },
-          "default_as_written": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Its default as written, where it is not a literal."
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "description": "One setting a graph generator promotes, as its parameter states it."
-      },
-      "NamedPinTypeReadFromSource": {
-        "type": "object",
-        "properties": {
-          "named_pin_type": {
-            "$ref": "#/components/schemas/NamedPinTypeImportPath",
-            "description": "Its name: the class's import path, `<module>:<qualname>`."
-          },
-          "description": {
-            "type": "string",
-            "description": "What a value of it is; empty where its `description` is no string in source."
-          },
-          "path": {
-            "type": "string",
-            "description": "The file declaring it, relative to its source's root."
-          },
-          "line": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The line of its `class`."
-          }
-        },
-        "required": [
-          "named_pin_type",
-          "description",
-          "path",
-          "line"
-        ],
-        "description": "One named type as its `@named_pin_type` declaration states it in source."
-      },
-      "NodeModuleNotReadable": {
-        "type": "object",
-        "properties": {
-          "module": {
-            "type": "string",
-            "description": "The module's import name."
-          },
-          "path": {
-            "type": "string",
-            "description": "Its file, relative to its source's root."
-          },
-          "line": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The line the parser stopped at."
-          },
-          "column": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The column the parser stopped at."
-          },
-          "why": {
-            "type": "string",
-            "description": "Why it was not read, in the parser's words."
-          }
-        },
-        "required": [
-          "module",
-          "path",
-          "why"
-        ],
-        "description": "A module of a source that could not be read, and why."
       },
       "ListPinTypesRequest": {
         "type": "object",
@@ -19170,6 +17908,26 @@
         ],
         "description": "One node type a source offers."
       },
+      "NodeTypeCategoryFrom": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "project",
+            "description": "The project moved it there with `set_node_type_group`; clearing that puts it back where\nan import or its author files it."
+          },
+          {
+            "type": "string",
+            "const": "import",
+            "description": "A project the project imports moved it there, and the project has not."
+          },
+          {
+            "type": "string",
+            "const": "declaration",
+            "description": "Its author declared it, with `@node.meta(category=…)` or `#[meta(category = …)]`."
+          }
+        ],
+        "description": "Who filed a node type under the group it is listed in."
+      },
       "NodeTypeKind": {
         "oneOf": [
           {
@@ -19247,6 +18005,77 @@
           "line"
         ],
         "description": "One `@graph_generator` as its declaration states it in source."
+      },
+      "GraphGeneratorPromotedSettingReadFromSource": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The parameter's name."
+          },
+          "annotation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its annotation as written."
+          },
+          "default": {
+            "description": "Its default, where it is a literal."
+          },
+          "default_as_written": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its default as written, where it is not a literal."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "description": "One setting a graph generator promotes, as its parameter states it."
+      },
+      "NodeModuleNotReadable": {
+        "type": "object",
+        "properties": {
+          "module": {
+            "type": "string",
+            "description": "The module's import name."
+          },
+          "path": {
+            "type": "string",
+            "description": "Its file, relative to its source's root."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The line the parser stopped at."
+          },
+          "column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The column the parser stopped at."
+          },
+          "why": {
+            "type": "string",
+            "description": "Why it was not read, in the parser's words."
+          }
+        },
+        "required": [
+          "module",
+          "path",
+          "why"
+        ],
+        "description": "A module of a source that could not be read, and why."
       },
       "DescribeNodeTypesRequest": {
         "type": "object",
@@ -19369,14 +18198,6 @@
               "$ref": "#/components/schemas/NodeTypePortDescribed"
             },
             "description": "Every output."
-          },
-          "exposable_config_fields": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The settings of a node type not yet typed that `set_exposed_config_fields` still takes;\nabsent when it takes none. Served until the contract's version changes.",
-            "x-removed-in": 4
           },
           "pin_groups": {
             "type": "array",
@@ -19503,18 +18324,6 @@
           "annotations": {
             "$ref": "#/components/schemas/PinAnnotations",
             "description": "What it states besides its type, none of which decides a link."
-          },
-          "family": {
-            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`.",
-            "x-removed-in": 4
-          },
-          "annotation": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes.",
-            "x-removed-in": 4
           },
           "mode": {
             "anyOf": [
@@ -19737,18 +18546,6 @@
           "annotations": {
             "$ref": "#/components/schemas/PinAnnotations",
             "description": "What it states besides its type, none of which decides a link."
-          },
-          "family": {
-            "description": "The port family a port of a node type not yet typed declares, with its family's keys.\nServed until the contract's version changes, for a client that reads no `pin_type`.",
-            "x-removed-in": 4
-          },
-          "annotation": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A function or shader port's annotation as its source writes it, where only source\ndescribes its node type. Served until the contract's version changes.",
-            "x-removed-in": 4
           }
         },
         "required": [
@@ -19819,7 +18616,7 @@
             "description": "The type named."
           },
           "not_described_because": {
-            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire",
+            "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire",
             "description": "Why it could not be described, with the call that checks its code when the runtime\nserves one."
           }
         },
@@ -20147,11 +18944,6 @@
             "type": "string",
             "description": "The port's name."
           },
-          "family": {
-            "type": "string",
-            "description": "The port family's wire name: the family its pin type's messages belong to, where it\nnames one. Served until the contract's version changes, for a client that reads no\n`pin_type`.",
-            "x-removed-in": 4
-          },
           "pin_type": {
             "anyOf": [
               {
@@ -20185,8 +18977,7 @@
           }
         },
         "required": [
-          "name",
-          "family"
+          "name"
         ],
         "description": "An input or output a view declares, as a node declares a port."
       },
@@ -20416,103 +19207,6 @@
           "why"
         ],
         "description": "One module's manifest that does not read."
-      },
-      "WriteStudioViewOutputRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream id of the stream holding the view node."
-          },
-          "node": {
-            "type": "string",
-            "description": "The view node's UUID, as `graph` lists it under `id`."
-          },
-          "port": {
-            "type": "string",
-            "description": "The view node's output port the value is published on."
-          },
-          "value": {
-            "description": "The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
-          }
-        },
-        "required": [
-          "stream",
-          "node",
-          "port",
-          "value"
-        ],
-        "description": "`write_studio_view_output`'s params."
-      },
-      "WriteStudioViewOutputToolResult": {
-        "type": "object",
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream id."
-          },
-          "node": {
-            "type": "string",
-            "description": "The view node's UUID, as `graph` lists it under `id`."
-          },
-          "port": {
-            "type": "string",
-            "description": "The output port the value was published on."
-          }
-        },
-        "required": [
-          "stream",
-          "node",
-          "port"
-        ],
-        "description": "The `write_studio_view_output` tool's result: the output of the view node the value was handed\nto, which published it."
-      },
-      "WriteGraphInputRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream id of a loaded stream."
-          },
-          "input": {
-            "type": "string",
-            "description": "The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is."
-          },
-          "value": {
-            "description": "The value, as the Input's family carries it: a Records Input takes a JSON object; an Array Input a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels Input a number or a bool, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
-          }
-        },
-        "required": [
-          "stream",
-          "input",
-          "value"
-        ],
-        "description": "`write_graph_input`'s params."
-      },
-      "WriteGraphInputToolResult": {
-        "type": "object",
-        "properties": {
-          "stream": {
-            "type": "string",
-            "description": "The stream id."
-          },
-          "input": {
-            "type": "string",
-            "description": "The Input's name, as the `GraphInput`'s config declares it under `port`."
-          },
-          "family": {
-            "type": "string",
-            "description": "The Input's family, as its wire name: `array`, `channels` or `records`."
-          }
-        },
-        "required": [
-          "stream",
-          "input",
-          "family"
-        ],
-        "description": "The `write_graph_input` tool's result: the Input of the stream's top-level `GraphInput` the\nvalue was handed to, which published it to every reader."
       },
       "ImportProjectRequest": {
         "type": "object",
@@ -21184,31 +19878,37 @@
               "distribution_version"
             ],
             "description": "An installed distribution that declares `tatolab.nodes` entry points."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "built_in"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The node types the runtime brings itself, which every stream can add."
           }
         ],
-        "description": "One node type a project offers and the source its code comes from, as a change on the\nproject's feed names it: the source's fields beside the node type's, as\n`list_project_node_types` lists each.",
+        "description": "One node type a project offers and the source its code comes from, as a change on the\nproject's feed names it: the source's fields beside the node type's row, as\n`list_node_types` lists each.",
         "properties": {
-          "type": {
+          "node_type": {
             "type": "string",
-            "description": "The type `add_node` takes: the import path `<module>:<qualname>`."
+            "description": "The type `add_node` takes: its import path, `<module>:<qualname>`."
           },
-          "kind": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`process`, `function` or `shader`; `None` for an entry point whose declaration source does not show."
-          },
-          "description": {
+          "documentation": {
             "type": "string",
-            "description": "The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it."
+            "description": "The first line of its description; empty when it declares none."
           },
           "category": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it."
+            "description": "The group it is filed under, a path where the group is inside another, as\n`Effects/Stylize`: the project's own, else an import's, else the one its author declared;\nnull when none files it, or where its declaration source does not show it."
           },
           "category_from": {
             "anyOf": [
@@ -21222,46 +19922,26 @@
             "description": "Who filed it under `category`; null when nothing files it.",
             "default": null
           },
-          "inputs": {
-            "type": [
-              "array",
-              "null"
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeTypeKind"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "items": {
-              "$ref": "#/components/schemas/NodeTypePortReadFromSource"
-            },
-            "description": "The input ports, `None` where only the node's native half states them."
+            "description": "How its code runs; null for an entry point whose declaration source does not show it,\nand for a node type the graph resolves itself, which no node code runs."
           },
-          "outputs": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "$ref": "#/components/schemas/NodeTypePortReadFromSource"
-            },
-            "description": "The output ports, `None` where only the node's native half states them."
-          },
-          "path": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The file declaring it, relative to its source's root."
-          },
-          "line": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The line of its `class`, `def` or assignment."
+          "described_from": {
+            "$ref": "#/components/schemas/NodeTypeDescribedFrom",
+            "description": "Where the runtime's description of it comes from."
           }
         },
         "required": [
-          "type",
-          "description"
+          "node_type",
+          "documentation",
+          "described_from"
         ]
       },
       "StreamGraphChangedNotificationParams": {

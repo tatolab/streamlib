@@ -31,9 +31,9 @@ __all__ = [
     "EncodedVideoPinType",
     "FloatPinType",
     "FloatSize",
-    "FromConfig",
-    "FromConfigChannelsOutputPortSampleRate",
-    "FromConfigImageOutputPortFrameRate",
+    "FromSetting",
+    "FromSettingChannelsOutputPortSampleRate",
+    "FromSettingImageOutputPortFrameRate",
     "ImageOutputPortFrameRate",
     "ImageStreamFrameRate",
     "IntegerPinType",
@@ -445,20 +445,20 @@ class StatedImageOutputPortFrameRate(TypedDict):
     stated: ImageStreamFrameRate
 
 
-class FromConfig(TypedDict):
-    """What a `from_config` key holds."""
+class FromSetting(TypedDict):
+    """What a `from_setting` key holds."""
 
-    config_key: str
+    setting: str
 
 
-class FromConfigImageOutputPortFrameRate(TypedDict):
-    """The value of the node's config key of this name."""
+class FromSettingImageOutputPortFrameRate(TypedDict):
+    """The value of the node's setting of this name."""
 
-    from_config: FromConfig
+    from_setting: FromSetting
 
 
 type ImageOutputPortFrameRate = (
-    StatedImageOutputPortFrameRate | FromConfigImageOutputPortFrameRate
+    StatedImageOutputPortFrameRate | FromSettingImageOutputPortFrameRate
 )
 """The frame rate a Texture output states, written on the class or read from one of its
 node's settings.
@@ -479,14 +479,14 @@ class StatedChannelsOutputPortSampleRate(TypedDict):
     stated: int
 
 
-class FromConfigChannelsOutputPortSampleRate(TypedDict):
-    """The value of the node's config key of this name."""
+class FromSettingChannelsOutputPortSampleRate(TypedDict):
+    """The value of the node's setting of this name."""
 
-    from_config: FromConfig
+    from_setting: FromSetting
 
 
 type ChannelsOutputPortSampleRate = (
-    StatedChannelsOutputPortSampleRate | FromConfigChannelsOutputPortSampleRate
+    StatedChannelsOutputPortSampleRate | FromSettingChannelsOutputPortSampleRate
 )
 """The sample rate an Audio output states, written on the class or read from one of its
 node's settings.
@@ -671,7 +671,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("bool",),
         value_component="BooleanPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="integer",
@@ -694,7 +694,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         ),
         value_component="IntegerPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="float",
@@ -705,7 +705,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("float", "Float32", "Float64"),
         value_component="FloatPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="string",
@@ -716,7 +716,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("str",),
         value_component="StringPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="menu",
@@ -727,7 +727,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Literal",),
         value_component="MenuPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="color",
@@ -738,7 +738,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Color",),
         value_component="ColorPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="vector",
@@ -749,7 +749,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Vector2", "Vector3", "Vector4"),
         value_component="VectorPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="rectangle",
@@ -760,7 +760,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Rectangle",),
         value_component="RectanglePinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="transform",
@@ -771,7 +771,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Transform",),
         value_component="TransformPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="texture",
@@ -782,7 +782,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Texture",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="audio",
@@ -793,7 +793,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Audio",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="encoded_video",
@@ -807,7 +807,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("EncodedVideo",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="encoded_audio",
@@ -821,7 +821,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("EncodedAudio",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="tensor",
@@ -832,7 +832,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Tensor",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="asset",
@@ -843,7 +843,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Asset",),
         value_component="AssetPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="trigger",
@@ -854,7 +854,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("Trigger",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="list_of",
@@ -865,7 +865,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("list",),
         value_component="ListPinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="bundle",
@@ -879,7 +879,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("dataclass",),
         value_component="BundlePinValue",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="named",
@@ -893,7 +893,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("named_pin_type",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="connection",
@@ -908,7 +908,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("connection_type",),
         value_component=None,
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="node_reference",
@@ -921,7 +921,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("NodeReference",),
         value_component="NodeReferenceInConfig",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
     PinTypeDescription(
         name="pin_type_choice",
@@ -935,6 +935,6 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         python_forms=("PinTypeChoice",),
         value_component="PinType",
         since=3,
-        stability="experimental",
+        stability="stable",
     ),
 )

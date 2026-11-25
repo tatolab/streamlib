@@ -9,11 +9,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
-    EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION,
-    GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
-    GROUP_ARGUMENT_DESCRIPTION, GROUP_COLOUR_ARGUMENT_DESCRIPTION,
-    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION, GraphEditStream,
-    IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION, GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION, GROUP_ARGUMENT_DESCRIPTION,
+    GROUP_COLOUR_ARGUMENT_DESCRIPTION, GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION,
+    GROUP_TITLE_ARGUMENT_DESCRIPTION, GraphEditStream,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
     NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION, NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION,
@@ -66,7 +65,7 @@ pub struct AddNodeRequest {
     /// The node's type by its import path.
     #[serde(rename = "type")]
     #[schemars(
-        description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
+        description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `list_node_types` lists it."
     )]
     pub node_type: String,
     /// The node's name.
@@ -74,20 +73,6 @@ pub struct AddNodeRequest {
         description = "The node's name, a label: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`) and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …"
     )]
     pub name: Option<String>,
-    /// The node's config.
-    #[schemars(
-        description = "The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is."
-    )]
-    #[schemars(extend("x-removed-in" = 4))]
-    pub config: Option<Map<String, Value>>,
-    /// The value on each unlinked input.
-    #[schemars(description = "The value on each unlinked input, by input name.")]
-    #[schemars(extend("x-removed-in" = 4))]
-    pub pins: Option<Map<String, Value>>,
-    /// The config fields the node also takes as inputs.
-    #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
-    #[schemars(extend("x-removed-in" = 4))]
-    pub exposed_config_fields: Option<Vec<String>>,
     /// What Tato Studio draws the node with.
     #[schemars(description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION)]
     pub studio: Option<Map<String, Value>>,
@@ -221,71 +206,6 @@ pub struct OneNodeGraphEditRequest {
     /// The node, by its UUID.
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     pub node: String,
-    /// Whether the edit is kept.
-    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
-    pub mode: Option<GraphEditMode>,
-    /// Who the change is by.
-    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    pub author: Option<ProjectTransactionAuthorArgument>,
-    /// The key the caller minted for this gesture.
-    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
-    pub idempotency_key: Option<String>,
-}
-
-/// `set_node_config`'s params.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SetNodeConfigRequest {
-    /// The stream the edit is in.
-    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: GraphEditStream,
-    /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
-    /// level when omitted.
-    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
-    pub level: Option<Vec<Uuid>>,
-    /// The node, by its UUID.
-    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-    pub node: String,
-    /// The node's new config, as the keys its type's schema declares.
-    #[schemars(
-        description = "The node's new config, as the keys its type's schema declares; it replaces the old one whole."
-    )]
-    pub config: Map<String, Value>,
-    /// Whether the edit is kept.
-    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
-    pub mode: Option<GraphEditMode>,
-    /// Who the change is by.
-    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    pub author: Option<ProjectTransactionAuthorArgument>,
-    /// The key the caller minted for this gesture.
-    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
-    pub idempotency_key: Option<String>,
-}
-
-/// `set_pin_value`'s params.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SetPinValueRequest {
-    /// The stream the edit is in.
-    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: GraphEditStream,
-    /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
-    /// level when omitted.
-    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
-    pub level: Option<Vec<Uuid>>,
-    /// The node, by its UUID.
-    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-    pub node: String,
-    /// The input's name, as `graph` lists it under the node's `ports.inputs`.
-    #[schemars(
-        description = "The input's name, as `graph` lists it under the node's `ports.inputs`."
-    )]
-    pub input: String,
-    /// The value the input holds while no link feeds it.
-    #[schemars(
-        description = "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
-    )]
-    pub value: Option<Value>,
     /// Whether the edit is kept.
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     pub mode: Option<GraphEditMode>,
@@ -643,10 +563,6 @@ pub struct ImportGraphGeneratorRequest {
     /// The fragment node's name.
     #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
     pub name: Option<String>,
-    /// The generator's config.
-    #[schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION)]
-    #[schemars(extend("x-removed-in" = 4))]
-    pub config: Option<Map<String, Value>>,
     /// Whether the edit is kept.
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     pub mode: Option<GraphEditMode>,
@@ -656,54 +572,6 @@ pub struct ImportGraphGeneratorRequest {
     /// The key the caller minted for this gesture.
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     pub idempotency_key: Option<String>,
-}
-
-/// `set_exposed_config_fields`'s params.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SetExposedConfigFieldsRequest {
-    /// The stream the edit is in.
-    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    pub stream: GraphEditStream,
-    /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
-    /// level when omitted.
-    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
-    pub level: Option<Vec<Uuid>>,
-    /// The node, by its UUID.
-    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-    pub node: String,
-    /// The config fields the node also takes as inputs.
-    #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
-    pub exposed_config_fields: Vec<String>,
-    /// Whether the edit is kept.
-    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
-    pub mode: Option<GraphEditMode>,
-    /// Who the change is by.
-    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    pub author: Option<ProjectTransactionAuthorArgument>,
-    /// The key the caller minted for this gesture.
-    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
-    pub idempotency_key: Option<String>,
-}
-
-/// `write_graph_input`'s params.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WriteGraphInputRequest {
-    /// The stream id of a loaded stream.
-    #[schemars(description = "The stream id of a loaded stream.")]
-    pub stream: String,
-    /// The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as
-    /// every exposed name is.
-    #[schemars(
-        description = "The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is."
-    )]
-    pub input: String,
-    /// The value, as the Input's family carries it.
-    #[schemars(
-        description = "The value, as the Input's family carries it: a Records Input takes a JSON object; an Array Input a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels Input a number or a bool, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
-    )]
-    pub value: serde_json::Value,
 }
 
 /// The params of `undo` and `redo`.

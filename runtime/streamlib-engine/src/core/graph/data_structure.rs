@@ -28,6 +28,7 @@ use crate::core::json_schema::{
     GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, rendered_link,
     rendered_link_carried_through_the_function_node_pool,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::PortStreamFactsOnTheWire;
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -547,24 +548,6 @@ impl Graph {
                 inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
                 ..GraphNodeOutput::from(node)
             };
-            let node_types = self.node_types_this_stream_resolves();
-            if node_types
-                .placeholder_of_the_node_type_not_described(&node.node_type)
-                .is_some()
-            {
-                // A field it was saved exposing is an input of its placeholder, and renders under
-                // `config` as it did when the node held one.
-                let older_keys = crate::core::json_schema::InputValuesRendered::split_by(
-                    &crate::core::json_schema::OlderGraphKeysOfANodeType::of(
-                        node_types,
-                        &node.node_type,
-                    ),
-                    &node.input_values,
-                );
-                rendered.config = Some(older_keys.config);
-                rendered.config_checksum = older_keys.config_checksum;
-                rendered.pins = older_keys.pins;
-            }
             if let Some((health, diagnostics)) = self.the_health_and_diagnostics_of(node) {
                 rendered.components.health = Some(health);
                 rendered.components.diagnostics = diagnostics;
@@ -586,9 +569,15 @@ impl Graph {
             {
                 rendered_output.pin =
                     the_pin_a_port_resolves_to(self, node, port, PortDirection::Output);
-                if let Some(stream_facts) = rendered_output.stream_facts.as_mut() {
-                    stream_facts.name_the_pin_type_of_the_port_of(rendered_output.pin.as_ref());
-                }
+                rendered_output.stream_facts = node
+                    .stream_facts_of_output_ports()
+                    .current_facts_of(&port.name)
+                    .and_then(|facts| {
+                        PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(
+                            facts,
+                            rendered_output.pin.as_ref(),
+                        )
+                    });
             }
             rendered
         };

@@ -135,8 +135,8 @@ async fn each_operation_answers_over_rest_what_it_answers_over_control() {
             }),
         ),
         (
-            "write_graph_input",
-            json!({ "stream": stream_id, "input": "speed", "value": 1.0 }),
+            "set_node_input_value",
+            json!({ "stream": stream_id, "input": "speed", "value": 1.0, "mode": "live" }),
         ),
         (
             "subscribe_project_changes",
@@ -316,8 +316,8 @@ async fn a_refusal_answers_the_status_its_refusal_code_gives() {
     let calls = [
         ("graph", json!({ "stream": "elsewhere" }), "refused", 422),
         (
-            "write_graph_input",
-            json!({ "stream": stream_id, "input": "speed", "value": 1.0 }),
+            "set_node_input_value",
+            json!({ "stream": stream_id, "input": "speed", "value": 1.0, "mode": "live" }),
             "node_not_found",
             404,
         ),

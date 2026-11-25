@@ -8,7 +8,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire, SuggestedOperationCall,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, SuggestedOperationCall,
 };
 
 use crate::agent_surface::{
@@ -106,15 +106,15 @@ pub fn the_call_that_describes(operation: &str) -> Option<SuggestedOperationCall
 pub fn the_refusal_of_an_unknown_operation(
     through_tool: Option<&str>,
     operation: &str,
-) -> ProjectActionRefusalOnTheWire {
+) -> ControlOperationRefusalOnTheWire {
     let no_such_operation = format!("the runtime serves no operation named `{operation}`");
     let (action, runtime_words) = match through_tool {
         Some(tool) => (tool, format!("{tool} failed: {no_such_operation}")),
         None => (operation, no_such_operation),
     };
-    ProjectActionRefusalOnTheWire {
+    ControlOperationRefusalOnTheWire {
         suggested_call: the_call_that_lists_every_operation(),
-        ..ProjectActionRefusalOnTheWire::of_the_action(
+        ..ControlOperationRefusalOnTheWire::of_the_action(
             action,
             ControlOperationRefusalCode::OperationNotFound,
             runtime_words,
@@ -124,7 +124,7 @@ pub fn the_refusal_of_an_unknown_operation(
 
 impl ControlOperationCallParseRefusal {
     /// This refusal as every door carries it.
-    pub fn the_refusal_on_the_wire(&self) -> ProjectActionRefusalOnTheWire {
+    pub fn the_refusal_on_the_wire(&self) -> ControlOperationRefusalOnTheWire {
         match self {
             Self::NoSuchMethod { method_name } => {
                 the_refusal_of_an_unknown_operation(None, method_name)
@@ -133,10 +133,10 @@ impl ControlOperationCallParseRefusal {
                 method_name,
                 params_pointer,
                 ..
-            } => ProjectActionRefusalOnTheWire {
+            } => ControlOperationRefusalOnTheWire {
                 refused_params_pointer: params_pointer.clone(),
                 suggested_call: the_call_that_describes(method_name),
-                ..ProjectActionRefusalOnTheWire::of_the_action(
+                ..ControlOperationRefusalOnTheWire::of_the_action(
                     *method_name,
                     ControlOperationRefusalCode::ParamsDoNotMatchSchema,
                     self.to_string(),

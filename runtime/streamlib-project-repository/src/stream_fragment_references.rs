@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use streamlib_node_schema::{IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, NodeClassImportPath};
 use uuid::Uuid;
 
@@ -275,17 +275,19 @@ fn resolve_each_stream_fragment_of_the_level(
                 .and_then(Value::as_str)
                 .and_then(|id| Uuid::parse_str(id).ok())
                 .ok_or("a stream fragment holds no UUID as its `id`")?;
-            let held_stream = node
+            let fragment = match node
                 .get(NODE_INPUT_VALUES_KEY)
-                .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY))
-                .cloned()
-                .unwrap_or(Value::Null);
-            let fragment = the_fragment_held_stream_places(
-                context,
-                fragment_node,
-                &held_stream,
-                streams_being_resolved,
-            )?;
+                .and_then(|input_values| input_values.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY))
+            {
+                // A stream fragment added with no stream yet places nothing until one is set.
+                None | Some(Value::Null) => json!({ "nodes": [], "links": [] }),
+                Some(held_stream) => the_fragment_held_stream_places(
+                    context,
+                    fragment_node,
+                    held_stream,
+                    streams_being_resolved,
+                )?,
+            };
             node.insert("fragment".to_owned(), fragment);
         } else if let Some(Value::Object(fragment)) = node.get_mut("fragment") {
             resolve_each_stream_fragment_of_the_level(context, fragment, streams_being_resolved)?;

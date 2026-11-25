@@ -15,7 +15,7 @@ use streamlib_control_contract::{
     JSON_RPC_PARSE_ERROR_CODE,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ProjectActionRefusalOnTheWire, SuggestedOperationCall,
+    ControlOperationRefusalOnTheWire, SuggestedOperationCall,
 };
 
 mod what_a_control_request_names;
@@ -160,7 +160,7 @@ fn the_result_of_an_answer(answered: ControlOperationAnswer) -> Value {
 /// routes serve its operation, so a discovery tool only an agent reaches is never suggested
 /// there. Its params need no second read: `the_suggested_call` makes only a suggestion whose
 /// params read.
-fn the_data_of_a_refusal(mut refusal: ProjectActionRefusalOnTheWire) -> Value {
+fn the_data_of_a_refusal(mut refusal: ControlOperationRefusalOnTheWire) -> Value {
     refusal.suggested_call =
         refusal
             .suggested_call

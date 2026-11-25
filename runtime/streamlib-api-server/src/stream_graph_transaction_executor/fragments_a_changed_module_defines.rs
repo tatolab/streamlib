@@ -85,7 +85,6 @@ pub(crate) fn the_refresh_of_each_fragment_a_changed_module_defines(
                 stream: stream_location.stream_asset,
                 generator: fragment_node.node_type,
                 name: Some(fragment_node.name),
-                config: Some(fragment_node.input_values),
                 label: None,
             });
         }

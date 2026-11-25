@@ -9,7 +9,7 @@
 use parking_lot::Mutex;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
 };
 
 use super::input_value_set_tests::the_input_named;
@@ -86,7 +86,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         project: &ProjectWithGraphDocuments,
         input: &str,
         value: f64,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         self.the_answer_or_the_refusal_of(
             "set_node_input_value",
             json!({ "stream": project.stream_asset_of("main"), "node": DIMMER_NODE_UUID,

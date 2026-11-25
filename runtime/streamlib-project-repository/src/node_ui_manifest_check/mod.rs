@@ -9,8 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListProjectNodeTypesToolResult, NodeTypeSourceOrigin, NodeUiControlPinType, NodeUiManifest,
-    ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckSeverity, ProjectFileChecked,
+    NodeTypeSourceOrigin, NodeUiControlPinType, NodeUiManifest, ProjectCodeCheckFinding,
+    ProjectCodeCheckKind, ProjectCodeCheckSeverity, ProjectFileChecked,
+    ProjectNodeTypesReadFromSource,
 };
 
 use crate::content_sha256::content_sha256_of;
@@ -75,7 +76,7 @@ pub enum ModuleThatDeclares {
 impl WhatTheProjectsModulesDeclare {
     /// What `listing`, the project's node type listing read from source, says its modules
     /// declare.
-    pub fn read_off(listing: &ListProjectNodeTypesToolResult) -> Self {
+    pub fn read_off(listing: &ProjectNodeTypesReadFromSource) -> Self {
         let mut declared = Self::default();
         for source in &listing.sources {
             let module = match &source.origin {
@@ -295,7 +296,7 @@ pub fn the_findings_of_a_node_ui_manifest(
                         "`node_bodies[{index}]` registers a node body for `{}`, which is no node \
                          type of the project's own code: only the module that brings a node type \
                          may register its body. Name one of the project's own node types as \
-                         `list_project_node_types` lists it",
+                         `list_node_types` lists it under the `project` source",
                         body.node_type
                     ),
                     Some(&body.node_type),

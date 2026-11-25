@@ -196,7 +196,7 @@ and `inverted-virtual-camera`.
 ## Knobs
 
 Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
-Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+Studio's inspector or with the runtime's `set_node_input_value` MCP tool, which
 records the edit in the project's history and applies it to the running stream.
 
 | Knob | Node | Effect |

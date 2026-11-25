@@ -5,13 +5,7 @@ use super::*;
 
 /// Every key a rendered port with no exact pin type carries. A port that
 /// grows another field fails here, whatever the field is named.
-const PORT_INFO_KEYS: [&str; 5] = [
-    "name",
-    "description",
-    "port_kind",
-    "delivery_profile",
-    "family",
-];
+const PORT_INFO_KEYS: [&str; 4] = ["name", "description", "port_kind", "delivery_profile"];
 /// A picture port is a Texture, so it serves its pin type and flow beside its family.
 const PORT_DESCRIPTOR_OF_A_PICTURE_KEYS: [&str; 7] = [
     "name",
@@ -22,13 +16,12 @@ const PORT_DESCRIPTOR_OF_A_PICTURE_KEYS: [&str; 7] = [
     "pin_type",
     "flow",
 ];
-const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 6] = [
+const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 5] = [
     "name",
     "description",
     "port_kind",
     "delivery_profile",
     "audio_window",
-    "family",
 ];
 const PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS: [&str; 6] = [
     "name",
@@ -113,7 +106,15 @@ fn a_node_whose_output_is(
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
-            pin: None,
+            // An Image port is a Texture, whose stream facts `graph` names by that pin type.
+            pin: (family == crate::core::descriptors::PortFamily::Image).then(|| {
+                crate::core::descriptors::ResolvedPin {
+                    pin_type: crate::core::descriptors::PinType::Texture {
+                        pixel_formats: Vec::new(),
+                    },
+                    flow: crate::core::descriptors::PinFlow::Stream,
+                }
+            }),
             declared_pin_type: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             former_names: Vec::new(),
@@ -274,8 +275,8 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
         crate::core::descriptors::PortFamily::Image,
         Some(serde_json::json!({"frames_per_second": 30})),
         Some(
-            crate::core::descriptors::ImageOutputPortFrameRate::FromConfig {
-                config_key: "frames_per_second".into(),
+            crate::core::descriptors::ImageOutputPortFrameRate::FromSetting {
+                setting: "frames_per_second".into(),
             },
         ),
     )))
@@ -284,7 +285,7 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
 
     assert_eq!(
         output["stream_facts"],
-        serde_json::json!({"family": "image", "frame_rate": {"numerator": 30, "denominator": 1}})
+        serde_json::json!({"type": "texture", "frame_rate": {"numerator": 30, "denominator": 1}})
     );
     assert_renders_exactly(
         output,
@@ -293,14 +294,15 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
             "description",
             "port_kind",
             "delivery_profile",
+            "pin_type",
+            "flow",
             "stream_facts",
-            "family",
         ],
     );
 }
 
 #[test]
-fn an_output_port_renders_the_facts_it_carries_now() {
+fn an_output_port_with_no_pin_type_renders_none_of_the_facts_it_carries() {
     let node = a_node_whose_output_is(crate::core::descriptors::PortFamily::Packets, None, None);
     let unstated = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_renders_exactly(&unstated["ports"]["outputs"][0], &PORT_INFO_KEYS);
@@ -319,13 +321,9 @@ fn an_output_port_renders_the_facts_it_carries_now() {
         .expect("a Packets port carries Packets facts");
     let replaced = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_eq!(
-        replaced["ports"]["outputs"][0]["stream_facts"],
-        serde_json::json!({
-            "family": "packets",
-            "rfc6381_codec": "avc1.64001f",
-            "coded_width": 1280,
-            "coded_height": 720,
-        })
+        replaced["ports"]["outputs"][0].get("stream_facts"),
+        None,
+        "a port with no pin type carries no facts `graph` names"
     );
 }
 

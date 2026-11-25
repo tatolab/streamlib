@@ -303,7 +303,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let Some(carried) = self.the_saved_value_a_retype_carries(&request, stream_id, staged)
         else {
             return self
-                .apply_one_request(request, stream_id, staged, InputValueCheck::MadeOnApply)
+                .apply_one_request(request, stream_id, staged)
                 .map(|applied| vec![applied]);
         };
         let set = |input: &str, value: Option<Value>| StreamGraphAction::SetNodeInputValue {
@@ -326,7 +326,7 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let mut applied_by_the_retype: Vec<OneGraphRequestApplied> = Vec::with_capacity(sets.len());
         for (input_set, one_set) in sets {
-            match self.apply_one_request(one_set, stream_id, staged, InputValueCheck::MadeOnApply) {
+            match self.apply_one_request(one_set, stream_id, staged) {
                 Ok(applied) => applied_by_the_retype.push(applied),
                 Err(refusal) => {
                     tracing::warn!(

@@ -21,7 +21,7 @@ export class ControlOperationError extends Error {
   }
 
   get refusal() {
-    const refusalReading = readControlContractValue("ProjectActionRefusalOnTheWire", this.data);
+    const refusalReading = readControlContractValue("ControlOperationRefusalOnTheWire", this.data);
     return refusalReading.read ? refusalReading.value : undefined;
   }
 }

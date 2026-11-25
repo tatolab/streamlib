@@ -180,9 +180,10 @@ fn five_edits_batched_in_one_transaction_are_kept_and_one_undo_reverses_them_all
             from: json!({}),
             to: json!({ "strength": 0.75 }),
         }),
-        project.on_the_stream(StreamGraphOperation::SetPinValue {
+        project.on_the_stream(StreamGraphOperation::SetNodeInputValue {
             node: effect.id,
             input: "threshold".to_owned(),
+            member: None,
             from: None,
             to: Some(json!(0.25)),
         }),

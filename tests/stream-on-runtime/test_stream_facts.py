@@ -32,11 +32,13 @@ MARKER_TIMEOUT_SECONDS = 30.0
 
 DECLARED_RENDERING = {
     "type": "texture",
-    "family": "image",
     "frame_rate": {"numerator": DECLARED_FRAMES_PER_SECOND, "denominator": 1},
 }
 REPLACEMENT_READ_DOWNSTREAM = REPLACEMENT_STREAM_FACTS.to_wire()
-REPLACEMENT_RENDERING = {"type": "encoded_video", **REPLACEMENT_READ_DOWNSTREAM}
+REPLACEMENT_RENDERING = {
+    "type": "encoded_video",
+    **{key: value for key, value in REPLACEMENT_READ_DOWNSTREAM.items() if key != "family"},
+}
 
 
 def output_port_rendered_under(
@@ -60,7 +62,6 @@ def test_declared_replaced_refused_and_read_downstream(
     refusal = tatolabd.await_marker("STREAM_FACTS_REFUSED", timeout=MARKER_TIMEOUT_SECONDS)
     tatolabd.await_marker("STREAM_FACTS_REPLACED", timeout=MARKER_TIMEOUT_SECONDS)
     graph = local_api.graph(stream_id)
-    node_catalog = local_api.node_catalog(stream_id)
 
     read_downstream: "list[Any]" = []
     occurrence = 0
@@ -83,15 +84,10 @@ def test_declared_replaced_refused_and_read_downstream(
         "the replacement the node made while running is the facts `graph` renders"
     )
 
-    (declaring_type,) = [
-        entry
-        for entry in node_catalog["nodes"]
-        if entry["type"].endswith(":DeclaresItsFrameRateAndWritesRecords")
-    ]
     assert {(node["name"], node["kind"]) for node in graph["nodes"]} == {
         (node["name"], "process") for node in graph["nodes"]
     }, "every class node renders its kind on its graph node"
-    assert declaring_type["kind"] == "process" and "language" not in declaring_type
+    assert all("language" not in node for node in graph["nodes"])
 
     assert "encoded" in refusal and "Packets" in refusal and "Image" in refusal, (
         f"refused facts name the port and both families: {refusal!r}"

@@ -21,7 +21,7 @@ use streamlib_control_contract::{
     the_refusal_of_an_unknown_operation, the_suggested_call,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire,
 };
 
 use crate::mcp::{
@@ -115,9 +115,9 @@ impl LocalApiMcpServerHandler {
                     )
                     .await
                 }
-                Some(_) => Ok(Err(Box::new(ProjectActionRefusalOnTheWire {
+                Some(_) => Ok(Err(Box::new(ControlOperationRefusalOnTheWire {
                     suggested_call: the_suggested_call(operation_name, arguments),
-                    ..ProjectActionRefusalOnTheWire::of_the_action(
+                    ..ControlOperationRefusalOnTheWire::of_the_action(
                         operation_name,
                         ControlOperationRefusalCode::Refused,
                         format!(
@@ -185,12 +185,12 @@ fn the_answer_of_a_discovery_tool(
 fn the_arguments_of<Arguments: DeserializeOwned>(
     tool_name: &str,
     arguments: Map<String, Value>,
-) -> Result<Arguments, Box<ProjectActionRefusalOnTheWire>> {
+) -> Result<Arguments, Box<ControlOperationRefusalOnTheWire>> {
     the_params_read_as(Value::Object(arguments)).map_err(
         |ParamsThatDoNotMatchTheirSchema { pointer, why }| {
-            Box::new(ProjectActionRefusalOnTheWire {
+            Box::new(ControlOperationRefusalOnTheWire {
                 refused_params_pointer: pointer,
-                ..ProjectActionRefusalOnTheWire::of_the_action(
+                ..ControlOperationRefusalOnTheWire::of_the_action(
                     tool_name,
                     ControlOperationRefusalCode::ParamsDoNotMatchSchema,
                     format!(
@@ -205,7 +205,7 @@ fn the_arguments_of<Arguments: DeserializeOwned>(
 /// A refused call as a tool answers it: the refusal under `structuredContent.refusal`, and the
 /// same refusal as the JSON of its text, so a host that passes only text loses nothing.
 pub(crate) fn a_tool_result_of_the_refusal(
-    refusal: ProjectActionRefusalOnTheWire,
+    refusal: ControlOperationRefusalOnTheWire,
 ) -> CallToolResult {
     let refusal = refusal.the_refusal_as_json();
     let mut tool_result = CallToolResult::error(vec![json_text_content_block(&refusal)]);

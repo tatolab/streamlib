@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ProjectActionRefusalOnTheWire;
+use super::ControlOperationRefusalOnTheWire;
 
 /// `check_project_code`'s answer, for the bytes on disk when the checks ran.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,7 +125,7 @@ pub struct ProjectCodeCheckRun {
     /// Why it did not run to its end, with its code, such as `check_ran_out_of_time` with the
     /// file it was checking as `refused_file`; present only when `state` is `not_checked`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub not_checked_because: Option<ProjectActionRefusalOnTheWire>,
+    pub not_checked_because: Option<ControlOperationRefusalOnTheWire>,
     /// Each program or package the check ran with, and its version.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checked_with: Vec<String>,

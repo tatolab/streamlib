@@ -16,16 +16,14 @@ use crate::core::descriptors::{
     SettingReadTime,
 };
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
-use crate::core::nodes::{
-    ConfigFieldDescribedAsASetting, the_config_fields_a_node_of_the_type_can_expose,
-    the_config_fields_described_as_settings,
-};
+use crate::core::nodes::{ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings};
 
 use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 
-mod input_values_under_the_older_graph_keys;
-pub(crate) use input_values_under_the_older_graph_keys::{
-    InputValuesRendered, OlderGraphKeysOfANodeType, redraw_a_node_over_its_pins,
+mod inputs_and_settings_of_a_node;
+pub(crate) use inputs_and_settings_of_a_node::{
+    InputsAndSettingsOfANodeType, redraw_a_node_over_the_values_its_inputs_hold,
+    the_values_held_on_no_input_of,
 };
 pub use streamlib_node_schema::NodeClassImportPath;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -277,10 +275,6 @@ pub struct NodeDescriptorOutput {
     /// typed; each field it lists is also under `inputs` as a setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
-    /// The number and Boolean config fields `set_exposed_config_fields` takes on
-    /// a node of this type not yet typed; absent when it takes none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exposable_config_fields: Vec<String>,
     /// Whether the node paces itself on real time, as a live device does: in a
     /// stepped stream it stands outside the step barrier.
     #[serde(default)]
@@ -412,24 +406,14 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             }
             None => (None, None),
         };
-        let older_keys = InputValuesRendered::split_by(
-            &OlderGraphKeysOfANodeType::of_the_input_ports(node.ports.inputs.iter().flat_map(
-                |input| std::iter::once(input.name.clone()).chain(input.former_names.clone()),
-            )),
-            &node.input_values,
-        );
         Self {
             id: node.node_uuid.to_string(),
             node_type: node.node_type.clone(),
             kind,
             language,
             name: node.display_name.clone(),
-            config: Some(older_keys.config),
-            config_checksum: older_keys.config_checksum,
             ports: ports_rendered_over_their_settled_contracts(node),
-            input_values: older_keys.input_values,
-            pins: older_keys.pins,
-            exposed_config_fields: Vec::new(),
+            input_values: node.input_values.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
             components: the_components_of_a_node_with_its_health(node),
@@ -486,7 +470,12 @@ fn ports_rendered_over_their_settled_contracts(
                 stream_facts: node
                     .stream_facts_of_output_ports()
                     .current_facts_of(&port.name)
-                    .map(PortStreamFactsOnTheWire::from),
+                    .and_then(|facts| {
+                        PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(
+                            facts,
+                            port.pin.as_ref(),
+                        )
+                    }),
                 pin_group_slot: pin_group_slot(&port.name),
                 ..GraphNodePortOnTheWire::from(port)
             })
@@ -538,7 +527,6 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             audio_window: port.audio_window.clone(),
             stream_facts: None,
             values_checked: values_checked_of(&port.family),
-            family: Some(port.family.clone()),
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             annotations: port.annotations.0.clone(),
@@ -752,13 +740,6 @@ impl From<&crate::core::NodeDescriptor> for NodeDescriptorOutput {
             runtime: NodeRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),
             config_schema: desc.config_schema.clone(),
-            exposable_config_fields: the_config_fields_a_node_of_the_type_can_expose(
-                &desc.node_class_import_path,
-                desc.config_schema.as_ref(),
-            )
-            .into_iter()
-            .map(|(field, _)| field)
-            .collect(),
             paced_by_real_time: desc.paced_by_real_time,
             inputs: desc
                 .inputs

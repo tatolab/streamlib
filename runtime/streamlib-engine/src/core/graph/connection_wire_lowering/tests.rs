@@ -96,8 +96,6 @@ fn rendered(resolution: &GraphSnapshotWithGraphOnlyNodesResolved) -> GraphRespon
                 kind: None,
                 language: None,
                 name: node.name.clone(),
-                config: Some(json!({})),
-                config_checksum: 0,
                 ports: GraphNodePortsOnTheWire {
                     inputs: Vec::new(),
                     outputs: Vec::new(),
@@ -105,8 +103,6 @@ fn rendered(resolution: &GraphSnapshotWithGraphOnlyNodesResolved) -> GraphRespon
                 components: Default::default(),
                 input_values: node.input_values.clone(),
                 live: None,
-                pins: serde_json::Map::new(),
-                exposed_config_fields: Vec::new(),
                 studio: serde_json::Map::new(),
                 inputs_waiting_for_a_value: Vec::new(),
                 fragment: None,
@@ -119,10 +115,9 @@ fn rendered(resolution: &GraphSnapshotWithGraphOnlyNodesResolved) -> GraphRespon
         studio: None,
         function_node_pool: None,
     };
-    resolution.graph_only_nodes_as_drawn.render_into(
-        &mut graph_response,
-        &node_types_of_a_relay_its_tracks_and_their_sends(),
-    );
+    resolution
+        .graph_only_nodes_as_drawn
+        .render_into(&mut graph_response);
     graph_response
 }
 

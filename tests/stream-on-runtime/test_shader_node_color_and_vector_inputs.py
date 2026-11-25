@@ -97,7 +97,7 @@ def test_a_color_and_a_vector_set_live_on_a_shader_node_change_the_picture_it_wr
 
     def set_live(input_name: str, value: "dict[str, float]") -> None:
         local_api.call_tool(
-            "set_pin_value",
+            "set_node_input_value",
             {"stream": stream_id, "node": tint["id"], "input": input_name, "value": value, "mode": "live"},
         )
 

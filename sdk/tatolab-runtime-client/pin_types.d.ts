@@ -258,8 +258,8 @@ export interface PinNumberRange {
 export type ImageOutputPortFrameRate = {
   stated: ImageStreamFrameRate;
 } | {
-  from_config: {
-    config_key: string;
+  from_setting: {
+    setting: string;
   };
 };
 
@@ -277,8 +277,8 @@ export interface ImageStreamFrameRate {
 export type ChannelsOutputPortSampleRate = {
   stated: number;
 } | {
-  from_config: {
-    config_key: string;
+  from_setting: {
+    setting: string;
   };
 };
 

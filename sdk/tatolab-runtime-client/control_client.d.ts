@@ -88,14 +88,6 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   disconnect(params: ControlOperations["disconnect"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["disconnect"]["result"]>;
   /**
-   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.
-   */
-  set_node_config(params: ControlOperations["set_node_config"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_node_config"]["result"]>;
-  /**
-   * Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.
-   */
-  set_pin_value(params: ControlOperations["set_pin_value"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_pin_value"]["result"]>;
-  /**
    * Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.
    */
   set_node_input_value(params: ControlOperations["set_node_input_value"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_node_input_value"]["result"]>;
@@ -107,10 +99,6 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    * Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.
    */
   set_studio_fields(params: ControlOperations["set_studio_fields"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_studio_fields"]["result"]>;
-  /**
-   * Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.
-   */
-  set_exposed_config_fields(params: ControlOperations["set_exposed_config_fields"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_exposed_config_fields"]["result"]>;
   /**
    * Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
    */
@@ -296,10 +284,6 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   check_project_code(params: ControlOperations["check_project_code"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["check_project_code"]["result"]>;
   /**
-   * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
-   */
-  list_project_node_types(params: ControlOperations["list_project_node_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_types"]["result"]>;
-  /**
    * List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.
    */
   list_pin_types(params: ControlOperations["list_pin_types"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_pin_types"]["result"]>;
@@ -323,14 +307,6 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    * List the controls and node bodies a project and its imports register.
    */
   list_project_node_ui_elements(params: ControlOperations["list_project_node_ui_elements"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_project_node_ui_elements"]["result"]>;
-  /**
-   * Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.
-   */
-  write_studio_view_output(params: ControlOperations["write_studio_view_output"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_studio_view_output"]["result"]>;
-  /**
-   * Write a value onto one of a loaded stream's graph inputs. Replaced by `set_node_input_value`.
-   */
-  write_graph_input(params: ControlOperations["write_graph_input"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["write_graph_input"]["result"]>;
   /**
    * Import a project from an archive into a folder that does not exist yet.
    */

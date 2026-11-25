@@ -9,7 +9,7 @@ use streamlib::sdk::descriptors::{PinConversion, PinLinkRefusal};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
     ProjectFilePlaceOnTheWire,
 };
 
@@ -19,7 +19,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 pub(crate) struct RefusalCodeAndPlace {
     pub(crate) refusal_code: ControlOperationRefusalCode,
     pub(crate) refused_node: Option<String>,
-    pub(crate) refused_field: Option<String>,
+    pub(crate) refused_input: Option<String>,
     pub(crate) refused_file: Option<ProjectFilePlaceOnTheWire>,
     pub(crate) not_running_because: Option<NodeNotRunningBecauseOnTheWire>,
     /// The one conversion a module or the project's own node declares that bridges a refused
@@ -54,13 +54,17 @@ impl RefusalCodeAndPlace {
         self,
         action: &str,
         runtime_words: impl Into<String>,
-    ) -> ProjectActionRefusalOnTheWire {
-        ProjectActionRefusalOnTheWire {
+    ) -> ControlOperationRefusalOnTheWire {
+        ControlOperationRefusalOnTheWire {
             refused_node: self.refused_node,
-            refused_field: self.refused_field,
+            refused_input: self.refused_input,
             refused_file: self.refused_file,
             not_running_because: self.not_running_because,
-            ..ProjectActionRefusalOnTheWire::of_the_action(action, self.refusal_code, runtime_words)
+            ..ControlOperationRefusalOnTheWire::of_the_action(
+                action,
+                self.refusal_code,
+                runtime_words,
+            )
         }
     }
 
@@ -206,11 +210,11 @@ impl RefusalCodeAndPlace {
                 direction,
                 ..
             } => Self {
-                refused_field: (*direction == PortDirection::Input).then(|| port_name.clone()),
+                refused_input: (*direction == PortDirection::Input).then(|| port_name.clone()),
                 ..Self::coded(PortNotFound)
             },
             Error::StreamHasNoInputNamed { input, .. } => Self {
-                refused_field: Some(input.clone()),
+                refused_input: Some(input.clone()),
                 ..Self::coded(PortNotFound)
             },
             Error::NodeInAStreamHasNoOutputPortNamed { node, .. } => Self {
@@ -230,7 +234,7 @@ impl RefusalCodeAndPlace {
                     input_name,
                 } => Self {
                     refused_node: Some(node_name.clone()),
-                    refused_field: Some(input_name.clone()),
+                    refused_input: Some(input_name.clone()),
                     ..Self::coded(InputTakesNoWire)
                 },
                 PinLinkRefusal::StreamIntoASetting {
@@ -239,7 +243,7 @@ impl RefusalCodeAndPlace {
                     ..
                 } => Self {
                     refused_node: Some(node_name.clone()),
-                    refused_field: Some(input_name.clone()),
+                    refused_input: Some(input_name.clone()),
                     ..Self::coded(LinkStreamsIntoASetting)
                 },
                 PinLinkRefusal::PinTypesDoNotConnect {

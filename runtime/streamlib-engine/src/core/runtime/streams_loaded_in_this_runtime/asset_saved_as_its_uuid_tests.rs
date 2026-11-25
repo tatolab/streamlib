@@ -97,20 +97,6 @@ fn an_older_edit_setting_an_asset_by_its_uuid_sets_the_asset_and_undoes_to_none(
         under_the_current_form(set("asset", Some(json!("")), Some(json!(ASSET)))),
         set("asset", None, Some(json!({ "asset": ASSET })))
     );
-    assert_eq!(
-        under_the_current_form(StreamGraphOperation::SetPinValue {
-            node: PICTURE,
-            input: "asset".to_owned(),
-            from: Some(json!(ASSET)),
-            to: None,
-        }),
-        StreamGraphOperation::SetPinValue {
-            node: PICTURE,
-            input: "asset".to_owned(),
-            from: Some(json!({ "asset": ASSET })),
-            to: None,
-        }
-    );
     let caption = set("caption", Some(json!("")), Some(json!(ASSET)));
     assert_eq!(under_the_current_form(caption.clone()), caption);
     let of_a_member = StreamGraphOperation::SetNodeInputValue {

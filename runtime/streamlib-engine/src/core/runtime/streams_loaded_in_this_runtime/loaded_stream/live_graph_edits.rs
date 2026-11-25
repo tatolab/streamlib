@@ -272,29 +272,6 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    /// Refuse an exposure of `exposed_config_fields` on the node `node_run_id` when a name it
-    /// lists is no input of its type that takes a wire; each such input takes a wire of its own,
-    /// so an exposure checked records nothing.
-    pub(crate) fn set_exposed_config_fields(
-        &self,
-        node_run_id: &NodeRunId,
-        exposed_config_fields: Vec<String>,
-    ) -> Result<()> {
-        self.compiler.scope(|graph, _tx| -> Result<()> {
-            let node = graph
-                .traversal()
-                .v(node_run_id)
-                .first()
-                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-            crate::core::graph::input_values::refuse_an_exposure_naming_no_input_that_takes_a_wire(
-                &self.node_types_this_stream_resolves,
-                &node.display_name,
-                &node.node_type,
-                &exposed_config_fields,
-            )
-        })
-    }
-
     pub(crate) fn set_studio_fields(
         &self,
         node_run_id: &NodeRunId,

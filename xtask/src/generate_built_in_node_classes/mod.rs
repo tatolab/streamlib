@@ -111,8 +111,15 @@ struct BuiltInNodePortFamilyDeclaration {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum BuiltInNodeImageOutputFrameRate {
-    Stated { numerator: u32, denominator: u32 },
-    FromConfig { config_key: String },
+    Stated {
+        numerator: u32,
+        denominator: u32,
+    },
+    #[serde(alias = "from_config")]
+    FromSetting {
+        #[serde(alias = "config_key")]
+        setting: String,
+    },
 }
 
 /// How an Image output's declared frame rate reads: `rate=30`,
@@ -127,8 +134,8 @@ fn python_spelling_of_a_frame_rate(frame_rate: &BuiltInNodeImageOutputFrameRate)
             numerator,
             denominator,
         } => format!("`rate=ImageStreamFrameRate({numerator}, {denominator})`"),
-        BuiltInNodeImageOutputFrameRate::FromConfig { config_key } => {
-            format!("its `{config_key}` setting")
+        BuiltInNodeImageOutputFrameRate::FromSetting { setting } => {
+            format!("its `{setting}` setting")
         }
     }
 }
