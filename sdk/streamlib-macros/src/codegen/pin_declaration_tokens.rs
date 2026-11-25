@@ -3,11 +3,15 @@
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use streamlib_node_schema::pin_type::{PinFlow, PinType};
+use streamlib_node_schema::pin_type::{PinAnnotations, PinFlow, PinType};
+use streamlib_node_schema::{
+    ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
+    ImageOutputPortFrameRate,
+};
 
 /// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in
 /// the flow it states, else in its type's default flow, with the names it had and whether it may
-/// be unset, as it states them. A port typed by the setting `pin_type_from_setting` carries the
+/// be unset and the annotations of its stream, as it states them. A port typed by the setting `pin_type_from_setting` carries the
 /// type that setting chooses, a value unless it states another flow.
 pub(super) fn pin_declaration_tokens(
     pin_type: Option<&PinType>,
@@ -15,6 +19,7 @@ pub(super) fn pin_declaration_tokens(
     flow: Option<PinFlow>,
     former_names: &[String],
     may_be_unset: bool,
+    annotations: &PinAnnotations,
 ) -> TokenStream {
     let descriptors = quote! { __streamlib_sdk::descriptors };
     if let Some(setting_name) = pin_type_from_setting {
@@ -52,6 +57,9 @@ pub(super) fn pin_declaration_tokens(
     if may_be_unset {
         stated.push(quote! { may_be_unset: true, });
     }
+    if let Some(annotations) = stream_annotation_tokens(annotations) {
+        stated.push(quote! { annotations: #annotations, });
+    }
     if stated.is_empty() {
         return quote! { ::std::option::Option::Some(#exactly) };
     }
@@ -61,6 +69,73 @@ pub(super) fn pin_declaration_tokens(
             ..#exactly
         })
     }
+}
+
+/// Emit an expression that builds the stream annotations of `annotations` a Rust port states:
+/// its frame rate, sample rate, sample type and residency; `None` when it states none.
+fn stream_annotation_tokens(annotations: &PinAnnotations) -> Option<TokenStream> {
+    let descriptors = quote! { __streamlib_sdk::descriptors };
+    let optional = |tokens: Option<TokenStream>| match tokens {
+        Some(tokens) => quote! { ::std::option::Option::Some(#tokens) },
+        None => quote! { ::std::option::Option::None },
+    };
+    let from_setting = |setting: &str| quote! { setting: ::std::string::String::from(#setting) };
+    let frame_rate = annotations.frame_rate.as_ref().map(|frame_rate| match frame_rate {
+        ImageOutputPortFrameRate::Stated(frame_rate) => {
+            let numerator = frame_rate.numerator;
+            let denominator = frame_rate.denominator;
+            quote! {
+                #descriptors::ImageOutputPortFrameRate::Stated(#descriptors::ImageStreamFrameRate {
+                    numerator: #numerator,
+                    denominator: #denominator,
+                })
+            }
+        }
+        ImageOutputPortFrameRate::FromSetting { setting } => {
+            let setting = from_setting(setting);
+            quote! { #descriptors::ImageOutputPortFrameRate::FromSetting { #setting } }
+        }
+    });
+    let sample_rate = annotations.sample_rate.as_ref().map(|rate| match rate {
+        ChannelsOutputPortSampleRate::Stated(rate) => {
+            quote! { #descriptors::ChannelsOutputPortSampleRate::Stated(#rate) }
+        }
+        ChannelsOutputPortSampleRate::FromSetting { setting } => {
+            let setting = from_setting(setting);
+            quote! { #descriptors::ChannelsOutputPortSampleRate::FromSetting { #setting } }
+        }
+    });
+    let sample_type = annotations.sample_type.map(|sample_type| match sample_type {
+        ChannelsOutputPortSampleType::F32 => {
+            quote! { #descriptors::ChannelsOutputPortSampleType::F32 }
+        }
+        ChannelsOutputPortSampleType::F64 => {
+            quote! { #descriptors::ChannelsOutputPortSampleType::F64 }
+        }
+    });
+    let residency = annotations.residency.map(|residency| match residency {
+        ArrayOutputPortResidency::Gpu => quote! { #descriptors::ArrayOutputPortResidency::Gpu },
+        ArrayOutputPortResidency::Cpu => quote! { #descriptors::ArrayOutputPortResidency::Cpu },
+    });
+    if frame_rate.is_none() && sample_rate.is_none() && sample_type.is_none() && residency.is_none()
+    {
+        return None;
+    }
+    let (frame_rate, sample_rate, sample_type, residency) = (
+        optional(frame_rate),
+        optional(sample_rate),
+        optional(sample_type),
+        optional(residency),
+    );
+    Some(quote! {
+        #descriptors::PinAnnotations {
+            frame_rate: #frame_rate,
+            sample_rate: #sample_rate,
+            sample_type: #sample_type,
+            residency: #residency,
+            ..::std::default::Default::default()
+        }
+    })
 }
 
 /// Emit an expression that builds `pin_type`: one of the types the port grammar declares.

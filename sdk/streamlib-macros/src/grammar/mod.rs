@@ -3,7 +3,7 @@
 
 use streamlib_node_schema::{
     AudioWindowContract, NodePortSchema, NodeScheduling, NodeSchema, NodeSchemaExecution,
-    PortFamilyDeclaration, RuntimeConfig, RuntimeOptions, ThreadPriority,
+    RuntimeConfig, RuntimeOptions, ThreadPriority, pin_type::PinAnnotations,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -256,14 +256,13 @@ pub(crate) struct ParsedPort {
     /// `None` everywhere else — this is opt-in, and a port without one is
     /// unchanged in every respect.
     pub audio_window: Option<AudioWindowContract>,
-    /// The port family the port declares with `family = …`, or the one its
-    /// `pin_type = …` is carried in, and its family's keys.
-    pub family: PortFamilyDeclaration,
-    /// The pin type the port declares with `pin_type = …`; `None` when it
-    /// declares only a family.
+    /// What an output states of its stream as the annotations of its pin: a Texture's
+    /// `frame_rate`, an Audio's `rate` and `dtype`, a Tensor's `residency`.
+    pub annotations: PinAnnotations,
+    /// The pin type the port declares with `pin_type = …`; `None` when a setting chooses it.
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
     /// The setting whose chosen pin type the port carries, as `pin_type = from_setting("…")`
-    /// states it; `None` when the port states its type itself or declares only a family.
+    /// states it; `None` when the port states its type itself.
     pub pin_type_from_setting: Option<String>,
     /// How long a value set live on the input lives, as `lifetime = …` declares it; kept when
     /// it declares none, and always kept on an output.
@@ -316,7 +315,7 @@ impl ParsedNodeAttr {
             delivery_profile: p.delivery_profile.clone(),
             borrow_quota: p.borrow_quota,
             audio_window: p.audio_window.clone(),
-            family: p.family.clone(),
+            annotations: p.annotations.clone(),
             pin_type: p.pin_type.clone(),
             pin_type_from_setting: p.pin_type_from_setting.clone(),
             lifetime: p.lifetime,

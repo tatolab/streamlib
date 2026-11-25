@@ -405,6 +405,11 @@ pub struct NodePortSchema {
     /// consumer states what it needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::AudioWindowContract>,
+    /// What an output states of its stream as the annotations of its pin. Its schema is open
+    /// JSON: only the control contract's schemars renders pin annotations.
+    #[serde(default)]
+    #[schemars(with = "serde_json::Value")]
+    pub annotations: crate::pin_type::PinAnnotations,
     /// The pin type this port declares; `None` when a setting chooses it. Its schema is
     /// open JSON: only the control contract's schemars renders pin types.
     #[serde(default, skip_serializing_if = "Option::is_none")]

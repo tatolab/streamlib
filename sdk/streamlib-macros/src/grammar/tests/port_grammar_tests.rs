@@ -5,7 +5,6 @@ use quote::quote;
 use streamlib_node_schema::{
     ArrayOutputPortResidency, AudioWindowContractDeclaredValues, ChannelsOutputPortSampleRate,
     ChannelsOutputPortSampleType, ImageOutputPortFrameRate, NodeValueLifetime,
-    OutputPortDeclaredNames, PortFamily,
 };
 
 use super::*;
@@ -282,9 +281,9 @@ fn the_unknown_port_key_error_offers_every_key_a_port_accepts() {
     }
 }
 
-/// No pin type a Rust port names travels on Packets, so a Packets key is no key of a Rust port.
+/// No pin type a Rust port names is encoded, so a codec key is no key of a Rust port.
 ///
-/// Mental-revert: a Rust port takes `codec` and is refused only as a family that does not take it.
+/// Mental-revert: a Rust port takes `codec` and is refused only by the type that does not take it.
 #[test]
 fn a_packets_key_is_refused_as_an_unknown_port_key() {
     for key in [
@@ -589,73 +588,67 @@ fn an_audio_window_on_an_output_is_refused() {
 }
 
 #[test]
-fn a_ports_family_and_its_keys_reach_the_schema() {
+fn a_ports_stream_facts_reach_the_schema_as_its_annotations() {
     let parsed = parse_ok(quote! {
         execution = manual,
-        input("signals", delivery_profile = "ordered", pin_type = Audio, requires = ["rpm"]),
         input("video", delivery_profile = "newest", pin_type = Texture, formats = ["rgba8_unorm"]),
-        output(
-            "telemetry",
-            pin_type = Audio,
-            names = from_setting("channel_names"),
-            rate = 48000,
-            dtype = "f32"
-        ),
-        output("tensor", pin_type = Tensor, names = ["boxes"], residency = "gpu"),
+        output("telemetry", pin_type = Audio, rate = 48000, dtype = "f32"),
+        output("tensor", pin_type = Tensor, residency = "gpu"),
     });
     let schema = parsed.to_node_schema();
 
-    let signals = &schema.inputs[0].family;
-    assert_eq!(signals.family, PortFamily::Channels);
-    assert_eq!(signals.requires, vec!["rpm".to_string()]);
     assert_eq!(
-        schema.inputs[1].family.formats,
-        vec!["rgba8_unorm".to_string()]
-    );
-    let telemetry = &schema.outputs[0].family;
-    assert_eq!(
-        telemetry.names,
-        Some(OutputPortDeclaredNames::FromConfig {
-            config_key: "channel_names".into()
+        schema.inputs[0].pin_type,
+        Some(streamlib_node_schema::pin_type::PinType::Texture {
+            pixel_formats: vec![streamlib_node_schema::pin_type::TexturePixelFormat::Rgba8Unorm]
         })
     );
+    let telemetry = &schema.outputs[0].annotations;
     assert_eq!(
-        telemetry.rate,
+        telemetry.sample_rate,
         Some(ChannelsOutputPortSampleRate::Stated(48_000))
     );
-    assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F32));
     assert_eq!(
-        schema.outputs[1].family.residency,
+        telemetry.sample_type,
+        Some(ChannelsOutputPortSampleType::F32)
+    );
+    assert_eq!(
+        schema.outputs[1].annotations.residency,
         Some(ArrayOutputPortResidency::Gpu)
     );
 }
 
+/// Mental-revert: the retired `names` and `requires` keys are taken and dropped.
 #[test]
-fn a_family_key_the_family_does_not_take_is_refused_naming_the_port() {
-    let msg = parse_err(quote! {
-        execution = manual,
-        output("video", pin_type = Texture, formats = ["rgba8_unorm"], names = ["x"]),
-    });
-    assert!(
-        msg.contains("\"video\"") && msg.contains("`names=`"),
-        "got {msg}"
-    );
+fn a_retired_family_key_is_refused_as_unknown() {
+    for retired in [
+        quote! { output("tensor", pin_type = Tensor, names = ["boxes"]) },
+        quote! { input("signals", pin_type = Audio, requires = ["rpm"]) },
+    ] {
+        let msg = parse_err(quote! { execution = manual, #retired, });
+        assert!(msg.contains("unknown port key"), "got {msg}");
+    }
 }
 
 #[test]
-fn a_family_key_its_pin_types_family_does_not_take_is_refused() {
+fn a_stream_fact_its_pin_type_does_not_take_is_refused_naming_the_port() {
     let msg = parse_err(quote! {
         execution = manual,
         output("level", pin_type = Float, formats = ["rgba8_unorm"]),
     });
     assert!(
-        msg.contains("states `formats=`, which a Channels output does not take"),
+        msg.contains("\"level\"") && msg.contains("states `formats=`, which an output of Float does not take"),
         "got {msg}"
     );
+    let msg = parse_err(quote! {
+        execution = manual,
+        input("audio", pin_type = Audio, delivery_profile = "ordered", rate = 48000),
+    });
+    assert!(msg.contains("states `rate=`"), "got {msg}");
 }
 
 #[test]
-fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
+fn a_texture_outputs_frame_rate_reaches_the_schema_stated_or_from_a_setting() {
     let parsed = parse_ok(quote! {
         execution = manual,
         output("video", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = 30),
@@ -665,7 +658,7 @@ fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
     let schema = parsed.to_node_schema();
 
     assert_eq!(
-        schema.outputs[0].family.frame_rate,
+        schema.outputs[0].annotations.frame_rate,
         Some(ImageOutputPortFrameRate::Stated(
             streamlib_node_schema::ImageStreamFrameRate {
                 numerator: 30,
@@ -674,12 +667,12 @@ fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
         ))
     );
     assert_eq!(
-        schema.outputs[1].family.frame_rate,
+        schema.outputs[1].annotations.frame_rate,
         Some(ImageOutputPortFrameRate::FromSetting {
             setting: "frames_per_second".into()
         })
     );
-    assert_eq!(schema.outputs[2].family.frame_rate, None);
+    assert_eq!(schema.outputs[2].annotations.frame_rate, None);
 }
 
 #[test]
@@ -847,7 +840,7 @@ fn a_contract_less_ports_projection_carries_no_audio_window_key() {
             "name": "video_in",
             "description": null,
             "delivery_profile": "newest",
-            "family": {"family": "image"},
+            "annotations": {},
             "pin_type": {"type": "texture"},
         })
     );

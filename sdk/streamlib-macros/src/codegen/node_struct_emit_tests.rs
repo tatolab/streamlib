@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use streamlib_node_schema::{NodePortSchema, NodeSchema, PortFamily, PortFamilyDeclaration};
+use streamlib_node_schema::{NodePortSchema, NodeSchema};
 
 fn minimal_schema() -> NodeSchema {
     NodeSchema {
@@ -205,7 +205,7 @@ fn schema_declaring_iceoryx2_input_and_output_ports() -> NodeSchema {
         delivery_profile: None,
         borrow_quota: None,
         audio_window: None,
-        family: PortFamilyDeclaration::of_family(PortFamily::Image),
+        annotations: Default::default(),
         pin_type: None,
         pin_type_from_setting: None,
         lifetime: streamlib_node_schema::NodeValueLifetime::Kept,
@@ -755,7 +755,7 @@ fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
         delivery_profile: None,
         borrow_quota: None,
         audio_window: None,
-        family: PortFamilyDeclaration::of_family(PortFamily::Image),
+        annotations: Default::default(),
         pin_type: None,
         pin_type_from_setting: None,
         lifetime: streamlib_node_schema::NodeValueLifetime::Kept,
