@@ -633,8 +633,8 @@ fn parse_port_family_key(
         "formats" => family_keys.formats = parse_string_literal_list(content, "formats")?,
         "rate" => {
             family_keys.rate = Some(match parse_the_setting_a_fact_is_read_from(content)? {
-                Some(setting_name) => ChannelsOutputPortSampleRate::FromConfig {
-                    config_key: setting_name,
+                Some(setting_name) => ChannelsOutputPortSampleRate::FromSetting {
+                    setting: setting_name,
                 },
                 None => {
                     let rate: LitInt = content.parse()?;
@@ -644,8 +644,8 @@ fn parse_port_family_key(
         }
         "frame_rate" => {
             family_keys.frame_rate = Some(match parse_the_setting_a_fact_is_read_from(content)? {
-                Some(setting_name) => ImageOutputPortFrameRate::FromConfig {
-                    config_key: setting_name,
+                Some(setting_name) => ImageOutputPortFrameRate::FromSetting {
+                    setting: setting_name,
                 },
                 None => {
                     let frames_per_second: LitInt = content.parse()?;

@@ -55,7 +55,7 @@ def the_tool_names_the_contract_lists(contract: "dict[str, Any]") -> "list[str]"
     ] + [tool["name"] for tool in contract["x-agent-discovery-tools"]]
 
 
-NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
+STREAM_ACTIONS_RESOURCE_URI = "streamlib://stream-actions"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
 
 
@@ -118,8 +118,8 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_and_resource
             resources = {
                 uri: (await client.read_resource(uri)).contents
                 for uri in (
-                    NODE_CATALOG_RESOURCE_URI,
                     LIVE_GRAPH_RESOURCE_URI,
+                    STREAM_ACTIONS_RESOURCE_URI,
                 )
             }
             return {

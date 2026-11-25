@@ -165,10 +165,6 @@ fn a_function_nodes_input_values_are_checked() {
         the_code_of(the_refusal_of(&node_types, SCALE, "z", Some(json!(1)))),
         InputValueRefusalCode::PortNotFound
     );
-    assert!(!a_set_node_config_replaces_every_setting_on(
-        &node_types,
-        &NodeClassImportPath::new(SCALE).unwrap()
-    ));
 }
 
 #[test]
@@ -245,7 +241,7 @@ fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_h
                     .iter()
                     .find(|rendered| rendered["id"] == node.to_string())
             })
-            .map(|rendered| rendered["pins"].clone())
+            .map(|rendered| rendered["input_values"].clone())
             .unwrap_or_else(|| panic!("the graph holds node {node}: {graph}"))
     };
 

@@ -8,7 +8,9 @@ use streamlib_node_schema::pin_type::PinType;
 
 use super::ControlOperationRefusalCode;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
-use super::{NamedPinTypeReadFromSource, NodeTypeCategoryFrom};
+use super::{
+    NamedPinTypeReadFromSource, NodeTypeCategoryFrom, NodeTypeListed, NodeTypeSourceListedOrigin,
+};
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,7 +338,7 @@ pub struct RefusedProjectActionOnTheWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     /// What the runtime refused, in its own words.
-    pub refusal: ProjectActionRefusalOnTheWire,
+    pub refusal: ControlOperationRefusalOnTheWire,
     /// When the runtime refused it, RFC 3339 in UTC to the second, for display only.
     pub refused_at: String,
 }
@@ -373,7 +375,7 @@ pub struct AssetMediaFactsReadOnTheWire {
 /// `structuredContent.refusal` and the text of a failing tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub struct ProjectActionRefusalOnTheWire {
+pub struct ControlOperationRefusalOnTheWire {
     /// What kind of refusal it is, for a caller to branch on; `refused` when a runtime that
     /// answers no code sent it.
     #[serde(default)]
@@ -389,10 +391,9 @@ pub struct ProjectActionRefusalOnTheWire {
     /// The link the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_link: Option<Box<RefusedGraphLinkOnTheWire>>,
-    /// The node's input or config field the refused operation names.
+    /// The node's input the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub refused_field: Option<String>,
+    pub refused_input: Option<String>,
     /// The JSON pointer, into the params the caller sent, of the value refused; absent when no
     /// one value inside them is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,7 +411,7 @@ pub struct ProjectActionRefusalOnTheWire {
     pub runtime_words: String,
 }
 
-impl ProjectActionRefusalOnTheWire {
+impl ControlOperationRefusalOnTheWire {
     /// The refusal of `action`, coded `refusal_code`, in `runtime_words`, naming no place.
     pub fn of_the_action(
         action: impl Into<String>,
@@ -423,7 +424,7 @@ impl ProjectActionRefusalOnTheWire {
             refused_operation_index: None,
             refused_node: None,
             refused_link: None,
-            refused_field: None,
+            refused_input: None,
             refused_params_pointer: None,
             refused_file: None,
             not_running_because: None,
@@ -734,11 +735,6 @@ pub struct ProjectViewListed {
 pub struct ProjectViewDeclaredPort {
     /// The port's name.
     pub name: String,
-    /// The port family's wire name: the family its pin type's messages belong to, where it
-    /// names one. Served until the contract's version changes, for a client that reads no
-    /// `pin_type`.
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub family: String,
     /// The pin type the port carries, which every port of a manifest that opens names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<PinType>,
@@ -748,11 +744,12 @@ pub struct ProjectViewDeclaredPort {
     pub range: Option<[f64; 2]>,
 }
 
-/// The `list_project_node_types` tool's result: what a project and each source it draws node
-/// code from declares, read from source without running it.
+/// What a project and each source it draws node code from declares, read from source without
+/// running it: what `list_node_types` and `describe_node_types` answer from, and what the
+/// runtime compares a project's listings by.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub struct ListProjectNodeTypesToolResult {
+pub struct ProjectNodeTypesReadFromSource {
     /// The project directory, symlinks resolved.
     pub project_directory: PathBuf,
     /// The project's UUID, from its `tatolab-project.json`.
@@ -810,17 +807,17 @@ pub struct NodeTypeSourceReadWithoutRunningIt {
 }
 
 /// One node type a project offers and the source its code comes from, as a change on the
-/// project's feed names it: the source's fields beside the node type's, as
-/// `list_project_node_types` lists each.
+/// project's feed names it: the source's fields beside the node type's row, as
+/// `list_node_types` lists each.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeTypeOfOneProjectSource {
     /// Where its code comes from.
     #[serde(flatten)]
-    pub origin: NodeTypeSourceOrigin,
-    /// The node type as its declaration states it.
+    pub origin: NodeTypeSourceListedOrigin,
+    /// The node type, as `list_node_types` lists it.
     #[serde(flatten)]
-    pub node_type: NodeTypeReadFromSource,
+    pub node_type: NodeTypeListed,
 }
 
 /// One node type as its declaration states it in source.
@@ -855,9 +852,6 @@ pub struct NodeTypeReadFromSource {
 pub struct NodeTypePortReadFromSource {
     /// The port's name, cast as every exposed name is.
     pub name: String,
-    /// The port family's wire name, `None` where source alone does not say.
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub family: Option<String>,
     /// The port's declared description.
     pub description: String,
     /// A function or shader port's annotation as written; `None` for a process node's port.

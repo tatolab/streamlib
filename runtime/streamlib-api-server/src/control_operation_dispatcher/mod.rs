@@ -28,21 +28,20 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CloseViewerToolResult,
-    ControlOperationRefusalCode, CreateNodeFileToolResult, CreateNodeUiElementToolResult,
-    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
-    DescribeAssetToolResult, DescribeNodeTypesToolResult, DescribeRuntimeToolResult,
-    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
-    ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
-    ListAudioCaptureDevicesToolResult, ListDependenciesToolResult, ListNodeTypesToolResult,
-    ListPinTypesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
-    ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
-    ListStreamsToolResult, LogsToolResult, OpenViewerToolResult, PausePlaybackToolResult,
-    ProjectActionRefusalOnTheWire, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, CreateNodeFileToolResult,
+    CreateNodeUiElementToolResult, CreateProjectToolResult, DeleteProjectToolResult,
+    DependencyTransactionToolResult, DescribeAssetToolResult, DescribeNodeTypesToolResult,
+    DescribeRuntimeToolResult, DescribeStreamActionToolResult, DuplicateProjectToolResult,
+    GraphTransactionToolResult, ImportProjectToolResult, LinkCandidatesCheckResult,
+    LinkCheckResult, ListAssetsToolResult, ListAudioCaptureDevicesToolResult,
+    ListDependenciesToolResult, ListNodeTypesToolResult, ListPinTypesToolResult,
+    ListProjectFilesToolResult, ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult,
+    ListSamplesToolResult, ListStreamsToolResult, LogsToolResult, OpenViewerToolResult,
+    PausePlaybackToolResult, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
     ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
     ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
     ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
     SetNodeTypeGroupToolResult, SetStreamClockScaleToolResult, UpdateDependencyToolResult,
-    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
@@ -166,8 +165,6 @@ pub(crate) enum ControlOperationAnswer {
     ProjectFileTransaction(ProjectFileTransactionToolResult),
     /// `check_project_code`'s.
     CheckProjectCode(ProjectCodeCheckResult),
-    /// `list_project_node_types`'s.
-    ListProjectNodeTypes(ListProjectNodeTypesToolResult),
     /// `list_pin_types`'.
     ListPinTypes(ListPinTypesToolResult),
     /// `list_node_types`'.
@@ -180,10 +177,6 @@ pub(crate) enum ControlOperationAnswer {
     ListProjectViews(ListProjectViewsToolResult),
     /// `list_project_node_ui_elements`'.
     ListProjectNodeUiElements(ListProjectNodeUiElementsToolResult),
-    /// `write_studio_view_output`'s.
-    WriteStudioViewOutput(WriteStudioViewOutputToolResult),
-    /// `write_graph_input`'s.
-    WriteGraphInput(WriteGraphInputToolResult),
     /// `import_project`'s.
     ImportProject(ImportProjectToolResult),
     /// `logs`'s.
@@ -206,7 +199,7 @@ pub(crate) enum ControlOperationAnswer {
 #[derive(Debug)]
 pub(crate) enum ControlOperationRefusal {
     /// The runtime refused the action, naming what it refused in its own words.
-    RefusedAction(Box<ProjectActionRefusalOnTheWire>),
+    RefusedAction(Box<ControlOperationRefusalOnTheWire>),
     /// The operation was not carried out, for a reason its code and place name, in the
     /// runtime's own words.
     Coded {
@@ -222,7 +215,7 @@ impl ControlOperationRefusal {
     pub(crate) fn into_the_refusal_on_the_wire(
         self,
         action: &str,
-    ) -> ProjectActionRefusalOnTheWire {
+    ) -> ControlOperationRefusalOnTheWire {
         match self {
             Self::RefusedAction(refused) => *refused,
             Self::Coded {
@@ -230,7 +223,7 @@ impl ControlOperationRefusal {
                 why,
             } => code_and_place.on_the_refusal_of(action, why),
             Self::ContractVersionMismatch(mismatch) => {
-                ProjectActionRefusalOnTheWire::of_the_action(
+                ControlOperationRefusalOnTheWire::of_the_action(
                     action,
                     ControlOperationRefusalCode::Refused,
                     format!("{action} failed: {mismatch}"),
@@ -485,12 +478,6 @@ impl ControlOperationDispatcher {
             ControlOperationCall::Disconnect(request) => {
                 self.answer_disconnect(request, request_origin).await
             }
-            ControlOperationCall::SetNodeConfig(request) => {
-                self.answer_set_node_config(request, request_origin).await
-            }
-            ControlOperationCall::SetPinValue(request) => {
-                self.answer_set_pin_value(request, request_origin).await
-            }
             ControlOperationCall::SetNodeInputValue(request) => {
                 self.answer_set_node_input_value(request, request_origin)
                     .await
@@ -500,10 +487,6 @@ impl ControlOperationDispatcher {
             }
             ControlOperationCall::SetStudioFields(request) => {
                 self.answer_set_studio_fields(request, request_origin).await
-            }
-            ControlOperationCall::SetExposedConfigFields(request) => {
-                self.answer_set_exposed_config_fields(request, request_origin)
-                    .await
             }
             ControlOperationCall::AddGroup(request) => {
                 self.answer_add_group(request, request_origin).await
@@ -668,10 +651,6 @@ impl ControlOperationDispatcher {
                 .check_project_code(request)
                 .await
                 .map(ControlOperationAnswer::CheckProjectCode),
-            ControlOperationCall::ListProjectNodeTypes(request) => self
-                .list_project_node_types(request)
-                .await
-                .map(ControlOperationAnswer::ListProjectNodeTypes),
             ControlOperationCall::ListPinTypes(request) => self
                 .list_pin_types(request)
                 .await
@@ -696,14 +675,6 @@ impl ControlOperationDispatcher {
                 .list_project_node_ui_elements(request)
                 .await
                 .map(ControlOperationAnswer::ListProjectNodeUiElements),
-            ControlOperationCall::WriteStudioViewOutput(request) => self
-                .write_studio_view_output(request, request_origin)
-                .await
-                .map(ControlOperationAnswer::WriteStudioViewOutput),
-            ControlOperationCall::WriteGraphInput(request) => self
-                .write_graph_input(request, request_origin)
-                .await
-                .map(ControlOperationAnswer::WriteGraphInput),
             ControlOperationCall::ImportProject(request) => self
                 .import_project(request, request_origin)
                 .await

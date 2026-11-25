@@ -41,7 +41,6 @@ async fn tools_call_add_node_applies_the_node_live_and_answers_its_new_uuid_and_
             json!({
                 "stream": STUB_STREAM_ASSET,
                 "type": "nodes.grayscale_effect:GrayscaleEffect",
-                "config": { "strength": 0.5 },
                 "name": "Gray",
                 "mode": "live",
             }),
@@ -58,10 +57,7 @@ async fn tools_call_add_node_applies_the_node_live_and_answers_its_new_uuid_and_
         );
     };
     assert_eq!(node.node_type, "nodes.grayscale_effect:GrayscaleEffect");
-    assert_eq!(
-        Value::Object(node.input_values.clone()),
-        json!({ "strength": 0.5 })
-    );
+    assert!(node.input_values.is_empty(), "{node:?}");
     assert_eq!(node.name, "Gray");
     assert!(links.is_empty());
     assert_eq!(stated["mode"], "live");
@@ -169,92 +165,8 @@ async fn a_committed_edit_to_a_stream_whose_directory_holds_no_project_is_refuse
     assert!(recorded.lock().is_empty(), "nothing was applied");
 }
 
-/// The one setting [`AddNodeTestSourceTakingOneSetting`] takes.
-#[derive(
-    Debug,
-    Clone,
-    Default,
-    PartialEq,
-    serde::Serialize,
-    serde::Deserialize,
-    streamlib::sdk::schemars::JsonSchema,
-)]
-#[schemars(crate = "streamlib::sdk::schemars")]
-#[serde(deny_unknown_fields)]
-pub(super) struct AddNodeTestSourceTakingOneSettingConfig {
-    #[serde(default)]
-    pub frame_width: Option<u32>,
-}
-
-/// A native source whose config refuses every key but `frame_width`.
-#[streamlib::sdk::node(
-    execution = manual,
-    output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
-)]
-pub(super) struct AddNodeTestSourceTakingOneSetting;
-
-impl streamlib::sdk::nodes::ManualNode for AddNodeTestSourceTakingOneSetting::Node {
-    fn start(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-    ) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// Against a real engine: a live add meets the refusal a load does, naming
-/// the node, its type and the setting, and adds nothing.
-#[tokio::test(flavor = "multi_thread")]
-async fn tools_call_add_node_refuses_a_setting_the_nodes_type_does_not_take_naming_it() {
-    streamlib::sdk::nodes::NODE_REGISTRY.register_with_a_config_schema_for_a_test::<
-        AddNodeTestSourceTakingOneSetting::Node,
-        AddNodeTestSourceTakingOneSettingConfig,
-    >();
-    let source_type = AddNodeTestSourceTakingOneSetting::node_class_import_path();
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runtime = streamlib::sdk::runtime::Runner::new().unwrap();
-    let stream = runtime
-        .load_an_empty_stream(
-            streamlib::sdk::runtime::OptionsForLoadingOneStream::at_stream_location(
-                "main".to_owned(),
-                StreamLocation {
-                    project_directory: project_directory.path().to_path_buf(),
-                    project: uuid::Uuid::new_v4(),
-                    stream_asset: STUB_STREAM_ASSET,
-                },
-            ),
-        )
-        .unwrap();
-
-    let body = tool_call_result(
-        Arc::clone(&runtime) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-        "add_node",
-        json!({
-            "stream": STUB_STREAM_ASSET,
-            "type": source_type.as_str(),
-            "name": "front",
-            "config": {"frame_widht": 640},
-            "mode": "live",
-        }),
-    )
-    .await;
-
-    assert_eq!(body["isError"], true, "body={body}");
-    let text = body["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("node `front`"), "{text}");
-    assert!(text.contains(source_type.as_str()), "{text}");
-    assert!(text.contains("`frame_widht`"), "{text}");
-    let graph = stream.to_json().unwrap();
-    assert_eq!(
-        graph["nodes"],
-        json!([]),
-        "a refused add adds nothing: {graph}"
-    );
-}
-
 #[tokio::test]
-async fn tools_call_add_node_without_config_or_name_sends_an_empty_object_and_answers_the_engines_name()
- {
+async fn tools_call_add_node_without_a_name_answers_the_engines_name() {
     let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
     let recorded = runtime.recorded_graph_mutations.clone();
 
@@ -384,8 +296,9 @@ async fn a_graph_tool_naming_a_node_by_its_name_or_an_absent_uuid_is_refused_nam
             "`camera` is neither a node's UUID",
         ),
         (
-            "set_node_config",
-            json!({ "stream": STUB_STREAM_ASSET, "node": absent_node_uuid, "config": {}, "mode": "live" }),
+            "set_node_input_value",
+            json!({ "stream": STUB_STREAM_ASSET, "node": absent_node_uuid, "input": "fps",
+                    "value": 60, "mode": "live" }),
             absent_node_uuid,
         ),
     ] {
@@ -407,19 +320,19 @@ fn a_studio_at(position: [i64; 2]) -> streamlib_project_repository::StreamGraphN
     }
 }
 
-/// Each edit carries what its inverse needs, read from the graph as it was; a config or a pin
-/// value set records one `SetNodeInputValue` for each input value it changes.
+/// Each edit carries what its inverse needs, read from the graph as it was; a value set records
+/// one `SetNodeInputValue` carrying the value it replaces.
 #[tokio::test]
 async fn each_node_edit_carries_what_the_node_held_before_it() {
     let runtime = a_stub_holding_a_camera_linked_to_an_effect();
     let recorded = runtime.recorded_graph_mutations.clone();
     for (tool_name, arguments) in [
         (
-            "set_node_config",
-            json!({ "node": STUB_CAMERA_NODE_UUID, "config": { "fps": 60 } }),
+            "set_node_input_value",
+            json!({ "node": STUB_CAMERA_NODE_UUID, "input": "fps", "value": 60 }),
         ),
         (
-            "set_pin_value",
+            "set_node_input_value",
             json!({ "node": STUB_EFFECT_NODE_UUID, "input": "strength", "value": 0.9 }),
         ),
         (

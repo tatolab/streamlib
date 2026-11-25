@@ -148,7 +148,7 @@ To watch what is being published on this machine too, open `camerasource`'s
 
 The credential is in `tatolabd`'s environment. Every other knob is a node's
 config in `streams/main.graph.json`; change it in Tato Studio's inspector or with
-the runtime's `set_node_config` MCP tool, which records the edit in the project's
+the runtime's `set_node_input_value` MCP tool, which records the edit in the project's
 history and applies it to the running stream.
 
 | Knob | Where | Effect |

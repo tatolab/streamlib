@@ -197,6 +197,10 @@ async fn an_agent_builds_a_stream_with_a_variable_from_the_listing_alone() {
             .find(|node_type| node_type.ends_with(&format!(":{short_name}")))
             .unwrap_or_else(|| panic!("`{short_name}` is listed: {listing}"))
     };
+    let set_on = |node: &str, input: &str, value: Value| {
+        json!({ "operation": "set_node_input_value", "stream": stream, "node": node,
+                "input": input, "value": value })
+    };
     let transact = |operations: Value| {
         tool_call_result(
             engine.operations_on_the_loaded_streams(),
@@ -208,9 +212,11 @@ async fn an_agent_builds_a_stream_with_a_variable_from_the_listing_alone() {
     tool_answer(
         &transact(json!([
             { "operation": "add_node", "stream": stream, "as": "set_level", "name": "set_level",
-              "type": listed_type("SetVariable"), "config": { "variable": "level" } },
+              "type": listed_type("SetVariable") },
+            set_on("set_level", "variable", json!("level")),
             { "operation": "add_node", "stream": stream, "as": "get_level", "name": "get_level",
-              "type": listed_type("GetVariable"), "config": { "variable": "level" } },
+              "type": listed_type("GetVariable") },
+            set_on("get_level", "variable", json!("level")),
             { "operation": "connect", "stream": stream,
               "source": { "node": MIXER_NODE_UUID, "port": "level" },
               "target": { "node": "set_level", "port": "value" } },
@@ -246,8 +252,9 @@ async fn an_agent_builds_a_stream_with_a_variable_from_the_listing_alone() {
     tool_answer(
         &transact(json!([
             { "operation": "add_node", "stream": stream, "as": "set_monitor",
-              "type": listed_type("SetVariable"),
-              "config": { "variable": "monitor", "node_reference": { "node": "monitor" } } },
+              "type": listed_type("SetVariable") },
+            set_on("set_monitor", "variable", json!("monitor")),
+            set_on("set_monitor", "node_reference", json!({ "node": "monitor" })),
         ]))
         .await,
     )

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `set_node_type_group` over a real engine: a node type of any source filed under a group of
-//! the project's own, served as its `category` by `list_node_types`, `describe_node_types` and
-//! `list_project_node_types`, put back where its author files it, each one undo; an import's
+//! the project's own, served as its `category` by `list_node_types` and `describe_node_types`,
+//! put back where its author files it, each one undo; an import's
 //! map filing the import's own node types unless the project files them itself; a filing taken
 //! away once its node type is gone; the feed announcing a filing; and the refusals.
 
@@ -112,10 +112,6 @@ async fn a_node_type_of_each_source_is_filed_under_the_projects_group_and_undoes
     assert_eq!(
         listed_filing(&listed, &built_in),
         (json!("Show/Inputs"), json!("project"))
-    );
-    assert_eq!(
-        listed_filing(&list("list_project_node_types").await, "nodes.mix:Mixer"),
-        (json!("Show/Levels"), json!("project"))
     );
     let described = engine
         .the_answer_or_the_refusal_of(
@@ -370,9 +366,10 @@ async fn a_node_type_filed_under_a_group_is_announced_updated_on_the_projects_fe
         )]),
     );
     dispatcher
-        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
-            project_directory: cell.path().to_path_buf(),
-        })
+        .the_node_types_the_project_offers_read_from_source(
+            "list_node_types",
+            cell.path().to_path_buf(),
+        )
         .await
         .expect("the cell's node types are listed");
 

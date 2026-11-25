@@ -589,15 +589,13 @@ impl StreamGraphTransactionExecutor<'_> {
 }
 
 /// Whether `operation` sets a value a running stream does not take back with the graph edits
-/// of a batch: a node's config, input, studio fields or exposed config fields.
+/// of a batch: a node's config, input or studio fields.
 fn sets_a_value_a_take_back_leaves(operation: &StreamGraphOperation) -> bool {
     matches!(
         operation,
         StreamGraphOperation::SetNodeConfig { .. }
-            | StreamGraphOperation::SetPinValue { .. }
             | StreamGraphOperation::SetNodeInputValue { .. }
             | StreamGraphOperation::SetStudioFields { .. }
-            | StreamGraphOperation::SetExposedConfigFields { .. }
     )
 }
 

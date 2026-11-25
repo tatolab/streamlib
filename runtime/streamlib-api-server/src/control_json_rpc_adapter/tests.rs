@@ -278,8 +278,8 @@ async fn each_operation_answers_over_control_what_its_mcp_tool_answers() {
             json!({ "stream": "no such stream", "scale": 0.5 }),
         ),
         (
-            "write_graph_input",
-            json!({ "stream": "no such stream", "input": "gain", "value": 1 }),
+            "set_node_input_value",
+            json!({ "stream": "no such stream", "input": "gain", "value": 1, "mode": "live" }),
         ),
         ("undo", json!({ "project_directory": "relative/rig" })),
         (
@@ -300,10 +300,6 @@ async fn each_operation_answers_over_control_what_its_mcp_tool_answers() {
         ),
         (
             "list_project_files",
-            json!({ "project_directory": "/no/such/project" }),
-        ),
-        (
-            "list_project_node_types",
             json!({ "project_directory": "/no/such/project" }),
         ),
         (
@@ -361,6 +357,35 @@ async fn discover_answers_the_contract_this_runtime_serves() {
             "operations": registered,
         })
     );
+}
+
+/// Each operation contract 4 removed is refused by its name, as an operation the runtime does not
+/// serve.
+///
+/// Mental-revert: keeping any one of them in the operation table answers it instead.
+#[tokio::test]
+async fn a_call_to_each_removed_operation_is_refused_by_name() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    for removed in [
+        "set_node_config",
+        "set_pin_value",
+        "set_exposed_config_fields",
+        "list_project_node_types",
+        "write_studio_view_output",
+        "write_graph_input",
+    ] {
+        let refused = served.control_call(removed, json!({})).await;
+        assert_eq!(refused["error"]["code"], -32601, "{removed}: {refused}");
+        assert_eq!(
+            refused["error"]["data"]["refusal_code"], "operation_not_found",
+            "{removed}: {refused}"
+        );
+        assert_eq!(
+            refused["error"]["message"],
+            format!("the runtime serves no operation named `{removed}`"),
+            "{refused}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -535,11 +560,12 @@ async fn an_engine_error_answers_its_code_over_control() {
     let served = ControlServedWithAnMcpClient::over_the_stub().await;
     let refused = served
         .control_call(
-            "write_graph_input",
+            "set_node_input_value",
             json!({
                 "stream": crate::control_plane_stub_support::STUB_STREAM_ID,
                 "input": "speed",
                 "value": 1.0,
+                "mode": "live",
             }),
         )
         .await;
@@ -547,7 +573,7 @@ async fn an_engine_error_answers_its_code_over_control() {
     assert_eq!(refused["error"]["code"], 2, "{refused}");
     let refusal = &refused["error"]["data"];
     assert_eq!(refusal["refusal_code"], "node_not_found", "{refusal}");
-    assert_eq!(refusal["action"], "write_graph_input", "{refusal}");
+    assert_eq!(refusal["action"], "set_node_input_value", "{refusal}");
     assert_eq!(
         refusal["runtime_words"], refused["error"]["message"],
         "{refused}"

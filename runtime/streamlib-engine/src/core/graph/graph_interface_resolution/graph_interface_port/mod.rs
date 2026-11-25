@@ -217,7 +217,6 @@ impl GraphInterfacePort {
             audio_window: None,
             stream_facts: None,
             values_checked: None,
-            family,
             pin_default: None,
             pin,
             annotations: PinAnnotations::default(),
@@ -236,7 +235,6 @@ impl GraphInterfacePort {
                 GraphInterfacePortDirection::Output => GraphInterfacePortDirectionOnTheWire::Output,
             },
             port: cast_or_as_written(&self.port),
-            family: self.family.map(|family| family.wire_name().to_string()),
             pin_type: self.the_pin_type_it_carries(),
             current_value: None,
         }

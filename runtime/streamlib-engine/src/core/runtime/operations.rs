@@ -283,15 +283,6 @@ pub trait RuntimeOperations: Send + Sync {
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<'_, Result<()>>;
 
-    /// Each of `input_values`, held by a node of type `node_type`, that a `set_node_config`
-    /// replaces, as this stream resolves the type: each naming a setting its config schema
-    /// lists, and every value a node of a type the stream does not describe holds.
-    fn the_settings_a_set_node_config_replaces(
-        &self,
-        node_type: &str,
-        input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<serde_json::Map<String, serde_json::Value>>;
-
     /// The ports a node of type `node_type` has, as this stream resolves the type: the way in,
     /// from outside the engine, to the one lookup of a port by its current name or a name it
     /// had, and to the one order a value held under several of its names is read in.
@@ -321,32 +312,6 @@ pub trait RuntimeOperations: Send + Sync {
         member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
-
-    /// Refuse `value`, saved on input `input` of the node named `node_name` of type `node_type`,
-    /// when that input is the input of an output a panel writes, which holds what a panel writes,
-    /// live, and no saved value; taking a value off is no refusal.
-    fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
-        &self,
-        node_type: &NodeClassImportPath,
-        node_name: &str,
-        input: &str,
-        value: Option<&serde_json::Value>,
-    ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
-
-    /// Whether a `set_node_config` on a node of type `node_type` replaces every setting it
-    /// holds, taking off each it does not name, as this stream resolves the type: its config
-    /// schema lists a setting, or the stream does not describe it.
-    fn a_set_node_config_replaces_every_setting_on(&self, node_type: &NodeClassImportPath) -> bool;
-
-    /// Refuse an exposure of `exposed_config_fields` on the node named `node_name` of type
-    /// `node_type` when a name it lists is no input of the type that takes a wire, naming each;
-    /// an exposure checked records nothing.
-    fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
-        &self,
-        node_name: &str,
-        node_type: &NodeClassImportPath,
-        exposed_config_fields: &[String],
-    ) -> Result<()>;
 
     /// Set each of `sets` live, apart from the graph, when each is on an input its node reads
     /// each run: every value checked before any is set, then each handed to the helper and the

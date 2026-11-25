@@ -147,7 +147,6 @@ pub(super) fn graph_operation_for_the_request(
         function_nodes_of_the_running_stream,
         convert_node_a_link_needs,
         refuse_a_link_judged_before_commit,
-        config_a_node_takes,
     } = what_the_request_reads;
     let label_the_node = |label: Option<String>,
                           node: Uuid,
@@ -164,21 +163,18 @@ pub(super) fn graph_operation_for_the_request(
         StreamGraphAction::ImportGraphGenerator {
             generator,
             name,
-            config,
             label,
             ..
         } => {
-            let given_settings = config.is_some();
             let mut placed = the_fragment_node_a_run_places(
                 run_the_graph_generator,
                 &generator,
                 name.as_deref(),
-                &config.unwrap_or_default(),
+                &Map::new(),
             )?;
-            // A re-import given no settings runs again with the ones the node it refreshes holds:
-            // which node that is, the run's name answers.
+            // A re-import runs again with the settings the node it refreshes holds: which node
+            // that is, the run's name answers.
             if let Some(held) = staged_graph.node_named(&placed.name)
-                && !given_settings
                 && held.fragment.is_some()
                 && held.input_values != placed.input_values
             {
@@ -233,29 +229,24 @@ pub(super) fn graph_operation_for_the_request(
         StreamGraphAction::AddNode {
             node_type,
             name,
-            config,
-            pins,
-            exposed_config_fields,
             studio,
             label,
             ..
         } => {
             let node = Uuid::new_v4();
             label_the_node(label, node, node_by_label)?;
-            let config = config_holding_the_default_name_of_a_graph_port_or_variable(
+            let input_values = config_holding_the_default_name_of_a_graph_port_or_variable(
                 &node_type,
-                config.unwrap_or_default(),
+                Map::new(),
                 staged_graph,
             );
-            let mut input_values = Map::new();
-            fold_into_input_values(&mut input_values, pins.unwrap_or_default(), config);
             Ok(StreamGraphOperation::AddNode {
                 node: StreamGraphDocumentNode {
                     id: node,
                     name: name.unwrap_or_default(),
                     node_type,
                     input_values,
-                    exposed_config_fields: exposed_config_fields.unwrap_or_default(),
+                    exposed_config_fields: Vec::new(),
                     studio: studio
                         .map(StreamGraphNodeStudioFields::from_a_callers_studio)
                         .transpose()?
@@ -292,25 +283,6 @@ pub(super) fn graph_operation_for_the_request(
             Ok(StreamGraphOperation::Disconnect {
                 link: the_link_named(&source, &target, node_by_label)?,
             })
-        }
-        StreamGraphAction::SetNodeConfig { node, config, .. } => {
-            let node = the_node_named(&node, node_by_label)?;
-            let configured = the_node_the_document_holds(staged_graph, node)?;
-            Ok(StreamGraphOperation::set_node_config_of(
-                &configured,
-                config_a_node_takes(&configured.node_type, &configured.input_values)?,
-                config,
-            ))
-        }
-        StreamGraphAction::SetPinValue {
-            node, input, value, ..
-        } => {
-            let node = the_node_named(&node, node_by_label)?;
-            Ok(StreamGraphOperation::set_pin_value_of(
-                &the_node_the_document_holds(staged_graph, node)?,
-                input,
-                value,
-            )?)
         }
         StreamGraphAction::SetNodeInputValue {
             node,
@@ -350,18 +322,6 @@ pub(super) fn graph_operation_for_the_request(
                 node,
                 from: the_node_the_document_holds(staged_graph, node)?.studio,
                 to: Box::new(StreamGraphNodeStudioFields::from_a_callers_studio(studio)?),
-            })
-        }
-        StreamGraphAction::SetExposedConfigFields {
-            node,
-            exposed_config_fields,
-            ..
-        } => {
-            let node = the_node_named(&node, node_by_label)?;
-            Ok(StreamGraphOperation::SetExposedConfigFields {
-                node,
-                from: the_node_the_document_holds(staged_graph, node)?.exposed_config_fields,
-                to: exposed_config_fields,
             })
         }
         StreamGraphAction::AddGroup {

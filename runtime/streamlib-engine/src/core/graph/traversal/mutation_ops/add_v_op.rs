@@ -164,7 +164,7 @@ impl TraversalSourceMut<'_> {
                     return Err(Error::GraphError(format!(
                         "node `{current_name}` cannot be renamed `{cast}`: node `{}`'s config \
                          key `{}` names it by its name",
-                        node.display_name, reference.edge.config_key
+                        node.display_name, reference.config_key
                     )));
                 }
             }

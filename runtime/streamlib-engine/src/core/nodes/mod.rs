@@ -70,7 +70,6 @@ pub(crate) use node_types_of_the_graph_itself::{
 };
 pub(crate) use node_types_one_stream_resolves::{
     HowANodeOfADescribedTypeRuns, chooses_among_the_bundles_its_stream_declares,
-    is_a_natively_compiled_node_type,
 };
 pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
@@ -88,6 +87,5 @@ pub(crate) use project_view_node::{
 };
 pub(crate) use settings_a_config_schema_lists::{
     ConfigFieldDescribedAsASetting, refuse_a_config_field_named_as_an_input_port,
-    the_config_fields_a_node_of_the_type_can_expose, the_config_fields_described_as_settings,
-    the_settings_a_config_schema_lists,
+    the_config_fields_described_as_settings, the_settings_a_config_schema_lists,
 };

@@ -343,7 +343,7 @@ impl NodeDescriptor {
         let each_pin_groups_outputs = self.pin_groups.iter().flat_map(|group| &group.outputs);
         self.outputs.iter().chain(each_pin_groups_outputs).find_map(|output| {
             let declared = output.declared_pin()?;
-            let Some(ImageOutputPortFrameRate::FromConfig { config_key }) =
+            let Some(ImageOutputPortFrameRate::FromSetting { setting: config_key }) =
                 declared.annotations.frame_rate.as_ref()
             else {
                 return None;

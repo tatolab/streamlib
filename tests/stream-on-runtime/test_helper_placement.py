@@ -303,7 +303,7 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
     )
     assert_graph_shows_the_graph_it_was_given(graph, "while the stream runs")
     pool = graph["function_node_pool"]
-    assert len(pool["config"]["carries"]) == 2, pool
+    assert len(pool["input_values"]["carries"]) == 2, pool
     carried_links = [
         link for link in graph["links"] if "carried_through_the_function_node_pool" in link["components"]
     ]
@@ -371,7 +371,7 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
 
     def set_open_live(is_open: bool) -> None:
         local_api.call_tool(
-            "set_pin_value",
+            "set_node_input_value",
             {
                 "stream": stream_id,
                 "node": gate["id"],
@@ -433,7 +433,7 @@ def test_a_crash_moves_a_gate_reading_a_python_class_out_of_its_reader_and_the_r
 
     def set_crash_live(crash: bool) -> None:
         local_api.call_tool(
-            "set_pin_value",
+            "set_node_input_value",
             {"stream": stream_id, "node": gate["id"], "input": "crash", "value": crash, "mode": "live"},
         )
 
@@ -523,7 +523,7 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    (carry,) = graph["function_node_pool"]["config"]["carries"]
+    (carry,) = graph["function_node_pool"]["input_values"]["carries"]
     assert carry["family"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
     levels = levels_read["levels"]
     assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1, (
@@ -702,7 +702,7 @@ def test_a_stream_whose_pool_runs_takes_an_edit_and_stops_and_plays_again(
     assert [link["id"] for link in edited["links"] if link["id"] == carried_link["id"]], (
         f"the edit keeps the carried link: {edited['links']}"
     )
-    assert len(edited["function_node_pool"]["config"]["carries"]) == 1, edited["function_node_pool"]
+    assert len(edited["function_node_pool"]["input_values"]["carries"]) == 1, edited["function_node_pool"]
 
     stopped = local_api.call_tool("stop_playback", {"project_directory": project_directory})
     stop_ended = local_api.stream_action_once_ended(stopped["action"])
@@ -720,7 +720,7 @@ def test_a_stream_whose_pool_runs_takes_an_edit_and_stops_and_plays_again(
     tatolabd.await_clean_exit()
 
     assert_graph_shows_the_graph_it_was_given(played_again, "played again")
-    assert len(played_again["function_node_pool"]["config"]["carries"]) == 1, played_again[
+    assert len(played_again["function_node_pool"]["input_values"]["carries"]) == 1, played_again[
         "function_node_pool"
     ]
     assert len(levels_read_again["levels"]) > 0
@@ -756,7 +756,7 @@ def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool
         f"get a process:\n{tatolabd.recent_stderr()}"
     )
     pool = graph["function_node_pool"]
-    assert pool["config"]["carries"] == [
+    assert pool["input_values"]["carries"] == [
         {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
     ], pool
 
@@ -841,8 +841,8 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
 
     `Lfo -> ScaleAndOffset (Rust) -> Clamp` maps the LFO's -1..1 onto 0..1, and
     `CountsItsOwnCalls (Rust) -> Remap` hands its ordered reader each count once,
-    as `(count + 1) / 2`. Only the two Python classes get a helper, and the
-    catalog and `graph` show each Rust node as `function` / `rust`.
+    as `(count + 1) / 2`. Only the two Python classes get a helper, and
+    `graph` shows each Rust node as `function` / `rust`.
     """
     tatolabd = start_tatolabd_running_stream(rust_function_nodes_in_islands_beside_python_ones)
     stream_id = tatolabd.await_the_latest_stream_loaded()
@@ -850,7 +850,6 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
     counts_read = tatolabd.await_marker("COUNTS_READ_IN_ORDER")
     local_api = tatolabd.local_api_client()
     graph = local_api.call_tool("graph", {"stream": stream_id})
-    node_catalog = local_api.node_catalog(stream_id)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
@@ -881,10 +880,6 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
             assert (graph_node.get("kind"), graph_node.get("language")) == ("function", "rust"), (
                 graph_node
             )
-    catalog_entries = {entry["type"]: entry for entry in node_catalog["nodes"]}
-    for rust_node_type in rust_node_types:
-        entry = catalog_entries[rust_node_type]
-        assert (entry["kind"], entry.get("language")) == ("function", "rust"), entry
     rust_counter = next(node for node in graph["nodes"] if node["name"] == "rust_counter")
     assert rust_counter["components"]["function_node_state"]["calls"] >= counts[-1], (
         rust_counter["components"]

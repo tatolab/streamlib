@@ -25,9 +25,9 @@ use streamlib_project_repository::{
     ProjectTransactionUndoState,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AssetMediaFactsReadOnTheWire, ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire,
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents,
-    RefusedProjectActionOnTheWire,
+    AssetMediaFactsReadOnTheWire, ControlOperationRefusalOnTheWire,
+    ProjectChangeFeedEntryOnTheWire, ProjectTransactionOnTheWire,
+    ProjectTransactionsResourceContents, RefusedProjectActionOnTheWire,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
@@ -62,7 +62,7 @@ pub(crate) struct ProjectActionTheRuntimeRefused<'action> {
     pub(crate) mode: &'static str,
     pub(crate) operations_as_requested: Vec<serde_json::Value>,
     pub(crate) idempotency_key: Option<&'action ProjectActionIdempotencyKey>,
-    pub(crate) refusal: ProjectActionRefusalOnTheWire,
+    pub(crate) refusal: ControlOperationRefusalOnTheWire,
 }
 
 impl ProjectActionsRefusedSinceTheRuntimeStarted {
@@ -435,10 +435,10 @@ mod tests {
 
     use super::*;
 
-    fn a_refusal_of(runtime_words: &str) -> ProjectActionRefusalOnTheWire {
-        ProjectActionRefusalOnTheWire {
+    fn a_refusal_of(runtime_words: &str) -> ControlOperationRefusalOnTheWire {
+        ControlOperationRefusalOnTheWire {
             refused_operation_index: Some(0),
-            ..ProjectActionRefusalOnTheWire::of_the_action(
+            ..ControlOperationRefusalOnTheWire::of_the_action(
                 "remove_node",
                 ControlOperationRefusalCode::Refused,
                 runtime_words,

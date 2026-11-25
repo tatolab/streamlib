@@ -112,9 +112,9 @@ async fn a_graph_input_added_with_no_port_takes_the_next_free_input_name() {
     let project = a_project_whose_main_stream_holds_one_source();
     engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let add_a_records_graph_input = || {
+    let add_a_graph_input = || {
         json!({ "operation": "add_node", "stream": stream_asset,
-                "type": "tatolab.stream:GraphInput", "config": { "family": "records" } })
+                "type": "tatolab.stream:GraphInput" })
     };
     let add_the_graph_inputs = |operations: Vec<Value>| {
         tool_call_result(
@@ -124,15 +124,9 @@ async fn a_graph_input_added_with_no_port_takes_the_next_free_input_name() {
         )
     };
 
-    tool_answer(
-        &add_the_graph_inputs(vec![
-            add_a_records_graph_input(),
-            add_a_records_graph_input(),
-        ])
-        .await,
-    )
-    .expect("both Inputs are added");
-    tool_answer(&add_the_graph_inputs(vec![add_a_records_graph_input()]).await)
+    tool_answer(&add_the_graph_inputs(vec![add_a_graph_input(), add_a_graph_input()]).await)
+        .expect("both Inputs are added");
+    tool_answer(&add_the_graph_inputs(vec![add_a_graph_input()]).await)
         .expect("a third Input is added");
 
     let kept = project.the_graph_document_of("main");
@@ -147,11 +141,11 @@ async fn a_graph_input_added_with_no_port_takes_the_next_free_input_name() {
     assert_eq!(ports_declared, ["input1", "input2", "input3"], "{kept}");
 }
 
-/// A `GraphInput` or `GraphOutput` added with no family runs nothing and renders no family
-/// until a link reaches it, then takes the family of the port linked to it, its config left as
-/// drawn.
+/// A `GraphInput` or `GraphOutput` added with no pin type runs nothing and renders no pin type
+/// until a link reaches it, then takes the pin type of the port linked to it, its input values
+/// left as drawn.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_interface_node_added_with_no_family_takes_the_family_of_its_first_link() {
+async fn an_interface_node_added_with_no_pin_type_takes_the_pin_type_of_its_first_link() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
@@ -173,15 +167,15 @@ async fn an_interface_node_added_with_no_family_takes_the_family_of_its_first_li
         ]))
         .await,
     )
-    .expect("interface nodes naming no family are added");
+    .expect("interface nodes naming no pin type are added");
     let live = engine.the_live_graph_of(&stream_id);
     let waiting_input = the_node_named(&live, "graphinput");
     assert_eq!(
         waiting_input["components"]["graph_interface"],
-        json!({ "direction": "input", "port": "input1", "family": null }),
+        json!({ "direction": "input", "port": "input1" }),
         "{waiting_input}"
     );
-    assert_eq!(waiting_input["config"], json!({ "port": "input1" }));
+    assert_eq!(waiting_input["input_values"], json!({ "port": "input1" }));
 
     let the_graph_output_in = |graph: &Value| -> Value {
         graph["nodes"]
@@ -207,17 +201,17 @@ async fn an_interface_node_added_with_no_family_takes_the_family_of_its_first_li
     assert_eq!(
         linked_output["components"]["graph_interface"],
         json!({
-            "direction": "output", "port": "output1", "family": "image",
+            "direction": "output", "port": "output1",
             "pin_type": { "type": "texture" },
         }),
         "{linked_output}"
     );
-    assert_eq!(linked_output["config"], json!({ "port": "output1" }));
+    assert_eq!(linked_output["input_values"], json!({ "port": "output1" }));
 }
 
 /// A top-level `GraphInput` naming its family that a transaction adds, renames, gives another
 /// port, moves or takes out renders as one loaded from its document does, with no reload: its
-/// interface with the value it carries, and its `value` output of the family it declares.
+/// interface with the value it carries.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_graph_input_a_transaction_adds_renames_and_takes_out_renders_its_interface_with_no_reload()
  {
@@ -232,6 +226,10 @@ async fn a_graph_input_a_transaction_adds_renames_and_takes_out_renders_its_inte
             json!({ "author": an_agent_named("alice"), "operations": operations }),
         )
     };
+    let set_on_t = |input: &str, value: Value| {
+        json!({ "operation": "set_node_input_value", "stream": stream_asset,
+                "node": "t", "input": input, "value": value })
+    };
     let the_graph_input_in = |graph: &Value| -> Option<Value> {
         graph["nodes"]
             .as_array()
@@ -244,27 +242,25 @@ async fn a_graph_input_a_transaction_adds_renames_and_takes_out_renders_its_inte
     tool_answer(
         &transact(json!([
             { "operation": "add_node", "stream": stream_asset,
-              "type": "tatolab.stream:GraphInput", "as": "t",
-              "config": { "port": "tint", "family": "array",
-                          "default": [1, 0.5, 0.25], "range": [0, 1] } },
+              "type": "tatolab.stream:GraphInput", "as": "t" },
+            set_on_t("port", json!("tint")),
+            set_on_t("family", json!("array")),
+            set_on_t("default", json!([1, 0.5, 0.25])),
+            set_on_t("range", json!([0, 1])),
         ]))
         .await,
     )
     .expect("the Input is added");
     let tint = the_graph_input_in(&engine.the_live_graph_of(&stream_id))
         .expect("the graph holds the added GraphInput");
+    let interface = &tint["components"]["graph_interface"];
     assert_eq!(
-        tint["components"]["graph_interface"],
-        json!({
-            "direction": "input",
-            "port": "tint",
-            "family": "array",
-            "current_value": [1, 0.5, 0.25]
-        }),
-        "{tint}"
-    );
-    assert_eq!(
-        tint["ports"]["outputs"][0]["family"]["family"], "array",
+        (
+            &interface["direction"],
+            &interface["port"],
+            &interface["current_value"]
+        ),
+        (&json!("input"), &json!("tint"), &json!([1, 0.5, 0.25])),
         "{tint}"
     );
 
@@ -291,14 +287,13 @@ async fn a_graph_input_a_transaction_adds_renames_and_takes_out_renders_its_inte
 
     tool_answer(
         &transact(json!([
-            { "operation": "set_node_config", "stream": stream_asset, "node": input_node,
-              "config": { "port": "hue", "family": "array",
-                          "default": [1, 0.5, 0.25], "range": [0, 1] } },
+            { "operation": "set_node_input_value", "stream": stream_asset,
+              "node": input_node, "input": "port", "value": "hue" },
         ]))
         .await,
     )
-    .expect("the Input's config names another port");
-    let hue = the_input_after("its config names another port");
+    .expect("the Input names another port");
+    let hue = the_input_after("it names another port");
     assert_eq!(hue["components"]["graph_interface"]["port"], "hue", "{hue}");
 
     tool_answer(
@@ -619,7 +614,11 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
             .map(|key| key.as_str()),
         Some("add-sink-gesture")
     );
-    assert_eq!(undone["format_version"], json!(3), "{undone}");
+    assert_eq!(
+        undone["format_version"],
+        json!(streamlib_project_repository::PROJECT_TRANSACTION_FORMAT_VERSION),
+        "{undone}"
+    );
     assert_eq!(undone["idempotency_key"], "undo-gesture", "{undone}");
     assert!(
         undone["applied_at"]

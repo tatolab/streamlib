@@ -22,11 +22,11 @@ import { DISCOVERED, startALocalApiThatAnswersOnlyWhenTold, untilTrue } from "./
 
 const CLIENT_NAME = "contract mismatch test";
 
-/** The record a runtime of revision `runtimeRevision` refuses this client with, naming `olderSide`. */
-function aMismatch(olderSide, runtimeRevision) {
+/** The record a runtime of contract `runtimeVersion` and revision `runtimeRevision` refuses this client with, naming `olderSide`. */
+function aMismatch(olderSide, runtimeVersion, runtimeRevision) {
   return {
     client_contract_version: CONTROL_CONTRACT_VERSION,
-    runtime_contract_version: CONTROL_CONTRACT_VERSION,
+    runtime_contract_version: runtimeVersion,
     client_contract_revision: CONTROL_CONTRACT_REVISION,
     runtime_contract_revision: runtimeRevision,
     older_side: olderSide,
@@ -34,7 +34,7 @@ function aMismatch(olderSide, runtimeRevision) {
   };
 }
 
-const THE_RUNTIME_IS_OLDER = aMismatch("runtime", CONTROL_CONTRACT_REVISION - 1);
+const THE_RUNTIME_IS_OLDER = aMismatch("runtime", CONTROL_CONTRACT_VERSION - 1, 0);
 
 function aMismatchAnswer(requestId, mismatch) {
   return JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, message: "refused", data: mismatch } });
@@ -101,7 +101,7 @@ test("a POST refused with the mismatch as error 3's data rejects with the same t
 });
 
 test("`discover` refused with the mismatch rejects with the same typed mismatch, naming the client older when it is", () => {
-  const theClientIsOlder = { ...aMismatch("client", CONTROL_CONTRACT_REVISION), runtime_contract_version: CONTROL_CONTRACT_VERSION + 1, runtime_contract_revision: 0 };
+  const theClientIsOlder = aMismatch("client", CONTROL_CONTRACT_VERSION + 1, 0);
   assert.throws(
     () => controlAnswerResult("discover", JSON.parse(aMismatchAnswer(1, theClientIsOlder))),
     (refusal) => {

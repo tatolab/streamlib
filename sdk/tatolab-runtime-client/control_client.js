@@ -78,14 +78,6 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("disconnect", params, callOptions);
   }
 
-  set_node_config(params, callOptions) {
-    return this.call("set_node_config", params, callOptions);
-  }
-
-  set_pin_value(params, callOptions) {
-    return this.call("set_pin_value", params, callOptions);
-  }
-
   set_node_input_value(params, callOptions) {
     return this.call("set_node_input_value", params, callOptions);
   }
@@ -96,10 +88,6 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
 
   set_studio_fields(params, callOptions) {
     return this.call("set_studio_fields", params, callOptions);
-  }
-
-  set_exposed_config_fields(params, callOptions) {
-    return this.call("set_exposed_config_fields", params, callOptions);
   }
 
   add_group(params, callOptions) {
@@ -286,10 +274,6 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("check_project_code", params, callOptions);
   }
 
-  list_project_node_types(params, callOptions) {
-    return this.call("list_project_node_types", params, callOptions);
-  }
-
   list_pin_types(params, callOptions) {
     return this.call("list_pin_types", params, callOptions);
   }
@@ -312,14 +296,6 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
 
   list_project_node_ui_elements(params, callOptions) {
     return this.call("list_project_node_ui_elements", params, callOptions);
-  }
-
-  write_studio_view_output(params, callOptions) {
-    return this.call("write_studio_view_output", params, callOptions);
-  }
-
-  write_graph_input(params, callOptions) {
-    return this.call("write_graph_input", params, callOptions);
   }
 
   import_project(params, callOptions) {

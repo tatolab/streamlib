@@ -308,8 +308,8 @@ mod tests {
         let camera_video = output_port(
             "video",
             PortFamilyDeclaration {
-                frame_rate: Some(ImageOutputPortFrameRate::FromConfig {
-                    config_key: "frames_per_second".into(),
+                frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
+                    setting: "frames_per_second".into(),
                 }),
                 ..PortFamilyDeclaration::of_family(PortFamily::Image)
             },
@@ -367,8 +367,8 @@ mod tests {
             StreamFactsOfOutputPorts::as_declared_by(&[stated], None).current_facts_of("video"),
             image_facts_at(30_000, 1_001)
         );
-        let from_a_setting = port_stating(ImageOutputPortFrameRate::FromConfig {
-            config_key: "frames_per_second".into(),
+        let from_a_setting = port_stating(ImageOutputPortFrameRate::FromSetting {
+            setting: "frames_per_second".into(),
         });
         assert_eq!(
             StreamFactsOfOutputPorts::as_declared_by(
@@ -388,8 +388,8 @@ mod tests {
         let port = PortInfo {
             annotations: crate::core::graph::PortAnnotations(
                 crate::core::descriptors::PinAnnotations {
-                    frame_rate: Some(ImageOutputPortFrameRate::FromConfig {
-                        config_key: "fps".into(),
+                    frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
+                        setting: "fps".into(),
                     }),
                     ..Default::default()
                 },

@@ -518,16 +518,16 @@ fn clearing_a_count_whose_default_leaves_out_a_linked_slot_is_refused() {
 fn a_later_slots_value_renders_under_pins_and_no_config_field() {
     register_the_pin_group_fixture_node_types();
     let compiler = Compiler::new();
-    let older_keys = compiler.scope(|graph, _tx| {
-        crate::core::json_schema::OlderGraphKeysOfANodeType::of(
+    let inputs_and_settings = compiler.scope(|graph, _tx| {
+        crate::core::json_schema::InputsAndSettingsOfANodeType::of(
             graph.node_types_this_stream_resolves(),
             &class_path(LAYER_MIXER),
         )
     });
 
-    assert!(!older_keys.renders_under_config("layers.2.layer"));
+    assert!(!inputs_and_settings.is_a_settings_value("layers.2.layer"));
     assert!(
-        older_keys.renders_under_config("layers.2.gain"),
+        inputs_and_settings.is_a_settings_value("layers.2.gain"),
         "no pin of the slot is so named"
     );
 }

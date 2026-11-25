@@ -3,14 +3,13 @@
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CloseViewerToolResult, CreateNodeFileToolResult, CreateNodeUiElementToolResult,
-    ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
-    ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, OpenViewerToolResult,
-    ProjectCodeCheckResult, ProjectFileTransactionToolResult, ReadProjectFileToolResult,
-    WriteStudioViewOutputToolResult,
+    ListProjectFilesToolResult, ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult,
+    OpenViewerToolResult, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
+    ReadProjectFileToolResult,
 };
 
+use super::EVERY_SURFACE;
 use super::worked_examples;
-use super::{EVERY_SURFACE, ListNodeTypes, SetNodeInputValue};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
     ControlOperationExample, ControlOperationExposure, ControlOperationGroup,
@@ -18,9 +17,8 @@ use crate::control_operation::{
 };
 use crate::control_operation_requests::{
     CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, CreateNodeUiElementRequest,
-    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest,
-    ListProjectViewsRequest, OpenViewerRequest, ReadProjectFileRequest, WriteProjectFileRequest,
-    WriteStudioViewOutputRequest,
+    ListProjectFilesRequest, ListProjectNodeUiElementsRequest, ListProjectViewsRequest,
+    OpenViewerRequest, ReadProjectFileRequest, WriteProjectFileRequest,
 };
 
 /// `list_project_files`: list the files of a project that are not assets.
@@ -70,7 +68,7 @@ impl ControlOperation for CreateNodeFile {
     const METHOD_NAME: &'static str = "create_node_file";
     const ONE_LINE_DOC: &'static str =
         "Create a node file in a project from the template, as one transaction.";
-    const AGENT_USAGE_NOTE: &'static str = "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.";
+    const AGENT_USAGE_NOTE: &'static str = "Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
@@ -130,7 +128,7 @@ impl ControlOperation for CheckProjectCode {
     const METHOD_NAME: &'static str = "check_project_code";
     const ONE_LINE_DOC: &'static str =
         "Check a project's code on disk without running a stream, answering each finding as data.";
-    const AGENT_USAGE_NOTE: &'static str = "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, or a retired name a module imports, is an `error` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.";
+    const AGENT_USAGE_NOTE: &'static str = "Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as the project's source reads it, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as the project's source reads it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as `list_node_types` names it among `unreadable_modules`, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When the project's source is not read, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, or a retired name a module imports, is an `error` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
@@ -139,26 +137,6 @@ impl ControlOperation for CheckProjectCode {
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ListedAsATool;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_PROJECT_CODE);
-}
-
-/// `list_project_node_types`: list the node types a project offers, from its own node files and the
-/// packages it installs.
-pub struct ListProjectNodeTypes;
-
-impl ControlOperation for ListProjectNodeTypes {
-    type Request = ListProjectNodeTypesRequest;
-    type Result = ListProjectNodeTypesToolResult;
-    const METHOD_NAME: &'static str = "list_project_node_types";
-    const ONE_LINE_DOC: &'static str = "List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.";
-    const AGENT_USAGE_NOTE: &'static str = "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(ListNodeTypes::METHOD_NAME);
 }
 
 /// `list_project_views`: list the Tato Studio views a project brings.
@@ -200,26 +178,6 @@ impl ControlOperation for ListProjectNodeUiElements {
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> =
         Some(worked_examples::LIST_PROJECT_NODE_UI_ELEMENTS);
-}
-
-/// `write_studio_view_output`: write a value a Tato Studio view produced onto its node's output
-/// port.
-pub struct WriteStudioViewOutput;
-
-impl ControlOperation for WriteStudioViewOutput {
-    type Request = WriteStudioViewOutputRequest;
-    type Result = WriteStudioViewOutputToolResult;
-    const METHOD_NAME: &'static str = "write_studio_view_output";
-    const ONE_LINE_DOC: &'static str = "Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, the view's own UUID, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. Each Array, Channels or Records output of a view node has an input of its name, a setting read each run that takes no wire and holds no saved value, whose value the node publishes on the output; this call sets that input. Every write is published, stamped with stream time now, the same value written again as much as a new one, a Channels block starting where the last one written ended. A write is live data: the last value written is what a reader keeps, and a reader that connects later reads it, many panels may write one node and the last write wins, nothing is recorded in the graph document or the project's history, and the input returns to no value at Stop; a saved value on that input, by a `commit` set or an `add_node`'s `pins`, is refused, and one a graph document holds is dropped as the stream loads, with a warning naming the node and the input. `graph` renders the value as the input's live value. An Image or Packets output, which has no such input, is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; a node with no such output; `null`, which sets no value; and a value its port's family does not take, as `input_value_not_valid` at `/value`. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming the view node as `node` and the output as `input`.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::View;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `open_viewer`: open a viewer of a node's output port, held open for the connection that opened

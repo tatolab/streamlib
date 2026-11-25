@@ -1,0 +1,37 @@
+{
+  "recorded_at_streamlib_commit": "beccbbe2911bf8545659a7a16a3a470179203072",
+  "commits": [
+    {
+      "message": "open_project rig",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\"stream\":\"main\",\"asset\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"nodes\":[{\"id\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"name\":\"mixer\",\"type\":\"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\",\"input_values\":{\"gain\":0.25,\"frame_width\":640}}],\"links\":[]}",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    },
+    {
+      "message": "add_node 7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c tone\n\nTatolab-Transaction: {\"format_version\":3,\"transaction\":\"b03a225a-df15-40a6-a152-c3ceffd5de13\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"cc288bf19c82a54613c31d8420eb59019277ed3f\",\"operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"add_node\",\"node\":{\"id\":\"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\"name\":\"tone\",\"type\":\"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\",\"input_values\":{\"gain\":0.5,\"frame_width\":320},\"exposed_config_fields\":[\"frame_width\"]}}],\"inverse_operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"remove_node\",\"node\":{\"id\":\"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\"name\":\"tone\",\"type\":\"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\",\"input_values\":{\"gain\":0.5,\"frame_width\":320},\"exposed_config_fields\":[\"frame_width\"]}}],\"actions\":[{\"operation\":\"add_node\",\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"type\":\"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\",\"name\":\"tone\",\"config\":{\"frame_width\":320},\"pins\":{\"gain\":0.5},\"exposed_config_fields\":[\"frame_width\"]}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"id\": \"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\n      \"input_values\": {\n        \"frame_width\": 640,\n        \"gain\": 0.25\n      },\n      \"name\": \"mixer\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\"\n    },\n    {\n      \"exposed_config_fields\": [\n        \"frame_width\"\n      ],\n      \"id\": \"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\n      \"input_values\": {\n        \"frame_width\": 320,\n        \"gain\": 0.5\n      },\n      \"name\": \"tone\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    },
+    {
+      "message": "set_exposed_config_fields 6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\n\nTatolab-Transaction: {\"format_version\":3,\"transaction\":\"f469bfdb-6d7e-4080-92c4-a53b84699692\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"8c3944a677d42cdda4bce2b7a776a9117a25da57\",\"operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_exposed_config_fields\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"from\":[],\"to\":[\"frame_width\"]}],\"inverse_operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_exposed_config_fields\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"from\":[\"frame_width\"],\"to\":[]}],\"actions\":[{\"operation\":\"set_exposed_config_fields\",\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"exposed_config_fields\":[\"frame_width\"]}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"exposed_config_fields\": [\n        \"frame_width\"\n      ],\n      \"id\": \"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\n      \"input_values\": {\n        \"frame_width\": 640,\n        \"gain\": 0.25\n      },\n      \"name\": \"mixer\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\"\n    },\n    {\n      \"exposed_config_fields\": [\n        \"frame_width\"\n      ],\n      \"id\": \"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\n      \"input_values\": {\n        \"frame_width\": 320,\n        \"gain\": 0.5\n      },\n      \"name\": \"tone\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    },
+    {
+      "message": "set_node_config 6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\n\nTatolab-Transaction: {\"format_version\":3,\"transaction\":\"22c0babd-644c-4ba1-8b73-6a1e07696a33\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"3510327096caf9ff34cd962e21b2f327c36b6f1b\",\"operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_node_config\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"from\":{\"gain\":0.25,\"frame_width\":640},\"to\":{\"gain\":0.8,\"frame_width\":1280}}],\"inverse_operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_node_config\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"from\":{\"gain\":0.8,\"frame_width\":1280},\"to\":{\"gain\":0.25,\"frame_width\":640}}],\"actions\":[{\"operation\":\"set_node_config\",\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"config\":{\"gain\":0.8,\"frame_width\":1280}}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"exposed_config_fields\": [\n        \"frame_width\"\n      ],\n      \"id\": \"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\n      \"input_values\": {\n        \"frame_width\": 1280,\n        \"gain\": 0.8\n      },\n      \"name\": \"mixer\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\"\n    },\n    {\n      \"exposed_config_fields\": [\n        \"frame_width\"\n      ],\n      \"id\": \"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\n      \"input_values\": {\n        \"frame_width\": 320,\n        \"gain\": 0.5\n      },\n      \"name\": \"tone\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_test_node::InputValueTestNode\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    }
+  ]
+}

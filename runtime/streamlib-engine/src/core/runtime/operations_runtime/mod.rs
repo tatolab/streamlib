@@ -662,22 +662,6 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             .the_pin_groups_of(node_type)
     }
 
-    fn the_settings_a_set_node_config_replaces(
-        &self,
-        node_type: &str,
-        input_values: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<serde_json::Map<String, serde_json::Value>> {
-        let node_type = NodeClassImportPath::new(node_type)
-            .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")))?;
-        Ok(
-            crate::core::graph::input_values::the_settings_a_set_node_config_replaces(
-                self.node_types_this_stream_resolves(),
-                &node_type,
-                input_values,
-            ),
-        )
-    }
-
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
         node_type: &NodeClassImportPath,
@@ -687,8 +671,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         member: Option<&str>,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
-        self.refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
-            node_type, node_name, input, value,
+        crate::core::nodes::refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+            self.node_types_this_stream_resolves(),
+            node_type,
+            node_name,
+            input,
+            value,
         )?;
         let node = crate::core::graph::input_values::NodeAnInputValueIsSetOn {
             name: node_name,
@@ -704,48 +692,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
-    fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
-        &self,
-        node_type: &NodeClassImportPath,
-        node_name: &str,
-        input: &str,
-        value: Option<&serde_json::Value>,
-    ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
-        crate::core::nodes::refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
-            self.node_types_this_stream_resolves(),
-            node_type,
-            node_name,
-            input,
-            value,
-        )
-    }
-
-    fn a_set_node_config_replaces_every_setting_on(&self, node_type: &NodeClassImportPath) -> bool {
-        crate::core::graph::input_values::a_set_node_config_replaces_every_setting_on(
-            self.node_types_this_stream_resolves(),
-            node_type,
-        )
-    }
-
     fn set_input_values_live(
         &self,
         sets: &[InputValueToSetLive],
     ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal> {
         LoadedStreamInThisRuntime::set_input_values_live(self, sets)
-    }
-
-    fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
-        &self,
-        node_name: &str,
-        node_type: &NodeClassImportPath,
-        exposed_config_fields: &[String],
-    ) -> Result<()> {
-        crate::core::graph::input_values::refuse_an_exposure_naming_no_input_that_takes_a_wire(
-            self.node_types_this_stream_resolves(),
-            node_name,
-            node_type,
-            exposed_config_fields,
-        )
     }
 
     fn refuse_a_node_a_live_add_would_refuse(

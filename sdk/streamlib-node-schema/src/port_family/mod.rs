@@ -99,21 +99,29 @@ pub enum OutputPortDeclaredNames {
 }
 
 /// The sample rate a Channels output states, written on the class or read
-/// from its node's config.
+/// from one of its node's settings, which the wire names `from_setting`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleRate {
     Stated(u32),
-    FromConfig { config_key: String },
+    #[serde(alias = "from_config")]
+    FromSetting {
+        #[serde(alias = "config_key")]
+        setting: String,
+    },
 }
 
 /// The frame rate an Image output states, written on the class or read from
-/// its node's config.
+/// one of its node's settings, which the wire names `from_setting`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOutputPortFrameRate {
     Stated(crate::ImageStreamFrameRate),
-    FromConfig { config_key: String },
+    #[serde(alias = "from_config")]
+    FromSetting {
+        #[serde(alias = "config_key")]
+        setting: String,
+    },
 }
 
 /// The sample type of a Channels output.
@@ -460,7 +468,7 @@ pub fn output_port_frame_rate_resolved_against_config(
     let config_key = match frame_rate {
         None => return Ok(None),
         Some(ImageOutputPortFrameRate::Stated(frame_rate)) => return Ok(Some(*frame_rate)),
-        Some(ImageOutputPortFrameRate::FromConfig { config_key }) => config_key,
+        Some(ImageOutputPortFrameRate::FromSetting { setting }) => setting,
     };
     let refusal = |held: &serde_json::Value| {
         format!(

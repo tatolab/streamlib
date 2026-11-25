@@ -19,8 +19,7 @@ use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 use crate::core::compiler::compiler_ops::python_node_declaration::read_the_settings_a_graph_generator_promotes;
 use crate::core::descriptors::PortDescriptor;
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PORT_CONFIG_KEY, GraphInterfaceAsDrawn,
-    GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
+    GraphInterfaceAsDrawn, GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
     is_a_graph_interface_node_type, the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_snapshot::{
@@ -35,8 +34,8 @@ use crate::core::graph::{
 };
 use crate::core::json_schema::{
     GraphFragmentOutput, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire, GraphNodeOutput,
-    GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
-    LinkStateOutput, OlderGraphKeysOfANodeType, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
+    GraphNodePortsOnTheWire, GraphResponse, LinkOutput, LinkPortRefOutput, LinkStateOutput,
+    PinLinkMarksOnTheWire, redraw_a_node_over_the_values_its_inputs_hold,
 };
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, the_setting_of_a_placed_stream_named,
@@ -426,7 +425,6 @@ impl GraphFragmentAsDrawn {
         &self,
         running_nodes_by_cast_name: &mut HashMap<String, GraphNodeOutput>,
         running_links: &[LinkOutput],
-        node_types: &NodeTypesOneStreamResolves,
     ) -> GraphNodeOutput {
         let stored = self.node.fragment.clone().unwrap_or_default();
         let mut nodes = Vec::new();
@@ -438,12 +436,10 @@ impl GraphFragmentAsDrawn {
                     .iter()
                     .find(|held| held.path_of_names == name_it_runs_under)
                 {
-                    Some(held) => held.rendered_as_a_container(
-                        running_nodes_by_cast_name,
-                        running_links,
-                        node_types,
-                    ),
-                    None => rendered_as_stored(node, node_types),
+                    Some(held) => {
+                        held.rendered_as_a_container(running_nodes_by_cast_name, running_links)
+                    }
+                    None => rendered_as_stored(node),
                 }
             } else if let Some(interface_node) = self
                 .interface_as_drawn
@@ -453,8 +449,8 @@ impl GraphFragmentAsDrawn {
             } else {
                 let mut running = running_nodes_by_cast_name
                     .remove(&cast_or_as_written(&name_it_runs_under))
-                    .unwrap_or_else(|| rendered_as_stored(node, node_types));
-                redraw_a_node_over_its_pins(&mut running, &node.input_values);
+                    .unwrap_or_else(|| rendered_as_stored(node));
+                redraw_a_node_over_the_values_its_inputs_hold(&mut running, &node.input_values);
                 running
             };
             rendered.name = cast_or_as_written(&node.name);
@@ -514,12 +510,6 @@ impl GraphFragmentAsDrawn {
                 GraphInterfacePortDirection::Output => outputs.push(port),
             }
         }
-        let values = InputValuesRendered::split_by(
-            &OlderGraphKeysOfANodeType::of_the_input_ports(
-                inputs.iter().map(|port| port.name.clone()),
-            ),
-            &self.node.input_values,
-        );
         if self.node.node_type.as_str() == STREAM_FRAGMENT_NODE_TYPE {
             inputs.splice(
                 0..0,
@@ -548,12 +538,8 @@ impl GraphFragmentAsDrawn {
             kind: Some(GraphNodeKindOnTheWire::Fragment),
             language: None,
             name: cast_or_as_written(&self.node.name),
-            config: Some(values.config),
-            config_checksum: values.config_checksum,
             ports: GraphNodePortsOnTheWire { inputs, outputs },
-            input_values: values.input_values,
-            pins: values.pins,
-            exposed_config_fields: self.node.exposed_config_fields.clone(),
+            input_values: self.node.input_values.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
             components: GraphNodeComponentsOnTheWire::default(),
@@ -677,11 +663,7 @@ impl GraphFragmentsAsDrawn {
     /// Render each fragment into `graph_response`, a render of the graph the runtime runs: its
     /// nodes and every link with an end on one taken out, and the fragment put back where it
     /// was drawn as one container holding them, with each drawn link to it.
-    pub fn render_into(
-        &self,
-        graph_response: &mut GraphResponse,
-        node_types: &NodeTypesOneStreamResolves,
-    ) {
+    pub fn render_into(&self, graph_response: &mut GraphResponse) {
         if self.fragments.is_empty() {
             return;
         }
@@ -708,11 +690,8 @@ impl GraphFragmentsAsDrawn {
             true
         });
         for fragment in &self.fragments {
-            let container = fragment.rendered_as_a_container(
-                &mut running_nodes_by_cast_name,
-                &running_links,
-                node_types,
-            );
+            let container =
+                fragment.rendered_as_a_container(&mut running_nodes_by_cast_name, &running_links);
             let position = fragment
                 .position_among_its_levels_nodes
                 .min(graph_response.nodes.len());
@@ -825,29 +804,8 @@ fn the_settings_its_generator_promotes(
     })
 }
 
-/// A node no running node stands for, rendered with its spec keys alone: its input values split
-/// as its type takes them, or for a fragment node as the interface its fragment draws declares.
-pub(crate) fn rendered_as_stored(
-    node: &GraphSnapshotNode,
-    node_types: &NodeTypesOneStreamResolves,
-) -> GraphNodeOutput {
-    let older_keys = match &node.fragment {
-        Some(fragment) => OlderGraphKeysOfANodeType::of_the_input_ports(
-            fragment
-                .nodes
-                .iter()
-                .filter(|inner| inner.node_type.as_str() == GRAPH_INPUT_NODE_TYPE)
-                .filter_map(|graph_input| {
-                    graph_input
-                        .input_values
-                        .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)
-                        .and_then(serde_json::Value::as_str)
-                        .map(cast_or_as_written)
-                }),
-        ),
-        None => OlderGraphKeysOfANodeType::of(node_types, &node.node_type),
-    };
-    let values = InputValuesRendered::split_by(&older_keys, &node.input_values);
+/// A node no running node stands for, rendered with its spec keys alone.
+pub(crate) fn rendered_as_stored(node: &GraphSnapshotNode) -> GraphNodeOutput {
     GraphNodeOutput {
         id: node
             .id
@@ -857,15 +815,11 @@ pub(crate) fn rendered_as_stored(
         kind: None,
         language: None,
         name: cast_or_as_written(&node.name),
-        config: Some(values.config),
-        config_checksum: values.config_checksum,
         ports: GraphNodePortsOnTheWire {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },
-        input_values: values.input_values,
-        pins: values.pins,
-        exposed_config_fields: node.exposed_config_fields.clone(),
+        input_values: node.input_values.clone(),
         studio: node.studio.clone(),
         inputs_waiting_for_a_value: Vec::new(),
         components: GraphNodeComponentsOnTheWire::default(),

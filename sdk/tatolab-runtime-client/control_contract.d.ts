@@ -80,7 +80,7 @@ export type {
  * A refused call as every door answers it: the `data` of a JSON-RPC error, and both
  * `structuredContent.refusal` and the text of a failing tool call.
  */
-export interface ProjectActionRefusalOnTheWire {
+export interface ControlOperationRefusalOnTheWire {
   /**
    * What kind of refusal it is, for a caller to branch on; `refused` when a runtime that
    * answers no code sent it.
@@ -103,9 +103,9 @@ export interface ProjectActionRefusalOnTheWire {
    */
   refused_link?: RefusedGraphLinkOnTheWire | null;
   /**
-   * The node's input or config field the refused operation names.
+   * The node's input the refused operation names.
    */
-  refused_field?: string | null;
+  refused_input?: string | null;
   /**
    * The JSON pointer, into the params the caller sent, of the value refused; absent when no
    * one value inside them is.
@@ -133,7 +133,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "link_streams_into_a_setting" | "link_from_a_function_node_into_a_setting" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "extension_sdk_not_found" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "link_streams_into_a_setting" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "extension_sdk_not_found" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -819,15 +819,6 @@ export interface GraphNodeOnTheWire {
    */
   name: string;
   /**
-   * The input values a node type not yet typed takes whole as its config, the rest of
-   * `input_values` being its `pins`. Served for a client that reads no `input_values`.
-   */
-  config?: unknown;
-  /**
-   * A checksum of `config`, for change detection.
-   */
-  config_checksum?: number | bigint;
-  /**
    * Every input port and output port.
    */
   ports: GraphNodePortsOnTheWire;
@@ -837,15 +828,6 @@ export interface GraphNodeOnTheWire {
    * `value`.
    */
   input_values?: { [key: string]: unknown };
-  /**
-   * The input values that are no config field, by input name; empty when none is saved.
-   * Served for a client that reads no `input_values`.
-   */
-  pins?: { [key: string]: unknown };
-  /**
-   * The config fields the node takes as inputs too, each an input of the field's name.
-   */
-  exposed_config_fields?: Array<string>;
   /**
    * What the studio draws the node with: canvas position, group, comment, colour.
    */
@@ -929,20 +911,15 @@ export interface GraphNodePortOnTheWire {
    */
   audio_window?: unknown;
   /**
-   * The stream facts this output port carries now, with the name of the port's pin type as
-   * `type` on a port whose pin type they describe; absent on a port that states none.
+   * The stream facts this output port carries now, tagged by the name of the port's pin type
+   * as `type`; absent on a port that states none, and on one whose pin type they do not
+   * describe.
    */
   stream_facts?: unknown;
   /**
    * `false` on a port whose values no pin type checks; absent on every other port.
    */
   values_checked?: boolean | null;
-  /**
-   * The port family this port declares and its family's keys. Absent on a graph variable's
-   * value port, which keeps the family of the setter's source port. Served for a client that
-   * reads no `pin_type`.
-   */
-  family?: unknown;
   /**
    * The value this input reads while nothing is linked into it and no value is set on its
    * node, null when it declares a null default; absent on a port that declares none.
@@ -1313,13 +1290,8 @@ export interface GraphInterfacePortOnTheWire {
    */
   port: string;
   /**
-   * The port family the port carries; null while the runtime waits for a link to settle it.
-   */
-  family?: string | null;
-  /**
-   * The pin type the port carries: the one its node's `pin_type` setting chooses, else the
-   * one the port's older field states exactly, as a port carrying frames is a Texture.
-   * Absent on any other port.
+   * The pin type the port carries, the one its node's `pin_type` setting chooses; absent
+   * while the runtime waits for a link to settle it.
    */
   pin_type?: PinType | null;
   /**
@@ -1593,10 +1565,6 @@ export interface ConfigNodeReferenceEdgeOnTheWire {
    */
   node: string;
   /**
-   * The setting the reference sits under, by its key in the node's settings.
-   */
-  config_key: string;
-  /**
    * The name of the node the reference names.
    */
   referenced_node: string;
@@ -1651,25 +1619,13 @@ export type StreamGraphAction = ({
    */
   level?: Array<string>;
   /**
-   * The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it.
+   * The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `list_node_types` lists it.
    */
   type: string;
   /**
    * The node's name, a label: cast to lowercase URL-safe and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …
    */
   name?: string | null;
-  /**
-   * The node's config, as the keys its type's schema declares. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is.
-   */
-  config?: { [key: string]: unknown } | null;
-  /**
-   * The value on each unlinked input, by input name.
-   */
-  pins?: { [key: string]: unknown } | null;
-  /**
-   * The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.
-   */
-  exposed_config_fields?: Array<string> | null;
   /**
    * What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name.
    */
@@ -1743,46 +1699,6 @@ export type StreamGraphAction = ({
    */
   node: string;
   /**
-   * The node's new config, as the keys its type's schema declares.
-   */
-  config: { [key: string]: unknown };
-  operation: "set_node_config";
-} | {
-  /**
-   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
-   */
-  stream: string;
-  /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
-   */
-  level?: Array<string>;
-  /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
-   */
-  node: string;
-  /**
-   * The input's name, as `graph` lists it under the node's `ports.inputs`.
-   */
-  input: string;
-  /**
-   * The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off.
-   */
-  value?: unknown;
-  operation: "set_pin_value";
-} | {
-  /**
-   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
-   */
-  stream: string;
-  /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
-   */
-  level?: Array<string>;
-  /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
-   */
-  node: string;
-  /**
    * The node's new name: cast to lowercase URL-safe, refused when another node has it.
    */
   name: string;
@@ -1819,33 +1735,11 @@ export type StreamGraphAction = ({
    */
   name?: string | null;
   /**
-   * The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.
-   */
-  config?: { [key: string]: unknown } | null;
-  /**
    * A label later operations of the same transaction name the fragment node by, before its UUID is known.
    */
   as?: string | null;
   operation: "import_graph_generator";
-}) | {
-  /**
-   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
-   */
-  stream: string;
-  /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
-   */
-  level?: Array<string>;
-  /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
-   */
-  node: string;
-  /**
-   * The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.
-   */
-  exposed_config_fields: Array<string>;
-  operation: "set_exposed_config_fields";
-} | ({
+}) | ({
   /**
    * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
    */
@@ -2346,25 +2240,13 @@ export interface AddNodeRequest {
    */
   level?: Array<string> | null;
   /**
-   * The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it.
+   * The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `list_node_types` lists it.
    */
   type: string;
   /**
    * The node's name, a label: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`) and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …
    */
   name?: string | null;
-  /**
-   * The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is.
-   */
-  config?: { [key: string]: unknown } | null;
-  /**
-   * The value on each unlinked input, by input name.
-   */
-  pins?: { [key: string]: unknown } | null;
-  /**
-   * The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.
-   */
-  exposed_config_fields?: Array<string> | null;
   /**
    * What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name.
    */
@@ -2457,7 +2339,7 @@ export interface LinkCheckResult {
    * The whole refusal `connect` would answer, with its code; present only when `outcome` is
    * `refused`.
    */
-  refusal?: ProjectActionRefusalOnTheWire | null;
+  refusal?: ControlOperationRefusalOnTheWire | null;
   /**
    * What the link would do that a person may not expect; none of these blocks it.
    */
@@ -2642,10 +2524,6 @@ export interface ImportGraphGeneratorRequest {
    */
   name?: string | null;
   /**
-   * The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.
-   */
-  config?: { [key: string]: unknown } | null;
-  /**
    * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
@@ -2675,78 +2553,6 @@ export interface OneNodeGraphEditRequest {
    * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
    */
   node: string;
-  /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
-   */
-  mode?: GraphEditMode | null;
-  /**
-   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
-   */
-  author?: ProjectTransactionAuthorArgument | null;
-  /**
-   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
-   */
-  idempotency_key?: string | null;
-}
-
-/**
- * `set_node_config`'s params.
- */
-export interface SetNodeConfigRequest {
-  /**
-   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
-   */
-  stream: string;
-  /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
-   */
-  level?: Array<string> | null;
-  /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
-   */
-  node: string;
-  /**
-   * The node's new config, as the keys its type's schema declares; it replaces the old one whole.
-   */
-  config: { [key: string]: unknown };
-  /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
-   */
-  mode?: GraphEditMode | null;
-  /**
-   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
-   */
-  author?: ProjectTransactionAuthorArgument | null;
-  /**
-   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
-   */
-  idempotency_key?: string | null;
-}
-
-/**
- * `set_pin_value`'s params.
- */
-export interface SetPinValueRequest {
-  /**
-   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
-   */
-  stream: string;
-  /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
-   */
-  level?: Array<string> | null;
-  /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
-   */
-  node: string;
-  /**
-   * The input's name, as `graph` lists it under the node's `ports.inputs`.
-   */
-  input: string;
-  /**
-   * The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off.
-   */
-  value?: unknown;
   /**
    * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
@@ -2857,40 +2663,6 @@ export interface SetStudioFieldsRequest {
    * What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name.
    */
   studio: { [key: string]: unknown };
-  /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
-   */
-  mode?: GraphEditMode | null;
-  /**
-   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
-   */
-  author?: ProjectTransactionAuthorArgument | null;
-  /**
-   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
-   */
-  idempotency_key?: string | null;
-}
-
-/**
- * `set_exposed_config_fields`'s params.
- */
-export interface SetExposedConfigFieldsRequest {
-  /**
-   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
-   */
-  stream: string;
-  /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
-   */
-  level?: Array<string> | null;
-  /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
-   */
-  node: string;
-  /**
-   * The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.
-   */
-  exposed_config_fields: Array<string>;
   /**
    * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
@@ -3930,7 +3702,7 @@ export interface RefusedProjectActionOnTheWire {
   /**
    * What the runtime refused, in its own words.
    */
-  refusal: ProjectActionRefusalOnTheWire;
+  refusal: ControlOperationRefusalOnTheWire;
   /**
    * When the runtime refused it, RFC 3339 in UTC to the second, for display only.
    */
@@ -4838,7 +4610,7 @@ export interface ProjectCodeCheckRun {
    * Why it did not run to its end, with its code, such as `check_ran_out_of_time` with the
    * file it was checking as `refused_file`; present only when `state` is `not_checked`.
    */
-  not_checked_because?: ProjectActionRefusalOnTheWire | null;
+  not_checked_because?: ControlOperationRefusalOnTheWire | null;
   /**
    * Each program or package the check ran with, and its version.
    */
@@ -4921,265 +4693,6 @@ export interface ProjectFileChecked {
    * answers it.
    */
   content_sha256: string;
-}
-
-/**
- * `list_project_node_types`'s params.
- */
-export interface ListProjectNodeTypesRequest {
-  /**
-   * The project, by absolute path: a folder holding `tatolab-project.json`.
-   */
-  project_directory: string;
-}
-
-/**
- * The `list_project_node_types` tool's result: what a project and each source it draws node
- * code from declares, read from source without running it.
- */
-export interface ListProjectNodeTypesToolResult {
-  /**
-   * The project directory, symlinks resolved.
-   */
-  project_directory: string;
-  /**
-   * The project's UUID, from its `tatolab-project.json`.
-   */
-  project: string;
-  /**
-   * The project's name.
-   */
-  project_name: string;
-  /**
-   * The project first, then each import, then each installed distribution.
-   */
-  sources: Array<NodeTypeSourceReadWithoutRunningIt>;
-}
-
-/**
- * One source's node types, graph generators, and the modules of it that could not be read.
- */
-export type NodeTypeSourceReadWithoutRunningIt = {
-  /**
-   * Each node type declared, by type.
-   */
-  node_types: Array<NodeTypeReadFromSource>;
-  /**
-   * Each `@graph_generator` declared, by import path.
-   */
-  graph_generators: Array<GraphGeneratorReadFromSource>;
-  /**
-   * Each `@named_pin_type` class declared, by import path.
-   */
-  named_pin_types?: Array<NamedPinTypeReadFromSource>;
-  /**
-   * Each module that does not parse, with why and where; the rest of the source still lists.
-   */
-  unreadable_modules: Array<NodeModuleNotReadable>;
-} & ({
-  source: "project";
-} | ({
-  /**
-   * The imported project's UUID.
-   */
-  project: string;
-  /**
-   * Its folder under `imports/`.
-   */
-  folder: string;
-  /**
-   * The version its copy carried.
-   */
-  version: string;
-  /**
-   * The imported project's name as the project file in its folder holds it; `null` when
-   * that file does not read.
-   */
-  project_name?: string | null;
-  source: "dependency";
-}) | {
-  /**
-   * The distribution's name.
-   */
-  distribution: string;
-  /**
-   * The distribution's version.
-   */
-  distribution_version: string;
-  source: "installed_distribution";
-});
-
-/**
- * One node type as its declaration states it in source.
- */
-export interface NodeTypeReadFromSource {
-  /**
-   * The type `add_node` takes: the import path `<module>:<qualname>`.
-   */
-  type: string;
-  /**
-   * `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
-   */
-  kind?: string | null;
-  /**
-   * The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
-   */
-  description: string;
-  /**
-   * The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
-   */
-  category?: string | null;
-  /**
-   * Who filed it under `category`; null when nothing files it.
-   */
-  category_from?: NodeTypeCategoryFrom | null;
-  /**
-   * The input ports, `None` where only the node's native half states them.
-   */
-  inputs?: Array<NodeTypePortReadFromSource> | null;
-  /**
-   * The output ports, `None` where only the node's native half states them.
-   */
-  outputs?: Array<NodeTypePortReadFromSource> | null;
-  /**
-   * The file declaring it, relative to its source's root.
-   */
-  path?: string | null;
-  /**
-   * The line of its `class`, `def` or assignment.
-   */
-  line?: number | null;
-}
-
-/**
- * Who filed a node type under the group it is listed in.
- */
-export type NodeTypeCategoryFrom = "project" | "import" | "declaration";
-
-/**
- * One port as its declaration states it in source.
- */
-export interface NodeTypePortReadFromSource {
-  /**
-   * The port's name, cast as every exposed name is.
-   */
-  name: string;
-  /**
-   * The port family's wire name, `None` where source alone does not say.
-   */
-  family?: string | null;
-  /**
-   * The port's declared description.
-   */
-  description: string;
-  /**
-   * A function or shader port's annotation as written; `None` for a process node's port.
-   */
-  annotation?: string | null;
-  /**
-   * A function input's default pin value, where it is a literal.
-   */
-  pin_default?: unknown;
-  /**
-   * A function input's default as written, where it is not a literal.
-   */
-  pin_default_as_written?: string | null;
-}
-
-/**
- * One `@graph_generator` as its declaration states it in source.
- */
-export interface GraphGeneratorReadFromSource {
-  /**
-   * The import path `import_graph_generator` takes: `<module>:<function>`.
-   */
-  generator: string;
-  /**
-   * Its docstring.
-   */
-  description: string;
-  /**
-   * Each parameter after the builder: a setting the fragment promotes.
-   */
-  promoted_config: Array<GraphGeneratorPromotedSettingReadFromSource>;
-  /**
-   * The file declaring it, relative to its source's root.
-   */
-  path: string;
-  /**
-   * The line of its `def`.
-   */
-  line: number;
-}
-
-/**
- * One setting a graph generator promotes, as its parameter states it.
- */
-export interface GraphGeneratorPromotedSettingReadFromSource {
-  /**
-   * The parameter's name.
-   */
-  name: string;
-  /**
-   * Its annotation as written.
-   */
-  annotation?: string | null;
-  /**
-   * Its default, where it is a literal.
-   */
-  default?: unknown;
-  /**
-   * Its default as written, where it is not a literal.
-   */
-  default_as_written?: string | null;
-}
-
-/**
- * One named type as its `@named_pin_type` declaration states it in source.
- */
-export interface NamedPinTypeReadFromSource {
-  /**
-   * Its name: the class's import path, `<module>:<qualname>`.
-   */
-  named_pin_type: NamedPinTypeImportPath;
-  /**
-   * What a value of it is; empty where its `description` is no string in source.
-   */
-  description: string;
-  /**
-   * The file declaring it, relative to its source's root.
-   */
-  path: string;
-  /**
-   * The line of its `class`.
-   */
-  line: number;
-}
-
-/**
- * A module of a source that could not be read, and why.
- */
-export interface NodeModuleNotReadable {
-  /**
-   * The module's import name.
-   */
-  module: string;
-  /**
-   * Its file, relative to its source's root.
-   */
-  path: string;
-  /**
-   * The line the parser stopped at.
-   */
-  line?: number | null;
-  /**
-   * The column the parser stopped at.
-   */
-  column?: number | null;
-  /**
-   * Why it was not read, in the parser's words.
-   */
-  why: string;
 }
 
 /**
@@ -5457,6 +4970,11 @@ export interface NodeTypeListed {
 }
 
 /**
+ * Who filed a node type under the group it is listed in.
+ */
+export type NodeTypeCategoryFrom = "project" | "import" | "declaration";
+
+/**
  * How a node type's code runs.
  */
 export type NodeTypeKind = "process" | "function" | "shader";
@@ -5490,6 +5008,54 @@ export interface GraphGeneratorListed {
    * The line of its `def`.
    */
   line: number;
+}
+
+/**
+ * One setting a graph generator promotes, as its parameter states it.
+ */
+export interface GraphGeneratorPromotedSettingReadFromSource {
+  /**
+   * The parameter's name.
+   */
+  name: string;
+  /**
+   * Its annotation as written.
+   */
+  annotation?: string | null;
+  /**
+   * Its default, where it is a literal.
+   */
+  default?: unknown;
+  /**
+   * Its default as written, where it is not a literal.
+   */
+  default_as_written?: string | null;
+}
+
+/**
+ * A module of a source that could not be read, and why.
+ */
+export interface NodeModuleNotReadable {
+  /**
+   * The module's import name.
+   */
+  module: string;
+  /**
+   * Its file, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line the parser stopped at.
+   */
+  line?: number | null;
+  /**
+   * The column the parser stopped at.
+   */
+  column?: number | null;
+  /**
+   * Why it was not read, in the parser's words.
+   */
+  why: string;
 }
 
 /**
@@ -5564,11 +5130,6 @@ export type NodeTypeDescription = {
    */
   outputs: Array<NodeTypePortDescribed>;
   /**
-   * The settings of a node type not yet typed that `set_exposed_config_fields` still takes;
-   * absent when it takes none. Served until the contract's version changes.
-   */
-  exposable_config_fields?: Array<string>;
-  /**
    * Each pin group: a slot of inputs and outputs that repeats on each node, each slot's ports
    * named `<group>.<index>.<pin>` among the node's ports in `graph`; absent when it declares
    * none.
@@ -5633,16 +5194,6 @@ export interface NodeTypeInputDescribed {
    * What it states besides its type, none of which decides a link.
    */
   annotations?: PinAnnotations;
-  /**
-   * The port family a port of a node type not yet typed declares, with its family's keys.
-   * Served until the contract's version changes, for a client that reads no `pin_type`.
-   */
-  family?: unknown;
-  /**
-   * A function or shader port's annotation as its source writes it, where only source
-   * describes its node type. Served until the contract's version changes.
-   */
-  annotation?: string | null;
   /**
    * Whether it takes a wire, a stored value or both; absent where only source describes its
    * node type.
@@ -5716,16 +5267,6 @@ export interface NodeTypePortDescribed {
    * What it states besides its type, none of which decides a link.
    */
   annotations?: PinAnnotations;
-  /**
-   * The port family a port of a node type not yet typed declares, with its family's keys.
-   * Served until the contract's version changes, for a client that reads no `pin_type`.
-   */
-  family?: unknown;
-  /**
-   * A function or shader port's annotation as its source writes it, where only source
-   * describes its node type. Served until the contract's version changes.
-   */
-  annotation?: string | null;
 }
 
 /**
@@ -5772,7 +5313,7 @@ export type NodeTypeNotDescribed = {
    * Why it could not be described, with the call that checks its code when the runtime
    * serves one.
    */
-  not_described_because: ProjectActionRefusalOnTheWire;
+  not_described_because: ControlOperationRefusalOnTheWire;
 } & ({
   source: "project";
 } | ({
@@ -5974,12 +5515,6 @@ export interface ProjectViewDeclaredPort {
    */
   name: string;
   /**
-   * The port family's wire name: the family its pin type's messages belong to, where it
-   * names one. Served until the contract's version changes, for a client that reads no
-   * `pin_type`.
-   */
-  family: string;
-  /**
    * The pin type the port carries, which every port of a manifest that opens names.
    */
   pin_type?: PinType | null;
@@ -6161,84 +5696,6 @@ export interface ProjectNodeUiManifestNotRead {
    * contract, each as "`field`: why.".
    */
   why: string;
-}
-
-/**
- * `write_studio_view_output`'s params.
- */
-export interface WriteStudioViewOutputRequest {
-  /**
-   * The stream id of the stream holding the view node.
-   */
-  stream: string;
-  /**
-   * The view node's UUID, as `graph` lists it under `id`.
-   */
-  node: string;
-  /**
-   * The view node's output port the value is published on.
-   */
-  port: string;
-  /**
-   * The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{"samples": [[...], ...], "sample_rate"}`, float32 channel by channel.
-   */
-  value: unknown;
-}
-
-/**
- * The `write_studio_view_output` tool's result: the output of the view node the value was handed
- * to, which published it.
- */
-export interface WriteStudioViewOutputToolResult {
-  /**
-   * The stream id.
-   */
-  stream: string;
-  /**
-   * The view node's UUID, as `graph` lists it under `id`.
-   */
-  node: string;
-  /**
-   * The output port the value was published on.
-   */
-  port: string;
-}
-
-/**
- * `write_graph_input`'s params.
- */
-export interface WriteGraphInputRequest {
-  /**
-   * The stream id of a loaded stream.
-   */
-  stream: string;
-  /**
-   * The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is.
-   */
-  input: string;
-  /**
-   * The value, as the Input's family carries it: a Records Input takes a JSON object; an Array Input a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels Input a number or a bool, as one control value, or `{"samples": [[...], ...], "sample_rate"}`, float32 channel by channel.
-   */
-  value: unknown;
-}
-
-/**
- * The `write_graph_input` tool's result: the Input of the stream's top-level `GraphInput` the
- * value was handed to, which published it to every reader.
- */
-export interface WriteGraphInputToolResult {
-  /**
-   * The stream id.
-   */
-  stream: string;
-  /**
-   * The Input's name, as the `GraphInput`'s config declares it under `port`.
-   */
-  input: string;
-  /**
-   * The Input's family, as its wire name: `array`, `channels` or `records`.
-   */
-  family: string;
 }
 
 /**
@@ -6612,24 +6069,22 @@ export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_re
 
 /**
  * One node type a project offers and the source its code comes from, as a change on the
- * project's feed names it: the source's fields beside the node type's, as
- * `list_project_node_types` lists each.
+ * project's feed names it: the source's fields beside the node type's row, as
+ * `list_node_types` lists each.
  */
 export type NodeTypeOfOneProjectSource = {
   /**
-   * The type `add_node` takes: the import path `<module>:<qualname>`.
+   * The type `add_node` takes: its import path, `<module>:<qualname>`.
    */
-  type: string;
+  node_type: string;
   /**
-   * `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
+   * The first line of its description; empty when it declares none.
    */
-  kind?: string | null;
+  documentation: string;
   /**
-   * The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
-   */
-  description: string;
-  /**
-   * The group it is filed under, a path where the group is inside another, as `Effects/Stylize`: the project's own, else an import's, else the one its `@node.meta` declares; null when none files it, and for a Rust function node or an entry point whose declaration source does not show and no map files it, since only the node's native half states it.
+   * The group it is filed under, a path where the group is inside another, as
+   * `Effects/Stylize`: the project's own, else an import's, else the one its author declared;
+   * null when none files it, or where its declaration source does not show it.
    */
   category?: string | null;
   /**
@@ -6637,21 +6092,14 @@ export type NodeTypeOfOneProjectSource = {
    */
   category_from?: NodeTypeCategoryFrom | null;
   /**
-   * The input ports, `None` where only the node's native half states them.
+   * How its code runs; null for an entry point whose declaration source does not show it,
+   * and for a node type the graph resolves itself, which no node code runs.
    */
-  inputs?: Array<NodeTypePortReadFromSource> | null;
+  kind?: NodeTypeKind | null;
   /**
-   * The output ports, `None` where only the node's native half states them.
+   * Where the runtime's description of it comes from.
    */
-  outputs?: Array<NodeTypePortReadFromSource> | null;
-  /**
-   * The file declaring it, relative to its source's root.
-   */
-  path?: string | null;
-  /**
-   * The line of its `class`, `def` or assignment.
-   */
-  line?: number | null;
+  described_from: NodeTypeDescribedFrom;
 } & ({
   source: "project";
 } | ({
@@ -6683,6 +6131,8 @@ export type NodeTypeOfOneProjectSource = {
    */
   distribution_version: string;
   source: "installed_distribution";
+} | {
+  source: "built_in";
 });
 
 /**
@@ -6977,7 +6427,7 @@ export type NodeInputMode = {
 
 /** Every component of the contract, by name: the type its schema states. */
 export interface ControlContractComponents {
-  ProjectActionRefusalOnTheWire: ProjectActionRefusalOnTheWire;
+  ControlOperationRefusalOnTheWire: ControlOperationRefusalOnTheWire;
   ControlOperationRefusalCode: ControlOperationRefusalCode;
   RefusedGraphLinkOnTheWire: RefusedGraphLinkOnTheWire;
   GraphLinkEndOnTheWire: GraphLinkEndOnTheWire;
@@ -7105,12 +6555,9 @@ export interface ControlContractComponents {
   LinkCandidateNotChecked: LinkCandidateNotChecked;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
-  SetNodeConfigRequest: SetNodeConfigRequest;
-  SetPinValueRequest: SetPinValueRequest;
   SetNodeInputValueRequest: SetNodeInputValueRequest;
   RenameNodeRequest: RenameNodeRequest;
   SetStudioFieldsRequest: SetStudioFieldsRequest;
-  SetExposedConfigFieldsRequest: SetExposedConfigFieldsRequest;
   AddGroupRequest: AddGroupRequest;
   SetGroupFieldsRequest: SetGroupFieldsRequest;
   CollapseSelectionIntoSubgraphRequest: CollapseSelectionIntoSubgraphRequest;
@@ -7205,16 +6652,6 @@ export interface ControlContractComponents {
   ProjectCodeCheckFinding: ProjectCodeCheckFinding;
   ProjectCodeCheckSeverity: ProjectCodeCheckSeverity;
   ProjectFileChecked: ProjectFileChecked;
-  ListProjectNodeTypesRequest: ListProjectNodeTypesRequest;
-  ListProjectNodeTypesToolResult: ListProjectNodeTypesToolResult;
-  NodeTypeSourceReadWithoutRunningIt: NodeTypeSourceReadWithoutRunningIt;
-  NodeTypeReadFromSource: NodeTypeReadFromSource;
-  NodeTypeCategoryFrom: NodeTypeCategoryFrom;
-  NodeTypePortReadFromSource: NodeTypePortReadFromSource;
-  GraphGeneratorReadFromSource: GraphGeneratorReadFromSource;
-  GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
-  NamedPinTypeReadFromSource: NamedPinTypeReadFromSource;
-  NodeModuleNotReadable: NodeModuleNotReadable;
   ListPinTypesRequest: ListPinTypesRequest;
   ListPinTypesToolResult: ListPinTypesToolResult;
   PinTypeListed: PinTypeListed;
@@ -7225,9 +6662,12 @@ export interface ControlContractComponents {
   ListNodeTypesToolResult: ListNodeTypesToolResult;
   NodeTypeSourceListed: NodeTypeSourceListed;
   NodeTypeListed: NodeTypeListed;
+  NodeTypeCategoryFrom: NodeTypeCategoryFrom;
   NodeTypeKind: NodeTypeKind;
   NodeTypeDescribedFrom: NodeTypeDescribedFrom;
   GraphGeneratorListed: GraphGeneratorListed;
+  GraphGeneratorPromotedSettingReadFromSource: GraphGeneratorPromotedSettingReadFromSource;
+  NodeModuleNotReadable: NodeModuleNotReadable;
   DescribeNodeTypesRequest: DescribeNodeTypesRequest;
   DescribeNodeTypesToolResult: DescribeNodeTypesToolResult;
   NodeTypeDescribedOrWhyNot: NodeTypeDescribedOrWhyNot;
@@ -7256,10 +6696,6 @@ export interface ControlContractComponents {
   NodeUiManifestControl: NodeUiManifestControl;
   NodeUiManifestNodeBody: NodeUiManifestNodeBody;
   ProjectNodeUiManifestNotRead: ProjectNodeUiManifestNotRead;
-  WriteStudioViewOutputRequest: WriteStudioViewOutputRequest;
-  WriteStudioViewOutputToolResult: WriteStudioViewOutputToolResult;
-  WriteGraphInputRequest: WriteGraphInputRequest;
-  WriteGraphInputToolResult: WriteGraphInputToolResult;
   ImportProjectRequest: ImportProjectRequest;
   ImportProjectToolResult: ImportProjectToolResult;
   LogsRequest: LogsRequest;
@@ -7359,7 +6795,7 @@ export interface ControlOperations {
    *
    * Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. A bundle input's change is sent for each member it changes, naming the `member`, with the `value` and `value_comes_from` of that member's row of `member_values`. Changes are sent at most once each 33 ms for one input, or one member of a bundle input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   subscribe_input_value_changes: {
     params: SubscribeInputValueChangesRequest;
@@ -7469,7 +6905,7 @@ export interface ControlOperations {
    *
    * Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion`, `input_takes_no_wire` or `link_streams_into_a_setting`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that does not yet say what it carries; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   check_link: {
     params: CheckLinkRequest;
@@ -7480,7 +6916,7 @@ export interface ControlOperations {
    *
    * Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{"output": {"node": …, "port": …}}`, each candidate then an input, or `{"input": …}`, each candidate then an output. `among` is `"placed_ports"`, every such port of every node at the level; `"node_type_ports"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{"ends": [...]}`, these ends alone, each `{"kind": "placed_port", "node", "port"}` or `{"kind": "node_type_port", "node_type", "port"}`, with `member` naming one member of a bundle the port carries. Among placed or node type ports, each port carrying a bundle is followed by each of its members as an end of its own. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   check_link_candidates: {
     params: CheckLinkCandidatesRequest;
@@ -7518,33 +6954,11 @@ export interface ControlOperations {
     result: GraphTransactionToolResult;
   };
   /**
-   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.
-   *
-   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.
-   *
-   * Since contract version 1, stable.
-   */
-  set_node_config: {
-    params: SetNodeConfigRequest;
-    result: GraphTransactionToolResult;
-  };
-  /**
-   * Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.
-   *
-   * Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.
-   *
-   * Since contract version 1, stable.
-   */
-  set_pin_value: {
-    params: SetPinValueRequest;
-    result: GraphTransactionToolResult;
-  };
-  /**
    * Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.
    *
    * Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A set on a setting read at setup that a link feeds is kept and answered there too, its node built with the value the link last carried. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A set of the `pin_type` of a top-level `GraphInput` that saves a value carries that value into the new type in the same commit, which one undo reverses whole: when exactly one conversion the stream registers takes the former type and gives the new one, the value is cast by it and then held within the Input's `range`, among them the built-in `FloatToInteger`, which truncates toward zero within an Integer's range, `IntegerToFloat`, exact, and `BooleanToInteger`, `IntegerToBoolean`, `BooleanToFloat` and `FloatToBoolean`, 0 and 1; with none, or when the one that fits is a module's, a node body that converts only inside a started stream, a value the new type takes as it is is kept; otherwise the value gives way to the new type's default, no saved value, as it does when more than one conversion fits, the cast is refused, or an Integer's `range` holds no whole number. Each such value is answered under `saved_values_retyped`: its `value_before`, the `value` it now saves and the conversion under `cast_by`, or why it took the default under `default_because` with each conversion that fits under `conversions_that_fit`. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   set_node_input_value: {
     params: SetNodeInputValueRequest;
@@ -7570,17 +6984,6 @@ export interface ControlOperations {
    */
   set_studio_fields: {
     params: SetStudioFieldsRequest;
-    result: GraphTransactionToolResult;
-  };
-  /**
-   * Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.
-   *
-   * Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value. Replaced by `set_node_input_value`: a typed node declares each input that takes a link as a port, and every setting is set by `set_node_input_value`.
-   *
-   * Since contract version 1, stable.
-   */
-  set_exposed_config_fields: {
-    params: SetExposedConfigFieldsRequest;
     result: GraphTransactionToolResult;
   };
   /**
@@ -8048,7 +7451,7 @@ export interface ControlOperations {
   /**
    * Create a node file in a project from the template, as one transaction.
    *
-   * Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.
+   * Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a class under bare `@node` in the current `tatolab.stream` idiom, named after the file, with a type parameter bound to `Texture`, one input pin `picture_in` of that parameter, one field `every_nth` ranged 1 to 60, and one output pin `picture_out` of the same parameter, which carries the type linked into `picture_in` and hands on one picture in every `every_nth` unchanged, each with its description. It loads as a node type of the project with no edits, passes `check_project_code` with no finding, and `list_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.
    *
    * Since contract version 1, stable.
    */
@@ -8081,7 +7484,7 @@ export interface ControlOperations {
   /**
    * Check a project's code on disk without running a stream, answering each finding as data.
    *
-   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as `list_project_node_types` lists its `named_pin_types`, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as `list_project_node_types` lists it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as the listing's `unreadable_modules` names it, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When that listing is refused, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, or a retired name a module imports, is an `error` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
+   * Check the project's code as it is on disk, for any project and with no stream loaded, changing nothing. Four checks run. `python_node_declarations`: each module the node type listing names, or each of `paths`, is imported in the project's interpreter by the reader that loads the node, so a declaration it refuses here is refused at load. `extension_manifest`: each `views/<view>/tatolab_view.json` of the project's own views, or each among `paths`, is read as the view opens: one that does not open is an `error` (`view_manifest_refused` or `view_manifest_missing`), as is one with a port still declared by its older field, its words naming the port and the `pin_type` to write, or the pin types it may become; the project's own `node_ui/tatolab_node_ui.json`, when it has one and `paths` names it or is omitted, is read as `list_project_node_ui_elements` reads it: one that does not read is an `error` coded `node_ui_manifest_refused`, a `controls` entry with no `control` name registers its type's default control, which only the module that declares the type may register: for a built-in type, as `float`, the Studio's own module, so it is always an `error` coded `default_control_not_the_modules_to_register`; for a named type, written as its import path `module:QualifiedClassName`, the module whose code declares it as the project's source reads it, so an entry for a type an import declares, or no module declares, is that same `error`, its words naming the module that may register it. A `node_bodies` entry for a node type the project's own code does not declare, as the project's source reads it, is an `error` coded `node_body_not_the_modules_to_register`. An entry for a type, or a node type, that no module declares while a module that may declare it does not parse, as `list_node_types` names it among `unreadable_modules`, is instead a `warning` coded `default_control_not_judged` or `node_body_not_judged`, its words naming that module's file. When the project's source is not read, the node bodies and named types' defaults are not judged and the check answers `not_checked` with the listing's refusal. `extension_types` and `extension_lint`: each of the project's own view folders and its `node_ui` folder, or each a path among `paths` lies in, is copied into a scratch folder beside the extension SDK kit and checked as the Studio runs it: `extension_types` type-checks its `.ts` files with the kit's strict options, each `controls` entry tied to the class type it declares, an `error` coded by the compiler as `TS2322`, a tie that does not hold placed at the manifest and its words naming the entry; `extension_lint` reads them with the kit's strict rules, `vendor/` left out, coded by the rule as `typescript(no-explicit-any)`. A `.tsx` file is an `error` coded `tsx_not_checked`, and a `.js`, `.mjs` or `.map` file outside `vendor/` an `error` coded `not_written_in_ts`, its words naming the file and `.ts` as what to write. The kit is the runtime unit's, else the one `TATOLAB_EXTENSION_SDK_KIT` named as the runtime started, else the project's installed `node_modules/@tatolab/tato-app-view-sdk`; with none, both answer `not_checked` with `extension_sdk_not_found` and words naming each place looked; `checked_with` names each program and the kit, with versions. A project with no view or control passes both. Each finding has its `finding_code`, its `severity`, its `words` with the fix, and its `path`, `line` and `column`, with the `node_type` and `port` it is about when it is about one: a refused declaration answers the reader's code, such as `value_input_has_no_default`; a module that does not import answers `module_does_not_import` with its traceback; a node declared in a retired form, such as `@node.function`, or a retired name a module imports, is an `error` coded `declaration_retired` whose words name its replacement. `verdict` is `failed` on any `error`, else `not_fully_checked` when a check did not run to its end, else `passed`; warnings alone pass. A check still running at its bound, 60 seconds for the declarations and 120 for each program over each extension folder, is killed and answers `not_checked` with `check_ran_out_of_time` and the file it was importing, or the folder it was checking, as `refused_file`, keeping the findings of the files it finished; `files_checked` lists only those, each with its `content_sha256`.
    *
    * Since contract version 3, experimental.
    */
@@ -8090,22 +7493,11 @@ export interface ControlOperations {
     result: ProjectCodeCheckResult;
   };
   /**
-   * List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.
-   *
-   * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.
-   *
-   * Since contract version 1, stable.
-   */
-  list_project_node_types: {
-    params: ListProjectNodeTypesRequest;
-    result: ListProjectNodeTypesToolResult;
-  };
-  /**
    * List every built-in pin type, how each is written, and what converts it, and each named type the project's node code declares.
    *
    * List every built-in pin type a port may carry, each under `pin_types` with its `name` (the `type` tag of its pin type), `label`, `documentation`, the `flows` a pin of it may state with its default first, the `annotations` it may state, how a Python declaration writes it in `python_forms` and the TypeScript SDK in `typescript_form`, and the JSON Schema of its stored value in `value_json_schema`, absent on a type that stores no value. The List and bundle rows say in `how_to_declare` how a pin of one is declared; a bundle has no name, so a port declaring one is described member by member by `describe_node_types`. `converts_to` lists each conversion a node type of this runtime offers from a pin of the type, and each one a node type of the project's installed modules states once a loaded stream of the project has described it in its own interpreter: the exact type it takes as `from`, the type it gives as `to`, and the `node_type` that converts. `connect` places a built-in conversion's node itself, between two ends at a stream's own level that only it bridges; a link only a module's conversion bridges, one inside a placed stream, or one more than one conversion bridges is refused, and a caller adds a node of that `node_type` and links each end to it. `named_pin_types` lists each named type a module of the project, an import or an installed distribution declares with `@named_pin_type`, read from source without running it: the source it comes from as `list_node_types` names one, the `pin_type` a pin of it states (`{"type": "named", "named_pin_type": "<module>:<class>"}`, its class's import path), its `documentation`, and the `path` and `line` declaring it. A pin of a named type carries the bytes its class packs and links only to a pin of the same name or an input of any type, never to a port that states no pin type. When the project's node code does not list, `named_pin_types` is empty and `named_pin_types_not_listed_because` says why; the built-in types are listed regardless.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   list_pin_types: {
     params: ListPinTypesRequest;
@@ -8116,7 +7508,7 @@ export interface ControlOperations {
    *
    * List the node types and graph generators a project offers, each under `sources` by `source`: the project's own node code outside `imports/` (`project`), each import as its folder holds it now (`dependency`, with its `project`, `folder`, `version` and `project_name`), each installed distribution that declares `tatolab.nodes` entry points (`installed_distribution`, with its `distribution` and `distribution_version`), then the node types the runtime brings itself (`built_in`), ending with the graph's own `GraphInput`, `GraphOutput`, `SetVariable` and `GetVariable` in the `Graph` category, which no node code runs and so have no `kind`. Project code is read from source without running it. Each node type has its `node_type` (what `add_node` and `describe_node_types` take), the first line of its description as `documentation`, its `category`, its `kind` (`process`, `function` or `shader`) and `described_from`, where the runtime's description of it comes from: `built_in`, `source`, or `interpreter` when a loaded stream of the project described it in its own interpreter. `describe_node_types` answers each one's inputs and outputs. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, where it is declared, and the settings it promotes as `promoted_settings`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   list_node_types: {
     params: ListNodeTypesRequest;
@@ -8125,9 +7517,9 @@ export interface ControlOperations {
   /**
    * Describe the inputs and outputs of the node types named, each with its pin type.
    *
-   * Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup`, which takes a link from an output that flows as a `value` and rebuilds its node on each change, or `each_run`, which takes no link), `takes_a_wire`, whether a link may end at it: false for a setting read each run, a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and states what it carries in the older fields its schema marks `x-removed-in`; its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.
+   * Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup`, which takes a link from an output that flows as a `value` and rebuilds its node on each change, or `each_run`, which takes no link), `takes_a_wire`, whether a link may end at it: false for a setting read each run, a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   describe_node_types: {
     params: DescribeNodeTypesRequest;
@@ -8136,7 +7528,7 @@ export interface ControlOperations {
   /**
    * File a node type under a group of the project's own, or put it back where its author files it, as one transaction on its history.
    *
-   * File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types`, `describe_node_types` and `list_project_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.
+   * File the node type `node_type`, as `list_node_types` names it, under `group` in the project, as one transaction by `author` on its history that undoes like any edit: the project's own node types, an import's, an installed distribution's and the built-ins can each be moved, and the move is saved in the project's `tatolab-project.json` under `node_type_groups`, never in the module. A group is a path where it is inside another, as `Effects/Stylize`, made by filing a node type there and gone once none is; a `null` `group` takes the project's own filing away, so the group an import files it under, else the one its author declared, stands again. A project imported into another carries its map, which files the import's own node types there unless the importing project files them itself; it files nothing else. Groups are display only: a move never changes what a node does, how it is addressed, or the stream. `list_node_types` and `describe_node_types` serve the group a node type ends up in as `category`, and who filed it there as `category_from` (`project`, `import` or `declaration`). Answers the `group` the project now files it under, with the `transaction` and `commit`. Refused, with `node_type_not_found` and the call to `list_node_types`, for a node type neither the project nor the runtime offers to be filed, though a filing is always taken away, and for a group that is no path, such as one with a blank name in it.
    *
    * Since contract version 3, experimental.
    */
@@ -8165,28 +7557,6 @@ export interface ControlOperations {
   list_project_node_ui_elements: {
     params: ListProjectNodeUiElementsRequest;
     result: ListProjectNodeUiElementsToolResult;
-  };
-  /**
-   * Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.
-   *
-   * Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, the view's own UUID, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. Each Array, Channels or Records output of a view node has an input of its name, a setting read each run that takes no wire and holds no saved value, whose value the node publishes on the output; this call sets that input. Every write is published, stamped with stream time now, the same value written again as much as a new one, a Channels block starting where the last one written ended. A write is live data: the last value written is what a reader keeps, and a reader that connects later reads it, many panels may write one node and the last write wins, nothing is recorded in the graph document or the project's history, and the input returns to no value at Stop; a saved value on that input, by a `commit` set or an `add_node`'s `pins`, is refused, and one a graph document holds is dropped as the stream loads, with a warning naming the node and the input. `graph` renders the value as the input's live value. An Image or Packets output, which has no such input, is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; a node with no such output; `null`, which sets no value; and a value its port's family does not take, as `input_value_not_valid` at `/value`. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming the view node as `node` and the output as `input`.
-   *
-   * Since contract version 1, stable.
-   */
-  write_studio_view_output: {
-    params: WriteStudioViewOutputRequest;
-    result: WriteStudioViewOutputToolResult;
-  };
-  /**
-   * Write a value onto one of a loaded stream's graph inputs. Replaced by `set_node_input_value`.
-   *
-   * Hand a value to the Input `input` of the stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process; every write is published, the same value written again as much as a new one, and a node linked later reads the last value set. A write is live data: many clients may write one Input and the last write wins, and nothing is recorded in the graph document or the project's history. An Input whose config's `lifetime` is `kept`, the default, keeps the last value in the project's store, so it carries it again after a Stop, a reload and a restart of the runtime; a `reset` Input returns to its saved value, its `default`, at Stop. While the project is stopped, a `kept` Input takes the value and carries it at the next Play, and `graph` shows it; a `reset` Input is refused as `playback_stopped`. Until a write, the Input carries its saved value, if it holds one. `graph` renders the value an Input carries now, or carries at the next Play while stopped, under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for an Input no top-level `GraphInput` declares, and a value its family does not take. A refusal because the Input's node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming no node and the Input as `input`.
-   *
-   * Since contract version 1, stable.
-   */
-  write_graph_input: {
-    params: WriteGraphInputRequest;
-    result: WriteGraphInputToolResult;
   };
   /**
    * Import a project from an archive into a folder that does not exist yet.
@@ -8317,7 +7687,7 @@ export interface ControlNotifications {
   /**
    * The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.
    *
-   * Since contract version 3, experimental.
+   * Since contract version 3, stable.
    */
   input_value_changed: InputValueChangedNotificationParams;
   /**
@@ -8341,10 +7711,10 @@ export type ControlOperationMethodName = keyof ControlOperations;
 export type ControlNotificationMethodName = keyof ControlNotifications;
 
 /** The contract version this package was generated from. */
-export declare const CONTROL_CONTRACT_VERSION: 3;
+export declare const CONTROL_CONTRACT_VERSION: 4;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 53;
+export declare const CONTROL_CONTRACT_REVISION: 1;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

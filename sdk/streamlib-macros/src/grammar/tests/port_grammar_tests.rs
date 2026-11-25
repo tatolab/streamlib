@@ -675,8 +675,8 @@ fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
     );
     assert_eq!(
         schema.outputs[1].family.frame_rate,
-        Some(ImageOutputPortFrameRate::FromConfig {
-            config_key: "frames_per_second".into()
+        Some(ImageOutputPortFrameRate::FromSetting {
+            setting: "frames_per_second".into()
         })
     );
     assert_eq!(schema.outputs[2].family.frame_rate, None);

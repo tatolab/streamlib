@@ -185,16 +185,11 @@ impl GraphOnlyNodesAsDrawn {
     /// Render the graph-only nodes into `graph_response`, a render of the graph
     /// the runtime runs, in the reverse of the order they were resolved: the
     /// interface, then the variables, then each fragment as a container.
-    pub fn render_into(
-        &self,
-        graph_response: &mut GraphResponse,
-        node_types: &NodeTypesOneStreamResolves,
-    ) {
+    pub fn render_into(&self, graph_response: &mut GraphResponse) {
         self.interface_as_drawn.render_into(graph_response);
         self.connection_wires_as_drawn.render_into(graph_response);
         self.variables_as_drawn.render_into(graph_response);
-        self.fragments_as_drawn
-            .render_into(graph_response, node_types);
+        self.fragments_as_drawn.render_into(graph_response);
         graph_response.groups = self.groups_as_drawn.clone();
         graph_response.studio = self.studio_as_drawn.clone();
         let cast = |name: &str| {

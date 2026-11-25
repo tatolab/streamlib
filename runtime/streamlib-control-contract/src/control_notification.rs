@@ -222,7 +222,7 @@ impl ControlNotification for InputValueChanged {
     const ONE_LINE_DOC: &'static str = "The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.";
     const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_input_value_changes";
     const SINCE_CONTRACT_VERSION: u32 = 3;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const EXPOSURES: &'static [ControlOperationExposure] = &[
         ControlOperationExposure::Studio,
         ControlOperationExposure::Public,

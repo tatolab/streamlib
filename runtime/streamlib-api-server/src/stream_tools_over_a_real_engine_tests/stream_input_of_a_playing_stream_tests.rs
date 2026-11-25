@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A stream input set on a playing stream, over a real engine: `write_graph_input` and a live
-//! `set_node_input_value` naming no node each reach a node reading the `GraphInput` declaring it,
-//! and a `reset` input set while the stream is stopped is refused naming the stopped playback.
+//! A stream input set on a playing stream, over a real engine: a live `set_node_input_value`
+//! naming no node reaches a node reading the `GraphInput` declaring it, and a `reset` input set while the stream is stopped is refused naming the stopped playback.
 
 use std::time::Instant;
 
@@ -11,7 +10,7 @@ use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::nodes::ReactiveNode;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
 };
 
 use super::*;
@@ -118,27 +117,13 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             .await;
     }
 
-    /// The answer of `write_graph_input` setting `value` on the input `cue` of `project`'s
-    /// stream `main`, or its refusal.
-    async fn write_the_cue(
-        &self,
-        project: &ProjectWithGraphDocuments,
-        value: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
-        self.the_answer_or_the_refusal_of(
-            "write_graph_input",
-            json!({ "stream": project.stream_id_of("main"), "input": "cue", "value": value }),
-        )
-        .await
-    }
-
     /// The answer of a live `set_node_input_value` naming no node, setting `value` on the input
     /// `cue` of `project`'s stream `main`, or its refusal.
     async fn set_the_cue_live(
         &self,
         project: &ProjectWithGraphDocuments,
         value: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         self.the_answer_or_the_refusal_of(
             "set_node_input_value",
             json!({ "stream": project.stream_asset_of("main"), "input": "cue", "value": value,
@@ -148,10 +133,8 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     }
 }
 
-/// On a playing stream, `write_graph_input` answers the family of the input it names and its
-/// value reaches the node reading the input, and so does a live `set_node_input_value` naming no
-/// node, the same value set again reaching it again; neither saves anything in the graph
-/// document.
+/// On a playing stream, a live `set_node_input_value` naming no node reaches the node reading the
+/// input, the same value set again reaching it again, and saves nothing in the graph document.
 ///
 /// Mental-revert: a set naming no node that is refused without its node, or that sets anything
 /// but the `value` of the `GraphInput` declaring the input, leaves the recorder without the value.
@@ -161,15 +144,6 @@ async fn a_stream_input_set_on_a_playing_stream_reaches_the_node_reading_it() {
     let project = a_project_whose_cue_input_a_recorder_reads("kept");
     engine.playing(&project).await;
     let document_before = project.the_graph_document_of("main");
-    let written = json!({ "track": format!("drop-{}", Uuid::new_v4()) });
-
-    let answer = engine
-        .write_the_cue(&project, written.clone())
-        .await
-        .expect("a playing stream's input is written");
-
-    assert_eq!(answer["family"], "records", "{answer}");
-    a_recorder_reads(&written).await;
     let set_live = json!({ "track": format!("outro-{}", Uuid::new_v4()) });
     engine
         .set_the_cue_live(&project, set_live.clone())
@@ -187,9 +161,8 @@ async fn a_stream_input_set_on_a_playing_stream_reaches_the_node_reading_it() {
         .await;
 }
 
-/// A `reset` stream input set live while its stream is stopped, by `write_graph_input` or by a
-/// `set_node_input_value` naming no node, is refused with `node_not_running`, naming the stopped
-/// playback.
+/// A `reset` stream input set live while its stream is stopped, by a `set_node_input_value`
+/// naming no node, is refused with `node_not_running`, naming the stopped playback.
 ///
 /// Mental-revert: a write that skips the check of the node's lifetime while stopped holds a value
 /// the next Play forgets.
@@ -202,27 +175,20 @@ async fn a_reset_stream_input_set_while_stopped_is_refused_naming_the_stopped_pl
         .the_project_action_done("stop_playback", &project)
         .await;
 
-    for refusal in [
-        engine
-            .write_the_cue(&project, json!({ "track": "drop" }))
-            .await
-            .expect_err("a stopped stream's reset input is refused a write"),
-        engine
-            .set_the_cue_live(&project, json!({ "track": "drop" }))
-            .await
-            .expect_err("a stopped stream's reset input is refused a live set"),
-    ] {
-        assert_eq!(
-            refusal.refusal_code,
-            ControlOperationRefusalCode::NodeNotRunning,
-            "{refusal:?}"
-        );
-        assert_eq!(
-            refusal.not_running_because,
-            Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
-            "{refusal:?}"
-        );
-    }
+    let refusal = engine
+        .set_the_cue_live(&project, json!({ "track": "drop" }))
+        .await
+        .expect_err("a stopped stream's reset input is refused a live set");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::NodeNotRunning,
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.not_running_because,
+        Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
+        "{refusal:?}"
+    );
 }
 
 /// A `live` transaction setting the `cue` Input's `value` and then its former name `default`

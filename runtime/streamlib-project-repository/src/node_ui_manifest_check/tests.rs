@@ -157,7 +157,7 @@ fn a_named_types_default_control_passes_only_in_the_module_that_declares_the_typ
 
 #[test]
 fn what_the_modules_declare_is_read_off_the_node_type_listing() {
-    let listing: ListProjectNodeTypesToolResult = serde_json::from_value(serde_json::json!({
+    let listing: ProjectNodeTypesReadFromSource = serde_json::from_value(serde_json::json!({
         "project_directory": "/projects/cell",
         "project": "4a4602b0-9d26-4d3a-b13c-018fcbea7c53",
         "project_name": "cell",

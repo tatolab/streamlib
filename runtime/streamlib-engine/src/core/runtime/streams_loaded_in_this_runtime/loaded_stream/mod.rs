@@ -599,7 +599,7 @@ impl LoadedStreamInThisRuntime {
         );
         self.graph_only_nodes_as_drawn
             .lock()
-            .render_into(&mut graph_response, &self.node_types_this_stream_resolves);
+            .render_into(&mut graph_response);
         render_the_value_of_each_graph_input_into(
             &mut graph_response.nodes,
             value_of_each_graph_input,
@@ -652,10 +652,8 @@ impl LoadedStreamInThisRuntime {
                 let held_under_the_keys: serde_json::Map<String, serde_json::Value> = keys
                     .iter()
                     .filter_map(|key| {
-                        node.config
-                            .as_ref()
-                            .and_then(|config| config.get(&key.config_key))
-                            .or_else(|| node.input_values.get(&key.config_key))
+                        node.input_values
+                            .get(&key.config_key)
                             .map(|value| (key.config_key.clone(), value.clone()))
                     })
                     .collect();
@@ -729,15 +727,13 @@ fn the_value_of_each_graph_input(
 }
 
 /// Render the value of each `GraphInput`'s `value` input: the one it reads under its
-/// `graph_interface` component, as `current_value`, and its saved one on its `value` input and in
-/// its config under `default`, the key a published Tato Studio reads until TAT-484.
+/// `graph_interface` component, as `current_value`, and its saved one on its `value` input.
 fn render_the_value_of_each_graph_input_into(
     nodes: &mut [crate::core::json_schema::GraphNodeOutput],
     mut value_of_each_graph_input: HashMap<String, ValueOfAGraphInputRendered>,
 ) {
     use crate::core::graph::graph_interface_resolution::{
         GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_VALUE_PORT_NAME,
-        render_the_saved_value_of_a_graph_input_as_its_default,
     };
     for node in nodes {
         let Some(rendered) = value_of_each_graph_input.remove(&node.id) else {
@@ -756,14 +752,5 @@ fn render_the_value_of_each_graph_input_into(
             None => node.input_values.remove(GRAPH_INTERFACE_VALUE_PORT_NAME),
         };
         node.input_values.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
-        if let Some(serde_json::Value::Object(config)) = &mut node.config {
-            render_the_saved_value_of_a_graph_input_as_its_default(
-                config,
-                rendered.saved_value.as_ref(),
-            );
-            node.config_checksum = crate::core::utils::compute_json_checksum(
-                node.config.as_ref().unwrap_or(&serde_json::Value::Null),
-            );
-        }
     }
 }

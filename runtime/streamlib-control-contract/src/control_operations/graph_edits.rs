@@ -3,7 +3,7 @@
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphTransactionToolResult, LinkCandidatesCheckResult, LinkCheckResult,
-    ProjectTransactionOnTheWire, WriteGraphInputToolResult,
+    ProjectTransactionOnTheWire,
 };
 
 use super::EVERY_SURFACE;
@@ -17,9 +17,8 @@ use crate::control_operation_requests::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkCandidatesRequest, CheckLinkRequest,
     CollapseSelectionIntoSubgraphRequest, ImportGraphGeneratorRequest, OneLinkGraphEditRequest,
     OneNodeGraphEditRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
-    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
-    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
-    TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest, WriteGraphInputRequest,
+    SetGroupFieldsRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetStudioFieldsRequest,
+    TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
 };
 
 /// `transact`: several graph operations of one project as one transaction.
@@ -93,7 +92,7 @@ impl ControlOperation for CheckLink {
         "Answer what `connect` would answer for one link in a loaded stream, changing nothing.";
     const AGENT_USAGE_NOTE: &'static str = "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion`, `input_takes_no_wire` or `link_streams_into_a_setting`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. A link inside a placed stream, under a non-empty `level`, is judged among the nodes of that level as `connect` judges it there. Some links are not checked yet, and `check_link` itself fails on them, saying why: one reaching a fragment node or a `GraphInput` or `GraphOutput` that does not yet say what it carries; inside a placed stream, one reaching a node whose type is not described; and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
@@ -113,7 +112,7 @@ impl ControlOperation for CheckLinkCandidates {
     const ONE_LINE_DOC: &'static str = "Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.";
     const AGENT_USAGE_NOTE: &'static str = "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream has described: the built-ins, the installed modules' types, and the project's own types once a node of each has been placed, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`, with `member` naming one member of a bundle the port carries. Among placed or node type ports, each port carrying a bundle is followed by each of its members as an end of its own. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet is listed under `not_checked` with why: one reaching a fragment node, or a port of a fragment or a graph interface node type; one closing a loop of function nodes; and a port of a node type the stream has not described yet, which this call never describes, so place a node of it first. A non-empty `level` is refused, so check a link inside a placed stream with `check_link`, and so is a `from` naming a node the graph does not hold or a port its node does not have in that direction.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
@@ -180,44 +179,6 @@ impl ControlOperation for Disconnect {
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DISCONNECT);
 }
 
-/// `set_node_config`: replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
-pub struct SetNodeConfig;
-
-impl ControlOperation for SetNodeConfig {
-    type Request = SetNodeConfigRequest;
-    type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "set_node_config";
-    const ONE_LINE_DOC: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
-}
-
-/// `set_pin_value`: set the value one of a node's inputs holds while no link feeds it, as one transaction.
-pub struct SetPinValue;
-
-impl ControlOperation for SetPinValue {
-    type Request = SetPinValueRequest;
-    type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "set_pin_value";
-    const ONE_LINE_DOC: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
-}
-
 /// `set_node_input_value`: set the value one input of one node holds while no link feeds it,
 /// saved or live, as one transaction.
 pub struct SetNodeInputValue;
@@ -229,7 +190,7 @@ impl ControlOperation for SetNodeInputValue {
     const ONE_LINE_DOC: &'static str = "Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.";
     const AGENT_USAGE_NOTE: &'static str = "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. A live value follows the lifetime its input declares: on a `kept` input, the default, it outlives Stop, the project's close and a restart of the runtime, and is held while the stream is stopped for its next Play; on a `reset` input it is taken off at Stop, so the input reads its saved value again, and a live set on it while the stream is stopped is refused with `node_not_running` and `not_running_because` `playback_stopped`. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A set on a setting read at setup that a link feeds is kept and answered there too, its node built with the value the link last carried. Omit `node` to set one of the stream's own inputs at the stream's own level: `input` names the port a top-level `GraphInput` declares, the set is made on that node's `value` input, which takes a value of the kind the `GraphInput` declares, a number within its `range`, and lasts as its `lifetime` says; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A set of the `pin_type` of a top-level `GraphInput` that saves a value carries that value into the new type in the same commit, which one undo reverses whole: when exactly one conversion the stream registers takes the former type and gives the new one, the value is cast by it and then held within the Input's `range`, among them the built-in `FloatToInteger`, which truncates toward zero within an Integer's range, `IntegerToFloat`, exact, and `BooleanToInteger`, `IntegerToBoolean`, `BooleanToFloat` and `FloatToBoolean`, 0 and 1; with none, or when the one that fits is a module's, a node body that converts only inside a started stream, a value the new type takes as it is is kept; otherwise the value gives way to the new type's default, no saved value, as it does when more than one conversion fits, the cast is refused, or an Integer's `range` holds no whole number. Each such value is answered under `saved_values_retyped`: its `value_before`, the `value` it now saves and the conversion under `cast_by`, or why it took the default under `default_because` with each conversion that fits under `conversions_that_fit`. It is also an operation of `transact`, where a `live` transaction sets each input of a node once: a second live set of the same input is refused with `refused`, since each value set live is published as its own write.";
     const SINCE_CONTRACT_VERSION: u32 = 3;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
@@ -274,25 +235,6 @@ impl ControlOperation for SetStudioFields {
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_STUDIO_FIELDS);
-}
-
-/// `set_exposed_config_fields`: replace the config fields a node takes as inputs, as one transaction.
-pub struct SetExposedConfigFields;
-
-impl ControlOperation for SetExposedConfigFields {
-    type Request = SetExposedConfigFieldsRequest;
-    type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "set_exposed_config_fields";
-    const ONE_LINE_DOC: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value. Replaced by `set_node_input_value`: a typed node declares each input that takes a link as a port, and every setting is set by `set_node_input_value`.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `add_group`: make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
@@ -451,25 +393,6 @@ impl ControlOperation for RemoveGroup {
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_GROUP);
-}
-
-/// `write_graph_input`: write a value onto one of a loaded stream's graph inputs.
-pub struct WriteGraphInput;
-
-impl ControlOperation for WriteGraphInput {
-    type Request = WriteGraphInputRequest;
-    type Result = WriteGraphInputToolResult;
-    const METHOD_NAME: &'static str = "write_graph_input";
-    const ONE_LINE_DOC: &'static str = "Write a value onto one of a loaded stream's graph inputs. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Hand a value to the Input `input` of the stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process; every write is published, the same value written again as much as a new one, and a node linked later reads the last value set. A write is live data: many clients may write one Input and the last write wins, and nothing is recorded in the graph document or the project's history. An Input whose config's `lifetime` is `kept`, the default, keeps the last value in the project's store, so it carries it again after a Stop, a reload and a restart of the runtime; a `reset` Input returns to its saved value, its `default`, at Stop. While the project is stopped, a `kept` Input takes the value and carries it at the next Play, and `graph` shows it; a `reset` Input is refused as `playback_stopped`. Until a write, the Input carries its saved value, if it holds one. `graph` renders the value an Input carries now, or carries at the next Play while stopped, under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for an Input no top-level `GraphInput` declares, and a value its family does not take. A refusal because the Input's node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming no node and the Input as `input`.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::View;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `undo`: undo an author's latest transaction in a project that is not undone yet, as a new

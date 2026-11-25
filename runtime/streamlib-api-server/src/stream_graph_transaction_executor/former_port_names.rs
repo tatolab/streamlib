@@ -99,19 +99,6 @@ pub(super) fn the_request_under_the_current_port_names(
         )
     };
     match request {
-        StreamGraphAction::SetPinValue {
-            stream,
-            level,
-            node,
-            input,
-            value,
-        } => StreamGraphAction::SetPinValue {
-            input: current_name(&node, input, PortDirection::Input),
-            stream,
-            level,
-            node,
-            value,
-        },
         StreamGraphAction::SetNodeInputValue {
             stream,
             level,

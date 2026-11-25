@@ -152,16 +152,11 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a node",
-    spec_keys: &[
-        "id",
-        "name",
-        "type",
-        "input_values",
-        "exposed_config_fields",
-        "studio",
-        "fragment",
-    ],
+    spec_keys: &["id", "name", "type", "input_values", "studio", "fragment"],
+    // `exposed_config_fields` and `config_checksum` stay so the graphs recorded while `graph`
+    // rendered them still load; neither is read.
     live_keys: &[
+        "exposed_config_fields",
         "kind",
         "language",
         "config_checksum",
@@ -578,7 +573,7 @@ impl GraphSnapshot {
                     return Err(Error::GraphError(format!(
                         "input `{}` of node `{}` names node `{referenced_node_name}`, which \
                          the graph does not hold. The graph holds: {}",
-                        reference.edge.config_key,
+                        reference.config_key,
                         node.name,
                         the_names_the_graph_holds()
                     )));

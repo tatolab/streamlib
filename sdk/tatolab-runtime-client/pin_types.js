@@ -14,7 +14,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"boolean\"",
     value_component: "BooleanPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "integer",
@@ -26,7 +26,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"integer\"",
     value_component: "IntegerPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "float",
@@ -38,7 +38,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"float\"",
     value_component: "FloatPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "string",
@@ -50,7 +50,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"string\"",
     value_component: "StringPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "menu",
@@ -62,7 +62,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"menu\"",
     value_component: "MenuPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "color",
@@ -74,7 +74,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"color\"",
     value_component: "ColorPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "vector",
@@ -86,7 +86,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"vector\"",
     value_component: "VectorPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "rectangle",
@@ -98,7 +98,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"rectangle\"",
     value_component: "RectanglePinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "transform",
@@ -110,7 +110,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"transform\"",
     value_component: "TransformPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "texture",
@@ -121,7 +121,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["Texture"]),
     typescript_form: "\"texture\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "audio",
@@ -132,7 +132,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["Audio"]),
     typescript_form: "\"audio\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "encoded_video",
@@ -143,7 +143,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["EncodedVideo"]),
     typescript_form: "\"encoded_video\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "encoded_audio",
@@ -154,7 +154,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["EncodedAudio"]),
     typescript_form: "\"encoded_audio\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "tensor",
@@ -165,7 +165,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["Tensor"]),
     typescript_form: "\"tensor\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "asset",
@@ -177,7 +177,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"asset\"",
     value_component: "AssetPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "trigger",
@@ -188,7 +188,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["Trigger"]),
     typescript_form: "\"trigger\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "list_of",
@@ -200,7 +200,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"list_of\"",
     value_component: "ListPinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "bundle",
@@ -212,7 +212,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"bundle\"",
     value_component: "BundlePinValue",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "named",
@@ -223,7 +223,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["named_pin_type"]),
     typescript_form: "\"named\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "connection",
@@ -234,7 +234,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     python_forms: Object.freeze(["connection_type"]),
     typescript_form: "\"connection\"",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "node_reference",
@@ -246,7 +246,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"node_reference\"",
     value_component: "NodeReferenceInConfig",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
   Object.freeze({
     name: "pin_type_choice",
@@ -258,6 +258,6 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     typescript_form: "\"pin_type_choice\"",
     value_component: "PinType",
     since: 3,
-    stability: "experimental",
+    stability: "stable",
   }),
 ]);

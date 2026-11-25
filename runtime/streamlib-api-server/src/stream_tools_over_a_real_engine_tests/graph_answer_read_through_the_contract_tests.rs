@@ -118,7 +118,9 @@ async fn a_real_runtimes_graph_reads_as_the_contract_types_it_and_names_where_ea
     );
     let live_mixer = the_node_named(one_stream, "live_mixer");
     assert_eq!(live_mixer["input_values"], json!({ "frame_width": 640 }));
-    assert_eq!(live_mixer["config"], json!({ "frame_width": 640 }));
+    for gone in ["config", "pins", "exposed_config_fields", "config_checksum"] {
+        assert!(live_mixer.get(gone).is_none(), "{gone}: {live_mixer}");
+    }
     let live_gain = the_input_named(&live_mixer, "gain");
     assert_eq!(
         (&live_gain["value"], &live_gain["value_comes_from"]),
@@ -133,7 +135,6 @@ async fn a_real_runtimes_graph_reads_as_the_contract_types_it_and_names_where_ea
     );
     let saved_mixer = the_node_named(one_stream, "saved_mixer");
     assert_eq!(saved_mixer["input_values"], json!({ "gain": 0.5 }));
-    assert_eq!(saved_mixer["pins"], json!({ "gain": 0.5 }));
     let saved_gain = the_input_named(&saved_mixer, "gain");
     assert_eq!(
         (&saved_gain["value"], &saved_gain["value_comes_from"]),

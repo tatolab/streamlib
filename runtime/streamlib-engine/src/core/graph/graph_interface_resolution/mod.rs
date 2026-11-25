@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::descriptors::{NodeClassImportPath, NodeValueLifetime, PinType, PortFamily};
+use crate::core::descriptors::{NodeValueLifetime, PinType, PortFamily};
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, the_ports_of_a_graph_document_node,
 };
@@ -27,8 +27,7 @@ use crate::core::graph::{
 };
 use crate::core::json_schema::{
     GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire, GraphNodeOutput,
-    GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered,
-    LinkOutput, LinkPortRefOutput,
+    GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse, LinkOutput, LinkPortRefOutput,
 };
 use crate::core::nodes::{
     NodeTypesOneStreamResolves, refuse_a_link_into_a_setting_of_a_node_of_the_graph_itself,
@@ -253,14 +252,6 @@ impl GraphInterfaceNodeAsDrawn {
             graph_interface: Some(declared.as_component()),
             ..GraphNodeComponentsOnTheWire::default()
         };
-        let values = InputValuesRendered::of_a_node_holding_no_pin_value_whose_config_renders_as(
-            &self.node.input_values,
-            the_config_a_graph_interface_node_renders(
-                &self.node.node_type,
-                &self.node.input_values,
-                serde_json::Value::Object(self.node.input_values.clone()),
-            ),
-        );
         GraphNodeOutput {
             id: self
                 .node
@@ -271,12 +262,8 @@ impl GraphInterfaceNodeAsDrawn {
             kind: None,
             language: None,
             name: cast_or_as_written(&self.node.name),
-            config: Some(values.config),
-            config_checksum: values.config_checksum,
             ports: GraphNodePortsOnTheWire { inputs, outputs },
-            input_values: values.input_values,
-            pins: values.pins,
-            exposed_config_fields: self.node.exposed_config_fields.clone(),
+            input_values: self.node.input_values.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
             components,
@@ -300,48 +287,6 @@ impl GraphInterfaceNodeAsDrawn {
             &self.node.input_values,
             TakesAWireRendered::ByTheRuleOnANodeOf(&self.node.node_type),
         )
-    }
-}
-
-/// The config an interface node of `node_type` holding `input_values` renders: a `GraphInput`'s
-/// saved value, on its `value` input or under the `default` it had, is rendered as
-/// [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
-pub(crate) fn the_config_a_graph_interface_node_renders(
-    node_type: &NodeClassImportPath,
-    input_values: &serde_json::Map<String, serde_json::Value>,
-    mut config: serde_json::Value,
-) -> serde_json::Value {
-    if node_type.is_the_graph_input_type()
-        && let Some(config) = config.as_object_mut()
-    {
-        let saved_value = [
-            GRAPH_INTERFACE_VALUE_PORT_NAME,
-            GRAPH_INPUT_VALUE_FORMER_NAME,
-        ]
-        .into_iter()
-        .filter_map(|key| input_values.get(key))
-        .find(|held| !held.is_null());
-        render_the_saved_value_of_a_graph_input_as_its_default(config, saved_value);
-    }
-    config
-}
-
-/// Render `saved_value`, the saved value of a `GraphInput`'s `value` input, in its rendered
-/// `config` under `default`, the key a published Tato Studio reads it by until TAT-484. A
-/// `value` or `default` the config itself holds is dropped first, so a `GraphInput` saving no
-/// value renders neither and a graph drawn back from the rendering reads a cleared value as
-/// cleared.
-pub(crate) fn render_the_saved_value_of_a_graph_input_as_its_default(
-    config: &mut serde_json::Map<String, serde_json::Value>,
-    saved_value: Option<&serde_json::Value>,
-) {
-    config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
-    config.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
-    if let Some(saved_value) = saved_value.filter(|held| !held.is_null()) {
-        config.insert(
-            GRAPH_INPUT_VALUE_FORMER_NAME.to_string(),
-            saved_value.clone(),
-        );
     }
 }
 

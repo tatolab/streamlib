@@ -15,22 +15,20 @@ use super::{
 };
 use crate::ImageStreamFrameRate;
 
-/// The schema of the variant `{"from_config": {"config_key": "<key>"}}`, which leaves the contract
-/// at its version 4 with the node settings it reads.
-fn from_config_variant(description: &str) -> Schema {
+/// The schema of the variant `{"from_setting": {"setting": "<name>"}}`.
+fn from_setting_variant(description: &str) -> Schema {
     json_schema!({
         "type": "object",
         "properties": {
-            "from_config": {
+            "from_setting": {
                 "type": "object",
-                "properties": { "config_key": { "type": "string" } },
-                "required": ["config_key"],
+                "properties": { "setting": { "type": "string" } },
+                "required": ["setting"],
             },
         },
-        "required": ["from_config"],
+        "required": ["from_setting"],
         "additionalProperties": false,
         "description": description,
-        "x-removed-in": 4,
     })
 }
 
@@ -85,7 +83,7 @@ impl JsonSchema for ImageOutputPortFrameRate {
                     generator.subschema_for::<ImageStreamFrameRate>(),
                     "Frames per second, stated on the class.",
                 ),
-                from_config_variant("The value of the node's config key of this name."),
+                from_setting_variant("The value of the node's setting of this name."),
             ],
             "description": "The frame rate a Texture output states, written on the class or \
                             read from one of its node's settings.",
@@ -105,7 +103,7 @@ impl JsonSchema for ChannelsOutputPortSampleRate {
                     generator.subschema_for::<u32>(),
                     "Samples per second, stated on the class.",
                 ),
-                from_config_variant("The value of the node's config key of this name."),
+                from_setting_variant("The value of the node's setting of this name."),
             ],
             "description": "The sample rate an Audio output states, written on the class or \
                             read from one of its node's settings.",

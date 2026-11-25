@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
     NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
 use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
@@ -67,7 +67,7 @@ pub fn control_contract_document() -> Value {
             settings.definitions_path = COMPONENT_SCHEMAS_DEFINITIONS_PATH.into();
         })
         .into_generator();
-    let refusal_schema = schema_generator.subschema_for::<ProjectActionRefusalOnTheWire>();
+    let refusal_schema = schema_generator.subschema_for::<ControlOperationRefusalOnTheWire>();
     let contract_version_mismatch_schema =
         schema_generator.subschema_for::<ControlContractVersionMismatch>();
     let methods: Vec<Value> = CONTROL_OPERATIONS
@@ -197,7 +197,7 @@ fn the_pin_type_entry_of(
         "python_forms": row.python_forms,
         "typescript_form": row.typescript_form,
         "x-since": PIN_TYPES_SINCE_CONTRACT_VERSION,
-        "x-stability": ControlOperationStability::Experimental,
+        "x-stability": ControlOperationStability::Stable,
     });
     if let Some(value_json_schema) = row.name.value_json_schema(schema_generator) {
         entry["value_json_schema"] = value_json_schema.to_value();
@@ -306,7 +306,7 @@ mod tests {
                 .unwrap_or_else(|refusal| panic!("a method states a schema: {refusal}"))
         };
         let refusal_validator = the_validator_of(
-            &json!({ "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire" }),
+            &json!({ "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire" }),
         );
         let mut examples_seen = 0;
         for method in document["methods"].as_array().into_iter().flatten() {
@@ -360,20 +360,12 @@ mod tests {
             }))
             .unwrap_or_else(|refusal| panic!("`{name}` is a schema: {refusal}"))
         };
-        let recorded = [
-            (
-                "NodeTypeListed",
-                json!({"node_type": "nodes.mix:Mixer", "documentation": "Mixes.",
+        let recorded = [(
+            "NodeTypeListed",
+            json!({"node_type": "nodes.mix:Mixer", "documentation": "Mixes.",
                        "category": "Show/Levels", "category_from": "project",
                        "kind": "process", "described_from": "source"}),
-            ),
-            (
-                "NodeTypeReadFromSource",
-                json!({"type": "nodes.mix:Mixer", "kind": "process", "description": "Mixes.",
-                       "category": "Robot/Hands", "category_from": "import",
-                       "inputs": [], "outputs": [], "path": "nodes/mix.py", "line": 1}),
-            ),
-        ];
+        )];
         for (name, answer) in recorded {
             let validator = the_schema_of(name);
             assert!(validator.is_valid(&answer), "{answer} is a `{name}`");
@@ -421,32 +413,25 @@ mod tests {
     }
 
     #[test]
-    fn each_replaced_operation_names_the_operation_that_replaces_it() {
+    fn the_document_lists_no_operation_contract_4_took_away() {
         let document = control_contract_document();
-        let replaced_by_of = |name: &str| {
-            document["methods"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|method| method["name"] == name)
-                .unwrap_or_else(|| panic!("the document lists `{name}`"))
-                .get("x-replaced-by")
-                .cloned()
-        };
-        for replaced in [
+        let method_names: Vec<&str> = document["methods"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|method| method["name"].as_str())
+            .collect();
+        for removed in [
             "set_node_config",
             "set_pin_value",
             "set_exposed_config_fields",
             "write_graph_input",
             "write_studio_view_output",
+            "list_project_node_types",
         ] {
-            assert_eq!(
-                replaced_by_of(replaced),
-                Some(serde_json::json!("set_node_input_value")),
-                "{replaced}"
-            );
+            assert!(!method_names.contains(&removed), "{removed}");
         }
-        assert_eq!(replaced_by_of("set_node_input_value"), None);
+        assert!(method_names.contains(&"set_node_input_value"));
     }
 
     #[test]
@@ -493,7 +478,7 @@ mod tests {
         assert_eq!(row_names, built_in_names);
         assert!((1..=CONTROL_CONTRACT_VERSION).contains(&PIN_TYPES_SINCE_CONTRACT_VERSION));
         for row in rows {
-            assert_eq!(row["x-stability"], json!("experimental"), "{}", row["name"]);
+            assert_eq!(row["x-stability"], json!("stable"), "{}", row["name"]);
             assert_eq!(
                 row["x-since"],
                 json!(PIN_TYPES_SINCE_CONTRACT_VERSION),

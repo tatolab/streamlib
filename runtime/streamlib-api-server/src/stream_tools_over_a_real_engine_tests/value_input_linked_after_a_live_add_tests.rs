@@ -113,9 +113,10 @@ async fn a_value_input_of_a_node_added_while_playing_takes_a_link_made_later() {
 
     transact_by_alice(
         &engine,
-        json!([{ "operation": "add_node", "stream": stream, "name": "reader",
-                 "type": StreamToolsTestLevelReader::node_class_import_path().as_str(),
-                 "pins": { "level": THE_LEVEL_HELD_UNLINKED } }]),
+        json!([{ "operation": "add_node", "stream": stream, "name": "reader", "as": "reader",
+                 "type": StreamToolsTestLevelReader::node_class_import_path().as_str() },
+               { "operation": "set_node_input_value", "stream": stream, "node": "reader",
+                 "input": "level", "value": THE_LEVEL_HELD_UNLINKED }]),
     )
     .await
     .expect("the reader is added while the stream plays");

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire,
 };
 
 use crate::control_operation::{
@@ -262,7 +262,7 @@ pub fn the_operation_groups_served_to_agents() -> ListOperationGroupsResult {
 /// nothing.
 pub fn the_operations_described_for(
     DescribeOperationsRequest { operations, group }: DescribeOperationsRequest,
-) -> Result<DescribeOperationsResult, Box<ProjectActionRefusalOnTheWire>> {
+) -> Result<DescribeOperationsResult, Box<ControlOperationRefusalOnTheWire>> {
     let described: Vec<&ControlOperationDeclaration> = match (operations, group) {
         (Some(names), None) => {
             if let Some(unknown) = names
@@ -284,7 +284,7 @@ pub fn the_operations_described_for(
             })
             .collect(),
         _ => {
-            return Err(Box::new(ProjectActionRefusalOnTheWire::of_the_action(
+            return Err(Box::new(ControlOperationRefusalOnTheWire::of_the_action(
                 DESCRIBE_OPERATIONS_TOOL_NAME,
                 ControlOperationRefusalCode::Refused,
                 format!(
@@ -490,16 +490,12 @@ mod tests {
     fn an_operation_is_described_with_its_worked_example_and_a_loop_operation_with_its_answer_and_refusal()
      {
         let described = the_operations_described_for(DescribeOperationsRequest {
-            operations: Some(vec![
-                "add_node".to_owned(),
-                "check_link".to_owned(),
-                "set_node_config".to_owned(),
-            ]),
+            operations: Some(vec!["add_node".to_owned(), "check_link".to_owned()]),
             group: None,
         })
         .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
-        let [add_node, check_link, set_node_config] = described.operations.as_slice() else {
-            panic!("three operations were asked for");
+        let [add_node, check_link] = described.operations.as_slice() else {
+            panic!("two operations were asked for");
         };
         let Some(add_node_example) = &add_node.example else {
             panic!("add_node shows an example");
@@ -524,7 +520,6 @@ mod tests {
                 .as_ref()
                 .is_some_and(|refusal| refusal["refusal_code"].is_string())
         );
-        assert_eq!(set_node_config.example, None);
     }
 
     #[test]
@@ -666,48 +661,38 @@ mod tests {
     }
 
     #[test]
-    fn a_replaced_operation_is_not_listed_and_is_still_described_and_reached_by_name() {
-        let replaced = ["set_node_config", "set_pin_value"];
-        let listed = the_operation_groups_served_to_agents();
-        let listed_names: Vec<&str> = listed
+    fn an_operation_contract_4_took_away_is_not_listed_and_not_described() {
+        let removed = [
+            "set_node_config",
+            "set_pin_value",
+            "list_project_node_types",
+        ];
+        let listed_names: Vec<String> = the_operation_groups_served_to_agents()
             .groups
-            .iter()
-            .flat_map(|group| {
-                group
-                    .operations
-                    .iter()
-                    .map(|operation| operation.name.as_str())
-            })
+            .into_iter()
+            .flat_map(|group| group.operations)
+            .map(|operation| operation.name)
             .collect();
         assert!(
-            listed_names.contains(&"set_node_input_value"),
-            "{listed_names:?}"
+            listed_names
+                .iter()
+                .any(|name| name == "set_node_input_value")
         );
-        for replaced in replaced {
-            assert!(!listed_names.contains(&replaced), "{replaced} is listed");
-            let described = the_operations_described_for(DescribeOperationsRequest {
-                operations: Some(vec![replaced.to_owned()]),
+        for removed in removed {
+            assert!(
+                !listed_names.iter().any(|name| name == removed),
+                "{removed} is listed"
+            );
+            let refusal = the_operations_described_for(DescribeOperationsRequest {
+                operations: Some(vec![removed.to_owned()]),
                 group: None,
             })
-            .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
-            assert_eq!(described.operations.len(), 1);
-            assert!(
-                described.operations[0]
-                    .usage
-                    .contains("set_node_input_value"),
-                "{replaced} names its replacement"
+            .unwrap_err();
+            assert_eq!(
+                refusal.refusal_code,
+                ControlOperationRefusalCode::OperationNotFound
             );
+            assert!(refusal.runtime_words.contains(&format!("`{removed}`")));
         }
-        let described_graph_group = the_operations_described_for(DescribeOperationsRequest {
-            operations: None,
-            group: Some(ControlOperationGroup::Graph),
-        })
-        .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
-        assert!(
-            described_graph_group
-                .operations
-                .iter()
-                .all(|operation| !replaced.contains(&operation.name.as_str()))
-        );
     }
 }

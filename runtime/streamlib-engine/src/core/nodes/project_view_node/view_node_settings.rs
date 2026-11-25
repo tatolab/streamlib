@@ -75,15 +75,9 @@ pub(crate) fn render_the_settings_of_each_view_node_into(
             continue;
         };
         let settings = the_settings_of_a_view_node(&descriptor);
-        let config_held = node
-            .config
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .cloned()
-            .unwrap_or_default();
         let rendered = the_settings_rendered_reading_the_values_held(
             &settings,
-            &config_held,
+            &node.input_values,
             TakesAWireRendered::NoneOfThemTakesOne,
         );
         node.ports.inputs.splice(0..0, rendered);

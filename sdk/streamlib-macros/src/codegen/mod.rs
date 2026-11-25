@@ -807,9 +807,9 @@ fn port_family_declaration_tokens(
         ChannelsOutputPortSampleRate::Stated(rate) => {
             quote! { #descriptors::ChannelsOutputPortSampleRate::Stated(#rate) }
         }
-        ChannelsOutputPortSampleRate::FromConfig { config_key } => quote! {
-            #descriptors::ChannelsOutputPortSampleRate::FromConfig {
-                config_key: ::std::string::String::from(#config_key),
+        ChannelsOutputPortSampleRate::FromSetting { setting } => quote! {
+            #descriptors::ChannelsOutputPortSampleRate::FromSetting {
+                setting: ::std::string::String::from(#setting),
             }
         },
     }));
@@ -824,9 +824,9 @@ fn port_family_declaration_tokens(
                 })
             }
         }
-        ImageOutputPortFrameRate::FromConfig { config_key } => quote! {
-            #descriptors::ImageOutputPortFrameRate::FromConfig {
-                config_key: ::std::string::String::from(#config_key),
+        ImageOutputPortFrameRate::FromSetting { setting } => quote! {
+            #descriptors::ImageOutputPortFrameRate::FromSetting {
+                setting: ::std::string::String::from(#setting),
             }
         },
     }));

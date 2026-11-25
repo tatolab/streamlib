@@ -8,7 +8,7 @@ import type {
   ControlContractVersionMismatch,
   ControlOperations,
   OlderSide,
-  ProjectActionRefusalOnTheWire,
+  ControlOperationRefusalOnTheWire,
 } from "./control_contract.js";
 import type { ControlContractIssue } from "./control_contract_check.js";
 
@@ -40,7 +40,7 @@ export declare class ControlOperationError extends Error {
   /** The error's `data`, as the runtime sent it. */
   readonly data: unknown;
   /** The refusal, when the error's `data` matches the contract's refusal, as every code but a contract mismatch carries it; `data` keeps what the runtime sent either way. */
-  readonly refusal: ProjectActionRefusalOnTheWire | undefined;
+  readonly refusal: ControlOperationRefusalOnTheWire | undefined;
 }
 
 /** The runtime refused a client built against a contract it does not serve, on a call, on `discover` or on the WebSocket upgrade, naming the side to update. */

@@ -10,7 +10,7 @@ use streamlib_node_schema::pin_type::{
     ConvertNodeToInsert, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
 };
 
-use super::ProjectActionRefusalOnTheWire;
+use super::ControlOperationRefusalOnTheWire;
 
 /// `check_link`'s answer: whether and how `connect` would make the link, and the refusal it
 /// would answer when it would not.
@@ -26,7 +26,7 @@ pub struct LinkCheckResult {
     /// The whole refusal `connect` would answer, with its code; present only when `outcome` is
     /// `refused`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refusal: Option<ProjectActionRefusalOnTheWire>,
+    pub refusal: Option<ControlOperationRefusalOnTheWire>,
     /// What the link would do that a person may not expect; none of these blocks it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<PinLinkWarningOnTheWire>,
@@ -64,7 +64,7 @@ impl LinkCheckResult {
     }
 
     /// The answer for a link `connect` would refuse with `refusal`.
-    pub fn of_a_link_connect_refuses(refusal: ProjectActionRefusalOnTheWire) -> Self {
+    pub fn of_a_link_connect_refuses(refusal: ControlOperationRefusalOnTheWire) -> Self {
         Self {
             outcome: PinLinkOutcomeOnTheWire::Refused,
             convert_node: None,

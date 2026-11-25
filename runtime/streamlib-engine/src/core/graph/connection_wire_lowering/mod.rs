@@ -275,7 +275,6 @@ impl ConnectionWiresAsDrawn {
             };
             let target = &mut graph_response.nodes[target_index];
             target.input_values.remove(input.as_ref());
-            target.pins.remove(input.as_ref());
             graph_response.links.push(LinkOutput {
                 source: LinkPortRefOutput {
                     node: source_node.into_owned(),

@@ -358,7 +358,7 @@ def test_a_project_with_no_node_of_its_own_places_core_nodes_from_the_runtimes_c
     [listed] = local_api.list_streams()
     assert listed["failed_because"] is None, listed
     node_types = local_api.call_tool(
-        "list_project_node_types", {"project_directory": str(project_directory)}
+        "list_node_types", {"project_directory": str(project_directory)}
     )
     assert f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.color:Tint" in json.dumps(node_types)
     views = local_api.call_tool(
@@ -485,7 +485,7 @@ def test_a_zip_of_an_opened_project_is_imported_and_unpacked_without_its_core_no
     )
     node_types_listed = json.dumps(
         local_api.call_tool(
-            "list_project_node_types",
+            "list_node_types",
             {"project_directory": str(importing_project_directory)},
         )
     )

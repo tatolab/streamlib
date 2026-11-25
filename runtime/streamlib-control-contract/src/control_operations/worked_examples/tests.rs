@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde_json::Value;
-use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalOnTheWire;
 
 use crate::agent_surface::{
     CALL_OPERATION_TOOL_NAME, DESCRIBE_OPERATIONS_TOOL_NAME, DescribeOperationsRequest,
@@ -126,7 +126,7 @@ fn every_example_refusal_is_the_one_refusal_shape_with_its_code_and_its_operatio
             "{}'s example refusal states no code",
             declaration.method_name
         );
-        let read: ProjectActionRefusalOnTheWire = serde_json::from_value(refusal.clone())
+        let read: ControlOperationRefusalOnTheWire = serde_json::from_value(refusal.clone())
             .unwrap_or_else(|error| {
                 panic!("{}'s example refusal: {error}", declaration.method_name)
             });
@@ -168,13 +168,20 @@ fn every_suggested_call_in_an_example_parses_as_the_suggested_operations_request
 }
 
 #[test]
-fn no_example_calls_or_suggests_a_replaced_operation() {
+fn no_example_calls_or_suggests_a_replaced_or_removed_operation() {
     let replaced: BTreeSet<&str> = CONTROL_OPERATIONS
         .iter()
         .filter(|declaration| declaration.replaced_by.is_some())
         .map(|declaration| declaration.method_name)
+        .chain([
+            "set_node_config",
+            "set_pin_value",
+            "set_exposed_config_fields",
+            "list_project_node_types",
+            "write_studio_view_output",
+            "write_graph_input",
+        ])
         .collect();
-    assert!(replaced.contains("set_node_config"));
     for (declaration, example) in every_example() {
         for value in every_value_of(&example) {
             let mut named = Vec::new();

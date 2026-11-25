@@ -31,7 +31,7 @@ use streamlib_project_repository::{
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
     StreamGraphOperation, StreamGraphOperationOnAStream,
     asset_references_made_references_into_the_import,
-    config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
+    config_holding_the_default_name_of_a_graph_port_or_variable,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
     input_values_after_the_set, is_a_node_type_of_the_graph_itself,
     stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
@@ -754,11 +754,6 @@ type ConvertNodeALinkOfTheRunningStreamNeeds<'stream> = dyn Fn(&StreamGraphDocum
 type RefusalOfALinkJudgedBeforeCommit<'stream> =
     dyn Fn(&StreamGraphDocumentLink) -> Result<(), GraphRequestRefusal> + 'stream;
 
-/// The config a node of a type holding some input values takes whole, as the running stream
-/// resolves the type.
-type ConfigANodeOfTheRunningStreamTakes<'stream> =
-    dyn Fn(&str, &Map<String, Value>) -> Result<Value, GraphRequestRefusal> + 'stream;
-
 /// What building a graph request's operation reads of the running stream and its project.
 struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     run_the_graph_generator: &'reads GraphGeneratorRunOfTheStream<'reads>,
@@ -768,7 +763,6 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
     convert_node_a_link_needs: &'reads ConvertNodeALinkOfTheRunningStreamNeeds<'reads>,
     refuse_a_link_judged_before_commit: &'reads RefusalOfALinkJudgedBeforeCommit<'reads>,
-    config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
 }
 
 /// The UUID of each node `rendered_graph`, a stream's `graph` render, renders as a function
@@ -794,11 +788,14 @@ fn the_function_nodes_rendered_in(rendered_level: &Value, function_nodes: &mut H
     }
 }
 
-/// The family wire name the output port `end` declares in `rendered_graph`, a stream's
-/// `graph` render, its node at any level of the fragments the render holds.
+/// The family wire name the output port `end` carries in `rendered_graph`, a stream's `graph`
+/// render, its node at any level of the fragments the render holds: the family its pin type
+/// travels on, else, for a port of no one type yet, the family the port's node type declares
+/// it on, as `ports_of_a_node_type` reads the type.
 fn the_family_of_an_output_port_in(
     rendered_graph: &Value,
     end: &StreamGraphDocumentLinkEnd,
+    ports_of_a_node_type: &dyn Fn(&str) -> Option<streamlib::sdk::graph::GraphNodePorts>,
 ) -> Result<String, String> {
     fn the_rendered_node_at_any_level<'render>(
         rendered_level: &'render Value,
@@ -817,22 +814,37 @@ fn the_family_of_an_output_port_in(
             })
     }
     let node = end.node.to_string();
-    the_rendered_node_at_any_level(rendered_graph, &node)
-        .and_then(|rendered_node| {
-            rendered_node["ports"]["outputs"]
-                .as_array()?
-                .iter()
-                .find(|port| port["name"] == end.port.as_str())
-        })
-        .and_then(|port| port["family"]["family"].as_str())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "the running stream declares no family for the output port {node}/{}, so the \
-                 subgraph port carrying it cannot be declared",
-                end.port
+    let no_family = || {
+        format!(
+            "the running stream declares no family for the output port {node}/{}, so the \
+             subgraph port carrying it cannot be declared",
+            end.port
+        )
+    };
+    let rendered_node =
+        the_rendered_node_at_any_level(rendered_graph, &node).ok_or_else(no_family)?;
+    let carried_by_its_pin_type = rendered_node["ports"]["outputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|port| port["name"] == end.port.as_str())
+        .and_then(|port| {
+            <streamlib::sdk::descriptors::PinType as serde::Deserialize>::deserialize(
+                &port["pin_type"],
             )
+            .ok()
         })
+        .and_then(|pin_type| streamlib::sdk::descriptors::PortFamily::carrying(&pin_type));
+    carried_by_its_pin_type
+        .or_else(|| {
+            ports_of_a_node_type(rendered_node["type"].as_str()?)?
+                .outputs
+                .into_iter()
+                .find(|port| port.name == end.port)
+                .map(|port| port.family.family)
+        })
+        .map(|family| family.wire_name().to_owned())
+        .ok_or_else(no_family)
 }
 
 /// The fragment the stream fragment node `fragment_node` places for `held_stream`,

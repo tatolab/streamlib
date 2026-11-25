@@ -116,9 +116,7 @@ fn graph_renders_the_pool_beside_the_nodes_and_each_carried_link_as_it_was_given
         .as_ref()
         .expect("`function_node_pool` renders the pool");
     assert_eq!(
-        pool.config.as_ref().unwrap()["carries"]
-            .as_array()
-            .map(Vec::len),
+        pool.input_values["carries"].as_array().map(Vec::len),
         Some(1)
     );
     assert_eq!(rendered.links.len(), 1, "{:?}", rendered.links);

@@ -152,9 +152,9 @@ fn each_config_field_is_an_input_taking_no_wire_with_its_default_and_an_exact_ty
             .all(|input| input.get("family").is_none() && input.get("annotations").is_none()),
         "{rendered}"
     );
-    assert_eq!(
-        rendered["exposable_config_fields"],
-        serde_json::json!(["gain", "frames", "mirrored"])
+    assert!(
+        rendered.get("exposable_config_fields").is_none(),
+        "{rendered}"
     );
     assert_eq!(
         rendered["config_schema"]["properties"]["gain"]["default"],

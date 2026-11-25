@@ -123,15 +123,6 @@ pub struct CreateNodeUiElementRequest {
     pub idempotency_key: Option<String>,
 }
 
-/// `list_project_node_types`'s params.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ListProjectNodeTypesRequest {
-    /// The project, by absolute path.
-    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    pub project_directory: PathBuf,
-}
-
 /// `check_project_code`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -162,26 +153,6 @@ pub struct ListProjectNodeUiElementsRequest {
     /// The project, by absolute path.
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     pub project_directory: PathBuf,
-}
-
-/// `write_studio_view_output`'s params.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WriteStudioViewOutputRequest {
-    /// The stream id of the stream holding the view node.
-    #[schemars(description = "The stream id of the stream holding the view node.")]
-    pub stream: String,
-    /// The view node's UUID, as `graph` lists it under `id`.
-    #[schemars(description = "The view node's UUID, as `graph` lists it under `id`.")]
-    pub node: String,
-    /// The view node's output port the value is published on.
-    #[schemars(description = "The view node's output port the value is published on.")]
-    pub port: String,
-    /// The value, as the port's family carries it.
-    #[schemars(
-        description = "The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
-    )]
-    pub value: serde_json::Value,
 }
 
 /// What every required `stream` argument says.
