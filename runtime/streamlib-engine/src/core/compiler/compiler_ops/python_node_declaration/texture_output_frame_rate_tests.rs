@@ -8,7 +8,7 @@ use super::tests::{declared_pin_of, described_node_type_with_input_ports, read, 
 use crate::core::descriptors::{ImageOutputPortFrameRate, ImageStreamFrameRate};
 
 /// A described node type whose Texture output `video` states its frame rate as `frame_rate`,
-/// beside a setting `frames_per_second`.
+/// beside an Integer setting `frames_per_second` and a String setting `title`.
 fn a_described_node_type_whose_texture_output_states(
     frame_rate: serde_json::Value,
 ) -> serde_json::Value {
@@ -18,6 +18,12 @@ fn a_described_node_type_whose_texture_output_states(
         "description": "",
         "input_mode": {"mode": "setting_only"},
         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}}, "flow": "value"},
+    }, {
+        "name": "title",
+        "family": {"family": "records"},
+        "description": "",
+        "input_mode": {"mode": "setting_only"},
+        "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "value"},
     }]));
     described["output_ports"] = serde_json::json!([{
         "name": "video",
@@ -61,7 +67,19 @@ fn a_texture_outputs_frame_rate_reads_stated_or_from_a_setting_the_node_declares
     assert!(
         refusal.contains(
             "output \"video\" runs at the frame rate its node's setting \"fps\" holds, and the \
-             node declares no setting \"fps\""
+             node declares no setting \"fps\". To fix:"
+        ),
+        "{refusal}"
+    );
+
+    let refusal = refusal_of(&a_described_node_type_whose_texture_output_states(
+        serde_json::json!({"from_config": {"config_key": "title"}}),
+    ));
+    assert!(
+        refusal.contains(
+            "output \"video\" runs at the frame rate its node's setting \"title\" holds, and \
+             that setting is a String, which holds no frame rate. To fix: type \"title\" an \
+             Integer of frames per second"
         ),
         "{refusal}"
     );

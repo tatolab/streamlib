@@ -239,14 +239,8 @@ fn the_facts_declared_by(
 ) -> StreamFactsOfOneOutputPort {
     let family = output_port_family_resolved_against_config(&port.family, node_config)
         .unwrap_or(port.family.family);
-    let stated_frame_rate = port
-        .annotations
-        .0
-        .frame_rate
-        .as_ref()
-        .or(port.family.frame_rate.as_ref());
     let declared_frame_rate =
-        output_port_frame_rate_resolved_against_config(stated_frame_rate, node_config)
+        output_port_frame_rate_resolved_against_config(port.stated_frame_rate(), node_config)
             .ok()
             .flatten();
     let current_facts = declared_frame_rate.map(|frame_rate| {

@@ -107,6 +107,11 @@ impl PortDescriptor {
             .or_else(|| self.family.exact_pin_type().map(PinDeclaration::exactly))
     }
 
+    /// Whether this input is a setting, read at setup or each run.
+    pub fn is_a_setting(&self) -> bool {
+        self.input_mode.is_some_and(NodeInputMode::is_a_setting)
+    }
+
     /// Whether the port's pin flows as a Value: an output port so declared keeps its last
     /// message for a reader that connects after it.
     pub fn flows_as_a_value(&self) -> bool {
@@ -331,7 +336,8 @@ impl NodeDescriptor {
     }
 
     /// Why an output's frame rate, read from one of the node type's settings, cannot be read: it
-    /// names a setting the node type does not declare; `None` when every such output names one.
+    /// names a setting the node type does not declare, or one of a type that holds no frame
+    /// rate; `None` when every such output names a setting that holds one.
     pub fn refusal_of_a_frame_rate_no_setting_holds(&self) -> Option<String> {
         self.outputs.iter().find_map(|output| {
             let declared = output.declared_pin()?;
@@ -340,15 +346,31 @@ impl NodeDescriptor {
             else {
                 return None;
             };
-            let a_setting_holds_it = self.inputs.iter().any(|input| {
-                input.name == *config_key
-                    && input.input_mode.is_some_and(|mode| mode.is_a_setting())
-            });
-            (!a_setting_holds_it).then(|| {
+            let Some(setting) = self
+                .inputs
+                .iter()
+                .find(|input| input.name == *config_key && input.is_a_setting())
+            else {
+                return Some(format!(
+                    "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \
+                     and the node declares no setting {config_key:?}. To fix: declare a setting \
+                     {config_key:?} holding the frame rate, or name one the node declares",
+                    output.name
+                ));
+            };
+            let setting_type = setting
+                .declared_pin()
+                .and_then(PinDeclaration::into_resolved)?;
+            let holds_a_frame_rate = matches!(
+                setting_type.pin_type,
+                PinType::Integer { .. } | PinType::Bundle { .. }
+            );
+            (!holds_a_frame_rate).then(|| {
                 format!(
                     "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \
-                     and the node declares no setting {config_key:?}",
-                    output.name
+                     and that setting is a {}, which holds no frame rate. To fix: type \
+                     {config_key:?} an Integer of frames per second",
+                    output.name, setting_type.pin_type
                 )
             })
         })
