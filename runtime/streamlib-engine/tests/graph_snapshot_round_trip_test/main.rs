@@ -75,6 +75,46 @@ fn the_spec_without_its_node_uuids_in(graph_document: serde_json::Value) -> Grap
     graph
 }
 
+/// [`the_spec_without_its_node_uuids_in`], with each `GetVariable` the render reads back naming
+/// its setter by UUID named by the variable that setter sets, as a spec written by name draws
+/// it; refusing a get naming no setter the graph holds.
+fn the_spec_naming_each_get_by_its_variable_in(graph_document: serde_json::Value) -> GraphSnapshot {
+    let mut graph = the_spec_in(graph_document);
+    let variable_of_each_setter: std::collections::HashMap<String, serde_json::Value> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.node_type.as_str() == "tatolab.stream:SetVariable")
+        .filter_map(|setter| {
+            Some((
+                setter.id?.to_string(),
+                setter.input_values.get("variable")?.clone(),
+            ))
+        })
+        .collect();
+    for get in &mut graph.nodes {
+        let Some(setter) = get.input_values.remove("set_variable") else {
+            continue;
+        };
+        let variable = variable_of_each_setter
+            .get(
+                setter
+                    .as_str()
+                    .expect("a get names its setter by a UUID string"),
+            )
+            .unwrap_or_else(|| panic!("get `{}` names a setter the graph holds", get.name));
+        get.input_values
+            .insert("variable".to_string(), variable.clone());
+    }
+    for node in &mut graph.nodes {
+        assert!(
+            node.id.take().is_some(),
+            "node `{}` renders no UUID",
+            node.name
+        );
+    }
+    graph
+}
+
 /// Load options for the stream `stream_id` of the project in `project_directory`.
 fn in_the_project(project_directory: &Path, stream_id: &str) -> OptionsForLoadingOneStream {
     options_loading_a_stream_of_the_test_project_at(project_directory, stream_id)

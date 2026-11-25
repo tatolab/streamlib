@@ -4,7 +4,7 @@
 use super::*;
 use crate::core::descriptors::{PinDeclaration, PinType};
 
-fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
+pub(super) fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
     GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
         .with_graph_variables_resolved(
@@ -13,13 +13,13 @@ fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolv
         )
 }
 
-fn refusal_of(graph: serde_json::Value) -> String {
+pub(super) fn refusal_of(graph: serde_json::Value) -> String {
     resolved(graph)
         .expect_err("the graph's variables are refused")
         .to_string()
 }
 
-fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
+pub(super) fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
     GraphSnapshotLink {
         source: LinkPortRefOutput {
             node: source.0.to_string(),
@@ -34,7 +34,7 @@ fn link(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
     }
 }
 
-fn a_camera_variable_read_by_two_displays() -> serde_json::Value {
+pub(super) fn a_camera_variable_read_by_two_displays() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
             {"name": "camera", "type": "rig:Camera"},
@@ -536,6 +536,7 @@ fn a_get_nothing_reads_is_placed_with_no_setter_and_one_linked_is_refused() {
     assert_eq!(
         resolution.variables_as_drawn.what_each_get_reads["get-camra"],
         WhatAGetVariableReads {
+            variable: Some("camra".to_string()),
             variables_it_may_read: vec!["camera".to_string()],
             value: None,
         }
@@ -578,7 +579,7 @@ fn a_setter_holding_another_variable_node_is_refused() {
         ));
     assert!(refusal_of(graph).contains("holds variable node `get-connection`"));
 }
-fn a_rendered_node(name: &str) -> GraphNodeOutput {
+pub(super) fn a_rendered_node(name: &str) -> GraphNodeOutput {
     GraphNodeOutput {
         id: format!("id-{name}"),
         node_type: NodeClassImportPath::new("rig:Node").unwrap(),

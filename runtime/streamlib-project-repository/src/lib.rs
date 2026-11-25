@@ -160,8 +160,9 @@ pub use stream_graph_action::{
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
 };
 pub use stream_graph_default_port_and_variable_names::{
-    GET_VARIABLE_NODE_TYPE, GRAPH_VARIABLE_NAME_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
-    config_holding_the_default_name_of_a_graph_port_or_variable,
+    GET_VARIABLE_NODE_TYPE, GET_VARIABLE_SET_VARIABLE_CONFIG_KEY, GRAPH_VARIABLE_NAME_CONFIG_KEY,
+    SET_VARIABLE_NODE_TYPE, config_holding_the_default_name_of_a_graph_port_or_variable,
+    the_input_values_of_a_get_reading,
 };
 pub use stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,

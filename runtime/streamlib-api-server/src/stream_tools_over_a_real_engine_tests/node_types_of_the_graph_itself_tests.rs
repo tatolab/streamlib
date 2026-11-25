@@ -6,7 +6,9 @@
 //! and added by their listed names, so an agent builds a stream holding a variable from the
 //! listing alone, its `GetVariable` offering the stream's variables.
 
-use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
+use super::input_value_set_tests::{
+    MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer, the_input_values_of,
+};
 use super::node_type_reads_tests::a_project_listing;
 use super::project_node_type_listing_tests::STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING;
 use super::*;
@@ -266,5 +268,91 @@ async fn an_agent_builds_a_stream_with_a_variable_from_the_listing_alone() {
         get["ports"]["inputs"][0]["pin_type"],
         json!({ "type": "menu", "option_names": ["level", "monitor"] }),
         "the menu offers the variable set since: {get}"
+    );
+}
+
+/// A `GetVariable` whose variable is picked by name saves the UUID of the setter of it, so
+/// renaming the variable on its `SetVariable` renames what the getter shows and keeps the getter
+/// reading it.
+///
+/// Mental-revert: saving the picked name keeps the getter naming `level` after the rename, so
+/// the stream refuses its link into the mixer's `gain`, naming a variable no setter sets.
+#[tokio::test(flavor = "multi_thread")]
+async fn renaming_a_variable_keeps_every_getter_reading_it() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    a_venv_listing_no_node_type_of_its_own_in(&project);
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+    let set_on = |node: &str, input: &str, value: Value| {
+        json!({ "operation": "set_node_input_value", "stream": stream, "node": node,
+                "input": input, "value": value })
+    };
+    let transact = |operations: Value| {
+        tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
+        )
+    };
+    let answer = tool_answer(
+        &transact(json!([
+            { "operation": "add_node", "stream": stream, "as": "set_level", "name": "set_level",
+              "type": "tatolab.stream:SetVariable" },
+            set_on("set_level", "variable", json!("level")),
+            { "operation": "add_node", "stream": stream, "as": "get_level", "name": "get_level",
+              "type": "tatolab.stream:GetVariable" },
+            set_on("get_level", "variable", json!("level")),
+            { "operation": "connect", "stream": stream,
+              "source": { "node": MIXER_NODE_UUID, "port": "level" },
+              "target": { "node": "set_level", "port": "value" } },
+            { "operation": "connect", "stream": stream,
+              "source": { "node": "get_level", "port": "value" },
+              "target": { "node": MIXER_NODE_UUID, "port": "gain" } },
+        ]))
+        .await,
+    )
+    .expect("a stream holding a variable is built");
+    let graph = engine.the_live_graph_of(&stream_id);
+    let setter_uuid = the_node_named(&graph, "set_level")["id"]
+        .as_str()
+        .expect("the setter has a UUID")
+        .to_string();
+    let getter_uuid = the_node_named(&graph, "get_level")["id"]
+        .as_str()
+        .expect("the getter has a UUID")
+        .to_string();
+    assert_eq!(
+        the_input_values_of(&project.the_graph_document_of("main"), &getter_uuid),
+        json!({ "set_variable": setter_uuid }),
+        "{answer}"
+    );
+
+    tool_answer(&transact(json!([set_on(&setter_uuid, "variable", json!("loudness"))])).await)
+        .expect("the variable is renamed");
+
+    let graph = engine.the_live_graph_of(&stream_id);
+    let get = the_node_named(&graph, "get_level");
+    assert_eq!(
+        get["ports"]["inputs"][0]["value"], "loudness",
+        "the getter shows the variable its setter sets now: {get}"
+    );
+    assert_eq!(
+        get["ports"]["inputs"][0]["pin_type"],
+        json!({ "type": "menu", "option_names": ["loudness"] }),
+        "{get}"
+    );
+    assert_eq!(
+        get["ports"]["outputs"][0]["pin_type"],
+        json!({ "type": "float" }),
+        "{get}"
+    );
+    assert!(
+        graph["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .any(|link| link["target"]["port"] == "gain" && link["source"]["node"] == "get_level"),
+        "the getter's drawn link still renders: {graph}"
     );
 }
