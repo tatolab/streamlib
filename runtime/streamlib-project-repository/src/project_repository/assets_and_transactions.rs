@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::stream_fragment_references::each_view_placed_by_its_projects_name_placed_by_its_type;
+use crate::stream_fragment_references::each_view_placed_by_its_folder_placed_by_its_type;
 
 impl ProjectRepository {
     /// Every asset, ordered by UUID: each sidecar's, and each stream's, read from its graph
@@ -143,7 +143,9 @@ impl ProjectRepository {
             return Ok(None);
         };
         let transaction_json = transaction_json.to_owned();
-        applied_transaction_read_from_its_trailer(&transaction_json, history_commit).map(Some)
+        let applied = applied_transaction_read_from_its_trailer(&transaction_json, history_commit)?;
+        self.the_transaction_as_read_now(applied, &self.every_asset()?)
+            .map(Some)
     }
 
     pub(super) fn each_applied_transaction_newest_first(
@@ -152,17 +154,18 @@ impl ProjectRepository {
         impl Iterator<Item = Result<AppliedProjectTransaction, ProjectRepositoryRefusal>>,
         ProjectRepositoryRefusal,
     > {
+        let assets = self.every_asset()?;
         Ok(self
             .history
             .commits_newest_first()?
             .into_iter()
-            .filter_map(|history_commit| {
+            .filter_map(move |history_commit| {
                 let transaction_json =
                     the_transaction_trailer_of(&history_commit.message)?.to_owned();
-                Some(applied_transaction_read_from_its_trailer(
-                    &transaction_json,
-                    history_commit,
-                ))
+                Some(
+                    applied_transaction_read_from_its_trailer(&transaction_json, history_commit)
+                        .and_then(|applied| self.the_transaction_as_read_now(applied, &assets)),
+                )
             }))
     }
 
@@ -251,7 +254,8 @@ impl ProjectRepository {
     }
 
     /// The graph document of the stream asset `stream`, as it is on disk now, each node placing a
-    /// view by its project's name read as placing it by the view's type.
+    /// view by its project's name read as placing it by the view's type, and each link onto a
+    /// port of a placed stream naming the port as the stream declares it now.
     pub fn stream_graph_document(
         &self,
         stream: Uuid,
@@ -276,10 +280,11 @@ impl ProjectRepository {
                 why,
             }
         })?;
-        each_view_placed_by_its_projects_name_placed_by_its_type(
+        each_view_placed_by_its_folder_placed_by_its_type(
             &self.project_directory,
             document.node_values_mut(),
         );
+        self.each_placed_stream_port_named_by_its_name(assets, &mut document);
         Ok((stream_asset.path.clone(), document))
     }
 
@@ -484,6 +489,10 @@ impl ProjectRepository {
             links_made_unjudged,
         };
 
+        let staged_documents_as_written =
+            self.the_staged_documents_as_written(&staged_assets, &staged_documents)?;
+        let transaction_as_recorded =
+            self.the_transaction_as_recorded(&transaction, &staged_assets, &staged_documents)?;
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());
         for operation in &transaction.operations {
             let ProjectOperation::Asset(asset_operation) = operation else {
@@ -512,7 +521,7 @@ impl ProjectRepository {
             }
         }
         let written_documents = match self
-            .write_staged_documents(&staged_assets, &staged_documents)
+            .write_staged_documents(&staged_assets, &staged_documents_as_written)
             .and_then(|mut written_documents| {
                 match self.take_out_stream_documents(&stream_documents_taken_out) {
                     Ok(taken_out) => {
@@ -592,7 +601,7 @@ impl ProjectRepository {
                 self.history.commit_tracked_files(
                     &tracked_files,
                     author,
-                    &transaction_commit_message(&transaction)?,
+                    &transaction_commit_message(&transaction_as_recorded)?,
                 )
             });
         let ProjectHistoryCommitWritten {

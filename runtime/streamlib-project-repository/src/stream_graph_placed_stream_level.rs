@@ -8,11 +8,13 @@ use uuid::Uuid;
 
 use crate::stream_document_upgrade::NODE_INPUT_VALUES_KEY;
 use crate::stream_graph_document::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_OUTPUT_NODE_TYPE,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphOperation, node_name_of, node_uuid_of,
+    StreamGraphOperation, node_name_of, node_uuid_of, uuid_placed_under,
 };
 use crate::stream_graph_fragment_fold::StreamGraphDocumentValueAtItsPosition;
+use crate::stream_graph_placed_stream_ports::{
+    PlacedStreamPortDirection, PortsAPlacedStreamDeclares,
+};
 
 /// The level of a stream's graph a path of placed streams reaches: the graph document of the
 /// stream the last placed stream on the path references, and how each of its nodes and groups
@@ -40,7 +42,7 @@ impl StreamGraphLevelOfAPlacedStream {
             .iter()
             .rev()
             .fold(own, |placed, placing_node| {
-                Uuid::new_v5(placing_node, placed.as_bytes())
+                uuid_placed_under(*placing_node, placed)
             })
     }
 
@@ -158,8 +160,8 @@ impl StreamGraphDocument {
         placed_before: &StreamGraphDocument,
         placed_after: &StreamGraphDocument,
     ) -> Result<Option<StreamGraphOperation>, String> {
-        let ports_before = FragmentPortsDeclaredInside::of(placed_before);
-        let ports_after = FragmentPortsDeclaredInside::of(placed_after);
+        let ports_before = PortsAPlacedStreamDeclares::of(placed_before.node_objects());
+        let ports_after = PortsAPlacedStreamDeclares::of(placed_after.node_objects());
         let mut uuid_and_name_of_each_placing_node = Vec::new();
         for placing_node in self.each_node_placing_the_stream(placed_stream) {
             uuid_and_name_of_each_placing_node
@@ -171,10 +173,7 @@ impl StreamGraphDocument {
         for (position, link) in self.link_values().iter().enumerate() {
             let mut link_after_the_edit = link.clone();
             let mut taken_away = false;
-            for (end_key, direction) in [
-                ("target", FragmentPortDirection::Input),
-                ("source", FragmentPortDirection::Output),
-            ] {
+            for (end_key, direction) in PlacedStreamPortDirection::OF_EACH_LINK_END {
                 let end = &link[end_key];
                 let on_a_placing_node = end["node"].as_str().is_some_and(|named| {
                     uuid_and_name_of_each_placing_node
@@ -415,66 +414,5 @@ fn push_each_node_and_group_uuid_of_the_level(level: &Value, uuids: &mut Vec<Uui
         if let Some(own) = group.as_object().and_then(node_uuid_of) {
             uuids.push(own);
         }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum FragmentPortDirection {
-    Input,
-    Output,
-}
-
-/// Each `GraphInput` and `GraphOutput` node of a placed stream's document, by UUID, with the
-/// port it declares on the node placing it.
-struct FragmentPortsDeclaredInside {
-    port_of_each_interface_node: Vec<(Uuid, FragmentPortDirection, String)>,
-}
-
-impl FragmentPortsDeclaredInside {
-    fn of(inside: &StreamGraphDocument) -> Self {
-        let port_of_each_interface_node = inside
-            .node_objects()
-            .filter_map(|node_object| {
-                let direction = match node_object.get("type").and_then(Value::as_str) {
-                    Some(GRAPH_INPUT_NODE_TYPE) => FragmentPortDirection::Input,
-                    Some(GRAPH_OUTPUT_NODE_TYPE) => FragmentPortDirection::Output,
-                    _ => return None,
-                };
-                let port = node_object
-                    .get(NODE_INPUT_VALUES_KEY)?
-                    .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)?
-                    .as_str()?;
-                Some((node_uuid_of(node_object)?, direction, port.to_owned()))
-            })
-            .collect();
-        Self {
-            port_of_each_interface_node,
-        }
-    }
-
-    fn declares(&self, direction: FragmentPortDirection, port: &str) -> bool {
-        self.interface_node_declaring(direction, port).is_some()
-    }
-
-    fn interface_node_declaring(
-        &self,
-        direction: FragmentPortDirection,
-        port: &str,
-    ) -> Option<Uuid> {
-        self.port_of_each_interface_node
-            .iter()
-            .find(|(_, declared_direction, declared_port)| {
-                *declared_direction == direction && declared_port == port
-            })
-            .map(|(interface_node, ..)| *interface_node)
-    }
-
-    fn port_of(&self, direction: FragmentPortDirection, interface_node: Uuid) -> Option<&str> {
-        self.port_of_each_interface_node
-            .iter()
-            .find(|(declared_by, declared_direction, _)| {
-                *declared_by == interface_node && *declared_direction == direction
-            })
-            .map(|(_, _, port)| port.as_str())
     }
 }

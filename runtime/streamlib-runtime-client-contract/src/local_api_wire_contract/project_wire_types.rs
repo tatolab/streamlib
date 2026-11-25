@@ -694,7 +694,8 @@ pub struct ListProjectViewsToolResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectViewListed {
-    /// The view type's id, `<project uuid>:<view folder>`, the node type a node of the view is;
+    /// The view type's id, the view's own UUID (`<project uuid>:<view folder>` for a view whose
+    /// manifest names none), the node type a node of the view is;
     /// `project_name` only shows.
     pub view_type: String,
     /// The UUID of the project whose `views/` holds it.

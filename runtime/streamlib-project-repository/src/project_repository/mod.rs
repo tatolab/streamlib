@@ -65,6 +65,7 @@ mod assets_and_transactions;
 mod creating_and_opening;
 mod imports_and_dependencies;
 mod node_ui_elements_created;
+mod placed_stream_ports;
 mod project_files;
 mod stream_documents;
 mod undo_and_redo;
@@ -553,7 +554,7 @@ fn apply_operation_to_imports(
     Ok(())
 }
 
-fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
+pub(crate) fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
     if let Some(parent) = path.parent() {
         create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
     }

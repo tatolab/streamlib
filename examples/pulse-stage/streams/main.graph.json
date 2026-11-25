@@ -210,7 +210,7 @@
       },
       "target": {
         "node": "16ae2834-a12e-5387-987f-36c73db1bb37",
-        "port": "video_in"
+        "port": "7a460338-4840-544c-af0a-7f50ab1d9367"
       }
     },
     {
@@ -220,13 +220,13 @@
       },
       "target": {
         "node": "16ae2834-a12e-5387-987f-36c73db1bb37",
-        "port": "seconds"
+        "port": "53d259e5-6b73-565b-be79-0794683b34ce"
       }
     },
     {
       "source": {
         "node": "16ae2834-a12e-5387-987f-36c73db1bb37",
-        "port": "video_out"
+        "port": "910e4314-4d41-5cb3-a067-cafd2ef2c2ce"
       },
       "target": {
         "node": "74228f65-fea3-5c7a-b683-492bd6602fe5",
@@ -695,7 +695,7 @@
           520
         ]
       },
-      "type": "ba5fc2b1-df25-4e86-bec3-aba1564d6233:audio_video_preview"
+      "type": "3c8e1f47-9a2d-4b65-8e07-d14f6a2b9c58"
     }
   ],
   "studio": {

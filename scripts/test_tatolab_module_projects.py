@@ -41,6 +41,7 @@ class FrameMaker:
 
 PROGRAM_VIEW_MANIFEST = {
     "contract": "1.0",
+    "view": "d2a7c5e9-1f4b-4a63-9e8d-5b0c3f7a1e26",
     "title": "Program",
     "description": "The show as the audience gets it.",
     "entry": "index.html",
@@ -244,7 +245,7 @@ class ModuleProjectArchives(unittest.TestCase):
         self.assertEqual(entry["streams"], [{"name": "Loop", "import_path": "1f9d2c3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f", "summary": ""}])
         self.assertEqual(entry["lowest_runtime_version"], RELEASE_VERSION)
 
-    def test_an_archive_carries_the_modules_views_and_the_catalog_lists_each(self):
+    def test_an_archive_carries_the_modules_views_and_the_catalog_lists_each_by_its_own_uuid(self):
         def write_a_view(module_directory):
             view_directory = module_directory / "views" / "program"
             view_directory.mkdir(parents=True)
@@ -268,7 +269,7 @@ class ModuleProjectArchives(unittest.TestCase):
             entry["views"],
             [
                 {
-                    "view_type": "8b0a5a52-3d5d-4f43-8f43-0b6c7b0d1e2f:program",
+                    "view_type": "d2a7c5e9-1f4b-4a63-9e8d-5b0c3f7a1e26",
                     "title": "Program",
                     "description": "The show as the audience gets it.",
                     "placement": "node",
@@ -277,8 +278,18 @@ class ModuleProjectArchives(unittest.TestCase):
             ],
         )
 
+    def test_the_catalog_lists_a_view_naming_no_uuid_of_its_own_by_its_projects_uuid_and_folder(self):
+        def write_a_view(module_directory):
+            (module_directory / "views" / "program").mkdir(parents=True)
+            manifest = {field: value for field, value in PROGRAM_VIEW_MANIFEST.items() if field != "view"}
+            (module_directory / "views" / "program" / "tatolab_view.json").write_text(json.dumps(manifest))
+
+        self.assemble_the_camera(before_assembling=write_a_view)
+        [entry] = json.loads(tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel).read_text())["entries"]
+        self.assertEqual([view["view_type"] for view in entry["views"]], ["8b0a5a52-3d5d-4f43-8f43-0b6c7b0d1e2f:program"])
+
     def test_a_view_whose_manifest_misses_what_the_view_contract_requires_fails_the_catalog(self):
-        for manifest in ({**PROGRAM_VIEW_MANIFEST, "placement": None}, {**PROGRAM_VIEW_MANIFEST, "placement": "floating"}, {**PROGRAM_VIEW_MANIFEST, "contract": "9.9"}, {"contract": "1.0", "title": "Program"}):
+        for manifest in ({**PROGRAM_VIEW_MANIFEST, "placement": None}, {**PROGRAM_VIEW_MANIFEST, "placement": "floating"}, {**PROGRAM_VIEW_MANIFEST, "contract": "9.9"}, {**PROGRAM_VIEW_MANIFEST, "view": "program"}, {"contract": "1.0", "title": "Program"}):
             with self.subTest(manifest=manifest):
                 shutil.rmtree(self.workspace_root, ignore_errors=True)
                 shutil.rmtree(self.output_root, ignore_errors=True)

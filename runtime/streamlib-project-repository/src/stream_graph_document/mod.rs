@@ -852,6 +852,22 @@ impl StreamGraphDocument {
         &mut self.link_values
     }
 
+    /// Make `edit` on the document as one JSON object, keeping what it makes of every key.
+    pub(crate) fn edit_as_one_value(&mut self, edit: impl FnOnce(&mut Value)) {
+        let mut value = self.to_value();
+        edit(&mut value);
+        let Value::Object(mut every_other_key) = value else {
+            return;
+        };
+        let mut array_under = |key: &str| match every_other_key.remove(key) {
+            Some(Value::Array(items)) => items,
+            _ => Vec::new(),
+        };
+        self.node_values = array_under("nodes");
+        self.link_values = array_under("links");
+        self.every_other_key = every_other_key;
+    }
+
     /// `link` with each end's node by UUID, an end naming its node by name resolved through
     /// the nodes the document holds.
     pub(crate) fn link_read_from(&self, link: &Value) -> Option<StreamGraphDocumentLink> {
@@ -889,6 +905,12 @@ fn studio_group_of(node_object: &Map<String, Value>) -> Option<Uuid> {
         .get(STUDIO_GROUP_KEY)?
         .as_str()
         .and_then(|group| Uuid::parse_str(group).ok())
+}
+
+/// The UUID the node or group `own` of a placed stream or fragment takes under the node
+/// `placing_node` placing it.
+pub(crate) fn uuid_placed_under(placing_node: Uuid, own: Uuid) -> Uuid {
+    Uuid::new_v5(&placing_node, own.as_bytes())
 }
 
 pub(crate) fn node_name_of(node_object: &Map<String, Value>) -> Option<&str> {

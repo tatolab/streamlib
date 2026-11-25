@@ -485,6 +485,21 @@ impl ProjectWithGraphDocuments {
         )
         .expect("the graph document is JSON")
     }
+
+    /// The graph document of this project's stream `stream_name` as its project reads it to
+    /// edit it, each link onto a placed stream naming the port by the name it is declared under.
+    fn the_graph_document_as_its_project_reads_it(&self, stream_name: &str) -> Value {
+        streamlib_project_repository::ProjectRepository::open(self.path())
+            .expect("the project opens")
+            .stream_graph_document(
+                self.the_graph_document_of(stream_name)["asset"]
+                    .as_str()
+                    .and_then(|asset| Uuid::parse_str(asset).ok())
+                    .expect("the graph document names its stream asset"),
+            )
+            .expect("the graph document reads")
+            .to_value()
+    }
 }
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {

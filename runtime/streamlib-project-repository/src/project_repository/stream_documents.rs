@@ -4,8 +4,9 @@
 use super::*;
 
 impl ProjectRepository {
-    /// Write each staged graph document at the path its stream asset holds once the
-    /// transaction applies, answering what each held before so a refusal can restore it.
+    /// Write each staged graph document, as its file is to hold it, at the path its stream
+    /// asset holds once the transaction applies, answering what each held before so a refusal
+    /// can restore it.
     pub(super) fn write_staged_documents(
         &self,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
