@@ -174,7 +174,7 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_FRAGMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a fragment",
-    spec_keys: &["nodes", "links", "groups"],
+    spec_keys: &["nodes", "links", "groups", "settings"],
     live_keys: &[],
 };
 
@@ -277,6 +277,11 @@ pub struct GraphFragment {
     /// Every labelled group the generator made of those nodes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,
+
+    /// Each setting the generator promotes, as its run declared it: an input of the fragment
+    /// node, in the form a node type's described input takes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<serde_json::Value>,
 }
 
 /// A node's `id` as a UUID; a string that is no UUID reads as none.

@@ -414,6 +414,14 @@ fn read_pin_groups(
         .collect()
 }
 
+/// The inputs `settings`, the settings a graph generator's run declared it promotes, declare:
+/// each read as a described node type's input is.
+pub(crate) fn read_the_settings_a_graph_generator_promotes(
+    settings: &[serde_json::Value],
+) -> std::result::Result<Vec<PortDescriptor>, String> {
+    read_port_descriptors_listed(settings, "settings", PortDirection::Input)
+}
+
 /// The ports `declared`, the list a described node type holds under `ports_key`, declares.
 fn read_listed_port_descriptors(
     declared: &serde_json::Value,
@@ -423,7 +431,16 @@ fn read_listed_port_descriptors(
     let declared = declared
         .as_array()
         .ok_or_else(|| format!("{ports_key} must be a list"))?;
+    read_port_descriptors_listed(declared, ports_key, direction)
+}
 
+/// The ports each of `declared`, the declarations a described node type lists under
+/// `ports_key`, declares.
+fn read_port_descriptors_listed(
+    declared: &[serde_json::Value],
+    ports_key: &str,
+    direction: PortDirection,
+) -> std::result::Result<Vec<PortDescriptor>, String> {
     let mut ports = Vec::with_capacity(declared.len());
     for declaration in declared {
         if !declaration.is_object() {
