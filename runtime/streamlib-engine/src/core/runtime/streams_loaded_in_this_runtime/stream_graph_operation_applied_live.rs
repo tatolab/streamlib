@@ -167,20 +167,6 @@ impl LoadedStreamInThisRuntime {
                     .await?;
                 Ok(StreamGraphOperation::SetNodeConfig { node, from, to })
             }
-            StreamGraphOperation::SetPinValue {
-                node,
-                input,
-                from,
-                to,
-            } => {
-                self.set_pin_value(&self.the_node_of_the_node(node)?, &input, None, to.clone())?;
-                Ok(StreamGraphOperation::SetPinValue {
-                    node,
-                    input,
-                    from,
-                    to,
-                })
-            }
             StreamGraphOperation::SetNodeInputValue {
                 node,
                 input,
@@ -222,10 +208,6 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveNote { .. } => {
                 self.apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                     .await
-            }
-            StreamGraphOperation::SetExposedConfigFields { node, from, to } => {
-                self.set_exposed_config_fields(&self.the_node_of_the_node(node)?, to.clone())?;
-                Ok(StreamGraphOperation::SetExposedConfigFields { node, from, to })
             }
         }
     }

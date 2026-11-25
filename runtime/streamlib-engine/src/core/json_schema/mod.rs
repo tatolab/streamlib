@@ -23,9 +23,10 @@ use crate::core::nodes::{
 
 use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 
-mod input_values_under_the_older_graph_keys;
-pub(crate) use input_values_under_the_older_graph_keys::{
-    InputValuesRendered, OlderGraphKeysOfANodeType, redraw_a_node_over_its_pins,
+mod inputs_and_settings_of_a_node;
+pub(crate) use inputs_and_settings_of_a_node::{
+    InputsAndSettingsOfANodeType, redraw_a_node_over_the_values_its_inputs_hold,
+    the_values_held_on_no_input_of,
 };
 pub use streamlib_node_schema::NodeClassImportPath;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -412,24 +413,14 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             }
             None => (None, None),
         };
-        let older_keys = InputValuesRendered::split_by(
-            &OlderGraphKeysOfANodeType::of_the_input_ports(node.ports.inputs.iter().flat_map(
-                |input| std::iter::once(input.name.clone()).chain(input.former_names.clone()),
-            )),
-            &node.input_values,
-        );
         Self {
             id: node.node_uuid.to_string(),
             node_type: node.node_type.clone(),
             kind,
             language,
             name: node.display_name.clone(),
-            config: Some(older_keys.config),
-            config_checksum: older_keys.config_checksum,
             ports: ports_rendered_over_their_settled_contracts(node),
-            input_values: older_keys.input_values,
-            pins: older_keys.pins,
-            exposed_config_fields: Vec::new(),
+            input_values: node.input_values.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
             components: the_components_of_a_node_with_its_health(node),
@@ -486,7 +477,12 @@ fn ports_rendered_over_their_settled_contracts(
                 stream_facts: node
                     .stream_facts_of_output_ports()
                     .current_facts_of(&port.name)
-                    .map(PortStreamFactsOnTheWire::from),
+                    .and_then(|facts| {
+                        PortStreamFactsOnTheWire::of_the_facts_on_a_port_of(
+                            facts,
+                            port.pin.as_ref(),
+                        )
+                    }),
                 pin_group_slot: pin_group_slot(&port.name),
                 ..GraphNodePortOnTheWire::from(port)
             })
@@ -538,7 +534,6 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             audio_window: port.audio_window.clone(),
             stream_facts: None,
             values_checked: values_checked_of(&port.family),
-            family: Some(port.family.clone()),
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             annotations: port.annotations.0.clone(),

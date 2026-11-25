@@ -19,7 +19,7 @@ use crate::core::graph::graph_fragment_flattening::{cast_or_as_written, rendered
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOnTheWire, GraphResponse, LinkOutput, LinkPortRefOutput,
-    redraw_a_node_over_its_pins,
+    redraw_a_node_over_the_values_its_inputs_hold,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
@@ -240,13 +240,13 @@ fn render_the_document_over_the_live_graph(
                 .and_then(|node_uuid| live_node_of_each_id.remove(&node_uuid.to_string()));
             match live {
                 Some(mut live) => {
-                    redraw_a_node_over_its_pins(&mut live, &node.input_values);
+                    redraw_a_node_over_the_values_its_inputs_hold(&mut live, &node.input_values);
                     live.studio = node.studio.clone();
                     live.name = cast_or_as_written(&node.name);
                     live
                 }
                 None => {
-                    let mut drawn = rendered_as_stored(node, node_types);
+                    let mut drawn = rendered_as_stored(node);
                     if let Some(ports) = node_types.port_info(&node.node_type) {
                         drawn.ports = GraphNodePortsOnTheWire::from(&ports);
                     }

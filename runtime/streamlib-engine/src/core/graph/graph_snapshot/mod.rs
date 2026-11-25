@@ -573,7 +573,7 @@ impl GraphSnapshot {
                     return Err(Error::GraphError(format!(
                         "input `{}` of node `{}` names node `{referenced_node_name}`, which \
                          the graph does not hold. The graph holds: {}",
-                        reference.edge.config_key,
+                        reference.config_key,
                         node.name,
                         the_names_the_graph_holds()
                     )));

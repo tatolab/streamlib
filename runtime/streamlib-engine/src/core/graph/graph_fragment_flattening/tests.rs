@@ -285,7 +285,7 @@ fn rendered_as_running(node: &GraphSnapshotNode) -> GraphNodeOutput {
             state: Some(NodeStateOnTheWire::Running),
             ..GraphNodeComponentsOnTheWire::default()
         },
-        ..rendered_as_stored(node, &NodeTypesOneStreamResolves::new())
+        ..rendered_as_stored(node)
     }
 }
 

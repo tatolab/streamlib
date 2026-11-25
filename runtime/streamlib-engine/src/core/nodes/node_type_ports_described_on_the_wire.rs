@@ -99,11 +99,6 @@ fn a_port_described(port: &PortDescriptor) -> NodeTypePortDescribed {
             .as_ref()
             .map(|declared| declared.annotations.clone())
             .unwrap_or_default(),
-        family: declared
-            .is_none()
-            .then(|| serde_json::to_value(&port.family).ok())
-            .flatten(),
-        annotation: None,
     }
 }
 
@@ -183,8 +178,6 @@ fn a_setting_described(setting: ConfigFieldDescribedAsASetting) -> NodeTypeInput
                 flow: declared.flow,
             }),
             annotations: setting.annotations,
-            family: None,
-            annotation: None,
         },
         mode: Some(mode),
         takes_a_wire: false,
