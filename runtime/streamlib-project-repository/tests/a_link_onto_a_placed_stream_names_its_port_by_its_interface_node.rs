@@ -174,13 +174,13 @@ fn write_title(project_directory: &Path, video_in_port: &str) {
                     "id": VIDEO_IN,
                     "name": "video_in",
                     "type": "tatolab.stream:GraphInput",
-                    "input_values": { "family": "image", "port": video_in_port }
+                    "input_values": { "port": video_in_port, "pin_type": { "type": "texture" } }
                 },
                 {
                     "id": VIDEO_OUT,
                     "name": "video_out",
                     "type": "tatolab.stream:GraphOutput",
-                    "input_values": { "family": "image", "port": "video_out" }
+                    "input_values": { "port": "video_out", "pin_type": { "type": "texture" } }
                 }
             ],
             "links": [
@@ -494,7 +494,7 @@ fn a_stream_created_and_placed_in_one_transaction_is_linked_by_its_interface_nod
                 "nodes": [{
                     "id": lower_third_in, "name": "picture",
                     "type": "tatolab.stream:GraphInput",
-                    "input_values": { "family": "image", "port": "picture" }
+                    "input_values": { "port": "picture", "pin_type": { "type": "texture" } }
                 }],
                 "links": []
             }),
@@ -555,7 +555,7 @@ fn a_link_inside_a_placed_stream_onto_a_stream_it_places_runs_by_its_port_name()
             "nodes": [
                 {
                     "id": outer_in, "name": "outer_in", "type": "tatolab.stream:GraphInput",
-                    "input_values": { "family": "image", "port": "outer_in" }
+                    "input_values": { "port": "outer_in", "pin_type": { "type": "texture" } }
                 },
                 {
                     "id": title_inside_outer, "name": "title",
