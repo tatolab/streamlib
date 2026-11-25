@@ -533,6 +533,30 @@ fn a_stream_placing_a_view_by_its_folder_reads_as_placing_it_by_the_views_uuid()
     );
 }
 
+/// Mental-revert: listing every project's views before keeping the placed ones fails on the
+/// import's `views/`, and the deck stays placed by its project's name.
+#[test]
+fn a_stream_placing_a_view_by_its_folder_reads_when_an_import_it_does_not_place_has_no_views_read()
+{
+    let workspace = tempfile::tempdir().unwrap();
+    let (project_directory, _, _) =
+        acme_dj_importing_levels(workspace.path(), DECK_VIEW, METER_MANIFEST);
+    let import_views = project_directory
+        .join(PROJECT_IMPORTS_DIRECTORY)
+        .join("levels")
+        .join(PROJECT_VIEWS_DIRECTORY);
+    std::fs::remove_dir_all(&import_views).unwrap();
+    std::fs::write(&import_views, "not a folder").unwrap();
+
+    let read = crate::graph_document_as_its_project_reads_it(
+        &project_directory,
+        &a_stream_placing(&["Acme DJ:deck"]),
+    )
+    .unwrap();
+
+    assert_eq!(the_node_types_of(&read), [DECK_VIEW]);
+}
+
 /// Mental-revert: leaving a manifest naming no `view` as it is types its view by its folder.
 #[cfg(feature = "history")]
 #[test]

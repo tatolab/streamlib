@@ -95,14 +95,29 @@ pub(crate) fn the_type_of_each_view_placed_by_its_folder(
     project_directory: &Path,
     projects_placed: &HashSet<String>,
 ) -> Result<HashMap<String, String>, ProjectRepositoryRefusal> {
-    let views_placed: Vec<ProjectViewFolderRead> =
-        every_view_a_project_and_its_imports_bring(project_directory)?
-            .into_iter()
-            .filter(|view| {
-                projects_placed.contains(&view.brought_by.project_name)
-                    || projects_placed.contains(&view.brought_by.project.to_string())
-            })
-            .collect();
+    let is_placed = |brought_by: &ProjectBringingAView| {
+        projects_placed.contains(&brought_by.project_name)
+            || projects_placed.contains(&brought_by.project.to_string())
+    };
+    let mut views = Vec::new();
+    for (brought_by, its_directory) in every_project_bringing_views(project_directory)? {
+        match every_view_in_the_views_of(&its_directory, &brought_by) {
+            Ok(its_views) => views.extend(its_views),
+            // A project no node places still holds UUIDs a placed view may share, but its
+            // `views/` not reading leaves the views placed as they are.
+            Err(unreadable) if !is_placed(&brought_by) => tracing::warn!(
+                project_directory = %its_directory.display(),
+                %unreadable,
+                "the views of a project no node places are not read"
+            ),
+            Err(unreadable) => return Err(unreadable),
+        }
+    }
+    refuse_each_view_whose_uuid_an_earlier_one_holds(&mut views);
+    let views_placed: Vec<ProjectViewFolderRead> = views
+        .into_iter()
+        .filter(|view| is_placed(&view.brought_by))
+        .collect();
     let by_its_projects_uuid = views_placed.iter().map(|view| {
         (
             the_view_type_of(view.brought_by.project, &view.view_folder_name),
