@@ -122,11 +122,20 @@ async fn a_collapsed_selection_is_saved_as_a_stream_running_where_it_is_placed_a
         placing_node.get("fragment").is_none(),
         "main stores the reference alone: {placing_node}"
     );
+    let saved = project.the_graph_document_of("sub");
+    let graph_input = the_node_named(&saved, "pass-sink-video");
     assert_eq!(
         links_by_node_name_in(&collapsed),
+        [format!(
+            "source/video -> sub/{}",
+            graph_input["id"].as_str().unwrap()
+        )],
+        "main's link onto sub names its port by the `GraphInput` node's UUID"
+    );
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_as_its_project_reads_it("main")),
         ["source/video -> sub/pass-sink-video"]
     );
-    let saved = project.the_graph_document_of("sub");
     assert_eq!(
         saved["asset"].as_str().unwrap(),
         the_stream_asset_placed_by(&collapsed, &subgraph)
@@ -406,7 +415,7 @@ async fn an_edit_inside_a_stream_placed_twice_reaches_both_placements_and_undoes
         "source/video -> sub-again/video_in",
     ];
     assert_eq!(
-        links_by_node_name_in(&project.the_graph_document_of("main")),
+        links_by_node_name_in(&project.the_graph_document_as_its_project_reads_it("main")),
         links_onto_the_renamed_port,
         "the links onto the renamed port follow it in both placements"
     );
@@ -585,7 +594,7 @@ async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_t
         .expect("the collapse and the rename apply");
 
     let links_into_sub_in_wrapper: Vec<String> =
-        links_by_node_name_in(&project.the_graph_document_of("wrapper"))
+        links_by_node_name_in(&project.the_graph_document_as_its_project_reads_it("wrapper"))
             .into_iter()
             .filter(|link| link.contains("-> sub/"))
             .collect();
@@ -599,7 +608,7 @@ async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_t
         "{links_into_sub_in_wrapper:?}"
     );
     assert_eq!(
-        links_by_node_name_in(&project.the_graph_document_of("main"))
+        links_by_node_name_in(&project.the_graph_document_as_its_project_reads_it("main"))
             .into_iter()
             .filter(|link| link.contains("sub-again"))
             .collect::<Vec<_>>(),
