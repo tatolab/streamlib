@@ -134,7 +134,7 @@ fn a_64_bit_integer_on_a_single_pin_is_refused_with_the_reason() {
 }
 
 /// A typed function node as bare `@node` describes `def Gate[PinValue](value: PinValue, open:
-/// bool = True) -> PinValue | None`: `value` takes any type on every family, and `result`
+/// bool = True) -> PinValue | None`: `value` takes any type, and `result`
 /// follows it, both handed on unread.
 fn a_described_function_node_passing_its_input_on() -> serde_json::Value {
     serde_json::json!({

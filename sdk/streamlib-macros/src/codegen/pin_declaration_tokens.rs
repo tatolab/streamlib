@@ -9,10 +9,11 @@ use streamlib_node_schema::{
     ImageOutputPortFrameRate,
 };
 
-/// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in
-/// the flow it states, else in its type's default flow, with the names it had and whether it may
-/// be unset and the annotations of its stream, as it states them. A port typed by the setting `pin_type_from_setting` carries the
-/// type that setting chooses, a value unless it states another flow.
+/// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in the
+/// flow it states, else in its type's default flow, with the names it had and whether it may be
+/// unset and the annotations of its stream, as it states them. A port typed by the setting
+/// `pin_type_from_setting` carries the type that setting chooses, a value unless it states another
+/// flow.
 pub(super) fn pin_declaration_tokens(
     pin_type: Option<&PinType>,
     pin_type_from_setting: Option<&str>,

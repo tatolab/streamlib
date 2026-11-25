@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The judgement of a link by its two ends' pin types, by the one rule [`pin_link_verdict`]. A
-//! link with an end its graph does not type yet is judged once that end is typed.
+//! link with an end its graph does not type yet is judged once that end is typed; one from an
+//! output of any type, which nothing types, is made as it is, and its reader judges each message
+//! it reads.
 
 use super::bundle_member_link_ends::{
     refuse_a_link_into_a_member_no_bundle_is_built_with, refuse_a_member_its_port_does_not_hold,
@@ -22,6 +24,7 @@ use crate::core::descriptors::{
 };
 use crate::core::pin_value_packing::message_kind_of;
 use crate::core::{Error, PortDirection, Result};
+use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 
 mod bundle_frames_into_an_untyped_input;
 mod named_type_at_an_untyped_end;
@@ -67,18 +70,16 @@ impl TypedLinkEnds<'_> {
     /// Whether a type the output may carry and a type the input may read travel as one kind of
     /// message, so a saved link between them still carries what it carried when it was saved.
     fn both_travel_as_one_kind_of_message(&self) -> bool {
-        let kinds = |pin_type: &PinTypeInItsGraph| -> Vec<_> {
-            let pin_types = match pin_type {
-                PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
-                PinTypeInItsGraph::OneOf(pin_types) => pin_types.as_slice(),
-                PinTypeInItsGraph::Any | PinTypeInItsGraph::Untyped => &[],
-            };
-            pin_types.iter().filter_map(message_kind_of).collect()
-        };
-        let input_kinds = kinds(&self.input_pin_type);
+        fn kinds(
+            pin_type: &PinTypeInItsGraph,
+        ) -> impl Iterator<Item = DataChannelPayloadDescriptorKind> + '_ {
+            pin_type
+                .the_types_it_may_carry()
+                .iter()
+                .filter_map(message_kind_of)
+        }
         kinds(&self.output_pin_type)
-            .iter()
-            .any(|kind| input_kinds.contains(kind))
+            .any(|output_kind| kinds(&self.input_pin_type).any(|kind| kind == output_kind))
     }
 
     /// The verdict on the link among `conversions`: [`verdict_between`] its two typed ends.
@@ -179,11 +180,7 @@ impl<'end> TypedEnd<'end> {
 
     /// Each type it may carry: its one type, or each of several.
     fn the_types_it_may_carry(&self) -> &'end [PinType] {
-        match self.pin_type {
-            PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
-            PinTypeInItsGraph::OneOf(pin_types) => pin_types,
-            PinTypeInItsGraph::Any | PinTypeInItsGraph::Untyped => &[],
-        }
+        self.pin_type.the_types_it_may_carry()
     }
 }
 

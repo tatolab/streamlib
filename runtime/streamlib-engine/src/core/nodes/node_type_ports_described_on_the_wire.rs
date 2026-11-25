@@ -71,8 +71,8 @@ impl NodeTypePortsDescribedOnTheWire {
     }
 }
 
-/// `port` as an output, or as the port part of an input: typed where it declares a pin, else by
-/// its family alone.
+/// `port` as an output, or as the port part of an input: typed where it declares a pin, else
+/// untyped.
 fn a_port_described(port: &PortDescriptor) -> NodeTypePortDescribed {
     let declared = port.declared_pin();
     NodeTypePortDescribed {

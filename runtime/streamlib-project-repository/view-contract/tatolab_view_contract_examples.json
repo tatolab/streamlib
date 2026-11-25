@@ -87,9 +87,9 @@
         "title": "Monitor",
         "entry": "index.html",
         "placement": "node",
-        "inputs": [{ "name": "picture", "pin_type": { "type": "texture" } }],
+        "inputs": [{ "name": "picture", "family": "image", "pin_type": { "type": "texture" } }],
         "outputs": [
-          { "name": "level", "pin_type": { "type": "float" } }
+          { "name": "level", "family": "channels", "pin_type": { "type": "float" } }
         ],
         "accepts": { "files": [] },
         "capabilities": []
@@ -199,6 +199,7 @@
         "outputs": [
           {
             "name": "camera",
+            "family": "records",
             "pin_type": {
               "type": "bundle",
               "members": [
@@ -264,6 +265,7 @@
         "inputs": [
           {
             "name": "levels",
+            "family": "records",
             "pin_type": {
               "type": "bundle",
               "members": [
@@ -307,6 +309,7 @@
         "inputs": [
           {
             "name": "detections",
+            "family": "array",
             "pin_type": {
               "type": "bundle",
               "members": [
@@ -562,7 +565,7 @@
         "outputs": [{ "name": "level", "family": "numbers" }]
       },
       "opens": false,
-      "refused_at": "outputs[0]"
+      "refused_at": "outputs[0].family"
     },
     {
       "named": "a port name out of shape",

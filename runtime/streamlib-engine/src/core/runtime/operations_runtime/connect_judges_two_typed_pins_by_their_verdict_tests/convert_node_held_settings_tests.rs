@@ -223,8 +223,8 @@ fn a_convert_node_feeding_a_wired_on_input_is_judged_by_the_type_it_holds() {
 /// link out of it, or past the input that link feeds, does not take the format it would then
 /// write; one that keeps a format each link takes is taken.
 ///
-/// Mental-revert: checking a config update only by the families of the links out of the node
-/// takes a `format` its wired link refuses, since its output states one Texture whatever it
+/// Mental-revert: checking a config update only by the kinds of message of the links out of
+/// the node takes a `format` its wired link refuses, since its output states one Texture whatever it
 /// holds.
 #[test]
 fn a_config_update_choosing_a_format_a_wired_link_refuses_is_refused() {

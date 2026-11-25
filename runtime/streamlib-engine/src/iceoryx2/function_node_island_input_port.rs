@@ -43,8 +43,8 @@ impl MessageAFunctionNodeIslandHandsOnUnread {
     }
 }
 
-/// The value an island's output took for one read, by the family its port
-/// carries.
+/// The value an island's output took for one read, by the kind of message its
+/// port carries.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FunctionNodeIslandOutputValue {
     /// A number, a bool, a Color, a Vector, a Rectangle or a Transform, carried as a control

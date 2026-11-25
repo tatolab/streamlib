@@ -116,7 +116,7 @@ fn the_form_a_held_annotation_is_not_of(
             (!held.as_f64().is_some_and(|step| step > 0.0)).then(|| "a number above 0".to_string())
         }
         // Its declared type alone judges each of these; the order of a range's bounds is
-        // judged with its family.
+        // judged with the type it bounds.
         PinAnnotationName::Range
         | PinAnnotationName::Unit
         | PinAnnotationName::Meaning

@@ -25,8 +25,20 @@ pub(crate) enum PinTypeInItsGraph {
     Any,
     /// No type its graph settles: a port its node type declares no pin for, an output that
     /// declares any type, one following an input nothing typed is linked into, or one whose type
-    /// a setting chooses while the setting holds none. A link at it is judged once it is typed.
+    /// a setting chooses while the setting holds none. A link at it is judged once it is typed; an
+    /// output of any type never is, so a link from it is made as it is.
     Untyped,
+}
+
+impl PinTypeInItsGraph {
+    /// Each type it may carry: its one type, or each of several; none for any type or none.
+    pub(crate) fn the_types_it_may_carry(&self) -> &[PinType] {
+        match self {
+            Self::Is(pin_type) => std::slice::from_ref(pin_type),
+            Self::OneOf(pin_types) => pin_types,
+            Self::Any | Self::Untyped => &[],
+        }
+    }
 }
 
 /// The pin `port`, a port of `node` at `direction`, resolves to in `graph`, as `graph` serves

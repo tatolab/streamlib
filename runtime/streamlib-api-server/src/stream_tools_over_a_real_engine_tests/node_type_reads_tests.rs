@@ -383,8 +383,8 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
 }
 
 /// A built-in node type is described from the runtime's own description: a typed input with its
-/// mode, lifetime and value schema, a Texture input taking a link only, its config field as a setting read at setup with its field's schema, and its
-/// typed outputs.
+/// mode, lifetime and value schema, a Texture input taking a link only, its config field as a
+/// setting read at setup with its field's schema, and its typed outputs.
 ///
 /// Mental-revert: describing a built-in from source answers `not_described_because`.
 #[tokio::test(flavor = "multi_thread")]

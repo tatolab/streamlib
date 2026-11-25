@@ -19,6 +19,7 @@ use crate::core::graph::Graph;
 const ONE_OF_SINK: &str = "VerdictCheckOneOfSink";
 const ANY_SINK: &str = "VerdictCheckAnySink";
 const CHOSEN_TYPE_SINK: &str = "VerdictCheckChosenTypeSink";
+const ANY_SOURCE: &str = "VerdictCheckAnySource";
 
 /// A port declaring `pin_type`, read as a value.
 fn a_port_declaring(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
@@ -56,6 +57,11 @@ fn register_the_node_types_port_fixtures() {
             class_path(ANY_SINK),
             vec![a_port_declaring("anything", DeclaredPinType::Any)],
             Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(ANY_SOURCE),
+            Vec::new(),
+            vec![a_port_declaring("anything", DeclaredPinType::Any)],
         ));
         register(a_node_type(
             class_path(CHOSEN_TYPE_SINK),
@@ -347,4 +353,27 @@ fn several_node_types_ports_are_each_answered_in_their_order() {
     );
     assert!(compiler.logged_pending_operations().is_empty());
     assert_eq!(the_nodes_in(&compiler), 1);
+}
+
+/// An output of any type is typed by nothing its graph holds, so a link from it into a typed
+/// input is made as it is: what it writes is judged by the reader, message by message, when the
+/// stream runs.
+///
+/// Mental-revert: judging the output by the Texture input's type refuses a link that carries a
+/// picture once the stream runs.
+#[test]
+fn a_link_from_an_output_of_any_type_into_a_typed_input_is_made() {
+    register_the_node_types_port_fixtures();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(ANY_SOURCE));
+    let sink = a_node_of(&compiler, class_path(ANY_TEXTURE_SINK));
+
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "anything"),
+        InputLinkPortRef::new(sink, "video"),
+    )
+    .expect("a link from an output of any type is made");
+
+    assert_eq!(the_links_in(&compiler), 1);
 }

@@ -83,8 +83,9 @@ impl ALinkConnectedOrSetAside {
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
 /// Connect judges a link by its two ports' pin link verdict, once its graph types both, and
-/// refuses, by name before any channel exists, a link that does not connect as it is; `a_link_connected` says how leniently a link of a saved
-/// graph is judged by its pin types. A link the engine cannot wire is refused or set aside, as
+/// refuses, by name before any channel exists, a link that does not connect as it is;
+/// `a_link_connected` says how leniently a link of a saved graph is judged by its pin types. A
+/// link from an output of any type, which its graph never types, is made as it is. A link the engine cannot wire is refused or set aside, as
 /// `when_the_engine_cannot_wire_it` says.
 #[tracing::instrument(
     name = "stream.connect",

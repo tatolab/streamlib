@@ -50,7 +50,7 @@ impl GraphNodePorts {
     }
 
     /// These ports, of a node of `node_type` holding `input_values`, with what its settings
-    /// declare of them resolved: a `GraphInput`'s `value` input takes the family, the range and
+    /// declare of them resolved: a `GraphInput`'s `value` input takes the type, the range and
     /// the lifetime its settings name, and a `Constant`'s `value` ports the type its `pin_type`
     /// chooses. The ports of every other node type are as it declares them.
     pub fn resolved_against_the_input_values(

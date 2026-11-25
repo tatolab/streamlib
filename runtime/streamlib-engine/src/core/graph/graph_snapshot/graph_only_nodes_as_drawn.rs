@@ -261,7 +261,7 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
     /// Check the graph the runtime runs, that each `SetVariable` holds a node
     /// of that graph, or an output port one of its nodes has, whether or not
     /// a get reads it, and that each interface port is linked to ports of its
-    /// family.
+    /// type.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
         let graph = &self.graph_the_runtime_runs;
         graph.validate_a_graph_holding_no_graph_only_node(node_types)?;

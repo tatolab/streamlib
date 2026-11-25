@@ -194,7 +194,7 @@ mod tests {
         ) -> NodeDescriptor {
             let mut port = PortDescriptor {
                 pin_declaration: pin_type.map(PinDeclaration::exactly),
-                ..PortDescriptor::a_setting_of_no_pin_type(port_name, "input")
+                ..PortDescriptor::of_a_pin_declared_or_not(port_name, "input", false, None)
             };
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);

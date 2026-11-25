@@ -43,7 +43,9 @@ fn a_view_setting_declared(setting: ConfigFieldDescribedAsASetting) -> PortDescr
                 ..PinDeclaration::exactly(pin_type)
             },
         ),
-        None => PortDescriptor::a_setting_of_no_pin_type(setting.name, setting.description),
+        None => {
+            PortDescriptor::of_a_pin_declared_or_not(setting.name, setting.description, false, None)
+        }
     }
     .with_input_mode(NodeInputMode::SettingOnly {
         read: SettingReadTime::AtSetup,

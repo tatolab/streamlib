@@ -8,7 +8,7 @@ use super::super::{Graph, GraphNode, InputLinkPortRef, OutputLinkPortRef};
 use crate::core::descriptors::{NamedPinTypeImportPath, PinType};
 use crate::core::{Error, PortDirection, Result};
 
-/// Refuse a link from `from` to `to` when one end carries a named type and the other is
+/// Refuse a link from `from` to `to` when one end carries a named type and the other
 /// carries no type yet, naming the type and both ends: a named type travels as the bytes its
 /// class packs, which only a pin typed with it reads.
 pub(super) fn refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
@@ -65,13 +65,11 @@ pub(super) fn refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(
 pub(crate) fn the_named_type_among(
     pin_type: &PinTypeInItsGraph,
 ) -> Option<&NamedPinTypeImportPath> {
-    let pin_types = match pin_type {
-        PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
-        PinTypeInItsGraph::OneOf(pin_types) => pin_types.as_slice(),
-        PinTypeInItsGraph::Any | PinTypeInItsGraph::Untyped => &[],
-    };
-    pin_types.iter().find_map(|pin_type| match pin_type {
-        PinType::Named { named_pin_type } => Some(named_pin_type),
-        _ => None,
-    })
+    pin_type
+        .the_types_it_may_carry()
+        .iter()
+        .find_map(|pin_type| match pin_type {
+            PinType::Named { named_pin_type } => Some(named_pin_type),
+            _ => None,
+        })
 }

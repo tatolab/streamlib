@@ -97,7 +97,7 @@ impl BuiltInNodePortDescriptor {
                 annotations.get(typed_built_in_node::THE_FRAME_RATE_A_DOCSTRING_RENDERS)
             })
             .map(|frame_rate| {
-                serde_json::from_value(frame_rate.clone()).with_context(|| {
+                BuiltInNodeImageOutputFrameRate::deserialize(frame_rate).with_context(|| {
                     format!(
                         "port `{}` states a frame rate {frame_rate} that does not read",
                         self.name

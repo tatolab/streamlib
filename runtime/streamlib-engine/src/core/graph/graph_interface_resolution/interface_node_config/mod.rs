@@ -210,8 +210,10 @@ fn refuse_a_default_or_range_its_type_does_not_take(
     };
     if !matches!(
         message_kind_of(pin_type),
-        Some(DataChannelPayloadDescriptorKind::ChannelsBlock)
-            | Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+        Some(
+            DataChannelPayloadDescriptorKind::ChannelsBlock
+                | DataChannelPayloadDescriptorKind::ArrayFrame
+        )
     ) {
         return Err(Error::GraphError(format!(
             "`GraphInput` node `{}` carries {pin_type}, and a `{GRAPH_INPUT_RANGE_CONFIG_KEY}` \

@@ -6,7 +6,7 @@
 //!
 //! A variable holds nothing at run time. A port's output resolves each get's
 //! links to links from the setter's source port, so the variable keeps that
-//! port's family and its readers are checked as any link is. A node reference
+//! port's type and its readers are checked as any link is. A node reference
 //! resolves each config value naming a get to the node the setter names, a
 //! reference edge checked against the type the reader's key takes.
 

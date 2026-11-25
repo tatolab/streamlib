@@ -81,6 +81,17 @@ impl PortDescriptor {
         required: bool,
         pin_declaration: PinDeclaration,
     ) -> Self {
+        Self::of_a_pin_declared_or_not(name, description, required, Some(pin_declaration))
+    }
+
+    /// A port named `name` declaring `pin_declaration`, or, given none, untyped: a shader's port
+    /// before its program types it, or a setting whose schema alone checks its value.
+    pub fn of_a_pin_declared_or_not(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        required: bool,
+        pin_declaration: Option<PinDeclaration>,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -89,26 +100,9 @@ impl PortDescriptor {
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
-            pin_declaration: Some(pin_declaration),
+            pin_declaration,
             lifetime: NodeValueLifetime::Kept,
             input_mode: None,
-        }
-    }
-
-    /// A setting named `name` whose schema states no one pin type: it takes no wire, and its
-    /// value is checked by its schema alone.
-    pub fn a_setting_of_no_pin_type(
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
-        Self {
-            pin_declaration: None,
-            ..Self::new(
-                name,
-                description,
-                false,
-                PinDeclaration::exactly(PinType::String {}),
-            )
         }
     }
 

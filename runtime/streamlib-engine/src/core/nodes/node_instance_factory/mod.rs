@@ -815,15 +815,18 @@ pub(crate) struct NodeTypeAsRegistered {
 }
 
 /// Whether `output` publishes the setting `input` of its name: `input` is a setting, and both
-/// declare one flow.
+/// declare one pin type.
 fn publishes_the_setting_of_its_name(input: &PortDescriptor, output: &PortDescriptor) -> bool {
-    let flow_of = |port: &PortDescriptor| port.pin_declaration.as_ref().map(|pin| pin.flow);
-    input.is_a_setting() && flow_of(input).is_some() && flow_of(input) == flow_of(output)
+    let (Some(input_pin), Some(output_pin)) = (&input.pin_declaration, &output.pin_declaration)
+    else {
+        return false;
+    };
+    input.is_a_setting() && input_pin.pin_type == output_pin.pin_type
 }
 
 /// Refuse a port name not in cast form, and one declared twice: an output takes the name of an
-/// input only when that input is the setting whose value the output publishes, both flowing
-/// alike, as a value source's and a view node's are.
+/// input only when that input is the setting whose value the output publishes, both of one
+/// pin type, as a value source's and a view node's are.
 fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> Result<()> {
     let declared_twice = |port: &PortDescriptor| Error::DescriptorPortNameDeclaredTwice {
         node_class_import_path: descriptor.node_class_import_path.clone(),

@@ -360,8 +360,9 @@ fn upgrade_a_node_with(node: &mut Value, merged_inputs: &[MergedInput]) -> bool 
     any_changed
 }
 
-/// Rename one node's type, fold its retired fields, choose the pin type its saved family and
-/// codec name, or an interface node's saved family implied, and upgrade every level of a fragment it holds; whether any changed. Its own old inputs are merged with the level's links after.
+/// Rename one node's type, fold its retired fields, choose the pin type its saved family and codec
+/// name, or an interface node's saved family implied, and upgrade every level of a fragment it
+/// holds; whether any changed. Its own old inputs are merged with the level's links after.
 fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
     let Some(node) = node.as_object_mut() else {
         return false;

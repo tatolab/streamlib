@@ -16,16 +16,16 @@ use crate::core::nodes::{the_names_listed, the_refusal_of_a_value_an_output_does
 use crate::core::pin_value_packing::pack_pin_value;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
-use streamlib_project_repository::a_panel_writes;
+use streamlib_project_repository::{TatolabViewPortFamily, a_panel_writes};
 
 impl LoadedStreamInThisRuntime {
-    /// The UUID of the running view node whose UUID, as the stream's graph lists it under `id`,
-    /// is `node_id`, and one of whose outputs a panel writes `value` onto, as `port_name`: the
-    /// node whose input of that output's name a write sets. Refused for a stream whose project
-    /// is stopped; a node that is not of a view type, that does not run, or that has no such
-    /// output; and a value no panel writes there: any onto a Texture or encoded output, one its
-    /// type does not take, and `null`. The stream's graph lock is held across a compile, so the read waits off the async
-    /// workers.
+    /// The UUID of the running view node whose UUID, as the stream's graph lists it under `id`, is
+    /// `node_id`, and one of whose outputs a panel writes `value` onto, as `port_name`: the node
+    /// whose input of that output's name a write sets. Refused for a stream whose project is
+    /// stopped; a node that is not of a view type, that does not run, or that has no such output;
+    /// and a value no panel writes there: any onto a Texture or encoded output, one its type does
+    /// not take, and `null`. The stream's graph lock is held across a compile, so the read waits
+    /// off the async workers.
     pub(crate) async fn read_the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
@@ -62,7 +62,7 @@ impl LoadedStreamInThisRuntime {
                     refuse_a_value_no_panel_writes_onto_the_output(
                         &node.display_name,
                         &port_name,
-                        &pin_type,
+                        pin_type,
                         &value,
                     )?;
                     Ok(node.node_uuid)
@@ -84,7 +84,7 @@ fn the_running_view_node_of_the_id<'graph>(
     node_id: &str,
     port_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<(&'graph GraphNode, PinType)> {
+) -> Result<(&'graph GraphNode, &'graph PinType)> {
     let no_such_node = || {
         Error::NodeNotFound(format!(
             "no node in the stream `{stream_id}` has the id `{node_id}`"
@@ -126,7 +126,7 @@ fn the_running_view_node_of_the_id<'graph>(
             node.display_name
         )));
     };
-    Ok((node, pin.pin_type.clone()))
+    Ok((node, &pin.pin_type))
 }
 
 /// Refuse `value` written onto output `port_name`, of `pin_type`, of the view node named
@@ -141,7 +141,9 @@ fn refuse_a_value_no_panel_writes_onto_the_output(
 ) -> Result<()> {
     let why = if value.is_null() {
         "`null` sets no value".to_string()
-    } else if !a_panel_writes(pin_type) {
+    } else if !TatolabViewPortFamily::carrying_a_whole_value_of(pin_type)
+        .is_some_and(a_panel_writes)
+    {
         format!("a panel writes no {pin_type} value; a node writes it")
     } else {
         match pack_pin_value(pin_type, value, 0) {

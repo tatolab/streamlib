@@ -83,7 +83,7 @@ pub(crate) fn the_node_type_of_a_project_view(
             manifest
                 .outputs
                 .iter()
-                .filter(|port| a_panel_writes(&port.pin_type))
+                .filter(|port| a_panel_writes(port.family))
                 .map(the_input_of_an_output_a_panel_writes),
         )
         .collect();
@@ -91,7 +91,7 @@ pub(crate) fn the_node_type_of_a_project_view(
         .outputs
         .iter()
         .map(|port| {
-            if a_panel_writes(&port.pin_type) {
+            if a_panel_writes(port.family) {
                 the_port_a_view_declares(port).with_pin_declaration(written_as_a_value(port))
             } else {
                 the_port_a_view_declares(port)

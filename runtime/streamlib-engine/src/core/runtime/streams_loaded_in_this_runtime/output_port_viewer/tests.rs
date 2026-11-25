@@ -531,7 +531,7 @@ fn a_viewer_of_a_channels_port_reads_every_block_and_any_other_port_the_latest()
 
 impl ARunningCameraWithNoLinks {
     /// Give output `port_name` exactly `pin_type`, as a port declaring it does, or no pin type,
-    /// as a port declaring only its family does.
+    /// as an untyped port does.
     fn retype_the_output(
         &self,
         port_name: &str,

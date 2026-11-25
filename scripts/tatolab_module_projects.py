@@ -20,8 +20,8 @@ What a storefront shows before a module is added, each from what the module proj
 - `category`, one of `CATALOG_CATEGORIES`, from its `pyproject.toml`'s
   `[tool.tatolab.catalog]` `category`;
 - `download_size`, the archive's size in bytes;
-- under each node, its `inputs` and `outputs` as the listing reads them, each a `name`, a
-  `family` and a `description`, left out where the listing reads none;
+- under each node, its `inputs` and `outputs` as the listing reads them, each a `name` and a
+  `description`, left out where the listing reads none;
 - `views`, each folder of its `views/` the archive carries, by its `tatolab_view.json`: its
   `view_type` (`<project uuid>:<folder>`), `title`, `description`, `placement` and the
   `devices` among its declared capabilities (`camera`, `microphone`, `gpu`); a manifest that
@@ -454,8 +454,8 @@ def view_members_of_the_archive(archive):
 
 
 def ports_as_the_catalog_names_them(ports):
-    """Each port the listing read, as its `name`, `family` and `description`."""
-    return [{"name": port["name"], "family": port.get("family"), "description": port.get("description") or ""} for port in ports]
+    """Each port the listing read, as its `name` and `description`."""
+    return [{"name": port["name"], "description": port.get("description") or ""} for port in ports]
 
 
 def first_line_of(description):

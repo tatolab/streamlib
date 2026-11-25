@@ -335,8 +335,12 @@ fn a_port_of_no_pin_type_renders_its_values_unchecked_in_the_graph_and_the_regis
         serde_json::json!(false)
     );
 
-    let declared =
-        crate::core::PortDescriptor::a_setting_of_no_pin_type("detections", "Detections");
+    let declared = crate::core::PortDescriptor::of_a_pin_declared_or_not(
+        "detections",
+        "Detections",
+        false,
+        None,
+    );
     let json = serde_json::to_value(PortDescriptorOutput::from(&declared)).unwrap();
     assert_eq!(json["values_checked"], serde_json::json!(false));
     assert_renders_exactly(

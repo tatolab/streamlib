@@ -113,21 +113,28 @@ impl PortStreamFacts {
     /// a Texture and Packets facts an encoded type; `None` for any other type.
     pub fn the_pin_type_they_describe(&self, pin_type: &PinType) -> Option<BuiltInPinTypeName> {
         let name = pin_type.built_in_name();
-        let describes = match self {
-            PortStreamFacts::Image(_) => name == BuiltInPinTypeName::Texture,
-            PortStreamFacts::Packets(_) => matches!(
-                name,
-                BuiltInPinTypeName::EncodedVideo | BuiltInPinTypeName::EncodedAudio
-            ),
-        };
-        describes.then_some(name)
+        self.the_pin_types_they_describe()
+            .contains(&name)
+            .then_some(name)
     }
 
-    /// What these facts describe, as a refusal names it.
-    fn what_they_describe(&self) -> &'static str {
+    /// The types these facts describe a stream of, and their name as a refusal words it.
+    fn the_pin_types_they_describe(&self) -> &'static [BuiltInPinTypeName] {
         match self {
-            PortStreamFacts::Image(_) => "Texture",
-            PortStreamFacts::Packets(_) => "encoded",
+            PortStreamFacts::Image(_) => &[BuiltInPinTypeName::Texture],
+            PortStreamFacts::Packets(_) => &[
+                BuiltInPinTypeName::EncodedVideo,
+                BuiltInPinTypeName::EncodedAudio,
+            ],
+        }
+    }
+
+    /// What these facts describe, as a refusal names it: the one type of
+    /// [`Self::the_pin_types_they_describe`], or `encoded` for the encoded types.
+    fn what_they_describe(&self) -> &'static str {
+        match self.the_pin_types_they_describe() {
+            [BuiltInPinTypeName::Texture] => "Texture",
+            _ => "encoded",
         }
     }
 }

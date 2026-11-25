@@ -302,10 +302,10 @@ fn a_function_node_type(
 }
 
 /// A pass-through stand-in for the `PreviousValue` node type a loop of function nodes closes
-/// through, not the node interpreter's own, which takes and gives a Float: it takes a value of
-/// any type into `value` and gives it back on `result` as the type of the link into `value`. A link closing a loop inside a placed
-/// stream has the links through the node judged among the level's nodes, and these tests close
-/// loops of Floats, so the stand-in passes each through as it came.
+/// through, not the node interpreter's own, which takes and gives a Float: it takes a value of any
+/// type into `value` and gives it back on `result` as the type of the link into `value`. A link
+/// closing a loop inside a placed stream has the links through the node judged among the level's
+/// nodes, and these tests close loops of Floats, so the stand-in passes each through as it came.
 fn a_previous_value_node_type() -> NodeDescriptor {
     let any_flow = PinDeclaration::exactly(PinType::Float { exact_size: None });
     let value = PortDescriptor::new(

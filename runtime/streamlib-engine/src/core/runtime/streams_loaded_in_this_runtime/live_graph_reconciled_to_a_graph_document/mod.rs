@@ -75,8 +75,8 @@ pub(in crate::core::runtime) struct LiveLinkAsGiven {
 }
 
 /// Which links a reconcile makes as a saved graph's, keeping one its pin types or Image formats
-/// alone refuse when both its ends travel as one kind of message, and which it judges as `connect` judges a link
-/// made now.
+/// alone refuse when both its ends travel as one kind of message, and which it judges as `connect`
+/// judges a link made now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::core::runtime) enum LinksAReconcileMakes {
     /// Each link, the document being a saved graph: read from disk, or as the stream drew it.
@@ -161,18 +161,17 @@ fn cast_name(name: &str) -> Result<String> {
 }
 
 impl LoadedStreamInThisRuntime {
-    /// Bring this stream's live graph to the graph `graph_document` holds, each node matched by
-    /// its UUID: a node the document no longer holds, or holds as another type, taken out; a
-    /// kept node renamed, reconfigured and repinned to the document's; each new node added;
-    /// and the links made to be the document's. The document is resolved and validated whole,
-    /// as a load is, before the live graph is touched. A kept node not handed the values the
-    /// document sets on it fails the reconcile once every node and link is made. Each link it
-    /// makes as a saved graph's, as `links_it_makes` says, is kept when its pin types or Image
-    /// formats alone refuse it and both its ends travel as one kind of message, and is set aside, not made, when
-    /// the engine cannot wire it; so is a link the stream held set aside before, and a link the
-    /// live graph keeps that the engine cannot wire once the reconcile made its links. A kept
-    /// node left to rebuild is handed its values, or left to its rebuild, as `left_to_rebuild`
-    /// says.
+    /// Bring this stream's live graph to the graph `graph_document` holds, each node matched by its
+    /// UUID: a node the document no longer holds, or holds as another type, taken out; a kept node
+    /// renamed, reconfigured and repinned to the document's; each new node added; and the links
+    /// made to be the document's. The document is resolved and validated whole, as a load is,
+    /// before the live graph is touched. A kept node not handed the values the document sets on it
+    /// fails the reconcile once every node and link is made. Each link it makes as a saved graph's,
+    /// as `links_it_makes` says, is kept when its pin types or Image formats alone refuse it and
+    /// both its ends travel as one kind of message, and is set aside, not made, when the engine
+    /// cannot wire it; so is a link the stream held set aside before, and a link the live graph
+    /// keeps that the engine cannot wire once the reconcile made its links. A kept node left to
+    /// rebuild is handed its values, or left to its rebuild, as `left_to_rebuild` says.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         graph_document: Value,

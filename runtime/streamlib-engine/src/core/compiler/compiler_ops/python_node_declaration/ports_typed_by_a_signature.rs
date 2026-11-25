@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The pin types a function or shader node's signature states exactly: its number and Boolean
-//! values, and a shader's output Texture in the one format every shader writes. Its other
-//! picture ports are typed by their Image family, as every picture port is.
+//! values, and a shader's output Texture in the one format every shader writes. Its picture
+//! inputs are each a Texture of any format, typed by its program.
 
 use crate::core::descriptors::{
     FloatSize, NodeDescriptor, PinDeclaration, PinType, TexturePixelFormat,
@@ -80,9 +80,10 @@ pub(super) fn ports_a_function_node_signature_types(
 }
 
 /// Each port a shader node's program types exactly, by name, with its declaration: its image
-/// inputs, each a Texture of any format; its inputs of numbers, a Float exactly a 32-bit Float, the four bytes its push constant holds, and a
-/// Color or a Vector as its signature states it, each part a 32-bit push constant too; and its
-/// output, a Texture of the format the runtime writes every shader's output in.
+/// inputs, each a Texture of any format; its inputs of numbers, a Float exactly a 32-bit Float, the
+/// four bytes its push constant holds, and a Color or a Vector as its signature states it, each
+/// part a 32-bit push constant too; and its output, a Texture of the format the runtime writes
+/// every shader's output in.
 pub(super) fn ports_a_shader_node_program_types(
     program: &ShaderNodeProgram,
 ) -> Vec<(String, PinDeclaration)> {

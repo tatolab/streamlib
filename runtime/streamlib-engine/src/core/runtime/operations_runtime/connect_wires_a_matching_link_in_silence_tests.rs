@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A link between two ports of one family wires in silence: connect
+//! A link between two ports of one pin type wires in silence: connect
 //! emits no warning.
 
 use crate::core::descriptors::{PinDeclaration, PinType};

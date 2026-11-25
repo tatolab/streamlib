@@ -189,7 +189,8 @@ async fn a_refused_candidate_is_left_out_unless_the_refused_are_asked_for() {
 /// node of that type; no node is left placed and the graph document is left as it was.
 ///
 /// Mental-revert: judging a node type's port by its pin type alone, its meaning left out, would
-/// answer `connects` with no warning; leaving the node held for the judgement would add a node to the live graph.
+/// answer `connects` with no warning; leaving the node held for the judgement would add a node to
+/// the live graph.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_types_port_answers_what_check_link_answers_for_a_placed_node_of_the_type() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();

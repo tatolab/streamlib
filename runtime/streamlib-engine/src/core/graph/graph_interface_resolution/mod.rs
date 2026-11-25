@@ -212,7 +212,8 @@ impl GraphInterfaceNodeAsDrawn {
     }
 
     /// The interface node as `graph` renders it: each setting its type declares as an input,
-    /// reading the value it holds, and its one port of the type it declares; a `GraphOutput`'s reads from a wire once a link feeds it.
+    /// reading the value it holds, and its one port of the type it declares; a `GraphOutput`'s
+    /// reads from a wire once a link feeds it.
     pub fn rendered_as_a_node(&self) -> GraphNodeOutput {
         let declared = &self.declared_port;
         let mut value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
@@ -280,7 +281,9 @@ pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
     ports: &mut GraphNodePorts,
     settings: Option<&serde_json::Value>,
 ) {
-    let chosen = what_the_value_port_of_an_interface_node_carries(settings).unwrap_or(None);
+    let chosen = what_the_value_port_of_an_interface_node_carries(settings)
+        .ok()
+        .flatten();
     carry_on_every_value_port(
         ports.inputs.iter_mut().chain(&mut ports.outputs),
         chosen.as_ref(),
@@ -497,7 +500,7 @@ impl GraphSnapshot {
             if runs_as_a_source_node {
                 runtime_nodes.push(match (states_what_it_carries, &pin_type) {
                     (false, Some(resolved)) => {
-                        node_with_the_pin_type_a_link_resolved(node, resolved)
+                        node_with_the_pin_type_a_link_resolved(node, resolved)?
                     }
                     _ => node.clone(),
                 });
@@ -674,13 +677,18 @@ fn the_one_type_a_port_of_a_document_node_carries(
 fn node_with_the_pin_type_a_link_resolved(
     node: &GraphSnapshotNode,
     resolved: &PinType,
-) -> GraphSnapshotNode {
+) -> Result<GraphSnapshotNode> {
+    let chosen = serde_json::to_value(resolved).map_err(|why| {
+        Error::GraphError(format!(
+            "`{}` takes the type {resolved:?} a link resolved, which does not render as JSON: {why}",
+            node.name
+        ))
+    })?;
     let mut node_with_the_pin_type = node.clone();
-    node_with_the_pin_type.input_values.insert(
-        GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(),
-        serde_json::to_value(resolved).expect("a pin type renders as JSON"),
-    );
     node_with_the_pin_type
+        .input_values
+        .insert(GRAPH_INTERFACE_PIN_TYPE_SETTING.to_string(), chosen);
+    Ok(node_with_the_pin_type)
 }
 
 impl GraphInterfaceAsDrawn {

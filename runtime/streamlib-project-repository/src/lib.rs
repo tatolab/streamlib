@@ -191,8 +191,9 @@ pub use streamlib_node_schema::CONSTANT_NODE_TYPE;
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
 pub use tatolab_view_manifest::{
     TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,
-    TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR, a_panel_writes,
-    is_a_type_a_panel_writes_a_value_of, read_tatolab_view_manifest,
+    TatolabViewPlacement, TatolabViewPortFamily, VIEW_CONTRACT_READ_MAJOR,
+    VIEW_CONTRACT_READ_MINOR, a_panel_writes, is_a_type_a_panel_writes_a_value_of,
+    read_tatolab_view_manifest,
 };
 #[cfg(feature = "history")]
 pub use view_manifest_check::{ViewManifestsChecked, check_a_projects_view_manifests};

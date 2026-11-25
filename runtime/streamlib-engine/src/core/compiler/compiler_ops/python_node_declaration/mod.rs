@@ -6,7 +6,7 @@ use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
     NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, NodeRuntime, NodeScheduling,
-    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor,
+    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PortDescriptor,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -463,18 +463,8 @@ fn read_port_descriptors_listed(
             .transpose()?;
         let description = read_string(declaration, "description")?;
         // A port of a shader node is typed by its program once every port is read.
-        let mut port = PortDescriptor {
-            pin_declaration: None,
-            ..PortDescriptor::new(
-                port_name,
-                description,
-                true,
-                PinDeclaration::exactly(PinType::String {}),
-            )
-        };
-        if let Some(pin_declaration) = pin_declaration {
-            port = port.with_pin_declaration(pin_declaration);
-        }
+        let mut port =
+            PortDescriptor::of_a_pin_declared_or_not(port_name, description, true, pin_declaration);
         if let Some(delivery_profile) = declaration
             .get("delivery_profile")
             .filter(|declared| !declared.is_null())
@@ -638,8 +628,8 @@ fn read_value_lifetime(
 
 /// Read the value an input port reads while nothing is linked into it: on a port whose author
 /// declares its pin, a stored value of the type it declares, or `null` when it may be unset;
-/// on any other port, a number or a bool on a Channels input, or `null` on an optional
-/// function node input of any family.
+/// on any other port, a number or a bool, or `null` on an optional function node input of any
+/// type.
 fn read_pin_default(
     pin_default: &serde_json::Value,
     port: &PortDescriptor,
