@@ -205,12 +205,12 @@ fn an_interface_node_naming_no_family_and_linked_to_nothing_runs_nothing() {
     assert!(declared.iter().all(|port| port.family.is_none()));
     assert!(declared.iter().all(|port| !port.runs_as_a_source_node));
     let rendered = resolution.interface_as_drawn.interface_nodes[0].rendered_as_a_node();
-    assert_eq!(rendered.ports.outputs[0].family, None);
+    assert_eq!(rendered.ports.outputs[0].pin, None);
     assert_eq!(
         rendered
             .components
             .graph_interface
-            .map(|graph_interface| graph_interface.family),
+            .map(|graph_interface| graph_interface.pin_type),
         Some(None)
     );
 }
@@ -513,8 +513,6 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
         kind: None,
         language: None,
         name: name.to_string(),
-        config: Some(serde_json::json!({})),
-        config_checksum: 0,
         ports: GraphNodePortsOnTheWire {
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -522,8 +520,6 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
         components: Default::default(),
         input_values: serde_json::Map::new(),
         live: None,
-        pins: serde_json::Map::new(),
-        exposed_config_fields: Vec::new(),
         studio: serde_json::Map::new(),
         inputs_waiting_for_a_value: Vec::new(),
         fragment: None,
@@ -544,8 +540,7 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
     assert_eq!(names, ["camera", "video", "overlay", "display"]);
     assert_eq!(
         serde_json::to_value(&graph_response.nodes[1].components.graph_interface).unwrap(),
-        serde_json::json!({"direction": "output", "port": "video", "family": "image",
-                           "pin_type": {"type": "texture"}})
+        serde_json::json!({"direction": "output", "port": "video", "pin_type": {"type": "texture"}})
     );
     assert_eq!(graph_response.links.len(), 2);
     assert_eq!(graph_response.links[0].target.node, "video");
@@ -640,8 +635,7 @@ fn a_graph_input_choosing_a_pin_type_carries_it_on_its_port_and_on_the_interface
     );
     assert_eq!(
         serde_json::to_value(declared[0].as_component()).unwrap(),
-        serde_json::json!({"direction": "input", "port": "cue", "family": "channels",
-                           "pin_type": {"type": "float"}})
+        serde_json::json!({"direction": "input", "port": "cue", "pin_type": {"type": "float"}})
     );
     let value_output = declared[0].rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
     assert_eq!(

@@ -586,8 +586,6 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
         kind: None,
         language: None,
         name: name.to_string(),
-        config: Some(serde_json::json!({})),
-        config_checksum: 0,
         ports: GraphNodePortsOnTheWire {
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -595,8 +593,6 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
         components: Default::default(),
         input_values: serde_json::Map::new(),
         live: None,
-        pins: serde_json::Map::new(),
-        exposed_config_fields: Vec::new(),
         studio: serde_json::Map::new(),
         inputs_waiting_for_a_value: Vec::new(),
         fragment: None,
@@ -671,7 +667,6 @@ fn the_render_matches_a_runtime_link_whose_ports_the_runtime_cast() {
         "{:?}",
         graph_response.links
     );
-    assert_ne!(graph_response.nodes[1].config_checksum, 0);
 }
 
 #[test]
@@ -793,9 +788,9 @@ fn the_render_lists_each_setting_of_a_variable_node_as_an_input_reading_its_valu
         [("variable".to_string(), serde_json::json!("camera"))]
     );
     assert_eq!(
-        setter.config,
-        Some(serde_json::json!({"variable": "camera"})),
-        "the config `graph` serves keeps its keys"
+        setter.input_values["variable"],
+        serde_json::json!("camera"),
+        "the input values `graph` serves keep their keys"
     );
 }
 

@@ -39,14 +39,14 @@ fn catalog_ports_of_type(
 }
 
 #[test]
-fn graph_serves_a_rust_ports_declared_pin_type_resolved_beside_its_family() {
+fn graph_serves_a_rust_ports_declared_pin_type_resolved() {
     let node = rendered_node_of_type(MockPinTypedNode::node_class_import_path());
 
     let gain = &node["ports"]["inputs"][0];
     assert_eq!(gain["name"], "gain");
     assert_eq!(gain["pin_type"], json!({"type": "float"}));
     assert_eq!(gain["flow"], "value");
-    assert_eq!(gain["family"], json!({"family": "channels"}));
+    assert!(gain.get("family").is_none(), "{gain}");
 
     let frames = &node["ports"]["outputs"][0];
     assert_eq!(frames["name"], "frames");
@@ -55,10 +55,7 @@ fn graph_serves_a_rust_ports_declared_pin_type_resolved_beside_its_family() {
         json!({"type": "texture", "pixel_formats": ["rgba8_unorm"]})
     );
     assert_eq!(frames["flow"], "stream");
-    assert_eq!(
-        frames["family"],
-        json!({"family": "image", "formats": ["rgba8_unorm"]})
-    );
+    assert!(frames.get("family").is_none(), "{frames}");
 }
 
 #[test]
@@ -199,7 +196,7 @@ fn a_port_with_no_exact_pin_type_serves_neither_field_in_graph_or_the_catalog() 
     );
     let node = rendered_node_of_type(node_type.clone());
     let audio = &node["ports"]["outputs"][0];
-    assert_eq!(audio["family"], json!({"family": "channels"}));
+    assert!(audio.get("family").is_none(), "{audio}");
     assert!(audio.get("pin_type").is_none(), "{audio}");
     assert!(audio.get("flow").is_none(), "{audio}");
 
@@ -277,7 +274,7 @@ fn graph_and_the_catalog_serve_the_formats_a_texture_pin_states() {
 }
 
 #[test]
-fn graph_serves_a_typed_ports_stream_facts_under_its_pin_type_beside_their_family() {
+fn graph_serves_a_typed_ports_stream_facts_under_its_pin_type() {
     use crate::core::descriptors::{ImageStreamFacts, ImageStreamFrameRate};
 
     ensure_test_mocks_registered();
@@ -311,14 +308,13 @@ fn graph_serves_a_typed_ports_stream_facts_under_its_pin_type_beside_their_famil
         rendered["nodes"][0]["ports"]["outputs"][0]["stream_facts"],
         json!({
             "type": "texture",
-            "family": "image",
             "frame_rate": {"numerator": 60, "denominator": 1},
         })
     );
 }
 
 #[test]
-fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_ports_by_family() {
+fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_ports_by_none() {
     use crate::core::descriptors::{PacketsStreamFacts, PinFlow, PinType, ResolvedPin};
 
     static REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -353,8 +349,8 @@ fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_por
 
     assert_eq!(
         stream_facts_rendered(&graph),
-        json!({"family": "packets", "rfc6381_codec": "avc1.64001f"}),
-        "a port with no pin type keeps its facts under `family` alone"
+        serde_json::Value::Null,
+        "a port with no pin type carries no facts `graph` names"
     );
 
     graph
@@ -370,6 +366,6 @@ fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_por
     });
     assert_eq!(
         stream_facts_rendered(&graph),
-        json!({"type": "encoded_video", "family": "packets", "rfc6381_codec": "avc1.64001f"})
+        json!({"type": "encoded_video", "rfc6381_codec": "avc1.64001f"})
     );
 }

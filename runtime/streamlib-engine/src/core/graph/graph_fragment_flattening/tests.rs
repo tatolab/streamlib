@@ -381,11 +381,11 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
     );
     assert_eq!(blur_into_tint.state, LinkStateOutput::Wired);
     assert_eq!(
-        soft_holds.nodes[2].config,
-        Some(serde_json::json!({
+        serde_json::Value::Object(soft_holds.nodes[2].input_values.clone()),
+        serde_json::json!({
             "reads_radius_of": {"node": "blur"},
             "label_shaped_like_a_reference": {"node": "blur"},
-        }))
+        })
     );
     let outer_links: Vec<(&str, &str)> = render
         .links
@@ -583,10 +583,9 @@ fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_
         .render_into(&mut render, &node_types_describing_a_blur_with_an_input());
 
     let look = &render.nodes[1];
-    assert_eq!(look.config, Some(serde_json::json!({"strength": 2})));
     assert_eq!(
-        serde_json::Value::Object(look.pins.clone()),
-        serde_json::json!({"video": 1})
+        serde_json::Value::Object(look.input_values.clone()),
+        serde_json::json!({"strength": 2, "video": 1})
     );
     let soft_holds = look.fragment.as_ref().expect("look holds").nodes[1]
         .fragment
@@ -594,10 +593,9 @@ fn a_node_nothing_runs_for_and_its_fragment_render_the_value_on_each_input_as_a_
         .expect("soft holds");
     let blur = &soft_holds.nodes[1];
     assert_eq!(blur.name, "blur");
-    assert_eq!(blur.config, Some(serde_json::json!({"radius": 8})));
     assert_eq!(
-        serde_json::Value::Object(blur.pins.clone()),
-        serde_json::json!({"amount": 3})
+        serde_json::Value::Object(blur.input_values.clone()),
+        serde_json::json!({"radius": 8, "amount": 3})
     );
 }
 
@@ -715,9 +713,8 @@ fn a_placed_stream_renders_its_stream_setting_as_an_input_reading_the_asset_it_p
         Some(placed_asset.clone())
     );
     assert_eq!(
-        placed.config,
-        Some(serde_json::json!({"stream": placed_asset})),
-        "the config `graph` serves keeps its keys"
+        placed.input_values["stream"], placed_asset,
+        "the input values `graph` serves keep their keys"
     );
 }
 
