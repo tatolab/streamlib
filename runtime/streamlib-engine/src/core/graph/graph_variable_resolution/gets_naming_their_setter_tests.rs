@@ -4,7 +4,8 @@
 //! A `GetVariable` naming the `SetVariable` it reads by that node's UUID.
 
 use super::tests::{
-    a_camera_variable_read_by_two_displays, a_rendered_node, link, refusal_of, resolved,
+    a_camera_variable_read_by_two_displays, a_graph_response_of, a_rendered_node, link, refusal_of,
+    resolved,
 };
 use super::*;
 
@@ -76,24 +77,11 @@ fn a_get_naming_its_setter_by_something_other_than_a_uuid_is_refused() {
 #[test]
 fn a_get_naming_its_setter_renders_the_variable_its_setter_sets_now() {
     let resolution = resolved(a_renamed_camera_variable_its_gets_name_by_its_setter()).unwrap();
-    let mut graph_response = GraphResponse {
-        asset: None,
-        display_name: None,
-        stream: None,
-        clock: Default::default(),
-        condition: None,
-        nodes: vec![
-            a_rendered_node("camera"),
-            a_rendered_node("front"),
-            a_rendered_node("back"),
-        ],
-        links: Vec::new(),
-        references: Vec::new(),
-        machine: "vm".to_string(),
-        groups: Vec::new(),
-        studio: None,
-        function_node_pool: None,
-    };
+    let mut graph_response = a_graph_response_of(vec![
+        a_rendered_node("camera"),
+        a_rendered_node("front"),
+        a_rendered_node("back"),
+    ]);
     resolution
         .variables_as_drawn
         .render_into(&mut graph_response);

@@ -69,3 +69,14 @@ fn a_get_inside_a_fragment_names_the_setter_of_the_fragments_level() {
         json!({ "set_variable": SET_PULSE })
     );
 }
+
+#[test]
+fn a_get_naming_a_variable_two_setters_of_its_level_set_keeps_it() {
+    let mut level = a_level_whose_gets_name_their_variables();
+    level["nodes"][1]["input_values"]["variable"] = json!("pulse");
+    let (_, document) = upgraded(level);
+    assert_eq!(
+        document["nodes"][2]["input_values"],
+        json!({ "variable": "pulse" })
+    );
+}

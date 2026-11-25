@@ -4,17 +4,18 @@
 //! A `GetVariable` names the `SetVariable` it reads by that node's UUID. One saved when a get
 //! named its variable opens naming the setter of that variable on its level instead, so
 //! renaming the variable later keeps it reading. A get whose variable no setter on its level
-//! sets, such as one reading a setter of an enclosing level, keeps its variable as written.
+//! sets, such as one reading a setter of an enclosing level, or two set, keeps its variable as
+//! written.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::NODE_INPUT_VALUES_KEY;
 use crate::stream_graph_default_port_and_variable_names::{
     GET_VARIABLE_NODE_TYPE, GET_VARIABLE_SET_VARIABLE_CONFIG_KEY, GRAPH_VARIABLE_NAME_CONFIG_KEY,
-    SET_VARIABLE_NODE_TYPE,
+    SET_VARIABLE_NODE_TYPE, the_input_values_naming_the_setter,
 };
 
-/// Name each get of `nodes`, one level's, that names a variable by the UUID of the level's
+/// Name each get of `nodes`, one level's, that names a variable by the UUID of the level's one
 /// setter of it; whether any was.
 pub(super) fn the_gets_of_the_level_named_by_their_setter(nodes: &mut [Value]) -> bool {
     let setters: Vec<(String, String)> = nodes
@@ -54,14 +55,6 @@ pub(super) fn the_gets_of_the_level_named_by_their_setter(nodes: &mut [Value]) -
         any_changed = true;
     }
     any_changed
-}
-
-/// The input values of a get naming the `SetVariable` node of `setter_uuid`.
-pub(crate) fn the_input_values_naming_the_setter(setter_uuid: &str) -> Map<String, Value> {
-    Map::from_iter([(
-        GET_VARIABLE_SET_VARIABLE_CONFIG_KEY.to_owned(),
-        Value::String(setter_uuid.to_owned()),
-    )])
 }
 
 fn the_type_of(node: &Value) -> Option<&str> {

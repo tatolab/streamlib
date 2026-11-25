@@ -19,7 +19,7 @@ use merged_inputs::{MERGED_INPUTS, MergedInput};
 use node_references_that_became_wires::INPUTS_THAT_HELD_A_NODE_REFERENCE;
 use pin_type_chosen_from_a_family_and_codec::PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC;
 
-pub(crate) mod get_variables_named_by_their_setter;
+mod get_variables_named_by_their_setter;
 mod inputs_moved_onto_pin_group_slots;
 mod interface_pin_type_named_by_its_family;
 mod merged_inputs;

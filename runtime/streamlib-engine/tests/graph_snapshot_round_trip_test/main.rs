@@ -64,7 +64,11 @@ fn the_spec_in(graph_document: serde_json::Value) -> GraphSnapshot {
 
 /// The spec in `graph_document` with each node's UUID dropped, refusing a node that renders none.
 fn the_spec_without_its_node_uuids_in(graph_document: serde_json::Value) -> GraphSnapshot {
-    let mut graph = the_spec_in(graph_document);
+    without_node_uuids(the_spec_in(graph_document))
+}
+
+/// `graph` with each node's UUID dropped, refusing a node that holds none.
+fn without_node_uuids(mut graph: GraphSnapshot) -> GraphSnapshot {
     for node in &mut graph.nodes {
         assert!(
             node.id.take().is_some(),
@@ -79,40 +83,35 @@ fn the_spec_without_its_node_uuids_in(graph_document: serde_json::Value) -> Grap
 /// its setter by UUID named by the variable that setter sets, as a spec written by name draws
 /// it; refusing a get naming no setter the graph holds.
 fn the_spec_naming_each_get_by_its_variable_in(graph_document: serde_json::Value) -> GraphSnapshot {
+    use streamlib_project_repository::{
+        GET_VARIABLE_SET_VARIABLE_CONFIG_KEY, GRAPH_VARIABLE_NAME_CONFIG_KEY,
+        SET_VARIABLE_NODE_TYPE,
+    };
     let mut graph = the_spec_in(graph_document);
     let variable_of_each_setter: std::collections::HashMap<String, serde_json::Value> = graph
         .nodes
         .iter()
-        .filter(|node| node.node_type.as_str() == "tatolab.stream:SetVariable")
+        .filter(|node| node.node_type.as_str() == SET_VARIABLE_NODE_TYPE)
         .filter_map(|setter| {
-            Some((
-                setter.id?.to_string(),
-                setter.input_values.get("variable")?.clone(),
-            ))
+            let variable = setter.input_values.get(GRAPH_VARIABLE_NAME_CONFIG_KEY)?;
+            Some((setter.id?.to_string(), variable.clone()))
         })
         .collect();
     for get in &mut graph.nodes {
-        let Some(setter) = get.input_values.remove("set_variable") else {
+        let Some(setter) = get
+            .input_values
+            .remove(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY)
+        else {
             continue;
         };
-        let variable = variable_of_each_setter
-            .get(
-                setter
-                    .as_str()
-                    .expect("a get names its setter by a UUID string"),
-            )
+        let variable = setter
+            .as_str()
+            .and_then(|setter| variable_of_each_setter.get(setter))
             .unwrap_or_else(|| panic!("get `{}` names a setter the graph holds", get.name));
         get.input_values
-            .insert("variable".to_string(), variable.clone());
+            .insert(GRAPH_VARIABLE_NAME_CONFIG_KEY.to_string(), variable.clone());
     }
-    for node in &mut graph.nodes {
-        assert!(
-            node.id.take().is_some(),
-            "node `{}` renders no UUID",
-            node.name
-        );
-    }
-    graph
+    without_node_uuids(graph)
 }
 
 /// Load options for the stream `stream_id` of the project in `project_directory`.

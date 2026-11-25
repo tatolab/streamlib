@@ -579,6 +579,24 @@ fn a_setter_holding_another_variable_node_is_refused() {
         ));
     assert!(refusal_of(graph).contains("holds variable node `get-connection`"));
 }
+/// A render of a graph holding `nodes` alone, for a variable's render to go into.
+pub(super) fn a_graph_response_of(nodes: Vec<GraphNodeOutput>) -> GraphResponse {
+    GraphResponse {
+        asset: None,
+        display_name: None,
+        stream: None,
+        clock: Default::default(),
+        condition: None,
+        nodes,
+        links: Vec::new(),
+        references: Vec::new(),
+        machine: "vm".to_string(),
+        groups: Vec::new(),
+        studio: None,
+        function_node_pool: None,
+    }
+}
+
 pub(super) fn a_rendered_node(name: &str) -> GraphNodeOutput {
     GraphNodeOutput {
         id: format!("id-{name}"),

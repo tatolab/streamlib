@@ -542,7 +542,9 @@ impl GraphSnapshot {
             .filter(|node| node.node_type.as_str() == GET_VARIABLE_NODE_TYPE)
         {
             let get_cast = cast_of(&get_node.name)?;
-            let names = &setter_of_each_get_by_cast[&get_cast];
+            let Some(names) = setter_of_each_get_by_cast.get(&get_cast) else {
+                continue;
+            };
             let setter = setter_of(&get_node.name, names).ok();
             what_each_get_reads.insert(
                 get_cast,
