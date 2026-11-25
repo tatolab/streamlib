@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::project_views::place_each_own_view_of_a_copy_by_its_type_in_the_copy;
+use crate::project_views::{
+    give_each_own_view_naming_no_uuid_one, place_each_own_view_of_a_copy_by_its_type_in_the_copy,
+};
 use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 impl ProjectRepository {
@@ -110,12 +112,23 @@ impl ProjectRepository {
         Ok(repository)
     }
 
-    /// Open the project in `project_directory`, its assets read from their sidecars.
+    /// Open the project in `project_directory`, its assets read from their sidecars, each of its
+    /// own views naming no UUID given one, committed by the runtime as one commit of its own.
     pub fn open(project_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
-        Self::open_with_its_history_in(
+        let repository = Self::open_with_its_history_in(
             project_directory,
             &project_directory.join(PROJECT_HISTORY_DIRECTORY),
-        )
+        )?;
+        if give_each_own_view_naming_no_uuid_one(project_directory)
+            && repository.history.head_commit()?.is_some()
+        {
+            repository.history.commit_tracked_files(
+                &repository.tracked_files(&repository.assets_by_uuid)?,
+                &ProjectTransactionAuthor::the_runtime(),
+                &format!("give_each_view_its_uuid {}", repository.project_file.name),
+            )?;
+        }
+        Ok(repository)
     }
 
     /// Open the project in `project_directory` as [`Self::open`] does, its history kept in
