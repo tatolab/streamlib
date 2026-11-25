@@ -283,13 +283,13 @@ fn a_port_renamed_in_the_placed_streams_file_keeps_each_link_onto_it_under_the_n
     assert_eq!(the_links_of(&project.main_as_it_runs().unwrap()), renamed);
 }
 
-#[test]
-fn a_port_renamed_by_a_transaction_leaves_the_placing_streams_file_as_it_was_and_undoes() {
-    let mut project = ProjectPlacingTitleInMain::new(
-        "video_in",
-        json!([a_link(CAMERA, "video", PLACING_NODE, VIDEO_IN)]),
-    );
-    let main_before = project.main_on_disk();
+/// The rename of `title`'s port `from` to `to` from inside it, with the carry of `main`'s links
+/// onto it that an edit through a placing level records beside it.
+fn the_rename_of_title_video_in_carried_onto_main(
+    project: &ProjectPlacingTitleInMain,
+    from: &str,
+    to: &str,
+) -> Vec<ProjectOperation> {
     let title_before = project
         .repository
         .stream_graph_document(uuid(TITLE))
@@ -298,8 +298,8 @@ fn a_port_renamed_by_a_transaction_leaves_the_placing_streams_file_as_it_was_and
         node: uuid(VIDEO_IN),
         input: "port".to_owned(),
         member: None,
-        from: Some(json!("video_in")),
-        to: Some(json!("clip_in")),
+        from: Some(json!(from)),
+        to: Some(json!(to)),
     };
     let mut title_after = title_before.clone();
     title_after.apply(&rename).unwrap();
@@ -314,8 +314,20 @@ fn a_port_renamed_by_a_transaction_leaves_the_placing_streams_file_as_it_was_and
         )
         .unwrap()
         .expect("the rename carries the link onto the renamed port");
+    vec![on(TITLE, rename), on(MAIN, carry)]
+}
 
-    project.apply(vec![on(TITLE, rename), on(MAIN, carry)]);
+#[test]
+fn a_port_renamed_by_a_transaction_leaves_the_placing_streams_file_as_it_was_and_undoes() {
+    let mut project = ProjectPlacingTitleInMain::new(
+        "video_in",
+        json!([a_link(CAMERA, "video", PLACING_NODE, VIDEO_IN)]),
+    );
+    let main_before = project.main_on_disk();
+
+    project.apply(the_rename_of_title_video_in_carried_onto_main(
+        &project, "video_in", "clip_in",
+    ));
 
     assert_eq!(project.main_on_disk(), main_before);
     assert_eq!(
@@ -583,5 +595,72 @@ fn a_link_inside_a_placed_stream_onto_a_stream_it_places_runs_by_its_port_name()
             &placed(title_inside_outer),
             "video_in"
         )]
+    );
+}
+
+/// Mental-revert: keeping a carry as recorded, by the port's name then, refuses the undo, the
+/// link onto `title` holding the name the second rename gave it.
+#[test]
+fn a_port_renamed_through_its_placing_stream_undoes_once_another_author_renames_it_again() {
+    let mut project = ProjectPlacingTitleInMain::new(
+        "video_in",
+        json!([a_link(CAMERA, "video", PLACING_NODE, VIDEO_IN)]),
+    );
+    let person = ProjectTransactionAuthor {
+        kind: streamlib_project_repository::ProjectTransactionAuthorKind::Person,
+        name: "jo".to_owned(),
+    };
+    let renamed_through_main =
+        the_rename_of_title_video_in_carried_onto_main(&project, "video_in", "clip_in");
+    project.apply_by(&person, renamed_through_main);
+    project.apply(vec![on(
+        TITLE,
+        StreamGraphOperation::SetNodeInputValue {
+            node: uuid(VIDEO_IN),
+            input: "port".to_owned(),
+            member: None,
+            from: Some(json!("clip_in")),
+            to: Some(json!("third_in")),
+        },
+    )]);
+
+    project.undo_by(&person);
+
+    assert_eq!(
+        the_links_of(&project.main_on_disk()),
+        vec![a_link(CAMERA, "video", PLACING_NODE, VIDEO_IN)]
+    );
+    assert_eq!(
+        the_links_of(&project.main_as_the_repository_reads_it()),
+        vec![a_link(CAMERA, "video", PLACING_NODE, "video_in")]
+    );
+}
+
+/// Mental-revert: matching a link end to a placing node by UUID alone leaves this link naming
+/// the port `video_in` on disk.
+#[test]
+fn a_link_naming_the_placing_node_by_its_name_is_saved_naming_its_port_by_uuid() {
+    let mut project = ProjectPlacingTitleInMain::new(
+        "video_in",
+        json!([a_link("camera", "video", "title", "video_in")]),
+    );
+
+    project.apply(vec![on(
+        MAIN,
+        StreamGraphOperation::RenameNode {
+            node: uuid(PREVIEW),
+            from: "preview".to_owned(),
+            to: "monitor".to_owned(),
+        },
+    )]);
+
+    assert_eq!(
+        the_links_of(&project.main_on_disk()),
+        vec![a_link("camera", "video", "title", VIDEO_IN)]
+    );
+    project.apply(vec![the_rename_of_title_video_in_to("clip_in")]);
+    assert_eq!(
+        the_links_of(&project.main_as_the_repository_reads_it()),
+        vec![a_link("camera", "video", "title", "clip_in")]
     );
 }

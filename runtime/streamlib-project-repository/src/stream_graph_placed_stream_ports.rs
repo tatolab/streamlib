@@ -284,9 +284,18 @@ fn each_link_end_on_a_placing_node_renamed(
 }
 
 /// Each link, at any depth of `value`, an object holding a `source` and a `target` that each
-/// name a node, with each end's port given the name `renamed_port` gives it.
+/// name a node, with each end's port given the name `renamed_port` gives it. An end names its
+/// node by UUID, or by the name of a node of the level whose links hold it.
 fn each_link_end_renamed(
     value: &mut Value,
+    renamed_port: &mut impl FnMut(Uuid, PlacedStreamPortDirection, &str) -> Option<String>,
+) {
+    each_link_end_renamed_at_its_level(value, &HashMap::new(), renamed_port);
+}
+
+fn each_link_end_renamed_at_its_level(
+    value: &mut Value,
+    node_of_each_name_of_the_level: &HashMap<String, Uuid>,
     renamed_port: &mut impl FnMut(Uuid, PlacedStreamPortDirection, &str) -> Option<String>,
 ) {
     match value {
@@ -305,9 +314,11 @@ fn each_link_end_renamed(
                         continue;
                     };
                     let (Some(node), Some(port)) = (
-                        end.get("node")
-                            .and_then(Value::as_str)
-                            .and_then(|node| Uuid::parse_str(node).ok()),
+                        end.get("node").and_then(Value::as_str).and_then(|node| {
+                            Uuid::parse_str(node)
+                                .ok()
+                                .or_else(|| node_of_each_name_of_the_level.get(node).copied())
+                        }),
                         end.get("port").and_then(Value::as_str),
                     ) else {
                         continue;
@@ -317,13 +328,32 @@ fn each_link_end_renamed(
                     }
                 }
             }
+            let node_of_each_name_of_this_level = match object.get("nodes") {
+                Some(Value::Array(nodes)) => Some(
+                    nodes
+                        .iter()
+                        .filter_map(Value::as_object)
+                        .filter_map(|node| {
+                            Some((node_name_of(node)?.to_owned(), node_uuid_of(node)?))
+                        })
+                        .collect::<HashMap<_, _>>(),
+                ),
+                _ => None,
+            };
+            let node_of_each_name = node_of_each_name_of_this_level
+                .as_ref()
+                .unwrap_or(node_of_each_name_of_the_level);
             for entry in object.values_mut() {
-                each_link_end_renamed(entry, renamed_port);
+                each_link_end_renamed_at_its_level(entry, node_of_each_name, renamed_port);
             }
         }
         Value::Array(entries) => {
             for entry in entries {
-                each_link_end_renamed(entry, renamed_port);
+                each_link_end_renamed_at_its_level(
+                    entry,
+                    node_of_each_name_of_the_level,
+                    renamed_port,
+                );
             }
         }
         _ => {}

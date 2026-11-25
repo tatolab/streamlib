@@ -73,15 +73,16 @@ impl ProjectRepository {
         });
     }
 
-    /// The ports `held_stream` places declare once a transaction staging `staged_documents`
-    /// applies, followed by those it declared before, so a name a link still holds from before
-    /// the transaction keeps the interface node it named.
+    /// The ports `held_stream` places declare as of `named_as_of` of a transaction staging
+    /// `staged_documents`, followed by those it declares as of the transaction's other end, so a
+    /// name a link holds from that other end keeps the interface node it named.
     fn the_ports_a_placed_stream_declares_once_staged(
         &self,
         assets_before: &BTreeMap<Uuid, ProjectAsset>,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
         staged_documents: &BTreeMap<Uuid, StreamGraphDocument>,
         held_stream: &Value,
+        named_as_of: PortsNamedAsOf,
     ) -> Option<PortsAPlacedStreamDeclares> {
         let staged = self.the_ports_a_placed_stream_declares(
             staged_assets,
@@ -89,9 +90,13 @@ impl ProjectRepository {
             held_stream,
         );
         let before = self.the_ports_a_placed_stream_declares(assets_before, None, held_stream);
-        match (staged, before) {
-            (Some(staged), Some(before)) => Some(staged.followed_by(before)),
-            (staged, before) => staged.or(before),
+        let (first, then) = match named_as_of {
+            PortsNamedAsOf::TheTransactionsEnd => (staged, before),
+            PortsNamedAsOf::TheTransactionsStart => (before, staged),
+        };
+        match (first, then) {
+            (Some(first), Some(then)) => Some(first.followed_by(then)),
+            (first, then) => first.or(then),
         }
     }
 
@@ -118,6 +123,7 @@ impl ProjectRepository {
                                 staged_assets,
                                 staged_documents,
                                 held_stream,
+                                PortsNamedAsOf::TheTransactionsEnd,
                             )
                         },
                     )
@@ -149,7 +155,7 @@ impl ProjectRepository {
             }
             placing_nodes
         };
-        each_operation_of_the_transaction_renamed(transaction, &mut |value, stream| {
+        each_operation_of_the_transaction_renamed(transaction, &mut |value, stream, named_as_of| {
             each_link_onto_a_placed_stream_named_by_its_interface_node(
                 value,
                 &placing_nodes_of(stream),
@@ -159,6 +165,7 @@ impl ProjectRepository {
                         staged_assets,
                         staged_documents,
                         held_stream,
+                        named_as_of,
                     )
                 },
             )
@@ -181,7 +188,7 @@ impl ProjectRepository {
         };
         applied.transaction = each_operation_of_the_transaction_renamed(
             &applied.transaction,
-            &mut |value, stream| {
+            &mut |value, stream, _| {
                 each_link_onto_a_placed_stream_named_by_its_port(
                     value,
                     &placing_nodes_of(stream),
@@ -195,27 +202,52 @@ impl ProjectRepository {
     }
 }
 
+/// Which end of a transaction an operation's links name each placed stream's ports as of.
+#[derive(Clone, Copy)]
+enum PortsNamedAsOf {
+    TheTransactionsStart,
+    TheTransactionsEnd,
+}
+
 /// `transaction` with `rename` made on each of its operations and inverse operations that
-/// edits a stream's graph, other than a carry of links onto a placed stream's ports, or writes
-/// or takes out its document whole, as one JSON value, with the stream it is on.
+/// edits a stream's graph, or writes or takes out its document whole, as one JSON value, with
+/// the stream it is on and the end of the transaction its links name ports as of.
+///
+/// A carry of the links onto a placed stream's ports is renamed in the links it takes out
+/// alone: the links it puts back name each port as the edit inside the placed stream beside it
+/// in the transaction leaves it, which its undo or redo leaves it as again, while the links it
+/// takes out name the port as it is when the carry applies, which another edit may change. A
+/// carry's own links name ports as of the transaction's start, and its inverse's as of its end.
 fn each_operation_of_the_transaction_renamed(
     transaction: &ProjectTransaction,
-    rename: &mut dyn FnMut(&mut Value, Uuid),
+    rename: &mut dyn FnMut(&mut Value, Uuid, PortsNamedAsOf),
 ) -> Result<ProjectTransaction, ProjectRepositoryRefusal> {
     let mut renamed = transaction.clone();
-    for operation in renamed
+    let each_operation = renamed
         .operations
         .iter_mut()
-        .chain(renamed.inverse_operations.iter_mut())
-    {
+        .map(|operation| (operation, PortsNamedAsOf::TheTransactionsStart))
+        .chain(
+            renamed
+                .inverse_operations
+                .iter_mut()
+                .map(|operation| (operation, PortsNamedAsOf::TheTransactionsEnd)),
+        );
+    for (operation, a_carry_names_ports_as_of) in each_operation {
         let stream = match operation {
-            // A carry names each port as the placed stream declared it before and after the edit
-            // inside it that the same transaction records, so it is kept as it was recorded.
             ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                stream,
                 graph_operation:
-                    StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream { .. },
-                ..
-            }) => continue,
+                    StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream {
+                        port_links_taken_out,
+                        ..
+                    },
+            }) => {
+                for taken_out in port_links_taken_out {
+                    rename(&mut taken_out.value, *stream, a_carry_names_ports_as_of);
+                }
+                continue;
+            }
             ProjectOperation::StreamGraph(on_a_stream) => on_a_stream.stream,
             ProjectOperation::StreamDocument(
                 ProjectStreamDocumentOperation::CreateStreamDocument { stream, .. }
@@ -224,7 +256,7 @@ fn each_operation_of_the_transaction_renamed(
             _ => continue,
         };
         let mut value = serde_json::to_value(&*operation)?;
-        rename(&mut value, stream);
+        rename(&mut value, stream, PortsNamedAsOf::TheTransactionsEnd);
         *operation = serde_json::from_value(value)?;
     }
     Ok(renamed)
