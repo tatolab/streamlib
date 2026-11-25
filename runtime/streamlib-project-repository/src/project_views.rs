@@ -3,6 +3,7 @@
 
 //! The Tato Studio views a project and its imports bring: each folder of their `views/`.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -42,8 +43,12 @@ pub struct ProjectBringingAView {
 /// One folder of a `views/`, read without running anything in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectViewFolderRead {
-    /// The view type's id, `<project uuid>:<view folder>`.
+    /// The view type's id: the view's own UUID, or `<project uuid>:<view folder>` for a view
+    /// whose manifest names none it may go by.
     pub view_type: String,
+    /// The view's own UUID, as its `tatolab_view.json` writes it; `None` when it writes none,
+    /// or one an earlier view holds.
+    pub view: Option<Uuid>,
     /// Its folder's name in the `views/` of the project bringing it.
     pub view_folder_name: String,
     /// The project whose `views/` holds it.
@@ -56,9 +61,23 @@ pub struct ProjectViewFolderRead {
     pub manifest: Result<TatolabViewManifest, String>,
 }
 
-/// The view type id of the view in `view_folder_name` brought by the project `project`.
+/// The view type id of the view in `view_folder_name` brought by the project `project` that
+/// names no UUID of its own.
 pub fn the_view_type_of(project: Uuid, view_folder_name: &str) -> String {
     format!("{project}{VIEW_TYPE_SEPARATOR}{view_folder_name}")
+}
+
+/// The view type id of a view whose own UUID is `view`: that UUID, or, naming none, its folder
+/// `view_folder_name` in the project `project`.
+fn the_view_type_of_the_folder_read(
+    view: Option<Uuid>,
+    project: Uuid,
+    view_folder_name: &str,
+) -> String {
+    view.map_or_else(
+        || the_view_type_of(project, view_folder_name),
+        |view| view.to_string(),
+    )
 }
 
 /// The type a node placing the view in `view_folder_name` of the project named `project_name`
@@ -67,49 +86,58 @@ fn the_view_type_named_by_its_projects_name(project_name: &str, view_folder_name
     format!("{project_name}{VIEW_TYPE_SEPARATOR}{view_folder_name}")
 }
 
-/// Each view of the project at `project_directory` and its imports whose project's name is one
-/// of `project_names_placed`, by `<project name>:<view folder>`, mapped to its type; the
-/// project's own views first, then each import's in the order its project file records them,
-/// the first view a name and folder name wins.
-pub(crate) fn the_type_of_each_view_placed_by_its_projects_name(
+/// Each view of the project at `project_directory` and its imports whose project's name or UUID
+/// is one of `projects_placed`, by `<project name>:<view folder>` and by
+/// `<project uuid>:<view folder>`, mapped to its type when that is another; the project's own
+/// views first, then each import's in the order its project file records them, the first view
+/// a name and folder name wins.
+pub(crate) fn the_type_of_each_view_placed_by_its_folder(
     project_directory: &Path,
-    project_names_placed: &HashSet<String>,
+    projects_placed: &HashSet<String>,
 ) -> Result<HashMap<String, String>, ProjectRepositoryRefusal> {
-    let mut type_of_each_view_placed_by_its_projects_name = HashMap::new();
-    for (brought_by, its_directory) in every_project_bringing_views(project_directory)? {
-        if !project_names_placed.contains(&brought_by.project_name) {
+    let mut type_of_each_view_placed_by_its_folder = HashMap::new();
+    for view in every_view_a_project_and_its_imports_bring(project_directory)? {
+        let brought_by = &view.brought_by;
+        let project = brought_by.project.to_string();
+        if !projects_placed.contains(&brought_by.project_name)
+            && !projects_placed.contains(&project)
+        {
             continue;
         }
-        for view_folder_name in the_view_folder_names_in(&its_directory)? {
-            type_of_each_view_placed_by_its_projects_name
-                .entry(the_view_type_named_by_its_projects_name(
-                    &brought_by.project_name,
-                    &view_folder_name,
-                ))
-                .or_insert_with(|| the_view_type_of(brought_by.project, &view_folder_name));
+        for type_before in [
+            the_view_type_named_by_its_projects_name(
+                &brought_by.project_name,
+                &view.view_folder_name,
+            ),
+            the_view_type_of(brought_by.project, &view.view_folder_name),
+        ] {
+            if type_before != view.view_type {
+                type_of_each_view_placed_by_its_folder
+                    .entry(type_before)
+                    .or_insert_with(|| view.view_type.clone());
+            }
         }
     }
-    Ok(type_of_each_view_placed_by_its_projects_name)
+    Ok(type_of_each_view_placed_by_its_folder)
 }
 
 /// The type each of the project at `project_directory`'s own views had in the project it was
-/// copied from, `project_before` named `name_before`, by that project's UUID and by its name,
-/// mapped to the type it has under the UUID its project file gives it now.
+/// copied from, `project_before` named `name_before`, when a stream placed it by its folder in
+/// that project's UUID or name, mapped to the type it has in the copy: its own UUID, which the
+/// copy keeps, or its folder in the copy's.
 fn the_type_each_own_view_had_in_the_project_copied(
     project_directory: &Path,
     project_before: Uuid,
     name_before: &str,
 ) -> Result<HashMap<String, String>, ProjectRepositoryRefusal> {
-    let project = TatolabProjectFile::read_from_project_directory(project_directory)?.project;
     let mut type_now_of_each_type_before = HashMap::new();
-    for view_folder_name in the_view_folder_names_in(project_directory)? {
-        let type_now = the_view_type_of(project, &view_folder_name);
+    for view in every_view_a_project_brings_itself(project_directory)? {
         for type_before in [
-            the_view_type_of(project_before, &view_folder_name),
-            the_view_type_named_by_its_projects_name(name_before, &view_folder_name),
+            the_view_type_of(project_before, &view.view_folder_name),
+            the_view_type_named_by_its_projects_name(name_before, &view.view_folder_name),
         ] {
-            if type_before != type_now {
-                type_now_of_each_type_before.insert(type_before, type_now.clone());
+            if type_before != view.view_type {
+                type_now_of_each_type_before.insert(type_before, view.view_type.clone());
             }
         }
     }
@@ -117,10 +145,10 @@ fn the_type_each_own_view_had_in_the_project_copied(
 }
 
 /// Retype each node of the graph documents of the project at `project_directory`, a copy of the
-/// project `project_before` named `name_before`, that places one of the copy's own views by
-/// that project's UUID or name, to the view's type under the UUID the copy's project file gives
-/// it, so the copy's streams place its own views. Only a graph document at a project-relative
-/// path `the_copy_wrote` holds is retyped; one that does not read is left as it was copied.
+/// project `project_before` named `name_before`, that places one of the copy's own views by its
+/// folder in that project's UUID or name, to the view's type in the copy. Only a graph document
+/// at a project-relative path `the_copy_wrote` holds is retyped; one that does not read is left
+/// as it was copied.
 pub(crate) fn place_each_own_view_of_a_copy_by_its_type_in_the_copy(
     project_directory: &Path,
     project_before: Uuid,
@@ -192,6 +220,7 @@ pub fn every_view_a_project_and_its_imports_bring(
     for (brought_by, its_directory) in every_project_bringing_views(project_directory)? {
         views.extend(every_view_in_the_views_of(&its_directory, &brought_by)?);
     }
+    refuse_each_view_whose_uuid_an_earlier_one_holds(&mut views);
     Ok(views)
 }
 
@@ -237,19 +266,64 @@ fn every_project_bringing_views(
 
 /// Every view the project at `project_directory` brings in its own `views/`, by folder name,
 /// reading none of its imports.
-#[cfg(feature = "history")]
 pub(crate) fn every_view_a_project_brings_itself(
     project_directory: &Path,
 ) -> Result<Vec<ProjectViewFolderRead>, ProjectRepositoryRefusal> {
     let project_file = TatolabProjectFile::read_from_project_directory(project_directory)?;
-    every_view_in_the_views_of(
+    let mut views = every_view_in_the_views_of(
         project_directory,
         &ProjectBringingAView {
             project: project_file.project,
             project_name: project_file.name,
             import_folder: None,
         },
-    )
+    )?;
+    refuse_each_view_whose_uuid_an_earlier_one_holds(&mut views);
+    Ok(views)
+}
+
+/// Where the view `view` is, from the project listing it: `views/<folder>`, under
+/// `imports/<folder>/` for an import's.
+fn the_folder_of_the_view_as_listed(view: &ProjectViewFolderRead) -> String {
+    let in_its_project = format!("{PROJECT_VIEWS_DIRECTORY}/{}", view.view_folder_name);
+    match &view.brought_by.import_folder {
+        Some(import_folder) => {
+            format!("{PROJECT_IMPORTS_DIRECTORY}/{import_folder}/{in_its_project}")
+        }
+        None => in_its_project,
+    }
+}
+
+/// Make each of `views` whose UUID an earlier one of them holds a view that does not open,
+/// naming both folders, typed by its folder in its project.
+fn refuse_each_view_whose_uuid_an_earlier_one_holds(views: &mut [ProjectViewFolderRead]) {
+    let mut folder_holding_each_uuid: HashMap<Uuid, String> = HashMap::new();
+    for view in views.iter_mut() {
+        let Some(uuid) = view.view else {
+            continue;
+        };
+        let folder = the_folder_of_the_view_as_listed(view);
+        match folder_holding_each_uuid.entry(uuid) {
+            Entry::Vacant(vacant) => {
+                vacant.insert(folder);
+            }
+            Entry::Occupied(holding) => {
+                let holding_it = holding.get();
+                view.manifest = Err(format!(
+                    "`view`: {uuid} is the UUID of the view in `{holding_it}` too, so `{folder}` \
+                     does not open. To fix: give `{folder}` a UUID of its own in its \
+                     `{TATOLAB_VIEW_MANIFEST_FILE_NAME}`, or leave its `view` out and the runtime \
+                     gives it one when the project next opens"
+                ));
+                view.view = None;
+                view.view_type = the_view_type_of_the_folder_read(
+                    None,
+                    view.brought_by.project,
+                    &view.view_folder_name,
+                );
+            }
+        }
+    }
 }
 
 /// Each folder of `views/` in `project_directory`, by name; none when it has no `views/`.
@@ -330,14 +404,82 @@ fn the_view_folder_read(
                 }
             },
         };
+    let view = manifest_as_written
+        .as_ref()
+        .and_then(the_uuid_a_view_manifest_names);
     ProjectViewFolderRead {
-        view_type: the_view_type_of(brought_by.project, view_folder_name),
+        view_type: the_view_type_of_the_folder_read(view, brought_by.project, view_folder_name),
+        view,
         view_folder_name: view_folder_name.to_owned(),
         brought_by: brought_by.clone(),
         folder,
         manifest_as_written,
         manifest,
     }
+}
+
+/// The UUID the `view` of `manifest_json`, a view's `tatolab_view.json` as parsed, names, read
+/// whether or not the rest of it is the view contract's.
+fn the_uuid_a_view_manifest_names(manifest_json: &Value) -> Option<Uuid> {
+    manifest_json
+        .get("view")
+        .and_then(Value::as_str)
+        .and_then(|view| Uuid::parse_str(view).ok())
+}
+
+/// Give each view of the project at `project_directory`'s own `views/` whose
+/// `tatolab_view.json` is a JSON object naming no `view` a UUID of its own, written as its
+/// `view` beside its `contract`; a manifest that does not read or cannot be written is left as
+/// it is, its view typed by its folder; whether any view was given one.
+#[cfg(feature = "history")]
+pub(crate) fn give_each_own_view_naming_no_uuid_one(project_directory: &Path) -> bool {
+    let views = match every_view_a_project_brings_itself(project_directory) {
+        Ok(views) => views,
+        Err(unreadable) => {
+            tracing::warn!(project = %project_directory.display(), %unreadable, "no view is given a UUID: the project's views do not read");
+            return false;
+        }
+    };
+    let mut any_given = false;
+    for view in views {
+        let Some(Value::Object(manifest)) = view.manifest_as_written else {
+            continue;
+        };
+        if manifest.contains_key("view") {
+            continue;
+        }
+        let manifest_path = view.folder.join(TATOLAB_VIEW_MANIFEST_FILE_NAME);
+        match write_the_manifest_given_a_uuid(&manifest_path, manifest) {
+            Ok(()) => any_given = true,
+            Err(not_written) => tracing::warn!(
+                manifest = %manifest_path.display(),
+                %not_written,
+                "the view is not given a UUID: its manifest cannot be written; it is typed by its folder"
+            ),
+        }
+    }
+    any_given
+}
+
+/// Write `manifest` at `manifest_path` with a new UUID as its `view`, beside its `contract`.
+#[cfg(feature = "history")]
+fn write_the_manifest_given_a_uuid(
+    manifest_path: &Path,
+    manifest: serde_json::Map<String, Value>,
+) -> Result<(), ProjectRepositoryRefusal> {
+    let mut view = Some(("view".to_owned(), Value::String(Uuid::new_v4().to_string())));
+    let mut given = serde_json::Map::new();
+    for (key, value) in manifest {
+        let is_the_contract = key == "contract";
+        given.insert(key, value);
+        if is_the_contract {
+            given.extend(view.take());
+        }
+    }
+    given.extend(view);
+    let mut bytes = serde_json::to_vec_pretty(&Value::Object(given))?;
+    bytes.push(b'\n');
+    crate::project_repository::write_file_whole(manifest_path, &bytes)
 }
 
 #[cfg(test)]

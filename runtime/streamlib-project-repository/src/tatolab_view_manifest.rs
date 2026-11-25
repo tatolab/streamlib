@@ -42,6 +42,10 @@ pub fn a_panel_writes(family: PortFamily) -> bool {
 pub struct TatolabViewManifest {
     /// The view contract the view was built for, as `"1.0"`.
     pub contract: String,
+    /// The view's own UUID, which a node placing the view is typed by; the runtime writes it
+    /// into a project's view that has none the first time the project opens.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
+    pub view: Option<uuid::Uuid>,
     /// The name the view-type menu lists.
     pub title: String,
     /// What the view is for.

@@ -43,7 +43,7 @@ NOT_COPIED_WITH_THE_PROJECT = shutil.ignore_patterns(
 
 EVERY_SHADER_NODE_STREAM_NAME = "every_shader_node"
 
-AUDIO_VIDEO_PREVIEW_VIEW_TYPE = "ba5fc2b1-df25-4e86-bec3-aba1564d6233:audio_video_preview"
+AUDIO_VIDEO_PREVIEW_VIEW_TYPE = "3c8e1f47-9a2d-4b65-8e07-d14f6a2b9c58"
 
 #: The project's first load makes its venv, which installs Numba.
 PROJECT_LOAD_TIMEOUT_SECONDS = 900.0

@@ -23,7 +23,7 @@ What a storefront shows before a module is added, each from what the module proj
 - under each node, its `inputs` and `outputs` as the listing reads them, each a `name`, a
   `family` and a `description`, left out where the listing reads none;
 - `views`, each folder of its `views/` the archive carries, by its `tatolab_view.json`: its
-  `view_type` (`<project uuid>:<folder>`), `title`, `description`, `placement` and the
+  `view_type` (its own `view` UUID, or `<project uuid>:<folder>` when it names none), `title`, `description`, `placement` and the
   `devices` among its declared capabilities (`camera`, `microphone`, `gpu`); a manifest that
   does not name what view contract 1.0 requires fails the catalog;
 - `gallery`, the URL of each picture `[tool.tatolab.catalog]` `gallery` names, the cover first,
@@ -426,6 +426,16 @@ def stream_members_of_the_archive(archive):
     return members
 
 
+def the_view_type_a_manifest_names(manifest, project, member_name):
+    """The view type of the view whose manifest `member_name` is: its own `view` UUID, or `<project uuid>:<folder>` when it names none."""
+    if "view" not in manifest:
+        return f"{project}:{member_name.split('/')[1]}"
+    try:
+        return str(uuid.UUID(manifest["view"]))
+    except (TypeError, ValueError, AttributeError):
+        raise ModuleProjectNotDescribed(f"{member_name}'s view {json.dumps(manifest['view'])} is not a UUID") from None
+
+
 def view_members_of_the_archive(archive):
     """Each view the archive's `views/<folder>/tatolab_view.json` declares, as a catalog entry names it."""
     project = str(uuid.UUID(json.loads(archive.read(PROJECT_FILE_NAME))["project"]))
@@ -443,7 +453,7 @@ def view_members_of_the_archive(archive):
             raise ModuleProjectNotDescribed(f"{member_name}'s placement {json.dumps(manifest['placement'])} is not area or node")
         members.append(
             {
-                "view_type": f"{project}:{member_name.split('/')[1]}",
+                "view_type": the_view_type_a_manifest_names(manifest, project, member_name),
                 "title": manifest["title"],
                 "description": manifest.get("description") or "",
                 "placement": manifest["placement"],

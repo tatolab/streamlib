@@ -553,7 +553,7 @@ fn apply_operation_to_imports(
     Ok(())
 }
 
-fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
+pub(crate) fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
     if let Some(parent) = path.parent() {
         create_directory_and_its_missing_parents_at_the_process_umask(parent)?;
     }

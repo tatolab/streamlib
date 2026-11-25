@@ -278,11 +278,33 @@ fn a_stream_placing_a_view_by_its_projects_name_reads_as_placing_it_by_its_proje
 
 #[test]
 fn a_copy_of_a_project_places_its_own_views_by_the_copys_uuid_in_each_of_its_streams() {
+    a_copy_of_acme_dj_places_its_deck_in_each_of_its_streams_as(DECK_MANIFEST, |copy| {
+        the_view_type_of(copy, "deck")
+    });
+}
+
+/// Mental-revert: retyping to the deck's folder in the copy leaves the copy's streams placing
+/// `<copy uuid>:deck` where the deck names a UUID of its own.
+#[test]
+fn a_copy_of_a_project_places_its_own_views_naming_a_uuid_by_that_uuid_which_it_keeps() {
+    a_copy_of_acme_dj_places_its_deck_in_each_of_its_streams_as(
+        &the_deck_manifest_naming(DECK_VIEW),
+        |_| DECK_VIEW.to_owned(),
+    );
+}
+
+/// Copy the sample `Acme DJ`, its view `deck` of `deck_manifest` and streams placing it by its
+/// folder in the sample's UUID and in its name, and check each of the copy's streams places it
+/// as `deck_in_the_copy` answers for the copy's UUID, its manifest kept as it was.
+fn a_copy_of_acme_dj_places_its_deck_in_each_of_its_streams_as(
+    deck_manifest: &str,
+    deck_in_the_copy: impl Fn(Uuid) -> String,
+) {
     let workspace = tempfile::tempdir().unwrap();
     let samples_directory = workspace.path().join("samples");
     let sample_directory = samples_directory.join("acme-dj");
     let sample = a_project_named(&sample_directory, "Acme DJ");
-    a_view_folder_holding(&sample_directory, "deck", DECK_MANIFEST);
+    a_view_folder_holding(&sample_directory, "deck", deck_manifest);
     std::fs::create_dir_all(sample_directory.join("streams")).unwrap();
     let deck_in_the_sample = the_view_type_of(sample.project, "deck");
     for (stream, node_types) in [
@@ -327,7 +349,11 @@ fn a_copy_of_a_project_places_its_own_views_by_the_copys_uuid_in_each_of_its_str
             .unwrap(),
         )
     };
-    let deck_in_the_copy = the_view_type_of(copy, "deck");
+    let deck_in_the_copy = deck_in_the_copy(copy);
+    assert_eq!(
+        std::fs::read_to_string(copy_directory.join("views/deck/tatolab_view.json")).unwrap(),
+        deck_manifest
+    );
     assert_eq!(
         node_types_of_the_copys("main"),
         [
@@ -349,4 +375,220 @@ fn a_copy_of_a_project_places_its_own_views_by_the_copys_uuid_in_each_of_its_str
         already_there,
         "a stream the copy did not write is left as it was"
     );
+}
+
+const DECK_VIEW: &str = "3b8e6f21-9c47-4d05-a1e3-7f2d9b6c4a18";
+
+fn the_deck_manifest_naming(view: &str) -> String {
+    format!(
+        r#"{{"contract": "1.1", "view": "{view}", "title": "Deck", "entry": "index.html", "placement": "node"}}"#
+    )
+}
+
+/// A project `Acme DJ` at `acme-dj/` in `workspace` with the view `deck` naming `deck_view`, and
+/// its import `levels`, the project `Mr. Levels`, with the view `meter`, whose manifest is
+/// `meter_manifest`; the project's file and the import's.
+fn acme_dj_importing_levels(
+    workspace: &Path,
+    deck_view: &str,
+    meter_manifest: &str,
+) -> (PathBuf, TatolabProjectFile, TatolabProjectFile) {
+    let project_directory = workspace.join("acme-dj");
+    let mut project_file = a_project_named(&project_directory, "Acme DJ");
+    a_view_folder_holding(
+        &project_directory,
+        "deck",
+        &the_deck_manifest_naming(deck_view),
+    );
+    let import_directory = project_directory
+        .join(PROJECT_IMPORTS_DIRECTORY)
+        .join("levels");
+    let imported_project = a_project_named(&import_directory, "Mr. Levels");
+    a_view_folder_holding(&import_directory, "meter", meter_manifest);
+    project_file.dependencies.push(ProjectImport {
+        project: imported_project.project,
+        folder: "levels".into(),
+        source: "/elsewhere/levels".into(),
+        version: "0".repeat(64),
+        copied_files: BTreeMap::new(),
+    });
+    std::fs::write(
+        project_directory.join(PROJECT_FILE_NAME),
+        project_file.canonical_bytes().unwrap(),
+    )
+    .unwrap();
+    (project_directory, project_file, imported_project)
+}
+
+/// Mental-revert: typing a view by its folder lists `deck` as `<project uuid>:deck`.
+#[test]
+fn a_view_naming_its_own_uuid_is_typed_by_it_and_one_naming_none_by_its_folder() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (project_directory, project_file, imported_project) =
+        acme_dj_importing_levels(workspace.path(), DECK_VIEW, METER_MANIFEST);
+
+    let views = every_view_a_project_and_its_imports_bring(&project_directory).unwrap();
+
+    assert_eq!(
+        views
+            .iter()
+            .map(|view| (view.view_type.clone(), view.view))
+            .collect::<Vec<_>>(),
+        [
+            (DECK_VIEW.to_owned(), Some(DECK_VIEW.parse().unwrap())),
+            (the_view_type_of(imported_project.project, "meter"), None),
+        ]
+    );
+    assert!(views[0].manifest.is_ok(), "{:?}", views[0].manifest);
+    assert_eq!(
+        views[0].manifest.as_ref().unwrap().view,
+        Some(DECK_VIEW.parse().unwrap())
+    );
+    assert_ne!(
+        views[0].view_type,
+        the_view_type_of(project_file.project, "deck")
+    );
+}
+
+/// Mental-revert: listing a view whose UUID another holds as it is lists two views of one type.
+#[test]
+fn a_view_naming_the_uuid_an_earlier_view_names_does_not_open_naming_both_folders() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (project_directory, project_file, imported_project) = acme_dj_importing_levels(
+        workspace.path(),
+        DECK_VIEW,
+        &the_deck_manifest_naming(DECK_VIEW),
+    );
+    a_view_folder_holding(
+        &project_directory,
+        "mixer",
+        &the_deck_manifest_naming(DECK_VIEW),
+    );
+
+    let views = every_view_a_project_and_its_imports_bring(&project_directory).unwrap();
+
+    assert_eq!(
+        views
+            .iter()
+            .map(|view| view.view_type.clone())
+            .collect::<Vec<_>>(),
+        [
+            DECK_VIEW.to_owned(),
+            the_view_type_of(project_file.project, "mixer"),
+            the_view_type_of(imported_project.project, "meter"),
+        ]
+    );
+    assert!(views[0].manifest.is_ok());
+    for (view, folder) in [
+        (&views[1], "views/mixer"),
+        (&views[2], "imports/levels/views/meter"),
+    ] {
+        let refusal = view.manifest.as_ref().unwrap_err();
+        assert!(
+            refusal.contains("`views/deck`") && refusal.contains(&format!("`{folder}`")),
+            "{refusal}"
+        );
+        assert_eq!(view.view, None);
+    }
+}
+
+/// Mental-revert: reading the stream as written leaves each node typed by a folder.
+#[test]
+fn a_stream_placing_a_view_by_its_folder_reads_as_placing_it_by_the_views_uuid() {
+    let workspace = tempfile::tempdir().unwrap();
+    let meter_view = "8d2f5a90-6c14-4e7b-b3a8-1e9c7d5f0b42";
+    let (project_directory, project_file, imported_project) = acme_dj_importing_levels(
+        workspace.path(),
+        DECK_VIEW,
+        &format!(
+            r#"{{"contract": "1.0", "view": "{meter_view}", "title": "Meter", "entry": "index.html", "placement": "area"}}"#
+        ),
+    );
+    let deck_by_its_folder = the_view_type_of(project_file.project, "deck");
+    let meter = the_view_type_of(imported_project.project, "meter");
+
+    let read = crate::graph_document_as_its_project_reads_it(
+        &project_directory,
+        &a_stream_placing(&[
+            "Acme DJ:deck",
+            &deck_by_its_folder,
+            DECK_VIEW,
+            "Mr. Levels:meter",
+            &meter,
+            "tatolab.testpattern:TestPatternSource",
+        ]),
+    )
+    .unwrap();
+
+    assert_eq!(
+        the_node_types_of(&read),
+        [
+            DECK_VIEW,
+            DECK_VIEW,
+            DECK_VIEW,
+            meter_view,
+            meter_view,
+            "tatolab.testpattern:TestPatternSource"
+        ]
+    );
+}
+
+/// Mental-revert: leaving a manifest naming no `view` as it is types its view by its folder.
+#[cfg(feature = "history")]
+#[test]
+fn each_own_view_naming_no_uuid_is_given_one_beside_its_contract_once() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (project_directory, _, _) =
+        acme_dj_importing_levels(workspace.path(), DECK_VIEW, METER_MANIFEST);
+    a_view_folder_holding(&project_directory, "meter", METER_MANIFEST);
+    a_view_folder_holding(&project_directory, "garbled", "{not json");
+    let deck_as_written =
+        std::fs::read(project_directory.join("views/deck/tatolab_view.json")).unwrap();
+    let the_imports_meter = project_directory.join("imports/levels/views/meter/tatolab_view.json");
+
+    give_each_own_view_naming_no_uuid_one(&project_directory);
+    let meter_given: Value = serde_json::from_slice(
+        &std::fs::read(project_directory.join("views/meter/tatolab_view.json")).unwrap(),
+    )
+    .unwrap();
+    give_each_own_view_naming_no_uuid_one(&project_directory);
+
+    let view = meter_given["view"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    assert_eq!(
+        meter_given
+            .as_object()
+            .unwrap()
+            .keys()
+            .take(2)
+            .collect::<Vec<_>>(),
+        ["contract", "view"]
+    );
+    let meter_now: Value = serde_json::from_slice(
+        &std::fs::read(project_directory.join("views/meter/tatolab_view.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meter_now, meter_given, "a view given a UUID keeps it");
+    assert_eq!(
+        std::fs::read(project_directory.join("views/deck/tatolab_view.json")).unwrap(),
+        deck_as_written
+    );
+    assert_eq!(
+        std::fs::read(project_directory.join("views/garbled/tatolab_view.json")).unwrap(),
+        b"{not json"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&the_imports_meter).unwrap(),
+        METER_MANIFEST
+    );
+    let views = every_view_a_project_brings_itself(&project_directory).unwrap();
+    let meter = views
+        .iter()
+        .find(|listed| listed.view_folder_name == "meter")
+        .unwrap();
+    assert_eq!(meter.view_type, view.to_string());
+    assert!(meter.manifest.is_ok(), "{:?}", meter.manifest);
 }
