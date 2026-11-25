@@ -7,7 +7,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ProjectActionRefusalOnTheWire, ProjectCodeCheckFinding, ProjectCodeCheckResult,
+    ControlOperationRefusalOnTheWire, ProjectCodeCheckFinding, ProjectCodeCheckResult,
     ProjectCodeCheckSeverity, ProjectCodeCheckState, ProjectCodeCheckVerdict,
 };
 
@@ -205,7 +205,7 @@ fn the_line_of_a_finding(finding: &ProjectCodeCheckFinding) -> String {
     format!("{place}: {}: {}", finding.finding_code, finding.words)
 }
 
-fn the_refusal_code_of(refusal: &ProjectActionRefusalOnTheWire) -> String {
+fn the_refusal_code_of(refusal: &ControlOperationRefusalOnTheWire) -> String {
     serde_json::to_value(refusal.refusal_code)
         .ok()
         .and_then(|code| code.as_str().map(str::to_owned))
@@ -214,7 +214,7 @@ fn the_refusal_code_of(refusal: &ProjectActionRefusalOnTheWire) -> String {
 
 /// A refusal's words, read from its JSON; the JSON itself when it does not read.
 fn the_words_of_a_refusal(refusal: &str) -> String {
-    serde_json::from_str::<ProjectActionRefusalOnTheWire>(refusal)
+    serde_json::from_str::<ControlOperationRefusalOnTheWire>(refusal)
         .map(|refusal| refusal.runtime_words)
         .unwrap_or_else(|_| refusal.to_owned())
 }

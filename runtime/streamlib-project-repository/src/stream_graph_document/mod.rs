@@ -624,11 +624,6 @@ impl StreamGraphDocument {
                         }
                     }
                 }),
-            StreamGraphOperation::SetPinValue {
-                node, input, to, ..
-            } => self.change_the_input_values_of(*node, |input_values| {
-                set_the_input_value_in(input_values, input, None, to.as_ref());
-            }),
             StreamGraphOperation::SetNodeInputValue {
                 node,
                 input,
@@ -685,18 +680,6 @@ impl StreamGraphDocument {
                 let mut fragment = to.fragment.clone();
                 upgrade_stream_document_in_place(&mut fragment);
                 node_object.insert("fragment".to_owned(), fragment);
-                Ok(())
-            }
-            StreamGraphOperation::SetExposedConfigFields { node, to, .. } => {
-                let node_object = self.node_object_mut(*node)?;
-                if to.is_empty() {
-                    node_object.remove("exposed_config_fields");
-                } else {
-                    node_object.insert(
-                        "exposed_config_fields".to_owned(),
-                        Value::Array(to.iter().cloned().map(Value::String).collect()),
-                    );
-                }
                 Ok(())
             }
             StreamGraphOperation::AddGroup { group, nodes } => {

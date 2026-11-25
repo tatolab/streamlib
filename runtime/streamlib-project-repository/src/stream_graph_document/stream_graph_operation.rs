@@ -46,14 +46,6 @@ pub enum StreamGraphOperation {
     /// The node's config was replaced whole: each input value `from` names taken out, then each
     /// `to` names set.
     SetNodeConfig { node: Uuid, from: Value, to: Value },
-    /// The value of one of the node's inputs was set, `None` being no value; an older runtime
-    /// recorded it so.
-    SetPinValue {
-        node: Uuid,
-        input: String,
-        from: Option<Value>,
-        to: Option<Value>,
-    },
     /// The node's name changed.
     RenameNode {
         node: Uuid,
@@ -71,12 +63,6 @@ pub enum StreamGraphOperation {
         node: Uuid,
         from: StreamGraphFragmentPlacement,
         to: StreamGraphFragmentPlacement,
-    },
-    /// The config fields the node takes as inputs were replaced whole.
-    SetExposedConfigFields {
-        node: Uuid,
-        from: Vec<String>,
-        to: Vec<String>,
     },
     /// The labelled group was made, each of `nodes` joining it.
     AddGroup {
@@ -146,17 +132,6 @@ impl StreamGraphOperation {
                 from: to,
                 to: from,
             },
-            Self::SetPinValue {
-                node,
-                input,
-                from,
-                to,
-            } => Self::SetPinValue {
-                node,
-                input,
-                from: to,
-                to: from,
-            },
             Self::SetNodeInputValue {
                 node,
                 input,
@@ -181,11 +156,6 @@ impl StreamGraphOperation {
                 to: from,
             },
             Self::RefreshFragment { node, from, to } => Self::RefreshFragment {
-                node,
-                from: to,
-                to: from,
-            },
-            Self::SetExposedConfigFields { node, from, to } => Self::SetExposedConfigFields {
                 node,
                 from: to,
                 to: from,
@@ -232,7 +202,6 @@ impl StreamGraphOperation {
                 format!("disconnect {} -> {}", end(&link.source), end(&link.target))
             }
             Self::SetNodeConfig { node, .. } => format!("set_node_config {node}"),
-            Self::SetPinValue { node, input, .. } => format!("set_pin_value {node}/{input}"),
             Self::SetNodeInputValue {
                 node,
                 input,
@@ -246,9 +215,6 @@ impl StreamGraphOperation {
             Self::SetStudioFields { node, .. } => format!("set_studio_fields {node}"),
             Self::RefreshFragment { node, to, .. } => {
                 format!("refresh_fragment {node} {}", to.generator)
-            }
-            Self::SetExposedConfigFields { node, .. } => {
-                format!("set_exposed_config_fields {node}")
             }
             Self::AddGroup { group, .. } => {
                 format!("add_group {} {}", group.id, group.fields.title)
@@ -296,12 +262,10 @@ impl StreamGraphOperation {
             Self::AddNode { node, .. } | Self::RemoveNode { node, .. } => Some(node.id),
             Self::Connect { link } | Self::Disconnect { link } => Some(link.target.node),
             Self::SetNodeConfig { node, .. }
-            | Self::SetPinValue { node, .. }
             | Self::SetNodeInputValue { node, .. }
             | Self::RenameNode { node, .. }
             | Self::SetStudioFields { node, .. }
-            | Self::RefreshFragment { node, .. }
-            | Self::SetExposedConfigFields { node, .. } => Some(*node),
+            | Self::RefreshFragment { node, .. } => Some(*node),
             Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => fold.fragment_node(),
             Self::AddGroup { .. }
             | Self::CarryTheLinksOntoThePortsOfAPlacedStream { .. }
@@ -310,32 +274,6 @@ impl StreamGraphOperation {
             | Self::AddNote { .. }
             | Self::SetNoteFields { .. }
             | Self::RemoveNote { .. } => None,
-        }
-    }
-
-    /// The `set_node_config` that sets `to` on `node`, which takes `config_it_takes` whole:
-    /// `from` is that config with the value `node` held of each other name `to` sets, such as
-    /// one of its inputs, so the inverse puts back every value the edit overwrites.
-    pub fn set_node_config_of(
-        node: &StreamGraphDocumentNode,
-        config_it_takes: Value,
-        to: Map<String, Value>,
-    ) -> Self {
-        let mut from = config_it_takes;
-        if let Value::Object(from_object) = &mut from {
-            for (name, held) in to
-                .keys()
-                .filter_map(|name| Some((name, node.input_values.get(name)?)))
-            {
-                from_object
-                    .entry(name.clone())
-                    .or_insert_with(|| held.clone());
-            }
-        }
-        Self::SetNodeConfig {
-            node: node.id,
-            from,
-            to: Value::Object(to),
         }
     }
 
@@ -375,26 +313,6 @@ impl StreamGraphOperation {
         }
     }
 
-    /// The input value set a `set_pin_value` of `to` on `node`'s input `input` makes, `None`
-    /// clearing it. A clear of a config field the node exposes as an input is refused: the node
-    /// holds one value of the field, so the clear would take its config value out while the
-    /// running node keeps it.
-    pub fn set_pin_value_of(
-        node: &StreamGraphDocumentNode,
-        input: String,
-        to: Option<Value>,
-    ) -> Result<Self, String> {
-        let to = to.filter(|value| !value.is_null());
-        if to.is_none() && node.exposed_config_fields.contains(&input) {
-            return Err(format!(
-                "node {} `{}` takes `{input}` as an input of its config field of that name, so \
-                 the value it holds is its config's: set it with set_node_config",
-                node.id, node.name
-            ));
-        }
-        Ok(Self::set_node_input_value_of(node, input, None, to))
-    }
-
     /// Each node's input values the operation leaves it with, by that node's UUID: its own
     /// node's, and those of every node at every level of a fragment it places, read in the
     /// current shape as [`StreamGraphDocument::apply`](super::StreamGraphDocument::apply) places
@@ -414,12 +332,6 @@ impl StreamGraphOperation {
                 to: Value::Object(to),
                 ..
             } => input_values.push((*node, to.clone())),
-            Self::SetPinValue {
-                node,
-                input,
-                to: Some(value),
-                ..
-            } => input_values.push((*node, Map::from_iter([(input.clone(), value.clone())]))),
             Self::SetNodeInputValue {
                 node,
                 input,

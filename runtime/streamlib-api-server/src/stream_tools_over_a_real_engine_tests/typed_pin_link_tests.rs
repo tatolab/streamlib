@@ -94,7 +94,7 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
         "{refusal:?}"
     );
     assert_eq!(
-        refusal.refused_field.as_deref(),
+        refusal.refused_input.as_deref(),
         Some("value"),
         "{refusal:?}"
     );
@@ -183,7 +183,7 @@ async fn a_link_into_a_setting_of_a_node_type_of_the_graph_itself_is_refused_as_
             "{node}.{setting}: {refusal:?}"
         );
         assert_eq!(
-            refusal.refused_field.as_deref(),
+            refusal.refused_input.as_deref(),
             Some(setting),
             "{refusal:?}"
         );

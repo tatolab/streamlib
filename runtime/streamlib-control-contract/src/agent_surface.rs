@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire,
 };
 
 use crate::control_operation::{
@@ -262,7 +262,7 @@ pub fn the_operation_groups_served_to_agents() -> ListOperationGroupsResult {
 /// nothing.
 pub fn the_operations_described_for(
     DescribeOperationsRequest { operations, group }: DescribeOperationsRequest,
-) -> Result<DescribeOperationsResult, Box<ProjectActionRefusalOnTheWire>> {
+) -> Result<DescribeOperationsResult, Box<ControlOperationRefusalOnTheWire>> {
     let described: Vec<&ControlOperationDeclaration> = match (operations, group) {
         (Some(names), None) => {
             if let Some(unknown) = names
@@ -284,7 +284,7 @@ pub fn the_operations_described_for(
             })
             .collect(),
         _ => {
-            return Err(Box::new(ProjectActionRefusalOnTheWire::of_the_action(
+            return Err(Box::new(ControlOperationRefusalOnTheWire::of_the_action(
                 DESCRIBE_OPERATIONS_TOOL_NAME,
                 ControlOperationRefusalCode::Refused,
                 format!(

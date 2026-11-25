@@ -5,14 +5,14 @@ use streamlib::sdk::descriptors::{PinLinkEndNamed, PinLinkRefusal, PinType};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ControlOperationRefusalOnTheWire,
     ProjectFilePlaceOnTheWire,
 };
 
 use super::RefusalCodeAndPlace;
 
 /// `refusal` as a caller reads it back off the wire.
-fn read_back(refusal: ProjectActionRefusalOnTheWire) -> ProjectActionRefusalOnTheWire {
+fn read_back(refusal: ControlOperationRefusalOnTheWire) -> ControlOperationRefusalOnTheWire {
     serde_json::from_value(refusal.the_refusal_as_json()).unwrap()
 }
 
@@ -215,13 +215,13 @@ fn an_engine_error_reads_back_with_its_code_and_the_input_it_names() {
             None,
         ),
     ];
-    for (refusal, refusal_code, refused_field) in cases {
+    for (refusal, refusal_code, refused_input) in cases {
         let read = read_back(
             RefusalCodeAndPlace::of_an_engine_error(&refusal)
                 .on_the_refusal_of("transact", refusal.to_string()),
         );
         assert_eq!(read.refusal_code, refusal_code, "{refusal}");
-        assert_eq!(read.refused_field, refused_field, "{refusal}");
+        assert_eq!(read.refused_input, refused_input, "{refusal}");
         assert_eq!(read.runtime_words, refusal.to_string());
     }
 }

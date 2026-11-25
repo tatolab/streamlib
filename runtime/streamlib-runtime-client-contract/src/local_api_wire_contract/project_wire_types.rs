@@ -336,7 +336,7 @@ pub struct RefusedProjectActionOnTheWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     /// What the runtime refused, in its own words.
-    pub refusal: ProjectActionRefusalOnTheWire,
+    pub refusal: ControlOperationRefusalOnTheWire,
     /// When the runtime refused it, RFC 3339 in UTC to the second, for display only.
     pub refused_at: String,
 }
@@ -373,7 +373,7 @@ pub struct AssetMediaFactsReadOnTheWire {
 /// `structuredContent.refusal` and the text of a failing tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub struct ProjectActionRefusalOnTheWire {
+pub struct ControlOperationRefusalOnTheWire {
     /// What kind of refusal it is, for a caller to branch on; `refused` when a runtime that
     /// answers no code sent it.
     #[serde(default)]
@@ -389,10 +389,9 @@ pub struct ProjectActionRefusalOnTheWire {
     /// The link the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_link: Option<Box<RefusedGraphLinkOnTheWire>>,
-    /// The node's input or config field the refused operation names.
+    /// The node's input the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub refused_field: Option<String>,
+    pub refused_input: Option<String>,
     /// The JSON pointer, into the params the caller sent, of the value refused; absent when no
     /// one value inside them is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,7 +409,7 @@ pub struct ProjectActionRefusalOnTheWire {
     pub runtime_words: String,
 }
 
-impl ProjectActionRefusalOnTheWire {
+impl ControlOperationRefusalOnTheWire {
     /// The refusal of `action`, coded `refusal_code`, in `runtime_words`, naming no place.
     pub fn of_the_action(
         action: impl Into<String>,
@@ -423,7 +422,7 @@ impl ProjectActionRefusalOnTheWire {
             refused_operation_index: None,
             refused_node: None,
             refused_link: None,
-            refused_field: None,
+            refused_input: None,
             refused_params_pointer: None,
             refused_file: None,
             not_running_because: None,

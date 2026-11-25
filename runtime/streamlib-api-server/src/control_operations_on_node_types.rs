@@ -32,7 +32,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed,
     NodeTypePortReadFromSource, NodeTypeReadFromSource, NodeTypeSourceListed,
     NodeTypeSourceListedOrigin, NodeTypeSourceOrigin, PinTypeConversionListed, PinTypeListed,
-    ProjectActionRefusalOnTheWire, ProjectFilePlaceOnTheWire,
+    ControlOperationRefusalOnTheWire, ProjectFilePlaceOnTheWire,
 };
 use uuid::Uuid;
 
@@ -625,7 +625,7 @@ fn an_input_read_from_source(port: &NodeTypePortReadFromSource) -> NodeTypeInput
 fn the_refusal_of_a_node_type_source_does_not_describe(
     listing: &ListProjectNodeTypesToolResult,
     read: &NodeTypeReadFromSource,
-) -> ProjectActionRefusalOnTheWire {
+) -> ControlOperationRefusalOnTheWire {
     let mut params = Map::from_iter([(
         "project_directory".to_owned(),
         json!(listing.project_directory),
@@ -633,14 +633,14 @@ fn the_refusal_of_a_node_type_source_does_not_describe(
     if let Some(path) = &read.path {
         params.insert("paths".to_owned(), json!([path]));
     }
-    ProjectActionRefusalOnTheWire {
+    ControlOperationRefusalOnTheWire {
         refused_file: read.path.as_ref().map(|path| ProjectFilePlaceOnTheWire {
             path: path.clone(),
             line: read.line,
             column: None,
         }),
         suggested_call: the_suggested_call(CHECK_PROJECT_CODE_OPERATION, params),
-        ..ProjectActionRefusalOnTheWire::of_the_action(
+        ..ControlOperationRefusalOnTheWire::of_the_action(
             DescribeNodeTypes::METHOD_NAME,
             ControlOperationRefusalCode::Refused,
             format!(
@@ -661,7 +661,7 @@ pub(crate) fn the_refusal_of_a_node_type_not_offered(
     listing: &ListProjectNodeTypesToolResult,
     node_type: &str,
 ) -> ControlOperationRefusal {
-    ControlOperationRefusal::RefusedAction(Box::new(ProjectActionRefusalOnTheWire {
+    ControlOperationRefusal::RefusedAction(Box::new(ControlOperationRefusalOnTheWire {
         suggested_call: the_suggested_call(
             ListNodeTypes::METHOD_NAME,
             Map::from_iter([(
@@ -669,7 +669,7 @@ pub(crate) fn the_refusal_of_a_node_type_not_offered(
                 json!(listing.project_directory),
             )]),
         ),
-        ..ProjectActionRefusalOnTheWire::of_the_action(
+        ..ControlOperationRefusalOnTheWire::of_the_action(
             method_name,
             ControlOperationRefusalCode::NodeTypeNotFound,
             format!(

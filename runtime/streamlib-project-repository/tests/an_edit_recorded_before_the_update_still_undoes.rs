@@ -1,17 +1,18 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A project whose history an older runtime recorded, in format 2, with `set_pin_value` and
-//! `set_node_config` edits: it opens, takes an edit, and undoes and redoes back through the old
-//! ones, each read as the `set_node_input_value` operations this runtime records.
+//! A project whose history an older runtime recorded, in format 2 with `set_pin_value` and
+//! `set_node_config` edits, or in format 3 with an `add_node` sent a config, a
+//! `set_exposed_config_fields` and a `set_node_config`: it opens, takes an edit, and undoes and
+//! redoes back through the old ones, each read in the forms this runtime records.
 //!
-//! The fixture is a recording, never edited by hand: each commit's message and files as the
+//! Each fixture is a recording, never edited by hand: each commit's message and files as the
 //! project repository at the commit it names wrote them, through its own `set_pin_value_of` and
 //! `set_node_config_of`, with the actions as the API server sent them.
 
 use std::collections::BTreeMap;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use streamlib_project_repository::{
     PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectAction, ProjectHistoryRepository, ProjectOperation,
     ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
@@ -28,6 +29,13 @@ const HISTORY_RECORDED_IN_FORMAT_2: &str =
 /// type takes no config and which holds no value.
 const AN_EMPTY_SET_NODE_CONFIG_RECORDED_IN_FORMAT_2: &str =
     include_str!("fixtures/history/an_empty_set_node_config_recorded_in_format_2.json");
+
+/// A history recorded in format 3, the last before the contract's version 4: an `add_node` of
+/// `tone` sent with `config`, `pins` and `exposed_config_fields`, a `set_exposed_config_fields`
+/// on `mixer`, then a `set_node_config` of `mixer`.
+const HISTORY_RECORDED_IN_FORMAT_3: &str = include_str!(
+    "fixtures/history/add_node_with_config_set_exposed_config_fields_and_set_node_config_recorded_in_format_3.json"
+);
 
 const STREAM: &str = "860fdbd6-8fe2-592b-8ebc-faae672abefa";
 const MIXER: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
@@ -211,18 +219,145 @@ fn each_recorded_edit_is_listed_as_the_input_value_sets_it_stands_for() {
     );
     assert_eq!(
         listed[1].transaction.actions,
-        vec![ProjectAction::StreamGraph(
-            StreamGraphAction::SetNodeConfig {
-                stream: stream(),
-                level: Vec::new(),
-                node: MIXER.to_owned(),
-                config: Map::from_iter([
-                    ("frame_width".to_owned(), json!(1280)),
-                    ("gain".to_owned(), json!(0.75)),
-                ]),
-            }
-        )],
-        "a `set_node_config` sent names no value it replaced, so it stays as sent"
+        vec![
+            a_set_of_the_mixer_sent("frame_width", json!(1280)),
+            a_set_of_the_mixer_sent("gain", json!(0.75)),
+        ],
+        "a `set_node_config` sent reads as a set of each name it sent"
+    );
+}
+
+fn a_set_of_the_mixer_sent(input: &str, value: Value) -> ProjectAction {
+    ProjectAction::StreamGraph(StreamGraphAction::SetNodeInputValue {
+        member: None,
+        stream: stream(),
+        level: Vec::new(),
+        node: MIXER.to_owned(),
+        input: input.to_owned(),
+        value: Some(value),
+    })
+}
+
+fn the_node_names_in_the_stream(project: &ProjectRepository) -> Vec<String> {
+    project
+        .stream_graph_document(stream())
+        .unwrap()
+        .nodes()
+        .into_iter()
+        .map(|node| node.name)
+        .collect()
+}
+
+#[test]
+fn a_project_recorded_in_format_3_lists_each_edit_in_the_current_forms() {
+    let root = tempfile::tempdir().unwrap();
+    let project = the_recorded_project_under(root.path(), HISTORY_RECORDED_IN_FORMAT_3);
+
+    let mut listed = project
+        .applied_transactions_newest_first(usize::MAX)
+        .unwrap();
+    listed.reverse();
+    assert_eq!(listed.len(), 3, "the three recorded edits");
+    assert!(
+        listed
+            .iter()
+            .all(|applied| applied.transaction.format_version == 3)
+    );
+    assert!(
+        matches!(
+            listed[0].transaction.actions.as_slice(),
+            [ProjectAction::StreamGraph(StreamGraphAction::AddNode { name: Some(name), .. })]
+                if name == "tone"
+        ),
+        "an `add_node` sent with a config reads without it: {:?}",
+        listed[0].transaction.actions
+    );
+    assert_eq!(
+        listed[1].transaction.actions,
+        Vec::new(),
+        "a `set_exposed_config_fields` sent reads as nothing sent"
+    );
+    assert!(
+        matches!(
+            listed[1].transaction.operations.as_slice(),
+            [ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                graph_operation: StreamGraphOperation::SetNodeConfig { from, to, .. },
+                ..
+            })] if *from == json!({}) && *to == json!({})
+        ),
+        "a `set_exposed_config_fields` reads as an edit that changes nothing: {:?}",
+        listed[1].transaction.operations
+    );
+    assert_eq!(
+        listed[2].transaction.operations,
+        vec![
+            set_of_the_mixer("gain", Some(json!(0.25)), Some(json!(0.8))),
+            set_of_the_mixer("frame_width", Some(json!(640)), Some(json!(1280))),
+        ]
+    );
+    assert_eq!(
+        listed[2].transaction.actions,
+        vec![
+            a_set_of_the_mixer_sent("gain", json!(0.8)),
+            a_set_of_the_mixer_sent("frame_width", json!(1280)),
+        ]
+    );
+}
+
+#[test]
+fn a_project_recorded_in_format_3_takes_an_edit_then_undoes_and_redoes_back_through_the_old_ones()
+{
+    let root = tempfile::tempdir().unwrap();
+    let mut project = the_recorded_project_under(root.path(), HISTORY_RECORDED_IN_FORMAT_3);
+    assert_eq!(
+        the_input_values_of_the_mixer(&project),
+        json!({ "gain": 0.8, "frame_width": 1280 })
+    );
+    project
+        .apply_project_operations(
+            &alice(),
+            None,
+            Vec::new(),
+            vec![set_of_the_mixer("gain", Some(json!(0.8)), Some(json!(1.0)))],
+            streamlib_project_repository::ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    undo(&mut project);
+    assert_eq!(
+        the_input_values_of_the_mixer(&project),
+        json!({ "gain": 0.8, "frame_width": 1280 })
+    );
+    undo(&mut project);
+    assert_eq!(
+        the_input_values_of_the_mixer(&project),
+        json!({ "gain": 0.25, "frame_width": 640 })
+    );
+    let document_before_the_change_of_nothing = project
+        .stream_graph_document(stream())
+        .unwrap()
+        .to_value();
+    assert_eq!(undo(&mut project).len(), 1);
+    assert_eq!(
+        project.stream_graph_document(stream()).unwrap().to_value(),
+        document_before_the_change_of_nothing,
+        "the older `set_exposed_config_fields` undoes as a change of nothing"
+    );
+    assert_eq!(the_node_names_in_the_stream(&project), ["mixer", "tone"]);
+    undo(&mut project);
+    assert_eq!(the_node_names_in_the_stream(&project), ["mixer"]);
+    assert!(matches!(
+        project.undo_by(&alice()),
+        Err(ProjectRepositoryRefusal::NothingToUndo { .. })
+    ));
+
+    for _ in 0..4 {
+        redo(&mut project);
+    }
+    assert_eq!(the_node_names_in_the_stream(&project), ["mixer", "tone"]);
+    assert_eq!(
+        the_input_values_of_the_mixer(&project),
+        json!({ "gain": 1.0, "frame_width": 1280 })
     );
 }
 

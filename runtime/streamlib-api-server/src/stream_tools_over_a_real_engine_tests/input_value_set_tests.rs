@@ -9,7 +9,7 @@
 use super::*;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire,
 };
 
 pub(super) use super::input_value_test_node::{
@@ -37,7 +37,7 @@ pub(super) fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDoc
 
 /// A tool's answer, or its refusal as the wire carries it.
 pub(super) type AToolAnswerOrItsRefusal =
-    std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>>;
+    std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>>;
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     /// The answer of the tool `tool_name` sent `arguments`, or its refusal as the wire carries it.
@@ -45,7 +45,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         &self,
         tool_name: &str,
         arguments: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         let tool_result = tool_call_result(
             self.operations_on_the_loaded_streams(),
             tool_name,
@@ -513,7 +513,7 @@ async fn a_value_the_input_does_not_take_is_refused_with_its_code_and_place() {
             Some(MIXER_NODE_UUID),
             "{refusal:?}"
         );
-        assert_eq!(refusal.refused_field.as_deref(), Some(input), "{refusal:?}");
+        assert_eq!(refusal.refused_input.as_deref(), Some(input), "{refusal:?}");
         assert_eq!(
             refusal.refused_params_pointer.as_deref(),
             Some("/value"),
@@ -805,7 +805,7 @@ async fn the_operations_it_replaces_record_what_it_records() {
         "{refusal:?}"
     );
     assert_eq!(
-        refusal.refused_field.as_deref(),
+        refusal.refused_input.as_deref(),
         Some("frame_width"),
         "{refusal:?}"
     );

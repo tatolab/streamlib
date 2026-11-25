@@ -14,7 +14,7 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, NodeNotRunningBecauseOnTheWire,
-    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire, SuggestedOperationCall,
+    ControlOperationRefusalOnTheWire, RefusedGraphLinkOnTheWire, SuggestedOperationCall,
 };
 use uuid::Uuid;
 
@@ -271,7 +271,7 @@ impl GraphRequestRefusal {
 
     /// The refusal naming `input` as the field refused.
     pub(super) fn of_the_field(mut self, input: &str) -> Self {
-        self.code_and_place.refused_field = Some(input.to_owned());
+        self.code_and_place.refused_input = Some(input.to_owned());
         self
     }
 }
@@ -378,7 +378,7 @@ impl GraphTransactionRefusal {
     pub(crate) fn into_the_refusal_on_the_wire(
         self,
         tool_name: &str,
-    ) -> ProjectActionRefusalOnTheWire {
+    ) -> ControlOperationRefusalOnTheWire {
         let what_the_refused_operation_names = *self.what_the_refused_operation_names;
         let GraphRequestRefusal {
             code_and_place,
@@ -413,10 +413,10 @@ impl GraphTransactionRefusal {
             .or(the_links_target_as_its_caller_named_it)
             .or(code_and_place.refused_node)
             .or(what_the_refused_operation_names.node_unless_the_refusal_names_one);
-        code_and_place.refused_field = code_and_place
-            .refused_field
+        code_and_place.refused_input = code_and_place
+            .refused_input
             .or(what_the_refused_operation_names.field);
-        ProjectActionRefusalOnTheWire {
+        ControlOperationRefusalOnTheWire {
             refused_operation_index: self.refused_operation_index,
             refused_link: what_the_refused_operation_names.link.map(Box::new),
             refused_params_pointer,

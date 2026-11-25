@@ -240,7 +240,7 @@ impl TheRunningGraphLinksAreCheckedOn {
             GraphRequestRefusal::coded(
                 RefusalCodeAndPlace {
                     refused_node: Some(held.node.clone()),
-                    refused_field: (held_direction == PortDirection::Input)
+                    refused_input: (held_direction == PortDirection::Input)
                         .then(|| held.port.clone()),
                     ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::PortNotFound)
                 },

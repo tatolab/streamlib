@@ -37,7 +37,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListPinTypesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
     ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
     ListStreamsToolResult, LogsToolResult, OpenViewerToolResult, PausePlaybackToolResult,
-    ProjectActionRefusalOnTheWire, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
+    ControlOperationRefusalOnTheWire, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
     ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
     ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
     ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
@@ -206,7 +206,7 @@ pub(crate) enum ControlOperationAnswer {
 #[derive(Debug)]
 pub(crate) enum ControlOperationRefusal {
     /// The runtime refused the action, naming what it refused in its own words.
-    RefusedAction(Box<ProjectActionRefusalOnTheWire>),
+    RefusedAction(Box<ControlOperationRefusalOnTheWire>),
     /// The operation was not carried out, for a reason its code and place name, in the
     /// runtime's own words.
     Coded {
@@ -222,7 +222,7 @@ impl ControlOperationRefusal {
     pub(crate) fn into_the_refusal_on_the_wire(
         self,
         action: &str,
-    ) -> ProjectActionRefusalOnTheWire {
+    ) -> ControlOperationRefusalOnTheWire {
         match self {
             Self::RefusedAction(refused) => *refused,
             Self::Coded {
@@ -230,7 +230,7 @@ impl ControlOperationRefusal {
                 why,
             } => code_and_place.on_the_refusal_of(action, why),
             Self::ContractVersionMismatch(mismatch) => {
-                ProjectActionRefusalOnTheWire::of_the_action(
+                ControlOperationRefusalOnTheWire::of_the_action(
                     action,
                     ControlOperationRefusalCode::Refused,
                     format!("{action} failed: {mismatch}"),

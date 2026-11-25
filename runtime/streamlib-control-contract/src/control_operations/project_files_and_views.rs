@@ -141,26 +141,6 @@ impl ControlOperation for CheckProjectCode {
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::CHECK_PROJECT_CODE);
 }
 
-/// `list_project_node_types`: list the node types a project offers, from its own node files and the
-/// packages it installs.
-pub struct ListProjectNodeTypes;
-
-impl ControlOperation for ListProjectNodeTypes {
-    type Request = ListProjectNodeTypesRequest;
-    type Result = ListProjectNodeTypesToolResult;
-    const METHOD_NAME: &'static str = "list_project_node_types";
-    const ONE_LINE_DOC: &'static str = "List the node types a project offers, from its own node files and the packages it installs. Replaced by `list_node_types`.";
-    const AGENT_USAGE_NOTE: &'static str = "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists. Replaced by `list_node_types`, which lists the same sources with the node types the runtime brings itself, and `describe_node_types`, which answers each node type's typed inputs and outputs.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(ListNodeTypes::METHOD_NAME);
-}
-
 /// `list_project_views`: list the Tato Studio views a project brings.
 pub struct ListProjectViews;
 
@@ -200,26 +180,6 @@ impl ControlOperation for ListProjectNodeUiElements {
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> =
         Some(worked_examples::LIST_PROJECT_NODE_UI_ELEMENTS);
-}
-
-/// `write_studio_view_output`: write a value a Tato Studio view produced onto its node's output
-/// port.
-pub struct WriteStudioViewOutput;
-
-impl ControlOperation for WriteStudioViewOutput {
-    type Request = WriteStudioViewOutputRequest;
-    type Result = WriteStudioViewOutputToolResult;
-    const METHOD_NAME: &'static str = "write_studio_view_output";
-    const ONE_LINE_DOC: &'static str = "Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. Each Array, Channels or Records output of a view node has an input of its name, a setting read each run that takes no wire and holds no saved value, whose value the node publishes on the output; this call sets that input. Every write is published, stamped with stream time now, the same value written again as much as a new one, a Channels block starting where the last one written ended. A write is live data: the last value written is what a reader keeps, and a reader that connects later reads it, many panels may write one node and the last write wins, nothing is recorded in the graph document or the project's history, and the input returns to no value at Stop; a saved value on that input, by a `commit` set or an `add_node`'s `pins`, is refused, and one a graph document holds is dropped as the stream loads, with a warning naming the node and the input. `graph` renders the value as the input's live value. An Image or Packets output, which has no such input, is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; a node with no such output; `null`, which sets no value; and a value its port's family does not take, as `input_value_not_valid` at `/value`. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming the view node as `node` and the output as `input`.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::View;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `open_viewer`: open a viewer of a node's output port, held open for the connection that opened

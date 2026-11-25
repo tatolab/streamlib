@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire,
 };
 
 use super::input_value_set_tests::the_input_named;
@@ -58,7 +58,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         project: &ProjectWithGraphDocuments,
         port: &str,
         value: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         self.the_answer_or_the_refusal_of(
             "write_studio_view_output",
             json!({ "stream": project.stream_id_of("main"), "node": DECK_NODE_UUID,

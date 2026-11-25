@@ -358,7 +358,7 @@ fn an_imports_source_listed_with_no_project_name_reads_with_none() {
 
 #[test]
 fn a_refusal_carries_its_code_and_leaves_out_every_place_it_does_not_name() {
-    let refusal = ProjectActionRefusalOnTheWire::of_the_action(
+    let refusal = ControlOperationRefusalOnTheWire::of_the_action(
         "transact",
         ControlOperationRefusalCode::ParamsDoNotMatchSchema,
         "missing field `stream`",
@@ -376,7 +376,7 @@ fn a_refusal_carries_its_code_and_leaves_out_every_place_it_does_not_name() {
 
 #[test]
 fn a_refusal_code_a_client_does_not_know_reads_as_refused() {
-    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+    let refusal: ControlOperationRefusalOnTheWire = serde_json::from_value(serde_json::json!({
         "refusal_code": "a_code_added_after_this_client",
         "action": "transact",
         "runtime_words": "no",
@@ -388,7 +388,7 @@ fn a_refusal_code_a_client_does_not_know_reads_as_refused() {
 
 #[test]
 fn a_refusal_from_a_runtime_that_sends_no_code_reads_as_refused() {
-    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+    let refusal: ControlOperationRefusalOnTheWire = serde_json::from_value(serde_json::json!({
         "action": "transact",
         "refused_operation_index": 1,
         "runtime_words": "no",
@@ -401,7 +401,7 @@ fn a_refusal_from_a_runtime_that_sends_no_code_reads_as_refused() {
 
 #[test]
 fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
-    let refusal = ProjectActionRefusalOnTheWire {
+    let refusal = ControlOperationRefusalOnTheWire {
         refused_params_pointer: Some("/operations/0/stream".to_owned()),
         refused_file: Some(ProjectFilePlaceOnTheWire {
             path: "nodes/blur.py".to_owned(),
@@ -415,7 +415,7 @@ fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
                 serde_json::Value::from("nodes/blur.py"),
             )]),
         }),
-        ..ProjectActionRefusalOnTheWire::of_the_action(
+        ..ControlOperationRefusalOnTheWire::of_the_action(
             "write_project_file",
             ControlOperationRefusalCode::Refused,
             "changed since it was read",
@@ -437,7 +437,7 @@ fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
         serde_json::json!({"operation": "read_project_file", "params": {"path": "nodes/blur.py"}})
     );
     assert_eq!(
-        serde_json::from_value::<ProjectActionRefusalOnTheWire>(on_the_wire).unwrap(),
+        serde_json::from_value::<ControlOperationRefusalOnTheWire>(on_the_wire).unwrap(),
         refusal
     );
 }

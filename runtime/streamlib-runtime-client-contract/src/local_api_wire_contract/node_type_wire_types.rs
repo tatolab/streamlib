@@ -21,7 +21,7 @@ use streamlib_node_schema::pin_type::{
 
 use super::{
     GraphGeneratorPromotedSettingReadFromSource, NodeModuleNotReadable,
-    ProjectActionRefusalOnTheWire, ProjectFilePlaceOnTheWire,
+    ControlOperationRefusalOnTheWire, ProjectFilePlaceOnTheWire,
 };
 
 /// `list_pin_types`' answer: every built-in pin type, and each named type the project's node
@@ -376,7 +376,7 @@ pub struct NodeTypeNotDescribed {
     pub origin: NodeTypeSourceListedOrigin,
     /// Why it could not be described, with the call that checks its code when the runtime
     /// serves one.
-    pub not_described_because: ProjectActionRefusalOnTheWire,
+    pub not_described_because: ControlOperationRefusalOnTheWire,
 }
 
 /// One port of a node type: its name, what it carries and how it is typed.

@@ -419,7 +419,7 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         "{refused_result}"
     );
     assert_eq!(
-        refused_result["structuredContent"]["refusal"]["refused_field"], "fader",
+        refused_result["structuredContent"]["refusal"]["refused_input"], "fader",
         "{refused_result}"
     );
     let refusal =
@@ -496,7 +496,7 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
         "{refusal:?}"
     );
     assert_eq!(
-        refusal.refused_field.as_deref(),
+        refusal.refused_input.as_deref(),
         Some("fader"),
         "{refusal:?}"
     );

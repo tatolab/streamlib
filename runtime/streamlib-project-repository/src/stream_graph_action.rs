@@ -21,8 +21,6 @@ pub const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `g
 pub const IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION: &str = "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`.";
 /// How `import_graph_generator`'s `name` is described to its caller.
 pub const IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import.";
-/// How `import_graph_generator`'s `config` is described to its caller.
-pub const IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION: &str = "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.";
 /// How a group action's `group` is described to its caller.
 pub const GROUP_ARGUMENT_DESCRIPTION: &str =
     "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers.";
@@ -169,7 +167,7 @@ pub enum StreamGraphAction<Stream = Uuid> {
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(
-                description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
+                description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `list_node_types` lists it."
             )
         )]
         node_type: String,
@@ -181,26 +179,6 @@ pub enum StreamGraphAction<Stream = Uuid> {
         )]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        #[cfg_attr(
-            feature = "mcp-tool-json-schema",
-            schemars(
-                description = "The node's config, as the keys its type's schema declares. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is."
-            )
-        )]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-        config: Option<Map<String, Value>>,
-        #[cfg_attr(
-            feature = "mcp-tool-json-schema",
-            schemars(description = "The value on each unlinked input, by input name.")
-        )]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-        pins: Option<Map<String, Value>>,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-        exposed_config_fields: Option<Vec<String>>,
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(
@@ -266,50 +244,6 @@ pub enum StreamGraphAction<Stream = Uuid> {
         )]
         target: StreamGraphActionLinkEnd,
     },
-    /// Replace a node's config whole.
-    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-    SetNodeConfig {
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Stream,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        level: Vec<Uuid>,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION))]
-        node: String,
-        #[cfg_attr(
-            feature = "mcp-tool-json-schema",
-            schemars(
-                description = "The node's new config, as the keys its type's schema declares."
-            )
-        )]
-        config: Map<String, Value>,
-    },
-    /// Set the value on one of a node's inputs.
-    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-    SetPinValue {
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Stream,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        level: Vec<Uuid>,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION))]
-        node: String,
-        #[cfg_attr(
-            feature = "mcp-tool-json-schema",
-            schemars(
-                description = "The input's name, as `graph` lists it under the node's `ports.inputs`."
-            )
-        )]
-        input: String,
-        #[cfg_attr(
-            feature = "mcp-tool-json-schema",
-            schemars(
-                description = "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
-            )
-        )]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        value: Option<Value>,
-    },
     /// Give a node another name.
     RenameNode {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
@@ -354,10 +288,6 @@ pub enum StreamGraphAction<Stream = Uuid> {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-        config: Option<Map<String, Value>>,
         #[serde(rename = "as")]
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
@@ -367,19 +297,6 @@ pub enum StreamGraphAction<Stream = Uuid> {
         )]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
-    },
-    /// Replace the config fields a node takes as inputs whole.
-    #[cfg_attr(feature = "mcp-tool-json-schema", schemars(extend("x-removed-in" = 4)))]
-    SetExposedConfigFields {
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Stream,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        level: Vec<Uuid>,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION))]
-        node: String,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION))]
-        exposed_config_fields: Vec<String>,
     },
     /// Make a labelled group of nodes of one level of the stream.
     AddGroup {
@@ -561,9 +478,6 @@ pub enum StreamGraphAction<Stream = Uuid> {
 /// What a set's `member` says, as every tool that takes one says.
 pub const NODE_INPUT_MEMBER_ARGUMENT_DESCRIPTION: &str = "The member of a bundle input the value is for, by name: that member alone is set, or taken off with no value, and every other member keeps its value; a member that declares no default is not taken off the saved bundle. Omitted, the value is the whole input's: for a bundle input, each member the object names is set and every other taken off.";
 
-/// What a node's `exposed_config_fields` are, as every tool that takes them says.
-pub const EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION: &str = "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.";
-
 impl<Stream> StreamGraphAction<Stream> {
     /// The path of fragment nodes, from the stream's own level inward, whose inside the action
     /// edits; empty for the stream's own level.
@@ -573,12 +487,9 @@ impl<Stream> StreamGraphAction<Stream> {
             | Self::RemoveNode { level, .. }
             | Self::Connect { level, .. }
             | Self::Disconnect { level, .. }
-            | Self::SetNodeConfig { level, .. }
-            | Self::SetPinValue { level, .. }
             | Self::SetNodeInputValue { level, .. }
             | Self::RenameNode { level, .. }
             | Self::SetStudioFields { level, .. }
-            | Self::SetExposedConfigFields { level, .. }
             | Self::AddGroup { level, .. }
             | Self::SetGroupFields { level, .. }
             | Self::RemoveGroup { level, .. }
@@ -599,13 +510,10 @@ impl<Stream> StreamGraphAction<Stream> {
             | Self::RemoveNode { stream, .. }
             | Self::Connect { stream, .. }
             | Self::Disconnect { stream, .. }
-            | Self::SetNodeConfig { stream, .. }
-            | Self::SetPinValue { stream, .. }
             | Self::SetNodeInputValue { stream, .. }
             | Self::RenameNode { stream, .. }
             | Self::SetStudioFields { stream, .. }
             | Self::ImportGraphGenerator { stream, .. }
-            | Self::SetExposedConfigFields { stream, .. }
             | Self::AddGroup { stream, .. }
             | Self::SetGroupFields { stream, .. }
             | Self::RemoveGroup { stream, .. }
@@ -629,9 +537,6 @@ impl<Stream> StreamGraphAction<Stream> {
                 level,
                 node_type,
                 name,
-                config,
-                pins,
-                exposed_config_fields,
                 studio,
                 label,
             } => StreamGraphAction::AddNode {
@@ -639,9 +544,6 @@ impl<Stream> StreamGraphAction<Stream> {
                 level,
                 node_type,
                 name,
-                config,
-                pins,
-                exposed_config_fields,
                 studio,
                 label,
             },
@@ -676,30 +578,6 @@ impl<Stream> StreamGraphAction<Stream> {
                 source,
                 target,
             },
-            Self::SetNodeConfig {
-                stream,
-                level,
-                node,
-                config,
-            } => StreamGraphAction::SetNodeConfig {
-                stream: name_the_stream(stream),
-                level,
-                node,
-                config,
-            },
-            Self::SetPinValue {
-                stream,
-                level,
-                node,
-                input,
-                value,
-            } => StreamGraphAction::SetPinValue {
-                stream: name_the_stream(stream),
-                level,
-                node,
-                input,
-                value,
-            },
             Self::RenameNode {
                 stream,
                 level,
@@ -726,25 +604,12 @@ impl<Stream> StreamGraphAction<Stream> {
                 stream,
                 generator,
                 name,
-                config,
                 label,
             } => StreamGraphAction::ImportGraphGenerator {
                 stream: name_the_stream(stream),
                 generator,
                 name,
-                config,
                 label,
-            },
-            Self::SetExposedConfigFields {
-                stream,
-                level,
-                node,
-                exposed_config_fields,
-            } => StreamGraphAction::SetExposedConfigFields {
-                stream: name_the_stream(stream),
-                level,
-                node,
-                exposed_config_fields,
             },
             Self::AddGroup {
                 stream,

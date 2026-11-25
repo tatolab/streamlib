@@ -285,7 +285,7 @@ fn wire_outcome<T: serde::Serialize>(
 /// its `structuredContent.refusal`.
 pub(crate) fn the_refusal_of_a_tool_result(
     tool_result: &Value,
-) -> streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire {
+) -> streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalOnTheWire {
     assert_eq!(tool_result["isError"], true, "{tool_result}");
     let refusal_as_text: Value = serde_json::from_str(
         tool_result["content"][0]["text"]

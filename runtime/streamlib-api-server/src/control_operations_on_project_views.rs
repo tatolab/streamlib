@@ -15,7 +15,7 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult,
-    ProjectActionRefusalOnTheWire, ProjectViewDeclaredPort, ProjectViewListed,
+    ControlOperationRefusalOnTheWire, ProjectViewDeclaredPort, ProjectViewListed,
     WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
@@ -251,7 +251,7 @@ impl ControlOperationDispatcher {
     ) -> Result<String, ControlOperationRefusal> {
         if !level.is_empty() {
             return Err(ControlOperationRefusal::RefusedAction(Box::new(
-                ProjectActionRefusalOnTheWire {
+                ControlOperationRefusalOnTheWire {
                     refused_params_pointer: Some("/level".to_owned()),
                     ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::Refused)
                         .on_the_refusal_of(

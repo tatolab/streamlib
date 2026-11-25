@@ -91,7 +91,7 @@ pub use project_wire_types::{
     ListProjectViewsToolResult, ListSamplesToolResult, ListSamplesToolResultSample,
     ListedProjectDependencyOnTheWire, NodeModuleNotReadable, NodeNotRunningBecauseOnTheWire,
     NodeTypeOfOneProjectSource, NodeTypePortReadFromSource, NodeTypeReadFromSource,
-    NodeTypeSourceOrigin, NodeTypeSourceReadWithoutRunningIt, ProjectActionRefusalOnTheWire,
+    NodeTypeSourceOrigin, NodeTypeSourceReadWithoutRunningIt, ControlOperationRefusalOnTheWire,
     ProjectAssetOnTheWire, ProjectAssetWithItsMediaFactsOnTheWire, ProjectChangeFeedEntryOnTheWire,
     ProjectDependencyOnTheWire, ProjectFileOnTheWire, ProjectFilePlaceOnTheWire,
     ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,

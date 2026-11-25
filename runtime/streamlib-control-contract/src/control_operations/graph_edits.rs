@@ -180,44 +180,6 @@ impl ControlOperation for Disconnect {
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::DISCONNECT);
 }
 
-/// `set_node_config`: replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
-pub struct SetNodeConfig;
-
-impl ControlOperation for SetNodeConfig {
-    type Request = SetNodeConfigRequest;
-    type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "set_node_config";
-    const ONE_LINE_DOC: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
-}
-
-/// `set_pin_value`: set the value one of a node's inputs holds while no link feeds it, as one transaction.
-pub struct SetPinValue;
-
-impl ControlOperation for SetPinValue {
-    type Request = SetPinValueRequest;
-    type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "set_pin_value";
-    const ONE_LINE_DOC: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
-}
-
 /// `set_node_input_value`: set the value one input of one node holds while no link feeds it,
 /// saved or live, as one transaction.
 pub struct SetNodeInputValue;
@@ -274,25 +236,6 @@ impl ControlOperation for SetStudioFields {
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::SET_STUDIO_FIELDS);
-}
-
-/// `set_exposed_config_fields`: replace the config fields a node takes as inputs, as one transaction.
-pub struct SetExposedConfigFields;
-
-impl ControlOperation for SetExposedConfigFields {
-    type Request = SetExposedConfigFieldsRequest;
-    type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "set_exposed_config_fields";
-    const ONE_LINE_DOC: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value. Replaced by `set_node_input_value`: a typed node declares each input that takes a link as a port, and every setting is set by `set_node_input_value`.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `add_group`: make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
@@ -451,25 +394,6 @@ impl ControlOperation for RemoveGroup {
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
     const EXAMPLE: Option<ControlOperationExample> = Some(worked_examples::REMOVE_GROUP);
-}
-
-/// `write_graph_input`: write a value onto one of a loaded stream's graph inputs.
-pub struct WriteGraphInput;
-
-impl ControlOperation for WriteGraphInput {
-    type Request = WriteGraphInputRequest;
-    type Result = WriteGraphInputToolResult;
-    const METHOD_NAME: &'static str = "write_graph_input";
-    const ONE_LINE_DOC: &'static str = "Write a value onto one of a loaded stream's graph inputs. Replaced by `set_node_input_value`.";
-    const AGENT_USAGE_NOTE: &'static str = "Hand a value to the Input `input` of the stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process; every write is published, the same value written again as much as a new one, and a node linked later reads the last value set. A write is live data: many clients may write one Input and the last write wins, and nothing is recorded in the graph document or the project's history. An Input whose config's `lifetime` is `kept`, the default, keeps the last value in the project's store, so it carries it again after a Stop, a reload and a restart of the runtime; a `reset` Input returns to its saved value, its `default`, at Stop. While the project is stopped, a `kept` Input takes the value and carries it at the next Play, and `graph` shows it; a `reset` Input is refused as `playback_stopped`. Until a write, the Input carries its saved value, if it holds one. `graph` renders the value an Input carries now, or carries at the next Play while stopped, under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for an Input no top-level `GraphInput` declares, and a value its family does not take. A refusal because the Input's node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming no node and the Input as `input`.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
-    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
-    const GROUP: ControlOperationGroup = ControlOperationGroup::View;
-    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
-    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
-    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
-        ControlOperationAgentToolListing::ReachedThroughCallOperation;
-    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `undo`: undo an author's latest transaction in a project that is not undone yet, as a new

@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::nodes::ReactiveNode;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ControlOperationRefusalOnTheWire,
 };
 
 use super::*;
@@ -124,7 +124,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         &self,
         project: &ProjectWithGraphDocuments,
         value: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         self.the_answer_or_the_refusal_of(
             "write_graph_input",
             json!({ "stream": project.stream_id_of("main"), "input": "cue", "value": value }),
@@ -138,7 +138,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         &self,
         project: &ProjectWithGraphDocuments,
         value: Value,
-    ) -> std::result::Result<Value, Box<ProjectActionRefusalOnTheWire>> {
+    ) -> std::result::Result<Value, Box<ControlOperationRefusalOnTheWire>> {
         self.the_answer_or_the_refusal_of(
             "set_node_input_value",
             json!({ "stream": project.stream_asset_of("main"), "input": "cue", "value": value,

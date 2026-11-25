@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde_json::Value;
-use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalOnTheWire;
 
 use crate::agent_surface::{
     CALL_OPERATION_TOOL_NAME, DESCRIBE_OPERATIONS_TOOL_NAME, DescribeOperationsRequest,
@@ -126,7 +126,7 @@ fn every_example_refusal_is_the_one_refusal_shape_with_its_code_and_its_operatio
             "{}'s example refusal states no code",
             declaration.method_name
         );
-        let read: ProjectActionRefusalOnTheWire = serde_json::from_value(refusal.clone())
+        let read: ControlOperationRefusalOnTheWire = serde_json::from_value(refusal.clone())
             .unwrap_or_else(|error| {
                 panic!("{}'s example refusal: {error}", declaration.method_name)
             });

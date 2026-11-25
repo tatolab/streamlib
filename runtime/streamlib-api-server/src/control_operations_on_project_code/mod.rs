@@ -21,7 +21,7 @@ use streamlib_project_repository::{
     the_node_ui_manifest_a_check_reads,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire, ProjectCodeCheckFinding,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, ProjectCodeCheckFinding,
     ProjectCodeCheckKind, ProjectCodeCheckResult, ProjectCodeCheckRun, ProjectCodeCheckSeverity,
     ProjectCodeCheckState, ProjectFileChecked, ProjectFilePlaceOnTheWire,
 };
@@ -154,7 +154,7 @@ struct NodeUiManifestChecked {
     file_checked: Option<ProjectFileChecked>,
     /// Why its node bodies and named types' default controls were not judged: the refusal of
     /// the node type listing they are judged against.
-    not_judged_because: Option<ProjectActionRefusalOnTheWire>,
+    not_judged_because: Option<ControlOperationRefusalOnTheWire>,
 }
 
 /// The paths among `paths` the `python_node_declarations` check imports, or every module of the
@@ -257,7 +257,7 @@ fn the_run_of_an_extension_code_check(
     let (state, not_checked_because) = match run.not_checked {
         Some(not_checked) => (
             ProjectCodeCheckState::NotChecked,
-            Some(ProjectActionRefusalOnTheWire {
+            Some(ControlOperationRefusalOnTheWire {
                 refused_file: not_checked.folder_being_checked.map(|path| {
                     ProjectFilePlaceOnTheWire {
                         path,
@@ -265,7 +265,7 @@ fn the_run_of_an_extension_code_check(
                         column: None,
                     }
                 }),
-                ..ProjectActionRefusalOnTheWire::of_the_action(
+                ..ControlOperationRefusalOnTheWire::of_the_action(
                     CHECK_PROJECT_CODE,
                     match not_checked.code {
                         ExtensionCodeNotCheckedCode::ExtensionSdkNotFound => {
@@ -345,7 +345,7 @@ fn the_run_of_the_declaration_check(
     let (state, not_checked_because) = match declaration_check.not_finished {
         Some(not_finished) => (
             ProjectCodeCheckState::NotChecked,
-            Some(ProjectActionRefusalOnTheWire {
+            Some(ControlOperationRefusalOnTheWire {
                 refused_file: not_finished.module_being_checked.map(|path| {
                     ProjectFilePlaceOnTheWire {
                         path,
@@ -353,7 +353,7 @@ fn the_run_of_the_declaration_check(
                         column: None,
                     }
                 }),
-                ..ProjectActionRefusalOnTheWire::of_the_action(
+                ..ControlOperationRefusalOnTheWire::of_the_action(
                     CHECK_PROJECT_CODE,
                     if not_finished.ran_out_of_time {
                         ControlOperationRefusalCode::CheckRanOutOfTime

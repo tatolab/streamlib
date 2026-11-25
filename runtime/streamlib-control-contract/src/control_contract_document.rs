@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
     NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
 use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
@@ -67,7 +67,7 @@ pub fn control_contract_document() -> Value {
             settings.definitions_path = COMPONENT_SCHEMAS_DEFINITIONS_PATH.into();
         })
         .into_generator();
-    let refusal_schema = schema_generator.subschema_for::<ProjectActionRefusalOnTheWire>();
+    let refusal_schema = schema_generator.subschema_for::<ControlOperationRefusalOnTheWire>();
     let contract_version_mismatch_schema =
         schema_generator.subschema_for::<ControlContractVersionMismatch>();
     let methods: Vec<Value> = CONTROL_OPERATIONS
@@ -306,7 +306,7 @@ mod tests {
                 .unwrap_or_else(|refusal| panic!("a method states a schema: {refusal}"))
         };
         let refusal_validator = the_validator_of(
-            &json!({ "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire" }),
+            &json!({ "$ref": "#/components/schemas/ControlOperationRefusalOnTheWire" }),
         );
         let mut examples_seen = 0;
         for method in document["methods"].as_array().into_iter().flatten() {

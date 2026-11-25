@@ -89,7 +89,7 @@ impl GraphTransactionRefusal {
         }
         let names = &self.what_the_refused_operation_names;
         let the_links_end = names.link.as_ref().map(|link| {
-            if code_and_place.refused_field.as_deref() == Some(link.target.port.as_str()) {
+            if code_and_place.refused_input.as_deref() == Some(link.target.port.as_str()) {
                 link.target.node.clone()
             } else {
                 link.source.node.clone()

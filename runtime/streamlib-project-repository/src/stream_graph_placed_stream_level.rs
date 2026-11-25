@@ -341,17 +341,6 @@ fn the_operation_with_each_node_and_group_renamed(
                 to,
             })
         }
-        StreamGraphOperation::SetPinValue {
-            node,
-            input,
-            from,
-            to,
-        } => Ok(StreamGraphOperation::SetPinValue {
-            node: renamed_uuid(node),
-            input,
-            from,
-            to,
-        }),
         StreamGraphOperation::SetNodeInputValue {
             node,
             input,
