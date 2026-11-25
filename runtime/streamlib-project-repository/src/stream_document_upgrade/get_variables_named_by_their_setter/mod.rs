@@ -8,6 +8,7 @@
 //! written.
 
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::NODE_INPUT_VALUES_KEY;
 use crate::stream_graph_default_port_and_variable_names::{
@@ -16,15 +17,18 @@ use crate::stream_graph_default_port_and_variable_names::{
 };
 
 /// Name each get of `nodes`, one level's, that names a variable by the UUID of the level's one
-/// setter of it; whether any was.
+/// setter of it; whether any was. A setter whose id is no UUID is given a new one when the
+/// document is read, so a get of its variable keeps naming the variable.
 pub(super) fn the_gets_of_the_level_named_by_their_setter(nodes: &mut [Value]) -> bool {
-    let setters: Vec<(String, String)> = nodes
+    let setters: Vec<(String, Option<Uuid>)> = nodes
         .iter()
         .filter(|node| the_type_of(node) == Some(SET_VARIABLE_NODE_TYPE))
         .filter_map(|setter| {
-            let uuid = setter.get("id").and_then(Value::as_str)?;
-            let variable = the_variable_named_in(setter)?;
-            Some((variable.to_owned(), uuid.to_owned()))
+            let uuid = setter
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok());
+            Some((the_variable_named_in(setter)?.to_owned(), uuid))
         })
         .collect();
     let mut any_changed = false;
@@ -38,7 +42,10 @@ pub(super) fn the_gets_of_the_level_named_by_their_setter(nodes: &mut [Value]) -
         else {
             continue;
         };
-        if input_values.contains_key(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY) {
+        if input_values
+            .get(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY)
+            .is_some_and(|setter| !setter.is_null())
+        {
             continue;
         }
         let Some(variable) = input_values
@@ -48,10 +55,11 @@ pub(super) fn the_gets_of_the_level_named_by_their_setter(nodes: &mut [Value]) -
             continue;
         };
         let mut setters_of_it = setters.iter().filter(|(set, _)| set == variable);
-        let (Some((_, setter_uuid)), None) = (setters_of_it.next(), setters_of_it.next()) else {
+        let (Some((_, Some(setter_uuid))), None) = (setters_of_it.next(), setters_of_it.next())
+        else {
             continue;
         };
-        *input_values = the_input_values_naming_the_setter(setter_uuid);
+        *input_values = the_input_values_naming_the_setter(&setter_uuid.to_string());
         any_changed = true;
     }
     any_changed

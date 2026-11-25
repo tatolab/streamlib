@@ -851,7 +851,8 @@ struct StreamGraphFragmentNodeAGeneratorRunPlaced {
 
 /// The input values a `GetVariable` takes when `value` is set on its `variable`, the variable
 /// it reads chosen by name: the UUID of the setter of it on `staged_graph`'s level, so renaming
-/// the variable later keeps the get reading it, in place of whichever setter it named; `None`
+/// the variable later keeps the get reading it, in place of whichever setter it named. Any other
+/// value, a cleared one included, is set as written and lets go of the setter it named. `None`
 /// for any other set.
 fn the_input_values_of_a_get_choosing_a_variable(
     held: &StreamGraphDocumentNode,
@@ -860,9 +861,22 @@ fn the_input_values_of_a_get_choosing_a_variable(
     value: Option<&Value>,
     staged_graph: &StreamGraphDocument,
 ) -> Option<Map<String, Value>> {
-    let variable = value?.as_str().filter(|variable| !variable.is_empty())?;
-    (held.node_type == GET_VARIABLE_NODE_TYPE
-        && input == GRAPH_VARIABLE_NAME_CONFIG_KEY
-        && member.is_none())
-    .then(|| the_input_values_of_a_get_reading(variable, staged_graph))
+    if held.node_type != GET_VARIABLE_NODE_TYPE
+        || input != GRAPH_VARIABLE_NAME_CONFIG_KEY
+        || member.is_some()
+    {
+        return None;
+    }
+    if let Some(Value::String(variable)) = value
+        && !variable.is_empty()
+    {
+        return Some(the_input_values_of_a_get_reading(variable, staged_graph));
+    }
+    let mut to = held.input_values.clone();
+    to.remove(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY);
+    match value {
+        Some(value) => to.insert(GRAPH_VARIABLE_NAME_CONFIG_KEY.to_owned(), value.clone()),
+        None => to.remove(GRAPH_VARIABLE_NAME_CONFIG_KEY),
+    };
+    Some(to)
 }

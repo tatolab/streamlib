@@ -311,6 +311,63 @@ fn an_unlocked_placed_stream_keeps_each_getter_naming_its_setters_copy() {
     );
 }
 
+/// A getter inside a subgraph of an unlocked placed stream, naming a setter the placed stream
+/// holds a level out, names that setter's copy.
+///
+/// Mental-revert: remapping a getter by its own level's setters alone leaves it naming the held
+/// stream's setter, which no level of the unlocked copy holds.
+#[test]
+fn an_unlocked_placed_streams_nested_getter_names_its_enclosing_setters_copy() {
+    const SETTER: &str = "00000000-0000-4000-8000-0000000000f3";
+    const GENERATED: &str = "00000000-0000-4000-8000-0000000000f4";
+    const GETTER: &str = "00000000-0000-4000-8000-0000000000f5";
+    let document = a_chain_of_five_nodes();
+    let collapse = collapse_blur_and_tint(&document);
+    let collapsed = applied(&document, &the_fold_of(&collapse));
+    let mut saved = collapse.placed_stream_document.clone();
+    let nodes = saved["nodes"].as_array_mut().unwrap();
+    nodes.push(
+        json!({ "id": SETTER, "name": "set_glow", "type": "tatolab.stream:SetVariable",
+                "input_values": { "variable": "glow" } }),
+    );
+    nodes.push(
+        json!({ "id": GENERATED, "name": "look", "type": "looks.generators:look",
+        "fragment": { "nodes": [
+            { "id": GETTER, "name": "get_glow", "type": "tatolab.stream:GetVariable",
+              "input_values": { "set_variable": SETTER } }
+        ], "links": [] } }),
+    );
+    let saved = StreamGraphDocument::from_value(saved).unwrap();
+    let unlock = StreamGraphOperation::UnfoldFragment {
+        fold: collapsed
+            .the_fold_a_fragment_unfolds(
+                Uuid::from_u128(0x99),
+                &|_: &Value| Ok(saved.clone()),
+                &mut fresh_uuids(),
+            )
+            .unwrap(),
+    };
+
+    let unlocked = applied(&collapsed, &unlock).to_value();
+
+    let copy_named = |nodes: &Value, name: &str| {
+        nodes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["name"] == name)
+            .unwrap_or_else(|| panic!("`{name}` is copied in place"))
+            .clone()
+    };
+    let setter = copy_named(&unlocked["nodes"], "set_glow");
+    assert_ne!(setter["id"], json!(SETTER));
+    let look = copy_named(&unlocked["nodes"], "look");
+    assert_eq!(
+        copy_named(&look["fragment"]["nodes"], "get_glow")["input_values"]["set_variable"],
+        setter["id"]
+    );
+}
+
 #[test]
 fn an_unlocked_placed_stream_passing_its_input_straight_to_its_output_links_the_source_to_the_reader()
  {

@@ -4,7 +4,7 @@
 //! A selection of a stream's nodes saved as a stream of its own and placed where they were, and
 //! a fragment unfolded back into the plain nodes it holds.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -585,7 +585,7 @@ impl StreamGraphDocument {
 fn a_copy_under_new_uuids(level: Value, new_uuid: &mut dyn FnMut() -> Uuid) -> Value {
     let mut nodes = level["nodes"].as_array().cloned().unwrap_or_default();
     let mut links = level["links"].as_array().cloned().unwrap_or_default();
-    each_node_and_link_end_under_new_uuids(&mut nodes, &mut links, new_uuid);
+    each_node_and_link_end_under_new_uuids(&mut nodes, &mut links, &HashMap::new(), new_uuid);
     for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
         if let Some(Value::Object(studio)) = node.get_mut("studio") {
             studio.remove(crate::stream_graph_document::STUDIO_GROUP_KEY);
@@ -596,21 +596,29 @@ fn a_copy_under_new_uuids(level: Value, new_uuid: &mut dyn FnMut() -> Uuid) -> V
 
 /// Give each of `nodes` a UUID `new_uuid` makes, each of `links`' ends and each `GetVariable`'s
 /// setter its node's new one, and every level a node's subgraph holds the same, its groups and
-/// their members included.
+/// their members included. `new_uuid_of_each_enclosing_node` holds the new UUID of each node the
+/// levels enclosing `nodes` held, so a get naming a setter of one of them names its copy.
 fn each_node_and_link_end_under_new_uuids(
     nodes: &mut [Value],
     links: &mut [Value],
+    new_uuid_of_each_enclosing_node: &HashMap<String, String>,
     new_uuid: &mut dyn FnMut() -> Uuid,
 ) {
-    let mut new_uuid_of_each_held_node = std::collections::HashMap::new();
+    let mut new_uuid_of_each_node_in_scope = new_uuid_of_each_enclosing_node.clone();
     for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
         if let Some(Value::String(id)) = node.get_mut("id") {
             let fresh = new_uuid().to_string();
-            new_uuid_of_each_held_node.insert(id.clone(), fresh.clone());
+            new_uuid_of_each_node_in_scope.insert(id.clone(), fresh.clone());
             *id = fresh;
         }
+    }
+    for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
         if let Some(Value::Object(subgraph)) = node.get_mut("fragment") {
-            each_node_and_group_of_a_subgraph_under_new_uuids(subgraph, new_uuid);
+            each_node_and_group_of_a_subgraph_under_new_uuids(
+                subgraph,
+                &new_uuid_of_each_node_in_scope,
+                new_uuid,
+            );
         }
     }
     for get_variable in nodes.iter_mut().filter(|node| {
@@ -624,7 +632,7 @@ fn each_node_and_link_end_under_new_uuids(
                     crate::stream_graph_default_port_and_variable_names::GET_VARIABLE_SET_VARIABLE_CONFIG_KEY,
                 )
             })
-            && let Some(fresh) = new_uuid_of_each_held_node.get(setter.as_str())
+            && let Some(fresh) = new_uuid_of_each_node_in_scope.get(setter.as_str())
         {
             *setter = fresh.clone();
         }
@@ -633,7 +641,7 @@ fn each_node_and_link_end_under_new_uuids(
         for end_key in ["source", "target"] {
             if let Some(Value::String(node)) =
                 link.get_mut(end_key).and_then(|end| end.get_mut("node"))
-                && let Some(fresh) = new_uuid_of_each_held_node.get(node.as_str())
+                && let Some(fresh) = new_uuid_of_each_node_in_scope.get(node.as_str())
             {
                 *node = fresh.clone();
             }
@@ -643,6 +651,7 @@ fn each_node_and_link_end_under_new_uuids(
 
 fn each_node_and_group_of_a_subgraph_under_new_uuids(
     subgraph: &mut Map<String, Value>,
+    new_uuid_of_each_enclosing_node: &HashMap<String, String>,
     new_uuid: &mut dyn FnMut() -> Uuid,
 ) {
     let mut nodes = match subgraph.remove("nodes") {
@@ -653,8 +662,13 @@ fn each_node_and_group_of_a_subgraph_under_new_uuids(
         Some(Value::Array(links)) => links,
         _ => Vec::new(),
     };
-    each_node_and_link_end_under_new_uuids(&mut nodes, &mut links, new_uuid);
-    let mut new_uuid_of_each_group = std::collections::HashMap::new();
+    each_node_and_link_end_under_new_uuids(
+        &mut nodes,
+        &mut links,
+        new_uuid_of_each_enclosing_node,
+        new_uuid,
+    );
+    let mut new_uuid_of_each_group = HashMap::new();
     if let Some(Value::Array(groups)) = subgraph.get_mut("groups") {
         for group in groups.iter_mut().filter_map(Value::as_object_mut) {
             if let Some(Value::String(id)) = group.get_mut("id") {
