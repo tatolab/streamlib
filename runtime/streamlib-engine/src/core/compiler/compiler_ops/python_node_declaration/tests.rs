@@ -232,7 +232,7 @@ fn a_described_tint_shader() -> serde_json::Value {
 }
 
 /// The pin type and flow the read declares on `port_name`, input or output.
-fn declared_pin_of(
+pub(super) fn declared_pin_of(
     declaration: &PythonNodeDeclaration,
     port_name: &str,
 ) -> Option<crate::core::descriptors::PinDeclaration> {

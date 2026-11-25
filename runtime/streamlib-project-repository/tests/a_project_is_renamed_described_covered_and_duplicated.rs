@@ -7,7 +7,9 @@ use serde_json::Map;
 use streamlib_project_repository::{
     PROJECT_HISTORY_DIRECTORY, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetOperation,
     ProjectOperation, ProjectRepository, ProjectRepositoryRefusal, ProjectSettingsAction,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, TatolabProjectFile,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
+    StreamGraphOperation, StreamGraphOperationOnAStream, TatolabProjectFile,
+    every_view_a_project_and_its_imports_bring, the_view_type_of,
 };
 use uuid::Uuid;
 
@@ -275,6 +277,126 @@ fn a_duplicate_carries_the_files_and_history_under_a_new_uuid_and_leaves_the_run
     assert_eq!(
         repository.history().commits_newest_first().unwrap().len(),
         commits_of_the_original
+    );
+}
+
+/// Give the project at `project_directory` a view `stage` and a stream `show` placing it by the
+/// type `stage_placed_as`.
+fn a_stage_view_and_a_stream_placing_it_as(project_directory: &Path, stage_placed_as: &str) {
+    std::fs::create_dir_all(project_directory.join("views/stage")).unwrap();
+    std::fs::write(
+        project_directory.join("views/stage/tatolab_view.json"),
+        br#"{"contract": "1.1", "title": "Stage", "entry": "index.html", "placement": "node"}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(project_directory.join("streams")).unwrap();
+    std::fs::write(
+        project_directory.join("streams/show.graph.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "asset": Uuid::new_v4(),
+            "nodes": [{ "id": Uuid::new_v4(), "name": "stage", "type": stage_placed_as }],
+            "links": [],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn the_type_the_show_stream_places_its_stage_by(project_directory: &Path) -> String {
+    let show: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project_directory.join("streams/show.graph.json")).unwrap(),
+    )
+    .unwrap();
+    show["nodes"][0]["type"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_rename_keeps_each_view_type_and_a_duplicate_places_its_own_views_by_its_own_uuid() {
+    let (project, mut repository) = ProjectInATemporaryRoot::created();
+    let stage = the_view_type_of(repository.project_file().project, "stage");
+    a_stage_view_and_a_stream_placing_it_as(&project.project_directory, &stage);
+
+    apply_settings(
+        &mut repository,
+        ProjectSettingsAction::SetProjectName {
+            name: "Weld line".to_owned(),
+        },
+    )
+    .unwrap();
+    let view_types: Vec<String> =
+        every_view_a_project_and_its_imports_bring(&project.project_directory)
+            .unwrap()
+            .into_iter()
+            .map(|view| view.view_type)
+            .collect();
+    assert_eq!(
+        view_types,
+        std::slice::from_ref(&stage),
+        "a rename leaves the view's type as it was"
+    );
+
+    let into = project.beside_the_project("weld-line-copy");
+    let duplicate = repository.duplicate_into(&into, &person()).unwrap();
+
+    assert_eq!(
+        the_type_the_show_stream_places_its_stage_by(&into),
+        the_view_type_of(duplicate.project_file().project, "stage")
+    );
+    assert_eq!(
+        the_type_the_show_stream_places_its_stage_by(&project.project_directory),
+        stage,
+        "the original's stream is left as it was"
+    );
+}
+
+/// A stream placing its project's view by `<project name>:<view folder>` reads, for an edit, as
+/// placing it by the view's type, and the edit saves it so.
+///
+/// Mental-revert: reading the stream as it is on disk saves the name the edit never touched.
+#[test]
+fn an_edit_of_a_stream_placing_a_view_by_its_projects_name_saves_it_placed_by_its_type() {
+    let (project, repository) = ProjectInATemporaryRoot::created();
+    let stage = the_view_type_of(repository.project_file().project, "stage");
+    a_stage_view_and_a_stream_placing_it_as(&project.project_directory, "Robot cell:stage");
+    let mut repository = ProjectRepository::open(&project.project_directory).unwrap();
+    let show: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.project_directory.join("streams/show.graph.json")).unwrap(),
+    )
+    .unwrap();
+    let stream: Uuid = show["asset"].as_str().unwrap().parse().unwrap();
+    let node: Uuid = show["nodes"][0]["id"].as_str().unwrap().parse().unwrap();
+
+    assert_eq!(
+        repository
+            .stream_graph_document(stream)
+            .unwrap()
+            .node(node)
+            .unwrap()
+            .node_type,
+        stage
+    );
+    repository
+        .apply_project_operations(
+            &person(),
+            None,
+            Vec::new(),
+            vec![ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    stream,
+                    graph_operation: StreamGraphOperation::RenameNode {
+                        node,
+                        from: "stage".to_owned(),
+                        to: "main stage".to_owned(),
+                    },
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    assert_eq!(
+        the_type_the_show_stream_places_its_stage_by(&project.project_directory),
+        stage
     );
 }
 

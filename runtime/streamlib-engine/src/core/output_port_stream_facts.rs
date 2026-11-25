@@ -13,8 +13,8 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::descriptors::{
-    ImageStreamFacts, PortFamily, PortStreamFacts, output_port_family_resolved_against_config,
-    output_port_frame_rate_resolved_against_config,
+    ImageStreamFacts, ImageStreamFrameRate, PortFamily, PortStreamFacts,
+    output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
@@ -23,6 +23,8 @@ use crate::iceoryx2::InboundLinkName;
 #[derive(Debug)]
 struct StreamFactsOfOneOutputPort {
     family: PortFamily,
+    /// The frame rate its declaration resolved to when it last took the facts it declares.
+    declared_frame_rate: Option<ImageStreamFrameRate>,
     current_facts: Option<PortStreamFacts>,
 }
 
@@ -66,9 +68,10 @@ impl StreamFactsOfOutputPorts {
         }
     }
 
-    /// Carry each of `output_ports` on the family its declaration resolves to against
-    /// `node_values` again: a port whose family that changes takes the facts it declares, as
-    /// [`Self::as_declared_by`] reads them, and every other port keeps what it carries.
+    /// Carry each of `output_ports` on the family and frame rate its declaration resolves to
+    /// against `node_values` again: a port whose family or declared frame rate that changes
+    /// takes the facts it declares, as [`Self::as_declared_by`] reads them, and every other port
+    /// keeps what it carries.
     pub(crate) fn take_the_families_declared_by(
         &self,
         output_ports: &[PortInfo],
@@ -78,7 +81,9 @@ impl StreamFactsOfOutputPorts {
         for port in output_ports {
             let declared = the_facts_declared_by(port, node_values);
             match facts_by_output_port.get_mut(&port.name) {
-                Some(held) if held.family == declared.family => {}
+                Some(held)
+                    if held.family == declared.family
+                        && held.declared_frame_rate == declared.declared_frame_rate => {}
                 Some(held) => *held = declared,
                 None => {
                     facts_by_output_port.insert(port.name.clone(), declared);
@@ -231,7 +236,8 @@ impl UpstreamStreamFactsByInboundLink {
     }
 }
 
-/// The facts output `port` declares, its family and frame rate resolved against `node_config`.
+/// The facts output `port` declares, its family and frame rate resolved against `node_config`:
+/// the frame rate its pin states, else the one its family declaration states.
 fn the_facts_declared_by(
     port: &PortInfo,
     node_config: Option<&serde_json::Value>,
@@ -239,7 +245,7 @@ fn the_facts_declared_by(
     let family = output_port_family_resolved_against_config(&port.family, node_config)
         .unwrap_or(port.family.family);
     let declared_frame_rate =
-        output_port_frame_rate_resolved_against_config(&port.family, node_config)
+        output_port_frame_rate_resolved_against_config(port.stated_frame_rate(), node_config)
             .ok()
             .flatten();
     let current_facts = declared_frame_rate.map(|frame_rate| {
@@ -250,6 +256,7 @@ fn the_facts_declared_by(
     });
     StreamFactsOfOneOutputPort {
         family,
+        declared_frame_rate,
         current_facts,
     }
 }
@@ -326,6 +333,106 @@ mod tests {
             StreamFactsOfOutputPorts::as_declared_by(&[camera_video], None)
                 .current_facts_of("video"),
             None
+        );
+    }
+
+    /// Mental-revert: reading the frame rate from the family declaration alone gives a port whose
+    /// pin states it, as a Python Texture output's does, no frame rate.
+    #[test]
+    fn an_image_port_carries_the_frame_rate_its_pin_states_stated_or_read_from_a_setting() {
+        let port_stating = |frame_rate: ImageOutputPortFrameRate| PortInfo {
+            annotations: crate::core::graph::PortAnnotations(
+                crate::core::descriptors::PinAnnotations {
+                    frame_rate: Some(frame_rate),
+                    ..Default::default()
+                },
+            ),
+            ..output_port("video", PortFamilyDeclaration::of_family(PortFamily::Image))
+        };
+        let image_facts_at = |numerator, denominator| {
+            Some(PortStreamFacts::Image(ImageStreamFacts {
+                frame_rate: Some(ImageStreamFrameRate {
+                    numerator,
+                    denominator,
+                }),
+                ..ImageStreamFacts::default()
+            }))
+        };
+
+        let stated = port_stating(ImageOutputPortFrameRate::Stated(ImageStreamFrameRate {
+            numerator: 30_000,
+            denominator: 1_001,
+        }));
+        assert_eq!(
+            StreamFactsOfOutputPorts::as_declared_by(&[stated], None).current_facts_of("video"),
+            image_facts_at(30_000, 1_001)
+        );
+        let from_a_setting = port_stating(ImageOutputPortFrameRate::FromSetting {
+            setting: "frames_per_second".into(),
+        });
+        assert_eq!(
+            StreamFactsOfOutputPorts::as_declared_by(
+                &[from_a_setting],
+                Some(&json!({"frames_per_second": 24}))
+            )
+            .current_facts_of("video"),
+            image_facts_at(24, 1)
+        );
+    }
+
+    /// Mental-revert: taking the facts again only when a port's family changes leaves a stream
+    /// whose setting now reads 60 frames a second carrying the 24 it was set up with.
+    #[test]
+    fn an_image_ports_frame_rate_follows_the_setting_it_is_read_from_and_keeps_what_it_carries_otherwise()
+     {
+        let port = PortInfo {
+            annotations: crate::core::graph::PortAnnotations(
+                crate::core::descriptors::PinAnnotations {
+                    frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
+                        setting: "fps".into(),
+                    }),
+                    ..Default::default()
+                },
+            ),
+            ..output_port("video", PortFamilyDeclaration::of_family(PortFamily::Image))
+        };
+        let frame_rate_of = |facts: &StreamFactsOfOutputPorts| match facts.current_facts_of("video")
+        {
+            Some(PortStreamFacts::Image(image)) => image.frame_rate,
+            other => panic!("an Image port carries Image facts, got {other:?}"),
+        };
+        let facts = StreamFactsOfOutputPorts::as_declared_by(
+            std::slice::from_ref(&port),
+            Some(&json!({"fps": 24})),
+        );
+
+        facts.take_the_families_declared_by(std::slice::from_ref(&port), Some(&json!({"fps": 60})));
+        assert_eq!(
+            frame_rate_of(&facts),
+            Some(ImageStreamFrameRate {
+                numerator: 60,
+                denominator: 1
+            })
+        );
+
+        let measured = ImageStreamFacts {
+            frame_rate: Some(ImageStreamFrameRate {
+                numerator: 59,
+                denominator: 1,
+            }),
+            ..ImageStreamFacts::default()
+        };
+        facts
+            .replace_facts_of("video", measured.into())
+            .expect("an Image port carries Image facts");
+        facts.take_the_families_declared_by(
+            std::slice::from_ref(&port),
+            Some(&json!({"fps": 60, "gain": 2})),
+        );
+        assert_eq!(
+            facts.current_facts_of("video"),
+            Some(measured.into()),
+            "a change that leaves its family and frame rate as they were keeps what it carries"
         );
     }
 

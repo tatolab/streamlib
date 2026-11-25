@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pin_type::{DeclaredPinType, NodeInputMode, PinDeclaration, PinFlow, PinType};
 use crate::{
-    AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
-    NodeValueLifetime, PortFamilyDeclaration,
+    AudioWindowContract, ImageOutputPortFrameRate, NodeClassImportPath, NodeClassShortName,
+    NodeKind, NodeScheduling, NodeValueLifetime, PortFamilyDeclaration,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,6 +105,11 @@ impl PortDescriptor {
         self.pin_declaration
             .clone()
             .or_else(|| self.family.exact_pin_type().map(PinDeclaration::exactly))
+    }
+
+    /// Whether this input is a setting, read at setup or each run.
+    pub fn is_a_setting(&self) -> bool {
+        self.input_mode.is_some_and(NodeInputMode::is_a_setting)
     }
 
     /// Whether the port's pin flows as a Value: an output port so declared keeps its last
@@ -327,6 +332,59 @@ impl NodeDescriptor {
                 | DeclaredPinType::OneOf { .. }
                 | DeclaredPinType::Any => None,
             }
+        })
+    }
+
+    /// Why an output's frame rate, read from one of the node type's settings, cannot be read: it
+    /// names a setting the node type does not declare, or one of a type that holds no frame
+    /// rate; `None` when every such output, its own or one each slot of a pin group holds, names
+    /// a setting that holds one.
+    pub fn refusal_of_a_frame_rate_no_setting_holds(&self) -> Option<String> {
+        let each_pin_groups_outputs = self.pin_groups.iter().flat_map(|group| &group.outputs);
+        self.outputs.iter().chain(each_pin_groups_outputs).find_map(|output| {
+            let declared = output.declared_pin()?;
+            let Some(ImageOutputPortFrameRate::FromSetting { setting: config_key }) =
+                declared.annotations.frame_rate.as_ref()
+            else {
+                return None;
+            };
+            let Some(setting) = self
+                .inputs
+                .iter()
+                .find(|input| input.name == *config_key && input.is_a_setting())
+            else {
+                return Some(format!(
+                    "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \
+                     and the node declares no setting {config_key:?}. To fix: declare a setting \
+                     {config_key:?} holding the frame rate, or name one the node declares",
+                    output.name
+                ));
+            };
+            let setting_type = setting
+                .declared_pin()
+                .and_then(PinDeclaration::into_resolved)?;
+            let holds_a_frame_rate = match &setting_type.pin_type {
+                PinType::Integer { .. } => true,
+                PinType::Bundle { members, .. } => {
+                    let mut member_names: Vec<&str> = members
+                        .iter()
+                        .filter(|member| matches!(member.member_type, PinType::Integer { .. }))
+                        .map(|member| member.name.as_str())
+                        .collect();
+                    member_names.sort_unstable();
+                    members.len() == 2 && member_names == ["denominator", "numerator"]
+                }
+                _ => false,
+            };
+            (!holds_a_frame_rate).then(|| {
+                format!(
+                    "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \
+                     and that setting is a {}, which holds no frame rate. To fix: type \
+                     {config_key:?} an Integer of frames per second, or a Bundle of an Integer \
+                     `numerator` and an Integer `denominator`",
+                    output.name, setting_type.pin_type
+                )
+            })
         })
     }
 

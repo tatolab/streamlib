@@ -39,6 +39,8 @@ from ._connection_type_declaration import connection_type as connection_type
 from ._named_pin_type_declaration import NamedPinTypeValue as NamedPinTypeValue
 from ._named_pin_type_declaration import named_pin_type as named_pin_type
 from ._number_range import NumberRange as NumberRange
+from ._pin_annotations import FrameRate as FrameRate
+from ._pin_annotations import FrameRateFromSetting as FrameRateFromSetting
 from ._pin_annotations import NumberStep as NumberStep
 from ._pin_annotations import NumberUnit as NumberUnit
 from ._pin_annotations import PinControl as PinControl
@@ -232,6 +234,8 @@ __all__ = [
     "TexturePixelFormats",
     "NamedPinTypeValue",
     "NumberRange",
+    "FrameRate",
+    "FrameRateFromSetting",
     "NumberStep",
     "NumberUnit",
     "PinControl",

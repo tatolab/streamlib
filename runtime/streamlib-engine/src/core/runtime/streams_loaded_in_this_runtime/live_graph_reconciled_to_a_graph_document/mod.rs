@@ -221,12 +221,11 @@ impl LoadedStreamInThisRuntime {
                 .entry(STREAM_DOCUMENT_ASSET_KEY)
                 .or_insert_with(|| Value::String(stream_asset.to_string()));
         }
-        let graph_document =
-            streamlib_project_repository::graph_document_with_each_stream_fragment_reference_resolved(
-                self.project_directory(),
-                &graph_document,
-            )
-            .map_err(Error::GraphError)?;
+        let graph_document = streamlib_project_repository::graph_document_as_its_project_reads_it(
+            self.project_directory(),
+            &graph_document,
+        )
+        .map_err(Error::GraphError)?;
         let graph_whose_every_node_holds_a_uuid =
             GraphSnapshot::from_graph_document(graph_document)?
                 .with_a_uuid_minted_for_each_node_holding_none();

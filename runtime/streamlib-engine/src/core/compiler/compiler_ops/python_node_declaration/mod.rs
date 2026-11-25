@@ -134,7 +134,10 @@ impl PythonNodeDeclaration {
         descriptor.pin_groups = read_pin_groups(described_node_type)?;
         declare_each_typed_port(&mut descriptor, typed_ports)?;
         descriptor.conversion = read_whether_it_states_a_conversion(described_node_type)?;
-        if let Some(refusal) = descriptor.refusal_of_a_port_whose_type_no_input_finds() {
+        if let Some(refusal) = descriptor
+            .refusal_of_a_port_whose_type_no_input_finds()
+            .or_else(|| descriptor.refusal_of_a_frame_rate_no_setting_holds())
+        {
             return Err(refusal);
         }
         for output in &descriptor.outputs {
@@ -938,5 +941,7 @@ mod pin_groups_read_tests;
 mod pin_type_found_another_way_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod texture_output_frame_rate_tests;
 #[cfg(test)]
 mod typed_input_mode_and_lifetime_tests;

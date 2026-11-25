@@ -16,9 +16,8 @@ use streamlib_consumer_rhi::runtime_unit_layout::sample_projects_directory_besid
 use streamlib_project_repository::{
     PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile,
     assets_a_nodes_input_values_reference, every_asset_uuid_the_project_holds,
-    every_sample_project_in, graph_document_with_each_stream_fragment_reference_resolved,
-    project_stream_documents, stream_assets_another_stream_of_the_project_places,
-    the_sample_project_named,
+    every_sample_project_in, graph_document_as_its_project_reads_it, project_stream_documents,
+    stream_assets_another_stream_of_the_project_places, the_sample_project_named,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire, ListSamplesToolResult,
@@ -257,13 +256,13 @@ fn the_graph_a_stream_document_holds(
         .map_err(|too_wide| why_it_holds_no_graph(format!("does not load: {too_wide}")))?;
     let document: serde_json::Value = serde_json::from_str(document_text)
         .map_err(|not_parsed| why_it_holds_no_graph(format!("does not parse: {not_parsed}")))?;
-    let document =
-        graph_document_with_each_stream_fragment_reference_resolved(project_directory, &document)
-            .map_err(|not_resolved| {
+    let document = graph_document_as_its_project_reads_it(project_directory, &document).map_err(
+        |not_resolved| {
             why_it_holds_no_graph(format!(
                 "holds a stream fragment that does not load: {not_resolved}"
             ))
-        })?;
+        },
+    )?;
     let graph = GraphSnapshot::from_graph_document(document)
         .map_err(|not_a_graph| why_it_holds_no_graph(format!("does not load: {not_a_graph}")))?;
     let nodes_at_every_level = graph.nodes_at_every_level();
@@ -321,7 +320,7 @@ fn every_node_uuid_the_graph_documents_of_the_project_hold(
         let bytes = stream_document.bytes.ok()?;
         let document: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
         let with_each_placed_stream_resolved =
-            streamlib_project_repository::graph_document_with_each_stream_fragment_reference_resolved(
+            streamlib_project_repository::graph_document_as_its_project_reads_it(
                 project_directory,
                 &document,
             )

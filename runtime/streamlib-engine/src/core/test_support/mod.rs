@@ -779,6 +779,7 @@ pub(crate) fn a_view_of_a_project_reading_records(
     let manifest = a_view_manifest_reading_records();
     streamlib_project_repository::ProjectViewFolderRead {
         view_type: view_type.to_owned(),
+        view_folder_name: "program".to_owned(),
         brought_by: streamlib_project_repository::ProjectBringingAView {
             project: uuid::Uuid::nil(),
             project_name: "a-project-bringing-a-view".to_owned(),

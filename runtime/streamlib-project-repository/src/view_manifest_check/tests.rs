@@ -55,7 +55,7 @@ fn the_codes_ports_and_severities(
 fn a_port_declared_by_family_fails_the_check_naming_the_port_and_the_pin_type_to_write() {
     let workspace = tempfile::tempdir().unwrap();
     let project_directory = workspace.path().join("acme");
-    a_project_named(&project_directory, "acme");
+    let acme = a_project_named(&project_directory, "acme");
     a_view_folder_holding(&project_directory, "monitor", FAMILY_MANIFEST);
 
     let checked = check_a_projects_view_manifests(&project_directory, None).unwrap();
@@ -73,7 +73,7 @@ fn a_port_declared_by_family_fails_the_check_naming_the_port_and_the_pin_type_to
     );
     let refused = &checked.findings[0];
     assert_eq!(refused.path, "views/monitor/tatolab_view.json");
-    assert_eq!(refused.node_type.as_deref(), Some("acme:monitor"));
+    assert_eq!(refused.node_type, Some(format!("{}:monitor", acme.project)));
     assert!(
         refused.words.starts_with("the view does not open: `inputs[0]`: port `picture` is declared by the older `family` field")
             && refused.words.contains(r#"write `"pin_type": {"type": "texture"}` in place of `"family": "image"`, with `"contract": "1.1"`"#),

@@ -40,6 +40,18 @@ pub fn the_location_of_a_stream_of_the_test_project_at(
     }
 }
 
+/// The type a node of the view `view_folder_name` of the test project in `project_directory`
+/// carries, writing the project's `tatolab-project.json` when it holds none.
+pub fn the_view_type_of_the_test_project_at(
+    project_directory: &Path,
+    view_folder_name: &str,
+) -> String {
+    streamlib_project_repository::the_view_type_of(
+        the_test_project_at(project_directory),
+        view_folder_name,
+    )
+}
+
 fn the_test_project_at(project_directory: &Path) -> Uuid {
     if let Ok(project_file) = TatolabProjectFile::read_from_project_directory(project_directory) {
         return project_file.project;

@@ -537,7 +537,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         self.engine
             .load_stream_from_graph_snapshot(
                 &GraphSnapshot::from_graph_document(
-                    streamlib_project_repository::graph_document_with_each_stream_fragment_reference_resolved(
+                    streamlib_project_repository::graph_document_as_its_project_reads_it(
                         project.path(),
                         &project.the_graph_document_of(stream_name),
                     )
@@ -545,7 +545,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
                 )
                 .expect("the graph document parses"),
                 OptionsForLoadingOneStream::at_stream_location(stream_id.clone(), stream_location)
-.in_stream_environment(project.stream_environment())
+                    .in_stream_environment(project.stream_environment())
                     .with_display_name(stream_name),
             )
             .expect("the stream loads");

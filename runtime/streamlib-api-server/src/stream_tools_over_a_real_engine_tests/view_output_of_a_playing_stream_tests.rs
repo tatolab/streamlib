@@ -290,7 +290,7 @@ async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_i
     let intro = json!("intro");
     let drop = json!("drop");
     let adding_a_second_deck = json!({ "operation": "add_node", "stream": stream_asset,
-                                       "type": format!("{TEST_PROJECT_NAME}:deck"),
+                                       "type": format!("{}:deck", project.project),
                                        "name": "second", "as": "second" });
 
     for (operations, second_index, node_named) in [

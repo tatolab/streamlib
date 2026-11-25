@@ -23,7 +23,7 @@ What a storefront shows before a module is added, each from what the module proj
 - under each node, its `inputs` and `outputs` as the listing reads them, each a `name`, a
   `family` and a `description`, left out where the listing reads none;
 - `views`, each folder of its `views/` the archive carries, by its `tatolab_view.json`: its
-  `view_type` (`<project name>:<folder>`), `title`, `description`, `placement` and the
+  `view_type` (`<project uuid>:<folder>`), `title`, `description`, `placement` and the
   `devices` among its declared capabilities (`camera`, `microphone`, `gpu`); a manifest that
   does not name what view contract 1.0 requires fails the catalog;
 - `gallery`, the URL of each picture `[tool.tatolab.catalog]` `gallery` names, the cover first,
@@ -50,6 +50,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -427,7 +428,7 @@ def stream_members_of_the_archive(archive):
 
 def view_members_of_the_archive(archive):
     """Each view the archive's `views/<folder>/tatolab_view.json` declares, as a catalog entry names it."""
-    project_name = json.loads(archive.read(PROJECT_FILE_NAME))["name"]
+    project = str(uuid.UUID(json.loads(archive.read(PROJECT_FILE_NAME))["project"]))
     members = []
     for member_name in sorted(archive.namelist()):
         if not re.fullmatch(rf"{VIEWS_DIRECTORY_NAME}/[^/]+/{re.escape(VIEW_MANIFEST_FILE_NAME)}", member_name):
@@ -442,7 +443,7 @@ def view_members_of_the_archive(archive):
             raise ModuleProjectNotDescribed(f"{member_name}'s placement {json.dumps(manifest['placement'])} is not area or node")
         members.append(
             {
-                "view_type": f"{project_name}:{member_name.split('/')[1]}",
+                "view_type": f"{project}:{member_name.split('/')[1]}",
                 "title": manifest["title"],
                 "description": manifest.get("description") or "",
                 "placement": manifest["placement"],

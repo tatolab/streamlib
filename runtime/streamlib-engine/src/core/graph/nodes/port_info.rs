@@ -195,6 +195,16 @@ impl PortInfo {
         self.annotations.0.meaning.as_deref()
     }
 
+    /// The frame rate this output's stream has, stated or read from one of its node's settings:
+    /// as its pin states it, else as its family declares it; `None` when neither states one.
+    pub fn stated_frame_rate(&self) -> Option<&crate::core::descriptors::ImageOutputPortFrameRate> {
+        self.annotations
+            .0
+            .frame_rate
+            .as_ref()
+            .or(self.family.frame_rate.as_ref())
+    }
+
     /// Whether a link may end at this input of a node of `node_type`, by the one rule
     /// [`crate::core::descriptors::an_input_takes_a_wire`].
     pub(crate) fn takes_a_wire_on_a_node_of(

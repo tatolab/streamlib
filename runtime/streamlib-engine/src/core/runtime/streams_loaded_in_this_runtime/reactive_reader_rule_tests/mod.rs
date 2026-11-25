@@ -28,7 +28,7 @@ use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_
     KeptNodesLeftToRebuild, LinksAReconcileMakes,
 };
 use crate::core::runtime::{GraphEditBatch, LoadedStreamInThisRuntime, Runner, RuntimeOperations};
-use crate::core::runtime::a_project_on_disk_for_a_test::THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST;
+use crate::core::runtime::a_project_on_disk_for_a_test::the_view_type_of_the_test_project_at;
 use crate::core::test_support::{
     a_temporary_directory_at_owner_only_mode, a_view_reading_records_in,
     ensure_test_mocks_registered,
@@ -931,7 +931,7 @@ fn a_saved_graphs_island_into_the_app_process_is_shown_failed_and_removed_by_a_d
     let (_runner, stream, project) = a_stopped_stream_resolving_a_reactive_reader();
     let async_runtime = an_async_runtime();
     a_view_reading_records_in(project.path(), "program");
-    let view_reader = format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:program");
+    let view_reader = the_view_type_of_the_test_project_at(project.path(), "program");
     load(
         &stream,
         a_document_of(

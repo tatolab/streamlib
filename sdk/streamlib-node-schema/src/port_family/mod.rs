@@ -458,15 +458,14 @@ pub fn the_pin_type_a_choice_holds(
     Ok(chosen)
 }
 
-/// The frame rate an Image output's declaration resolves to against its node's
-/// config — a whole number of frames per second or a `{numerator,
-/// denominator}` map — or why it cannot be resolved; `None` when it states none
-/// or its config key is unset.
+/// The frame rate `frame_rate`, the one an Image output states, resolves to against its node's
+/// config — a whole number of frames per second or a `{numerator, denominator}` map — or why it
+/// cannot be resolved; `None` when it states none or its config key is unset.
 pub fn output_port_frame_rate_resolved_against_config(
-    declaration: &PortFamilyDeclaration,
+    frame_rate: Option<&ImageOutputPortFrameRate>,
     node_config: Option<&serde_json::Value>,
 ) -> Result<Option<crate::ImageStreamFrameRate>, String> {
-    let config_key = match declaration.frame_rate.as_ref() {
+    let config_key = match frame_rate {
         None => return Ok(None),
         Some(ImageOutputPortFrameRate::Stated(frame_rate)) => return Ok(Some(*frame_rate)),
         Some(ImageOutputPortFrameRate::FromSetting { setting }) => setting,
