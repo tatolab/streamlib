@@ -9,7 +9,7 @@ use streamlib::sdk::descriptors::{PinConversion, PinLinkRefusal};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ControlOperationRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
     ProjectFilePlaceOnTheWire,
 };
 
@@ -60,7 +60,11 @@ impl RefusalCodeAndPlace {
             refused_input: self.refused_input,
             refused_file: self.refused_file,
             not_running_because: self.not_running_because,
-            ..ControlOperationRefusalOnTheWire::of_the_action(action, self.refusal_code, runtime_words)
+            ..ControlOperationRefusalOnTheWire::of_the_action(
+                action,
+                self.refusal_code,
+                runtime_words,
+            )
         }
     }
 

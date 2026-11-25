@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use streamlib::sdk::runtime::StreamAction;
-use streamlib_control_contract::ListProjectNodeTypesRequest;
+use streamlib_control_contract::{ControlOperation, ListNodeTypes};
+
 use streamlib_project_repository::{ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ProjectNodeTypesReadFromSource, NodeTypeOfOneProjectSource,
+    NodeTypeDescribedFrom, NodeTypeOfOneProjectSource, ProjectNodeTypesReadFromSource,
 };
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
@@ -23,6 +24,7 @@ use uuid::Uuid;
 use crate::control_operation_dispatcher::{
     ControlOperationDispatcher, ControlOperationDispatcherHeldWeakly,
 };
+use crate::control_operations_on_node_types::{a_node_type_listed, the_listed_origin_of};
 
 /// The project files whose change can alter the node types a project offers, by file name:
 /// node code, what uv installs the project's distributions from, and the project file, whose
@@ -293,9 +295,10 @@ fn list_the_project_again(dispatcher: &ControlOperationDispatcherHeldWeakly, pro
                 return;
             };
             if let Err(refusal) = dispatcher
-                .list_project_node_types(ListProjectNodeTypesRequest {
-                    project_directory: project_directory.clone(),
-                })
+                .the_node_types_the_project_offers_read_from_source(
+                    ListNodeTypes::METHOD_NAME,
+                    project_directory.clone(),
+                )
                 .await
             {
                 tracing::warn!(
@@ -410,8 +413,8 @@ fn node_types_offered_by_type_in(
             node_types_offered
                 .entry(node_type.node_type.clone())
                 .or_insert_with(|| NodeTypeOfOneProjectSource {
-                    origin: source.origin.clone(),
-                    node_type: node_type.clone(),
+                    origin: the_listed_origin_of(source.origin.clone()),
+                    node_type: a_node_type_listed(node_type, NodeTypeDescribedFrom::Source),
                 });
         }
     }

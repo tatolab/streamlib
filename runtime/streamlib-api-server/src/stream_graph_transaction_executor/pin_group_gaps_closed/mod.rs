@@ -28,17 +28,13 @@ impl StreamGraphTransactionExecutor<'_> {
         } = &request
         else {
             return self
-                .apply_one_request(request, stream_id, staged, InputValueCheck::MadeOnApply)
+                .apply_one_request(request, stream_id, staged)
                 .map(|applied| vec![applied]);
         };
         let (stream, level) = (*stream, level.clone());
         let ends = [source.node.clone(), target.node.clone()];
-        let mut applied_by_the_disconnect = vec![self.apply_one_request(
-            request,
-            stream_id,
-            staged,
-            InputValueCheck::MadeOnApply,
-        )?];
+        let mut applied_by_the_disconnect =
+            vec![self.apply_one_request(request, stream_id, staged)?];
         let Some(stream_operations) = staged
             .streams
             .get(stream_id)
@@ -82,8 +78,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 .collect()
         };
         for move_one in moves {
-            match self.apply_one_request(move_one, stream_id, staged, InputValueCheck::MadeOnApply)
-            {
+            match self.apply_one_request(move_one, stream_id, staged) {
                 Ok(applied) => applied_by_the_disconnect.push(applied),
                 Err(refusal) => {
                     let applied_live = applied_by_the_disconnect

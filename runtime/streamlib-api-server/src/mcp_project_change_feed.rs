@@ -25,9 +25,9 @@ use streamlib_project_repository::{
     ProjectTransactionUndoState,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AssetMediaFactsReadOnTheWire, ControlOperationRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire,
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents,
-    RefusedProjectActionOnTheWire,
+    AssetMediaFactsReadOnTheWire, ControlOperationRefusalOnTheWire,
+    ProjectChangeFeedEntryOnTheWire, ProjectTransactionOnTheWire,
+    ProjectTransactionsResourceContents, RefusedProjectActionOnTheWire,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;

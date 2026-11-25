@@ -16,10 +16,7 @@ use crate::core::descriptors::{
     SettingReadTime,
 };
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
-use crate::core::nodes::{
-    ConfigFieldDescribedAsASetting, the_config_fields_a_node_of_the_type_can_expose,
-    the_config_fields_described_as_settings,
-};
+use crate::core::nodes::{ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings};
 
 use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 
@@ -278,10 +275,6 @@ pub struct NodeDescriptorOutput {
     /// typed; each field it lists is also under `inputs` as a setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
-    /// The number and Boolean config fields `set_exposed_config_fields` takes on
-    /// a node of this type not yet typed; absent when it takes none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exposable_config_fields: Vec<String>,
     /// Whether the node paces itself on real time, as a live device does: in a
     /// stepped stream it stands outside the step barrier.
     #[serde(default)]
@@ -747,13 +740,6 @@ impl From<&crate::core::NodeDescriptor> for NodeDescriptorOutput {
             runtime: NodeRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),
             config_schema: desc.config_schema.clone(),
-            exposable_config_fields: the_config_fields_a_node_of_the_type_can_expose(
-                &desc.node_class_import_path,
-                desc.config_schema.as_ref(),
-            )
-            .into_iter()
-            .map(|(field, _)| field)
-            .collect(),
             paced_by_real_time: desc.paced_by_real_time,
             inputs: desc
                 .inputs

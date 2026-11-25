@@ -9,7 +9,7 @@
 use parking_lot::Mutex;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ControlOperationRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
 };
 
 use super::input_value_set_tests::the_input_named;

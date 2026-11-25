@@ -17,21 +17,15 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::input_values::the_input_port_takes_a_value;
-use crate::core::nodes::{
-    ConfigFieldDescribedAsASetting, the_config_fields_a_node_of_the_type_can_expose,
-    the_config_fields_described_as_settings,
-};
+use crate::core::nodes::{ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings};
 
-/// A registered node type's inputs and outputs, and the settings `set_exposed_config_fields`
-/// still takes on it.
+/// A registered node type's inputs and outputs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeTypePortsDescribedOnTheWire {
     /// Each input port, then each setting.
     pub inputs: Vec<NodeTypeInputDescribed>,
     /// Each output port.
     pub outputs: Vec<NodeTypePortDescribed>,
-    /// The settings of a node type not yet typed that `set_exposed_config_fields` takes.
-    pub exposable_config_fields: Vec<String>,
     /// Each pin group, its slot's ports each named as its pin.
     pub pin_groups: Vec<NodeTypePinGroupDescribed>,
 }
@@ -51,13 +45,6 @@ impl NodeTypePortsDescribedOnTheWire {
                 )
                 .collect(),
             outputs: descriptor.outputs.iter().map(a_port_described).collect(),
-            exposable_config_fields: the_config_fields_a_node_of_the_type_can_expose(
-                &descriptor.node_class_import_path,
-                descriptor.config_schema.as_ref(),
-            )
-            .into_iter()
-            .map(|(field, _)| field)
-            .collect(),
             pin_groups: descriptor
                 .pin_groups
                 .iter()

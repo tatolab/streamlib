@@ -41,8 +41,8 @@ use streamlib::sdk::runtime::{
 use streamlib_control_contract::ControlOperationCall;
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, DescribeStreamActionToolResult,
-    DescribeStreamActionToolResultStream, ControlOperationRefusalOnTheWire, ProjectVenvSyncOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, DescribeStreamActionToolResult,
+    DescribeStreamActionToolResultStream, ProjectVenvSyncOnTheWire,
     ProjectVenvSyncPackageKindOnTheWire, ProjectVenvSyncPackageOnTheWire,
     ProjectVenvSyncPackageStateOnTheWire, ProjectVenvSyncPhaseOnTheWire, StreamActionKindOnTheWire,
     StreamActionStateOnTheWire,

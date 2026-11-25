@@ -5,9 +5,8 @@ use streamlib_control_contract::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
     ControlOperation, ImportGraphGeneratorRequest, OneLinkGraphEditRequest,
     OneNodeGraphEditRequest, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
-    SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValue,
-    SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
-    TransactRequest, UnlockSubgraphRequest,
+    SetGroupFieldsRequest, SetNodeInputValue, SetNodeInputValueRequest, SetNoteFieldsRequest,
+    SetStudioFieldsRequest, TransactRequest, UnlockSubgraphRequest,
 };
 use streamlib_project_repository::{GRAPH_INTERFACE_VALUE_PORT_NAME, StreamGraphAction};
 
@@ -50,9 +49,6 @@ impl ControlOperationDispatcher {
             level,
             node_type,
             name,
-            config,
-            pins,
-            exposed_config_fields,
             studio,
             mode,
             author,
@@ -65,9 +61,6 @@ impl ControlOperationDispatcher {
                 level: level.unwrap_or_default(),
                 node_type,
                 name,
-                config,
-                pins,
-                exposed_config_fields,
                 studio,
                 label: None,
             }],
@@ -120,7 +113,6 @@ impl ControlOperationDispatcher {
             stream,
             generator,
             name,
-            config,
             mode,
             author,
             idempotency_key,
@@ -131,7 +123,6 @@ impl ControlOperationDispatcher {
                 stream,
                 generator,
                 name,
-                config,
                 label: None,
             }],
             mode,
@@ -193,70 +184,6 @@ impl ControlOperationDispatcher {
                 level: level.unwrap_or_default(),
                 source,
                 target,
-            }],
-            mode,
-            author,
-            idempotency_key,
-            request_origin,
-        )
-        .await
-        .map(ControlOperationAnswer::GraphTransaction)
-    }
-
-    pub(super) async fn answer_set_node_config(
-        &self,
-        set_node_config_request: SetNodeConfigRequest,
-        request_origin: &ControlRequestOrigin,
-    ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
-        let SetNodeConfigRequest {
-            stream,
-            level,
-            node,
-            config,
-            mode,
-            author,
-            idempotency_key,
-        } = set_node_config_request;
-        self.apply_a_graph_transaction(
-            "set_node_config",
-            vec![StreamGraphAction::SetNodeConfig {
-                stream,
-                level: level.unwrap_or_default(),
-                node,
-                config,
-            }],
-            mode,
-            author,
-            idempotency_key,
-            request_origin,
-        )
-        .await
-        .map(ControlOperationAnswer::GraphTransaction)
-    }
-
-    pub(super) async fn answer_set_pin_value(
-        &self,
-        set_pin_value_request: SetPinValueRequest,
-        request_origin: &ControlRequestOrigin,
-    ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
-        let SetPinValueRequest {
-            stream,
-            level,
-            node,
-            input,
-            value,
-            mode,
-            author,
-            idempotency_key,
-        } = set_pin_value_request;
-        self.apply_a_graph_transaction(
-            "set_pin_value",
-            vec![StreamGraphAction::SetPinValue {
-                stream,
-                level: level.unwrap_or_default(),
-                node,
-                input,
-                value,
             }],
             mode,
             author,
@@ -364,37 +291,6 @@ impl ControlOperationDispatcher {
                 level: level.unwrap_or_default(),
                 node,
                 studio,
-            }],
-            mode,
-            author,
-            idempotency_key,
-            request_origin,
-        )
-        .await
-        .map(ControlOperationAnswer::GraphTransaction)
-    }
-
-    pub(super) async fn answer_set_exposed_config_fields(
-        &self,
-        set_exposed_config_fields_request: SetExposedConfigFieldsRequest,
-        request_origin: &ControlRequestOrigin,
-    ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
-        let SetExposedConfigFieldsRequest {
-            stream,
-            level,
-            node,
-            exposed_config_fields,
-            mode,
-            author,
-            idempotency_key,
-        } = set_exposed_config_fields_request;
-        self.apply_a_graph_transaction(
-            "set_exposed_config_fields",
-            vec![StreamGraphAction::SetExposedConfigFields {
-                stream,
-                level: level.unwrap_or_default(),
-                node,
-                exposed_config_fields,
             }],
             mode,
             author,

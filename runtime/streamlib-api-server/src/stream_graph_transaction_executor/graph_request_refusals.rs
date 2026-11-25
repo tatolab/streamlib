@@ -13,8 +13,8 @@ use streamlib_project_repository::{
     ProjectRepositoryRefusal, StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, GraphLinkEndOnTheWire, NodeNotRunningBecauseOnTheWire,
-    ControlOperationRefusalOnTheWire, RefusedGraphLinkOnTheWire, SuggestedOperationCall,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, GraphLinkEndOnTheWire,
+    NodeNotRunningBecauseOnTheWire, RefusedGraphLinkOnTheWire, SuggestedOperationCall,
 };
 use uuid::Uuid;
 
@@ -146,12 +146,9 @@ pub(super) fn what_a_graph_action_names<Stream>(
     };
     match action {
         StreamGraphAction::RemoveNode { node, .. }
-        | StreamGraphAction::SetNodeConfig { node, .. }
         | StreamGraphAction::RenameNode { node, .. }
-        | StreamGraphAction::SetStudioFields { node, .. }
-        | StreamGraphAction::SetExposedConfigFields { node, .. } => names_a_node(node),
-        StreamGraphAction::SetPinValue { node, input, .. }
-        | StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
+        | StreamGraphAction::SetStudioFields { node, .. } => names_a_node(node),
+        StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
             field: Some(input.clone()),
             ..names_a_node(node)
         },
@@ -267,12 +264,6 @@ impl GraphRequestRefusal {
     /// `kept`, when it kept one.
     pub(super) fn kept_in_or(kept: &std::cell::RefCell<Option<Self>>, why: String) -> Self {
         kept.take().unwrap_or_else(|| why.into())
-    }
-
-    /// The refusal naming `input` as the field refused.
-    pub(super) fn of_the_field(mut self, input: &str) -> Self {
-        self.code_and_place.refused_input = Some(input.to_owned());
-        self
     }
 }
 

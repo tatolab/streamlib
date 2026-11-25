@@ -37,6 +37,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
                 )))
             })
         }
+
         fn the_top_level_graph_input_declaring(
             &self,
             input_name: String,
@@ -181,13 +182,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::std::vec::Vec<::streamlib::sdk::descriptors::PinGroupDescriptor> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn the_settings_a_set_node_config_replaces(
-            &self,
-            _node_type: &str,
-            _input_values: &::serde_json::Map<String, ::serde_json::Value>,
-        ) -> ::streamlib::sdk::error::Result<::serde_json::Map<String, ::serde_json::Value>> {
-            unreachable!(concat!("the control plane serves no graph edit ", $surface))
-        }
         fn refuse_an_input_value_its_input_does_not_take(
             &self,
             _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
@@ -199,15 +193,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
-            &self,
-            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
-            _node_name: &str,
-            _input: &str,
-            _value: ::std::option::Option<&::serde_json::Value>,
-        ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
-            unreachable!(concat!("the control plane serves no graph edit ", $surface))
-        }
         fn set_input_values_live(
             &self,
             _sets: &[::streamlib::sdk::graph::input_values::InputValueToSetLive],
@@ -215,20 +200,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
             ::streamlib::sdk::graph::input_values::InputValuesSetLive,
             ::streamlib::sdk::graph::input_values::LiveInputValueSetRefusal,
         > {
-            unreachable!(concat!("the control plane serves no graph edit ", $surface))
-        }
-        fn a_set_node_config_replaces_every_setting_on(
-            &self,
-            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
-        ) -> bool {
-            unreachable!(concat!("the control plane serves no graph edit ", $surface))
-        }
-        fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
-            &self,
-            _node_name: &str,
-            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
-            _exposed_config_fields: &[String],
-        ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
         fn hold_an_edit_its_document_holds_not_live(

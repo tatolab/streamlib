@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::nodes::ReactiveNode;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ControlOperationRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
 };
 
 use super::*;

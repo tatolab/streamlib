@@ -5,7 +5,7 @@ use streamlib::sdk::descriptors::{PinLinkEndNamed, PinLinkRefusal, PinType};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire, ControlOperationRefusalOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
     ProjectFilePlaceOnTheWire,
 };
 

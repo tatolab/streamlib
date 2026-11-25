@@ -31,7 +31,7 @@ use streamlib_project_repository::{
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
     StreamGraphOperation, StreamGraphOperationOnAStream,
     asset_references_made_references_into_the_import,
-    config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
+    config_holding_the_default_name_of_a_graph_port_or_variable,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
     input_values_after_the_set, is_a_node_type_of_the_graph_itself,
     stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
@@ -754,11 +754,6 @@ type ConvertNodeALinkOfTheRunningStreamNeeds<'stream> = dyn Fn(&StreamGraphDocum
 type RefusalOfALinkJudgedBeforeCommit<'stream> =
     dyn Fn(&StreamGraphDocumentLink) -> Result<(), GraphRequestRefusal> + 'stream;
 
-/// The config a node of a type holding some input values takes whole, as the running stream
-/// resolves the type.
-type ConfigANodeOfTheRunningStreamTakes<'stream> =
-    dyn Fn(&str, &Map<String, Value>) -> Result<Value, GraphRequestRefusal> + 'stream;
-
 /// What building a graph request's operation reads of the running stream and its project.
 struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     run_the_graph_generator: &'reads GraphGeneratorRunOfTheStream<'reads>,
@@ -768,7 +763,6 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
     convert_node_a_link_needs: &'reads ConvertNodeALinkOfTheRunningStreamNeeds<'reads>,
     refuse_a_link_judged_before_commit: &'reads RefusalOfALinkJudgedBeforeCommit<'reads>,
-    config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
 }
 
 /// The UUID of each node `rendered_graph`, a stream's `graph` render, renders as a function

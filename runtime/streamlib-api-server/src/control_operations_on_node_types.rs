@@ -25,14 +25,14 @@ use streamlib_control_contract::{
 };
 use streamlib_node_schema::pin_type::built_in_pin_types;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ControlOperationRefusalCode, DescribeNodeTypesToolResult, GraphGeneratorListed,
-    GraphGeneratorReadFromSource, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ProjectNodeTypesReadFromSource, NamedPinTypeListed, NodeTypeCategoryFrom,
-    NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed,
-    NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed,
-    NodeTypePortReadFromSource, NodeTypeReadFromSource, NodeTypeSourceListed,
-    NodeTypeSourceListedOrigin, NodeTypeSourceOrigin, PinTypeConversionListed, PinTypeListed,
-    ControlOperationRefusalOnTheWire, ProjectFilePlaceOnTheWire,
+    ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, DescribeNodeTypesToolResult,
+    GraphGeneratorListed, GraphGeneratorReadFromSource, ListNodeTypesToolResult,
+    ListPinTypesToolResult, NamedPinTypeListed, NodeTypeCategoryFrom, NodeTypeDescribedFrom,
+    NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed, NodeTypeKind,
+    NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed, NodeTypePortReadFromSource,
+    NodeTypeReadFromSource, NodeTypeSourceListed, NodeTypeSourceListedOrigin, NodeTypeSourceOrigin,
+    PinTypeConversionListed, PinTypeListed, ProjectFilePlaceOnTheWire,
+    ProjectNodeTypesReadFromSource,
 };
 use uuid::Uuid;
 
@@ -130,17 +130,15 @@ impl ControlOperationDispatcher {
                 node_types: source
                     .node_types
                     .iter()
-                    .map(|read| NodeTypeListed {
-                        node_type: read.node_type.clone(),
-                        documentation: the_first_line_of(&read.description),
-                        category: read.category.clone(),
-                        category_from: read.category_from,
-                        kind: read.kind.as_deref().and_then(the_kind_named),
-                        described_from: if described.contains_key(&read.node_type) {
-                            NodeTypeDescribedFrom::Interpreter
-                        } else {
-                            NodeTypeDescribedFrom::Source
-                        },
+                    .map(|read| {
+                        a_node_type_listed(
+                            read,
+                            if described.contains_key(&read.node_type) {
+                                NodeTypeDescribedFrom::Interpreter
+                            } else {
+                                NodeTypeDescribedFrom::Source
+                            },
+                        )
                     })
                     .collect(),
                 graph_generators: source
@@ -383,7 +381,7 @@ fn the_named_pin_types_listed_in(
         .collect()
 }
 
-fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSourceListedOrigin {
+pub(crate) fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSourceListedOrigin {
     match origin {
         NodeTypeSourceOrigin::Project => NodeTypeSourceListedOrigin::Project,
         NodeTypeSourceOrigin::Dependency {
@@ -409,6 +407,22 @@ fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSourceListedOri
 
 /// The node types the runtime brings itself, by import path, each filed under the group the
 /// project's and its imports' `node_type_groups` put it in, else the one it declares.
+/// `read`, a node type its source declares, as `list_node_types` lists it, its description
+/// coming from `described_from`.
+pub(crate) fn a_node_type_listed(
+    read: &NodeTypeReadFromSource,
+    described_from: NodeTypeDescribedFrom,
+) -> NodeTypeListed {
+    NodeTypeListed {
+        node_type: read.node_type.clone(),
+        documentation: the_first_line_of(&read.description),
+        category: read.category.clone(),
+        category_from: read.category_from,
+        kind: read.kind.as_deref().and_then(the_kind_named),
+        described_from,
+    }
+}
+
 fn the_built_in_source(node_type_groups: &NodeTypeGroupsOfAProject) -> NodeTypeSourceListed {
     NodeTypeSourceListed {
         origin: NodeTypeSourceListedOrigin::BuiltIn,
@@ -548,7 +562,6 @@ pub(crate) fn the_project_node_type_described(
         declared_at,
         inputs: inputs.iter().map(an_input_read_from_source).collect(),
         outputs: outputs.iter().map(a_port_read_from_source).collect(),
-        exposable_config_fields: Vec::new(),
         pin_groups: Vec::new(),
     }))
 }
@@ -564,7 +577,6 @@ fn a_registered_node_type_described(
     let NodeTypePortsDescribedOnTheWire {
         inputs,
         outputs,
-        exposable_config_fields,
         pin_groups,
     } = NodeTypePortsDescribedOnTheWire::of(descriptor);
     NodeTypeDescription {
@@ -578,7 +590,6 @@ fn a_registered_node_type_described(
         declared_at,
         inputs,
         outputs,
-        exposable_config_fields,
         pin_groups,
     }
 }
@@ -590,19 +601,13 @@ pub(crate) fn the_built_in_node_type(node_type: &str) -> Option<BuiltInNodeType>
         .find(|built_in| built_in.descriptor.node_class_import_path.as_str() == node_type)
 }
 
-/// A port as its declaration states it in source: by its family alone, a pin type not being
-/// read there.
+/// A port as its declaration states it in source, a pin type not being read there.
 fn a_port_read_from_source(port: &NodeTypePortReadFromSource) -> NodeTypePortDescribed {
     NodeTypePortDescribed {
         name: port.name.clone(),
         documentation: port.description.clone(),
         pin: None,
         annotations: Default::default(),
-        family: port
-            .family
-            .as_ref()
-            .map(|family| json!({ "family": family })),
-        annotation: port.annotation.clone(),
     }
 }
 

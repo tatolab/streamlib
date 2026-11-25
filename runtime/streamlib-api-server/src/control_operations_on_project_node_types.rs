@@ -12,8 +12,8 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_project_repository::{PROJECT_IMPORTS_DIRECTORY, TatolabProjectFile};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ProjectNodeTypesReadFromSource, NodeModuleNotReadable, NodeTypeSourceOrigin,
-    NodeTypeSourceReadWithoutRunningIt,
+    NodeModuleNotReadable, NodeTypeSourceOrigin, NodeTypeSourceReadWithoutRunningIt,
+    ProjectNodeTypesReadFromSource,
 };
 use uuid::Uuid;
 
@@ -84,22 +84,7 @@ fn the_module_name_of_a_python_file(path: &str) -> String {
     package_or_module.replace('/', ".")
 }
 
-use streamlib_control_contract::{
-    ControlOperation, ListProjectNodeTypes, ListProjectNodeTypesRequest,
-};
-
 impl ControlOperationDispatcher {
-    pub(crate) async fn list_project_node_types(
-        &self,
-        ListProjectNodeTypesRequest { project_directory }: ListProjectNodeTypesRequest,
-    ) -> Result<ProjectNodeTypesReadFromSource, ControlOperationRefusal> {
-        self.the_node_types_the_project_offers_read_from_source(
-            ListProjectNodeTypes::METHOD_NAME,
-            project_directory,
-        )
-        .await
-    }
-
     /// The node types and graph generators the project in `project_directory` offers, by
     /// source, read from source without running it for the operation `method_name`, each filed
     /// under the group the project's and its imports' maps or its declaration put it in: kept as

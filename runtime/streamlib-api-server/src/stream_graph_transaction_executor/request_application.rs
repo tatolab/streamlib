@@ -355,7 +355,6 @@ impl StreamGraphTransactionExecutor<'_> {
         request: StreamGraphAction,
         stream_id: &str,
         staged: &mut WhatTheTransactionHasStaged<'_>,
-        input_value_check: InputValueCheck,
     ) -> Result<OneGraphRequestApplied, GraphRequestRefusal> {
         let WhatTheTransactionHasStaged {
             streams,
@@ -477,12 +476,6 @@ impl StreamGraphTransactionExecutor<'_> {
             }
             the_convert_node_a_live_connect_places(stream_operations.as_ref(), link)
         };
-        let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
-            stream_operations
-                .the_settings_a_set_node_config_replaces(node_type, input_values)
-                .map(Value::Object)
-                .map_err(GraphRequestRefusal::from)
-        };
         let mut placed_stream_a_collapse_saves = None;
         let mut node_inserted_because = None;
         let mut edit_as_drawn = graph_operation_for_the_request(
@@ -497,7 +490,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
                 convert_node_a_link_needs: &convert_node_a_link_needs,
                 refuse_a_link_judged_before_commit: &refuse_a_link_judged_before_commit,
-                config_a_node_takes: &config_a_node_takes,
             },
             &mut placed_stream_a_collapse_saves,
             &mut node_inserted_because,
@@ -514,9 +506,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 ..
             } => {
                 let set_on = level_as_drawn.node(*node)?;
-                if input_value_check == InputValueCheck::MadeOnApply
-                    && its_input_values_are_checked(&set_on)
-                {
+                if its_input_values_are_checked(&set_on) {
                     refuse_a_value_the_input_does_not_take(
                         stream_operations.as_ref(),
                         &set_on,

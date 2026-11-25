@@ -555,7 +555,7 @@ async fn a_node_type_not_offered_refuses_the_call_suggesting_list_node_types() {
 #[test]
 fn a_project_node_type_an_interpreter_described_is_described_from_that_description() {
     use streamlib_runtime_client_contract::local_api_wire_contract::{
-        ProjectNodeTypesReadFromSource, NodeTypeDescribedOrWhyNot,
+        NodeTypeDescribedOrWhyNot, ProjectNodeTypesReadFromSource,
     };
 
     register_the_input_value_test_node_once();

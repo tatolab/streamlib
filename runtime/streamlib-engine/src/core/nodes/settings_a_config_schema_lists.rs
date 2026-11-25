@@ -13,11 +13,9 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 use crate::core::descriptors::{
-    IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinNumberRange,
-    PinProjectAssetAnnotation, PinType,
+    IntegerSize, NodeDescriptor, PinAnnotations, PinNumberRange, PinProjectAssetAnnotation, PinType,
 };
 use crate::core::error::{Error, Result};
-use crate::core::nodes::is_a_natively_compiled_node_type;
 
 /// Each field `config_schema` lists, by name, with its schema; `None` for no schema, or one
 /// listing no `properties`.
@@ -159,30 +157,6 @@ fn the_number_range_of(field_schema: &Value) -> Option<PinNumberRange> {
         maximum: field_schema.get("maximum").and_then(Value::as_f64),
     };
     (range.minimum.is_some() || range.maximum.is_some()).then_some(range)
-}
-
-/// The config fields a node of `node_type`, whose config schema is `config_schema`, can expose
-/// as inputs, each with its description: the number and Boolean fields, which
-/// `set_exposed_config_fields` takes; none for a natively compiled type, whose code reads no
-/// config field as an input.
-pub(crate) fn the_config_fields_a_node_of_the_type_can_expose(
-    node_type: &NodeClassImportPath,
-    config_schema: Option<&Value>,
-) -> Vec<(String, String)> {
-    if is_a_natively_compiled_node_type(node_type) {
-        return Vec::new();
-    }
-    the_properties_of_a_config_schema(config_schema)
-        .into_iter()
-        .flatten()
-        .filter(|(_, field_schema)| {
-            matches!(
-                field_schema.get("type").and_then(Value::as_str),
-                Some("number" | "integer" | "boolean")
-            )
-        })
-        .map(|(field, field_schema)| (field.clone(), the_description_of(field_schema).to_owned()))
-        .collect()
 }
 
 /// Refuse `descriptor` when its config schema lists a field named as one of its input ports: a

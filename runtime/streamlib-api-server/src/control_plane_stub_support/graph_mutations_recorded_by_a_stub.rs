@@ -141,13 +141,6 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::vec::Vec<::streamlib::sdk::descriptors::PinGroupDescriptor> {
             ::std::vec::Vec::new()
         }
-        fn the_settings_a_set_node_config_replaces(
-            &self,
-            _node_type: &str,
-            input_values: &::serde_json::Map<String, ::serde_json::Value>,
-        ) -> ::streamlib::sdk::error::Result<::serde_json::Map<String, ::serde_json::Value>> {
-            Ok(input_values.clone())
-        }
         fn refuse_an_input_value_its_input_does_not_take(
             &self,
             _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
@@ -155,15 +148,6 @@ macro_rules! graph_mutation_ops_record_the_call {
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
             _member: ::std::option::Option<&str>,
-            _value: ::std::option::Option<&::serde_json::Value>,
-        ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
-            Ok(())
-        }
-        fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
-            &self,
-            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
-            _node_name: &str,
-            _input: &str,
             _value: ::std::option::Option<&::serde_json::Value>,
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())
@@ -176,20 +160,6 @@ macro_rules! graph_mutation_ops_record_the_call {
             ::streamlib::sdk::graph::input_values::LiveInputValueSetRefusal,
         > {
             Ok(::streamlib::sdk::graph::input_values::InputValuesSetLive::OnTheGraph)
-        }
-        fn a_set_node_config_replaces_every_setting_on(
-            &self,
-            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
-        ) -> bool {
-            true
-        }
-        fn refuse_an_exposure_naming_no_input_that_takes_a_wire(
-            &self,
-            _node_name: &str,
-            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
-            _exposed_config_fields: &[String],
-        ) -> ::streamlib::sdk::error::Result<()> {
-            Ok(())
         }
         fn open_a_graph_edit_batch(
             self: ::std::sync::Arc<Self>,

@@ -302,13 +302,6 @@ fn the_input_values_a_transaction_sets_live(
                 value,
                 ..
             } => (level, node, input, member.clone(), value),
-            StreamGraphAction::SetPinValue {
-                level,
-                node,
-                input,
-                value,
-                ..
-            } => (level, node, input, None, value),
             _ => return None,
         };
         if !level.is_empty() || request_stream_id != stream_id {
@@ -367,9 +360,6 @@ fn the_value_set_of_each_request<'request>(
                     member,
                     ..
                 } => (level, node, input, member.as_deref()),
-                StreamGraphAction::SetPinValue {
-                    level, node, input, ..
-                } => (level, node, input, None),
                 _ => return None,
             };
             Some(ValueSetOfATransaction {
