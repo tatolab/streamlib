@@ -1,13 +1,12 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The schemars 1.2 schemas of the port stream facts a pin annotation states, for the control
-//! contract. Written by hand: these types derive schemars 0.8, which reads the same
-//! `#[schemars]` attribute the 1.2 derive would need.
+//! The schemas of the port stream facts a pin annotation states, for the control contract,
+//! written by hand to state each variant as the contract renders it.
 
 use std::borrow::Cow;
 
-use schemars_1::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 
 use super::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,

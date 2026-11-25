@@ -192,24 +192,16 @@ pub enum NodeRuntimeOutput {
 }
 
 /// A string schema naming one of `names`.
-fn one_of_the_names_schema(
-    names: impl IntoIterator<Item = &'static str>,
-) -> schemars::schema::Schema {
-    schemars::schema::SchemaObject {
-        instance_type: Some(schemars::schema::InstanceType::String.into()),
-        enum_values: Some(names.into_iter().map(serde_json::Value::from).collect()),
-        ..Default::default()
-    }
-    .into()
+fn one_of_the_names_schema(names: impl IntoIterator<Item = &'static str>) -> schemars::Schema {
+    let names: Vec<serde_json::Value> = names.into_iter().map(serde_json::Value::from).collect();
+    schemars::json_schema!({ "type": "string", "enum": names })
 }
 
-fn every_node_kind_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+fn every_node_kind_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     one_of_the_names_schema(GraphNodeKindOnTheWire::EVERY_KIND.map(GraphNodeKindOnTheWire::name))
 }
 
-fn every_function_node_language_schema(
-    _: &mut schemars::r#gen::SchemaGenerator,
-) -> schemars::schema::Schema {
+fn every_function_node_language_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     one_of_the_names_schema(
         FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE.map(FunctionNodeLanguageOnTheWire::name),
     )
@@ -296,7 +288,6 @@ pub struct PortDescriptorOutput {
     /// the mode an input port declares. Absent on an input port that declares
     /// none, and on an output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<serde_json::Value>")]
     pub input_mode: Option<NodeInputMode>,
     /// The value a setting reads while no value is set on its node, as its
     /// schema or its declaration states it. Absent on an input that is no
@@ -308,7 +299,6 @@ pub struct PortDescriptorOutput {
     /// them, such as the project assets a String holding an asset's UUID is
     /// picked from. Absent on one that states nothing.
     #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
-    #[schemars(with = "Option<serde_json::Value>")]
     pub annotations: PinAnnotations,
 }
 
@@ -340,9 +330,7 @@ impl PortDescriptorOutput {
 /// The pin type a catalog port declares, and its flow.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PortDeclaredPinOutput {
-    /// The type it carries, or how that type is found. Its schema here is open
-    /// JSON: only the control contract's schemars renders pin types.
-    #[schemars(with = "serde_json::Value")]
+    /// The type it carries, or how that type is found.
     pub pin_type: crate::core::descriptors::DeclaredPinType,
     /// How its messages are read: `value`, `stream` or `trigger`.
     #[schemars(with = "String")]

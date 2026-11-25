@@ -12,15 +12,10 @@ use crate::error::{SchemaError, SchemaResult};
 /// later runtime may add a built-in type, which a client of an earlier revision reads as it is.
 // A type with nothing to state is an empty struct variant: serde ignores the keys beside the tag
 // of an internally tagged unit variant, and refuses them on a struct variant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(
-        crate = "schemars_1",
-        transform = crate::pin_type::bundle_members_json_schema::state_what_a_bundle_member_may_be,
-        extend("x-may-grow" = true)
-    )
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(
+    transform = crate::pin_type::bundle_members_json_schema::state_what_a_bundle_member_may_be,
+    extend("x-may-grow" = true)
 )]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PinType {
@@ -119,7 +114,7 @@ pub enum PinType {
     NodeReference {
         /// The node type the referenced node must be; absent, any node.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(feature = "contract-json-schema", schemars(with = "Option<String>"))]
+        #[schemars(with = "Option<String>")]
         referenced_node_type: Option<NodeClassImportPath>,
         /// Whether one node at most may name a given node through this setting.
         #[serde(default)]
@@ -140,12 +135,7 @@ pub enum PinType {
 }
 
 /// The size an Integer must fit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IntegerSize {
     /// A signed 8-bit integer.
@@ -187,12 +177,7 @@ impl IntegerSize {
 }
 
 /// The size a Float is held in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FloatSize {
     /// A 32-bit float.
@@ -212,12 +197,7 @@ impl FloatSize {
 }
 
 /// How many numbers a Vector holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VectorComponentCount {
     /// `x` and `y`.
@@ -235,11 +215,7 @@ macro_rules! texture_pixel_formats {
     ($($(#[$attribute:meta])* $format:ident => $wire_name:literal),+ $(,)?) => {
         /// A texture format, spelled as the escalate wire spells it.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[cfg_attr(
-            feature = "contract-json-schema",
-            derive(schemars_1::JsonSchema),
-            schemars(crate = "schemars_1")
-        )]
+        #[derive(schemars::JsonSchema)]
         pub enum TexturePixelFormat {
             $(
                 $(#[$attribute])*
@@ -295,12 +271,7 @@ texture_pixel_formats![
 ];
 
 /// What an asset holds, as its media facts or its kind name it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAssetMedia {
     /// A still picture.
@@ -332,12 +303,7 @@ impl ProjectAssetMedia {
 }
 
 /// One member of a bundle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BundleMember {
     /// The member's name, a key of the bundle's stored value.
@@ -370,12 +336,7 @@ impl BundleMember {
 /// The class that declares a named pin type, `module:QualifiedClassName`.
 // Every inhabitant names one: the inner string is private, `new` is the only constructor, and
 // `Deserialize` validates rather than inheriting `String`'s.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct NamedPinTypeImportPath(String);
 

@@ -19,11 +19,9 @@ default = ["history", "store"]
 # The project's own history and the one writer that commits to it. Without it the crate reads
 # and writes a project's files alone, so a consumer such as the Python wheel links no libgit2.
 history = ["dep:git2", "dep:libz-sys", "dep:notify", "dep:parking_lot", "dep:tokio", "dep:zip"]
-# The JSON Schema of each graph action, in the schemars rmcp reads, for the MCP tools, and of the
-# node UI manifest, which the control contract renders. Without it
-# the engine and the SDK link only their own schemars, so a missing `JsonSchema` derive on a
-# node config is reported against one crate.
-mcp-tool-json-schema = ["dep:schemars", "streamlib-node-schema/contract-json-schema"]
+# The JSON Schema of each graph action, for the MCP tools, and of the node UI manifest, which the
+# control contract renders.
+mcp-tool-json-schema = ["dep:schemars"]
 # The project's store: one embedded database the runtime keeps what it holds for a project in,
 # outside its history, each concern a named table, committed by one debounced writer.
 store = ["dep:redb", "dep:parking_lot"]

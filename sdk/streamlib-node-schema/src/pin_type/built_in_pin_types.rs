@@ -100,12 +100,7 @@ impl PinType {
 }
 
 /// An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PinAnnotationName {
     /// The lowest and highest number it holds.
@@ -413,13 +408,12 @@ impl BuiltInPinTypeName {
     }
 }
 
-#[cfg(feature = "contract-json-schema")]
 impl BuiltInPinTypeName {
     /// The JSON Schema of the type's stored value, reading on its own outside the contract:
     /// every type it names written in place, and a type that names itself, as a pin type
     /// does, under the schema's own `$defs`; `None` for a type that stores no value.
     pub fn value_json_schema_on_its_own(self) -> Option<serde_json::Value> {
-        let mut generator = schemars_1::generate::SchemaSettings::draft2020_12()
+        let mut generator = schemars::generate::SchemaSettings::draft2020_12()
             .with(|settings| settings.inline_subschemas = true)
             .into_generator();
         let mut schema = self.value_json_schema(&mut generator)?.to_value();
@@ -436,8 +430,8 @@ impl BuiltInPinTypeName {
     /// definitions; `None` for a type that stores no value.
     pub fn value_json_schema(
         self,
-        generator: &mut schemars_1::SchemaGenerator,
-    ) -> Option<schemars_1::Schema> {
+        generator: &mut schemars::SchemaGenerator,
+    ) -> Option<schemars::Schema> {
         use super::stored_pin_values::{
             AssetPinValue, BooleanPinValue, BundlePinValue, ColorPinValue, FloatPinValue,
             IntegerPinValue, ListPinValue, MenuPinValue, RectanglePinValue, StringPinValue,
@@ -472,13 +466,12 @@ impl BuiltInPinTypeName {
 
 /// A closed set of names, as the contract writes one: a `oneOf` of string `const`s, each
 /// described by its row's documentation.
-#[cfg(feature = "contract-json-schema")]
-impl schemars_1::JsonSchema for BuiltInPinTypeName {
+impl schemars::JsonSchema for BuiltInPinTypeName {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "BuiltInPinTypeName".into()
     }
 
-    fn json_schema(_generator: &mut schemars_1::SchemaGenerator) -> schemars_1::Schema {
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         let names: Vec<serde_json::Value> = Self::EVERY_NAME
             .iter()
             .map(|name| {
@@ -489,7 +482,7 @@ impl schemars_1::JsonSchema for BuiltInPinTypeName {
                 })
             })
             .collect();
-        schemars_1::json_schema!({
+        schemars::json_schema!({
             "oneOf": names,
             "description": "The name of a built-in pin type: the `type` tag of its pin type.",
         })

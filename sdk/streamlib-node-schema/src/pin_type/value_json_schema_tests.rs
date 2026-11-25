@@ -242,7 +242,6 @@ fn each_type_that_holds_a_stored_value_states_a_schema_and_each_other_states_non
     }
 }
 
-#[cfg(feature = "contract-json-schema")]
 #[test]
 fn each_built_in_types_value_schema_reads_on_its_own_with_every_reference_defined_in_it() {
     use super::BuiltInPinTypeName;

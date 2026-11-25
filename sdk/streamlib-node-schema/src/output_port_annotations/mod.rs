@@ -10,7 +10,7 @@ use crate::pin_type::PinType;
 
 /// The sample rate an Audio output states, written on the class or read
 /// from one of its node's settings, which the wire names `from_setting`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleRate {
     Stated(u32),
@@ -23,7 +23,7 @@ pub enum ChannelsOutputPortSampleRate {
 
 /// The frame rate a Texture output states, written on the class or read from
 /// one of its node's settings, which the wire names `from_setting`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOutputPortFrameRate {
     Stated(crate::ImageStreamFrameRate),
@@ -35,7 +35,7 @@ pub enum ImageOutputPortFrameRate {
 }
 
 /// The sample type of an Audio output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleType {
     F32,
@@ -43,7 +43,7 @@ pub enum ChannelsOutputPortSampleType {
 }
 
 /// Where a Tensor output's values live.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArrayOutputPortResidency {
     Gpu,
@@ -211,7 +211,6 @@ pub(crate) fn codec_nodes_placed_between(
     }
 }
 
-#[cfg(feature = "contract-json-schema")]
 mod contract_json_schema;
 
 #[cfg(test)]

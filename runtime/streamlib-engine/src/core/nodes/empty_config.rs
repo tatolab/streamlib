@@ -49,22 +49,13 @@ impl<'de> serde::de::Visitor<'de> for EmptyConfigVisitor {
 }
 
 impl schemars::JsonSchema for EmptyConfig {
-    fn schema_name() -> String {
-        "EmptyConfig".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EmptyConfig".into()
     }
 
-    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        let schema: schemars::schema::Schema = schemars::schema::SchemaObject {
-            instance_type: Some(schemars::schema::InstanceType::Object.into()),
-            object: Some(Box::new(schemars::schema::ObjectValidation {
-                additional_properties: Some(Box::new(schemars::schema::Schema::Bool(false))),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-        .into();
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         crate::core::descriptors::schema_carrying_the_declared_description(
-            schema,
+            schemars::json_schema!({ "type": "object", "additionalProperties": false }),
             "This node declares no configuration.",
         )
     }
