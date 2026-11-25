@@ -74,6 +74,7 @@ mod node_rebuilt_by_a_setting_tests;
 mod node_type_group_tests;
 mod node_type_reads_tests;
 mod node_types_of_the_graph_itself_tests;
+mod pin_group_count_set_as_an_input_value_tests;
 mod pin_group_gap_closed_by_a_disconnect_tests;
 mod played_project_end_to_end_tests;
 mod project_conversion_named_on_a_link_tests;

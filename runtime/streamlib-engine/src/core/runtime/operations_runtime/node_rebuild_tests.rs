@@ -3,7 +3,8 @@
 
 //! A value set on a setting a node reads at setup rebuilds that one node while its stream runs:
 //! once for every setting set before the rebuild, refused in the node's words when it does not
-//! build with the value, and read at the start of a stream that was stopped when it was set.
+//! build with the value, and read at the start of a stream that was stopped when it was set. A
+//! change in how many slots a pin group holds, by a link or by its count, rebuilds it the same way.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,9 +21,9 @@ use crate::core::nodes::NodeSpec;
 use crate::core::runtime::Runner;
 use crate::core::runtime::a_node_reading_its_settings_at_setup_for_a_test::{
     A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH, THE_LAYERED_NODES_PIN_GROUP, THE_SOURCES_OUTPUT,
-    forget_every_setup_run, the_node_type_built_for_its_layers,
-    the_node_type_reading_its_settings_at_setup, the_node_type_whose_output_a_test_writes,
-    the_settings_each_setup_read,
+    THE_TAPPED_NODES_PIN_GROUP, forget_every_setup_run, the_node_type_built_for_its_layers,
+    the_node_type_built_for_its_taps, the_node_type_reading_its_settings_at_setup,
+    the_node_type_whose_output_a_test_writes, the_settings_each_setup_read,
 };
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::operations::RuntimeOperations;
@@ -351,5 +352,84 @@ fn a_link_changing_how_many_slots_a_running_node_holds_rebuilds_it() {
         "the last slot's link taken out gives its empty slot back"
     );
     assert_eq!(the_settings_each_setup_read(layered).len(), 3);
+    stream.stop().expect("the stream stops");
+}
+
+/// The names of the outputs the graph renders for `node`.
+fn the_outputs_the_graph_renders_for(
+    stream: &LoadedStreamInThisRuntime,
+    node: Uuid,
+) -> Vec<String> {
+    let graph = stream.to_json().expect("the graph serializes");
+    graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|rendered| rendered["id"] == node.to_string())
+        .map(|rendered| {
+            rendered["ports"]["outputs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|output| output["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .expect("the graph holds the node")
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_pin_groups_count_set_while_the_stream_runs_rebuilds_its_node_once_for_its_slots() {
+    let project_directory = tempfile::tempdir().unwrap();
+    forget_every_setup_run();
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    let tapped = Uuid::new_v4();
+    stream
+        .add_node(
+            NodeSpec::new(the_node_type_built_for_its_taps(), Value::Null).with_node_uuid(tapped),
+        )
+        .expect("the tapped node is added");
+    stream.start().expect("the stream starts");
+    stream
+        .wait_until_every_node_is_running(Duration::from_secs(30))
+        .expect("the node runs");
+
+    set(&stream, tapped, THE_TAPPED_NODES_PIN_GROUP, json!(3))
+        .expect("the running node takes a count of 3");
+    assert_eq!(
+        the_settings_each_setup_read(tapped).len(),
+        1,
+        "a set count leaves its node to rebuild and rebuilds nothing yet"
+    );
+    assert_eq!(
+        rebuild(&stream).expect("the node builds for three slots"),
+        vec![tapped]
+    );
+
+    let setups = the_settings_each_setup_read(tapped);
+    assert_eq!(setups.len(), 2, "rebuilt once: {setups:?}");
+    assert_eq!(setups[1].get(THE_TAPPED_NODES_PIN_GROUP), Some(&json!(3)));
+    assert_eq!(
+        the_outputs_the_graph_renders_for(&stream, tapped),
+        ["taps.0.tap", "taps.1.tap", "taps.2.tap"]
+    );
+    assert_eq!(
+        the_components_the_graph_renders_for(&stream, tapped)["state"],
+        json!("Running")
+    );
+    assert_eq!(
+        rebuild(&stream).expect("nothing is left to rebuild"),
+        Vec::<Uuid>::new()
+    );
     stream.stop().expect("the stream stops");
 }
