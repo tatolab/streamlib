@@ -41,10 +41,9 @@ pub use graph_edit_requests::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkCandidatesRequest, CheckLinkRequest,
     CollapseSelectionIntoSubgraphRequest, ImportGraphGeneratorRequest, LinkCandidatesAmong,
     LinkCandidatesFrom, OneLinkGraphEditRequest, OneNodeGraphEditRequest, RemoveGroupRequest,
-    RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
-    SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
-    SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    WriteGraphInputRequest,
+    RemoveNoteRequest, RenameNodeRequest, SetGroupFieldsRequest, SetNodeInputValueRequest,
+    SetNoteFieldsRequest, SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest,
+    UnlockSubgraphRequest,
 };
 pub use node_type_requests::{
     DescribeNodeTypesRequest, ListNodeTypesRequest, ListPinTypesRequest, SetNodeTypeGroupRequest,
@@ -55,10 +54,9 @@ pub use playback_and_stream_action_requests::{
 };
 pub use project_file_and_view_requests::{
     CheckProjectCodeRequest, CloseViewerRequest, CreateNodeFileRequest, CreateNodeUiElementRequest,
-    ListProjectFilesRequest, ListProjectNodeTypesRequest, ListProjectNodeUiElementsRequest,
-    ListProjectViewsRequest, OpenViewerRequest, PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION,
-    ReadProjectFileRequest, STREAM_ARGUMENT_DESCRIPTION, WriteProjectFileRequest,
-    WriteStudioViewOutputRequest,
+    ListProjectFilesRequest, ListProjectNodeUiElementsRequest, ListProjectViewsRequest,
+    OpenViewerRequest, PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION, ReadProjectFileRequest,
+    STREAM_ARGUMENT_DESCRIPTION, WriteProjectFileRequest,
 };
 pub use project_lifecycle_requests::{
     CreateProjectRequest, DuplicateProjectRequest, ImportProjectRequest, ListSamplesRequest,

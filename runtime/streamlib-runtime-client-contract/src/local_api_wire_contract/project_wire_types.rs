@@ -8,7 +8,9 @@ use streamlib_node_schema::pin_type::PinType;
 
 use super::ControlOperationRefusalCode;
 use super::graph_wire_types::RefusedGraphLinkOnTheWire;
-use super::{NamedPinTypeReadFromSource, NodeTypeCategoryFrom};
+use super::{
+    NamedPinTypeReadFromSource, NodeTypeCategoryFrom, NodeTypeListed, NodeTypeSourceListedOrigin,
+};
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -731,11 +733,6 @@ pub struct ProjectViewListed {
 pub struct ProjectViewDeclaredPort {
     /// The port's name.
     pub name: String,
-    /// The port family's wire name: the family its pin type's messages belong to, where it
-    /// names one. Served until the contract's version changes, for a client that reads no
-    /// `pin_type`.
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub family: String,
     /// The pin type the port carries, which every port of a manifest that opens names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<PinType>,
@@ -745,11 +742,12 @@ pub struct ProjectViewDeclaredPort {
     pub range: Option<[f64; 2]>,
 }
 
-/// The `list_project_node_types` tool's result: what a project and each source it draws node
-/// code from declares, read from source without running it.
+/// What a project and each source it draws node code from declares, read from source without
+/// running it: what `list_node_types` and `describe_node_types` answer from, and what the
+/// runtime compares a project's listings by.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub struct ListProjectNodeTypesToolResult {
+pub struct ProjectNodeTypesReadFromSource {
     /// The project directory, symlinks resolved.
     pub project_directory: PathBuf,
     /// The project's UUID, from its `tatolab-project.json`.
@@ -807,17 +805,17 @@ pub struct NodeTypeSourceReadWithoutRunningIt {
 }
 
 /// One node type a project offers and the source its code comes from, as a change on the
-/// project's feed names it: the source's fields beside the node type's, as
-/// `list_project_node_types` lists each.
+/// project's feed names it: the source's fields beside the node type's row, as
+/// `list_node_types` lists each.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeTypeOfOneProjectSource {
     /// Where its code comes from.
     #[serde(flatten)]
-    pub origin: NodeTypeSourceOrigin,
-    /// The node type as its declaration states it.
+    pub origin: NodeTypeSourceListedOrigin,
+    /// The node type, as `list_node_types` lists it.
     #[serde(flatten)]
-    pub node_type: NodeTypeReadFromSource,
+    pub node_type: NodeTypeListed,
 }
 
 /// One node type as its declaration states it in source.
@@ -852,9 +850,6 @@ pub struct NodeTypeReadFromSource {
 pub struct NodeTypePortReadFromSource {
     /// The port's name, cast as every exposed name is.
     pub name: String,
-    /// The port family's wire name, `None` where source alone does not say.
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub family: Option<String>,
     /// The port's declared description.
     pub description: String,
     /// A function or shader port's annotation as written; `None` for a process node's port.

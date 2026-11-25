@@ -27,7 +27,7 @@ use streamlib_node_schema::pin_type::built_in_pin_types;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, DescribeNodeTypesToolResult, GraphGeneratorListed,
     GraphGeneratorReadFromSource, ListNodeTypesToolResult, ListPinTypesToolResult,
-    ListProjectNodeTypesToolResult, NamedPinTypeListed, NodeTypeCategoryFrom,
+    ProjectNodeTypesReadFromSource, NamedPinTypeListed, NodeTypeCategoryFrom,
     NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed,
     NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed, NodeTypePortDescribed,
     NodeTypePortReadFromSource, NodeTypeReadFromSource, NodeTypeSourceListed,
@@ -117,7 +117,7 @@ impl ControlOperationDispatcher {
         let described = self
             .the_node_types_the_projects_loaded_streams_described(the_project_of(&listing)?)
             .await?;
-        let ListProjectNodeTypesToolResult {
+        let ProjectNodeTypesReadFromSource {
             project_directory,
             project,
             project_name,
@@ -346,7 +346,7 @@ fn the_loaded_streams_of(
 
 /// The UUID a listing names its project by.
 fn the_project_of(
-    listing: &ListProjectNodeTypesToolResult,
+    listing: &ProjectNodeTypesReadFromSource,
 ) -> Result<Uuid, ControlOperationRefusal> {
     Uuid::parse_str(&listing.project).map_err(|not_a_uuid| {
         ControlOperationRefusal::runtime_failed(format!(
@@ -360,7 +360,7 @@ fn the_project_of(
 /// Each named type a source of `listing` declares, with the source it comes from, in the order
 /// the sources list.
 fn the_named_pin_types_listed_in(
-    listing: ListProjectNodeTypesToolResult,
+    listing: ProjectNodeTypesReadFromSource,
 ) -> Vec<NamedPinTypeListed> {
     listing
         .sources
@@ -494,7 +494,7 @@ fn a_graph_generator_listed(generator: GraphGeneratorReadFromSource) -> GraphGen
 /// interpreter `described` it where one did, else as its declaration states it, else why it
 /// cannot be described.
 pub(crate) fn the_project_node_type_described(
-    listing: &ListProjectNodeTypesToolResult,
+    listing: &ProjectNodeTypesReadFromSource,
     origin: &NodeTypeSourceOrigin,
     read: &NodeTypeReadFromSource,
     described: Option<&NodeDescriptor>,
@@ -623,7 +623,7 @@ fn an_input_read_from_source(port: &NodeTypePortReadFromSource) -> NodeTypeInput
 /// Why `read`, which its source states no ports of and no loaded stream described, cannot be
 /// described, suggesting the check of its file where the runtime serves one.
 fn the_refusal_of_a_node_type_source_does_not_describe(
-    listing: &ListProjectNodeTypesToolResult,
+    listing: &ProjectNodeTypesReadFromSource,
     read: &NodeTypeReadFromSource,
 ) -> ControlOperationRefusalOnTheWire {
     let mut params = Map::from_iter([(
@@ -658,7 +658,7 @@ fn the_refusal_of_a_node_type_source_does_not_describe(
 /// runtime offers, suggesting the call that lists what they do.
 pub(crate) fn the_refusal_of_a_node_type_not_offered(
     method_name: &'static str,
-    listing: &ListProjectNodeTypesToolResult,
+    listing: &ProjectNodeTypesReadFromSource,
     node_type: &str,
 ) -> ControlOperationRefusal {
     ControlOperationRefusal::RefusedAction(Box::new(ControlOperationRefusalOnTheWire {

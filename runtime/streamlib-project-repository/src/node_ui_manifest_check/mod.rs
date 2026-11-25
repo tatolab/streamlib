@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListProjectNodeTypesToolResult, NodeTypeSourceOrigin, NodeUiControlPinType, NodeUiManifest,
+    ProjectNodeTypesReadFromSource, NodeTypeSourceOrigin, NodeUiControlPinType, NodeUiManifest,
     ProjectCodeCheckFinding, ProjectCodeCheckKind, ProjectCodeCheckSeverity, ProjectFileChecked,
 };
 
@@ -75,7 +75,7 @@ pub enum ModuleThatDeclares {
 impl WhatTheProjectsModulesDeclare {
     /// What `listing`, the project's node type listing read from source, says its modules
     /// declare.
-    pub fn read_off(listing: &ListProjectNodeTypesToolResult) -> Self {
+    pub fn read_off(listing: &ProjectNodeTypesReadFromSource) -> Self {
         let mut declared = Self::default();
         for source in &listing.sources {
             let module = match &source.origin {

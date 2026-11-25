@@ -5,14 +5,14 @@
 //! reads, its links and what the runtime keeps on each. The engine builds these types and
 //! nothing mirrors them.
 //!
-//! A port's family, audio window and stream facts are open JSON here: their types derive another
-//! JSON Schema generator than the contract's.
+//! A port's audio window and stream facts are open JSON here: their types derive another JSON
+//! Schema generator than the contract's.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use streamlib_node_schema::NodeClassImportPath;
-use streamlib_node_schema::PortStreamFacts;
 use streamlib_node_schema::pin_type::{BuiltInPinTypeName, PinAnnotations, ResolvedPin};
+use streamlib_node_schema::{ImageStreamFacts, PacketsStreamFacts, PortStreamFacts};
 
 use super::{
     GraphLinkOnTheWire, GraphNodeComponentsOnTheWire, StreamClockSpec, StreamConditionOnTheWire,
@@ -114,9 +114,6 @@ pub struct LabelledNodeGroup {
 pub struct ConfigNodeReferenceEdgeOnTheWire {
     /// The name of the node whose setting holds the reference.
     pub node: String,
-    /// The setting the reference sits under, by its key in the node's settings.
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub config_key: String,
     /// The name of the node the reference names.
     pub referenced_node: String,
 }
@@ -140,15 +137,6 @@ pub struct GraphNodeOnTheWire {
     /// The node's name, unique in its graph and cast to lowercase URL-safe: what a link end, an
     /// exposure and a port address name it by.
     pub name: String,
-    /// The input values a node type not yet typed takes whole as its config, the rest of
-    /// `input_values` being its `pins`. Served for a client that reads no `input_values`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub config: Option<Value>,
-    /// A checksum of `config`, for change detection.
-    #[serde(default)]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub config_checksum: u64,
     /// Every input port and output port.
     pub ports: GraphNodePortsOnTheWire,
     /// The values the node's graph document holds for its inputs, by input name: a sparse map,
@@ -156,15 +144,6 @@ pub struct GraphNodeOnTheWire {
     /// `value`.
     #[serde(default)]
     pub input_values: Map<String, Value>,
-    /// The input values that are no config field, by input name; empty when none is saved.
-    /// Served for a client that reads no `input_values`.
-    #[serde(default)]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub pins: Map<String, Value>,
-    /// The config fields the node takes as inputs too, each an input of the field's name.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub studio: Map<String, Value>,
@@ -287,21 +266,15 @@ pub struct GraphNodePortOnTheWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
     pub audio_window: Option<streamlib_node_schema::AudioWindowContract>,
-    /// The stream facts this output port carries now, with the name of the port's pin type as
-    /// `type` on a port whose pin type they describe; absent on a port that states none.
+    /// The stream facts this output port carries now, tagged by the name of the port's pin type
+    /// as `type`; absent on a port that states none, and on one whose pin type they do not
+    /// describe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
     pub stream_facts: Option<PortStreamFactsOnTheWire>,
     /// `false` on a port whose values no pin type checks; absent on every other port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_checked: Option<bool>,
-    /// The port family this port declares and its family's keys. Absent on a graph variable's
-    /// value port, which keeps the family of the setter's source port. Served for a client that
-    /// reads no `pin_type`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "json-schema", schemars(with = "Option<Value>"))]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub family: Option<streamlib_node_schema::PortFamilyDeclaration>,
     /// The value this input reads while nothing is linked into it and no value is set on its
     /// node, null when it declares a null default; absent on a port that declares none.
     #[serde(
@@ -311,8 +284,8 @@ pub struct GraphNodePortOnTheWire {
     )]
     pub pin_default: Option<Value>,
     /// The pin type the port carries, resolved, as `pin_type`, and its flow, as `flow`. Both
-    /// are absent on a port whose type the code does not state exactly, which links by its
-    /// family alone.
+    /// are absent on a port whose type is not one type yet: one typed `any` or `one_of`, or one
+    /// whose type another port sets.
     #[serde(flatten)]
     pub pin: Option<ResolvedPin>,
     /// What the port's pin states besides its type, such as its range, its unit and the control
@@ -338,33 +311,39 @@ pub struct GraphNodePortOnTheWire {
     pub pin_group_slot: Option<PinGroupSlotOnTheWire>,
 }
 
-/// An output port's stream facts as `graph` serves them.
+/// An output port's stream facts as `graph` serves them, tagged by the name of the port's pin
+/// type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PortStreamFactsOnTheWire {
-    /// The name of the port's pin type, `texture`, `encoded_video` or `encoded_audio`; absent on
-    /// a port with no pin type, whose facts `family` alone tags.
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub pin_type: Option<BuiltInPinTypeName>,
-    /// The facts, tagged by the family they belong to.
-    #[serde(flatten)]
-    pub facts: PortStreamFacts,
-}
-
-impl From<PortStreamFacts> for PortStreamFactsOnTheWire {
-    /// `facts` under their family alone, naming no pin type.
-    fn from(facts: PortStreamFacts) -> Self {
-        Self {
-            pin_type: None,
-            facts,
-        }
-    }
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PortStreamFactsOnTheWire {
+    /// The facts of a stream of frames.
+    Texture(ImageStreamFacts),
+    /// The facts of a stream of encoded video.
+    EncodedVideo(PacketsStreamFacts),
+    /// The facts of a stream of encoded audio.
+    EncodedAudio(PacketsStreamFacts),
 }
 
 impl PortStreamFactsOnTheWire {
-    /// Name these facts by the pin type of `pin`, the pin of the port that carries them, when
-    /// they describe a stream of it; name none otherwise.
-    pub fn name_the_pin_type_of_the_port_of(&mut self, pin: Option<&ResolvedPin>) {
-        self.pin_type = pin.and_then(|pin| self.facts.the_pin_type_they_describe(&pin.pin_type));
+    /// `facts` as a port of `pin` carries them, tagged by its pin type; `None` when the port has
+    /// no pin type or one they do not describe.
+    pub fn of_the_facts_on_a_port_of(
+        facts: PortStreamFacts,
+        pin: Option<&ResolvedPin>,
+    ) -> Option<Self> {
+        let pin_type = facts.the_pin_type_they_describe(&pin?.pin_type)?;
+        match (pin_type, facts) {
+            (BuiltInPinTypeName::Texture, PortStreamFacts::Image(image)) => {
+                Some(Self::Texture(image))
+            }
+            (BuiltInPinTypeName::EncodedVideo, PortStreamFacts::Packets(packets)) => {
+                Some(Self::EncodedVideo(packets))
+            }
+            (BuiltInPinTypeName::EncodedAudio, PortStreamFacts::Packets(packets)) => {
+                Some(Self::EncodedAudio(packets))
+            }
+            _ => None,
+        }
     }
 }
 

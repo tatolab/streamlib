@@ -555,12 +555,12 @@ async fn a_node_type_not_offered_refuses_the_call_suggesting_list_node_types() {
 #[test]
 fn a_project_node_type_an_interpreter_described_is_described_from_that_description() {
     use streamlib_runtime_client_contract::local_api_wire_contract::{
-        ListProjectNodeTypesToolResult, NodeTypeDescribedOrWhyNot,
+        ProjectNodeTypesReadFromSource, NodeTypeDescribedOrWhyNot,
     };
 
     register_the_input_value_test_node_once();
     let node_type = InputValueTestNode::node_class_import_path();
-    let listing: ListProjectNodeTypesToolResult = serde_json::from_value(json!({
+    let listing: ProjectNodeTypesReadFromSource = serde_json::from_value(json!({
         "project_directory": "/projects/cell", "project": Uuid::new_v4(), "project_name": "cell",
         "sources": [{
             "source": "project",

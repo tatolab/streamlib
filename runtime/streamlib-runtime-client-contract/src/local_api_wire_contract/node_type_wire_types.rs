@@ -4,10 +4,6 @@
 //! What the three node type reads answer: `list_pin_types`, the pin types and what converts
 //! each; `list_node_types`, the node types a project offers by the source their code comes
 //! from; and `describe_node_types`, the typed inputs and outputs of the node types named.
-//!
-//! A port of a node type not yet typed keeps its family and annotation as open JSON beside a
-//! missing pin type, as the old listing states them: their types derive another JSON Schema
-//! generator than the contract's.
 
 use std::path::PathBuf;
 
@@ -20,8 +16,8 @@ use streamlib_node_schema::pin_type::{
 };
 
 use super::{
-    GraphGeneratorPromotedSettingReadFromSource, NodeModuleNotReadable,
-    ControlOperationRefusalOnTheWire, ProjectFilePlaceOnTheWire,
+    ControlOperationRefusalOnTheWire, GraphGeneratorPromotedSettingReadFromSource,
+    NodeModuleNotReadable, ProjectFilePlaceOnTheWire,
 };
 
 /// `list_pin_types`' answer: every built-in pin type, and each named type the project's node
@@ -325,11 +321,6 @@ pub struct NodeTypeDescription {
     pub inputs: Vec<NodeTypeInputDescribed>,
     /// Every output.
     pub outputs: Vec<NodeTypePortDescribed>,
-    /// The settings of a node type not yet typed that `set_exposed_config_fields` still takes;
-    /// absent when it takes none. Served until the contract's version changes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub exposable_config_fields: Vec<String>,
     /// Each pin group: a slot of inputs and outputs that repeats on each node, each slot's ports
     /// named `<group>.<index>.<pin>` among the node's ports in `graph`; absent when it declares
     /// none.
@@ -393,16 +384,6 @@ pub struct NodeTypePortDescribed {
     /// What it states besides its type, none of which decides a link.
     #[serde(default, skip_serializing_if = "PinAnnotations::is_empty")]
     pub annotations: PinAnnotations,
-    /// The port family a port of a node type not yet typed declares, with its family's keys.
-    /// Served until the contract's version changes, for a client that reads no `pin_type`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub family: Option<Value>,
-    /// A function or shader port's annotation as its source writes it, where only source
-    /// describes its node type. Served until the contract's version changes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "json-schema", schemars(extend("x-removed-in" = 4)))]
-    pub annotation: Option<String>,
 }
 
 /// A port's pin type, or how it is found, and its flow.

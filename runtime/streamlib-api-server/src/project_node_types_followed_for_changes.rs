@@ -15,7 +15,7 @@ use streamlib::sdk::runtime::StreamAction;
 use streamlib_control_contract::ListProjectNodeTypesRequest;
 use streamlib_project_repository::{ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListProjectNodeTypesToolResult, NodeTypeOfOneProjectSource,
+    ProjectNodeTypesReadFromSource, NodeTypeOfOneProjectSource,
 };
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
@@ -115,7 +115,7 @@ impl ProjectNodeTypesLastListed {
         &self,
         project: Uuid,
         listing_started: NodeTypeListingStarted,
-        listing: &ListProjectNodeTypesToolResult,
+        listing: &ProjectNodeTypesReadFromSource,
         announce_what_changed: impl FnOnce(NodeTypesChangedSinceTheLastListing),
     ) {
         let node_types_offered = node_types_offered_by_type_in(listing);
@@ -402,7 +402,7 @@ fn can_a_file_change_the_node_types(path_relative_to_the_project: &str) -> bool 
 }
 
 fn node_types_offered_by_type_in(
-    listing: &ListProjectNodeTypesToolResult,
+    listing: &ProjectNodeTypesReadFromSource,
 ) -> NodeTypesOfferedByType {
     let mut node_types_offered = NodeTypesOfferedByType::new();
     for source in &listing.sources {
@@ -462,8 +462,8 @@ mod tests {
         }
     }
 
-    fn a_listing_of(node_types: Vec<NodeTypeReadFromSource>) -> ListProjectNodeTypesToolResult {
-        ListProjectNodeTypesToolResult {
+    fn a_listing_of(node_types: Vec<NodeTypeReadFromSource>) -> ProjectNodeTypesReadFromSource {
+        ProjectNodeTypesReadFromSource {
             project_directory: PathBuf::from("/projects/show"),
             project: Uuid::nil().to_string(),
             project_name: "show".to_owned(),
@@ -483,7 +483,7 @@ mod tests {
     /// What `last_listed` takes in from `listing`, started now.
     fn what_the_listing_changed(
         last_listed: &ProjectNodeTypesLastListed,
-        listing: &ListProjectNodeTypesToolResult,
+        listing: &ProjectNodeTypesReadFromSource,
     ) -> NodeTypesChangedSinceTheLastListing {
         let mut announced = NodeTypesChangedSinceTheLastListing::default();
         last_listed.take_in_the_listing(

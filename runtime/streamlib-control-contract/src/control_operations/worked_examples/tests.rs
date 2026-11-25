@@ -174,7 +174,6 @@ fn no_example_calls_or_suggests_a_replaced_operation() {
         .filter(|declaration| declaration.replaced_by.is_some())
         .map(|declaration| declaration.method_name)
         .collect();
-    assert!(replaced.contains("set_node_config"));
     for (declaration, example) in every_example() {
         for value in every_value_of(&example) {
             let mut named = Vec::new();

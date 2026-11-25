@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use super::*;
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 #[test]
 fn every_registered_operation_has_a_unique_method_name() {
@@ -55,6 +56,37 @@ fn every_registered_method_name_parses_to_the_call_of_that_name_or_is_refused_fo
             }
             Err(refusal) => panic!("{refusal}"),
         }
+    }
+}
+
+#[test]
+fn a_call_to_each_operation_contract_4_took_away_is_refused_by_its_name() {
+    for removed in [
+        "set_node_config",
+        "set_pin_value",
+        "set_exposed_config_fields",
+        "write_graph_input",
+        "write_studio_view_output",
+        "list_project_node_types",
+    ] {
+        let refusal =
+            ControlOperationCall::parse(removed, Some(serde_json::json!({}))).unwrap_err();
+        assert_eq!(
+            refusal,
+            ControlOperationCallParseRefusal::NoSuchMethod {
+                method_name: removed.to_owned()
+            }
+        );
+        let on_the_wire = refusal.the_refusal_on_the_wire();
+        assert_eq!(
+            on_the_wire.refusal_code,
+            ControlOperationRefusalCode::OperationNotFound
+        );
+        assert!(
+            on_the_wire.runtime_words.contains(&format!("`{removed}`")),
+            "{}",
+            on_the_wire.runtime_words
+        );
     }
 }
 

@@ -34,7 +34,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
     ImportProjectToolResult, LinkCandidatesCheckResult, LinkCheckResult, ListAssetsToolResult,
     ListAudioCaptureDevicesToolResult, ListDependenciesToolResult, ListNodeTypesToolResult,
-    ListPinTypesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
+    ListPinTypesToolResult, ListProjectFilesToolResult, ProjectNodeTypesReadFromSource,
     ListProjectNodeUiElementsToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
     ListStreamsToolResult, LogsToolResult, OpenViewerToolResult, PausePlaybackToolResult,
     ControlOperationRefusalOnTheWire, ProjectCodeCheckResult, ProjectFileTransactionToolResult,
@@ -167,7 +167,7 @@ pub(crate) enum ControlOperationAnswer {
     /// `check_project_code`'s.
     CheckProjectCode(ProjectCodeCheckResult),
     /// `list_project_node_types`'s.
-    ListProjectNodeTypes(ListProjectNodeTypesToolResult),
+    ListProjectNodeTypes(ProjectNodeTypesReadFromSource),
     /// `list_pin_types`'.
     ListPinTypes(ListPinTypesToolResult),
     /// `list_node_types`'.

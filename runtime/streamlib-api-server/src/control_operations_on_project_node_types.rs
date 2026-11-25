@@ -12,7 +12,7 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_project_repository::{PROJECT_IMPORTS_DIRECTORY, TatolabProjectFile};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListProjectNodeTypesToolResult, NodeModuleNotReadable, NodeTypeSourceOrigin,
+    ProjectNodeTypesReadFromSource, NodeModuleNotReadable, NodeTypeSourceOrigin,
     NodeTypeSourceReadWithoutRunningIt,
 };
 use uuid::Uuid;
@@ -92,7 +92,7 @@ impl ControlOperationDispatcher {
     pub(crate) async fn list_project_node_types(
         &self,
         ListProjectNodeTypesRequest { project_directory }: ListProjectNodeTypesRequest,
-    ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
+    ) -> Result<ProjectNodeTypesReadFromSource, ControlOperationRefusal> {
         self.the_node_types_the_project_offers_read_from_source(
             ListProjectNodeTypes::METHOD_NAME,
             project_directory,
@@ -109,7 +109,7 @@ impl ControlOperationDispatcher {
         &self,
         method_name: &'static str,
         project_directory: PathBuf,
-    ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
+    ) -> Result<ProjectNodeTypesReadFromSource, ControlOperationRefusal> {
         self.the_node_types_the_project_offers_and_its_groups(method_name, project_directory)
             .await
             .map(|(listing, _)| listing)
@@ -122,7 +122,7 @@ impl ControlOperationDispatcher {
         &self,
         method_name: &'static str,
         project_directory: PathBuf,
-    ) -> Result<(ListProjectNodeTypesToolResult, NodeTypeGroupsOfAProject), ControlOperationRefusal>
+    ) -> Result<(ProjectNodeTypesReadFromSource, NodeTypeGroupsOfAProject), ControlOperationRefusal>
     {
         let listing_started = self.project_node_types_last_listed.start_a_listing();
         let project_read = self
@@ -245,7 +245,7 @@ impl ControlOperationDispatcher {
                 );
             }
         }
-        let listing = ListProjectNodeTypesToolResult {
+        let listing = ProjectNodeTypesReadFromSource {
             project_directory: project_read.project_directory,
             project: project_read.project.to_string(),
             project_name: project_read.project_name,
@@ -261,7 +261,7 @@ impl ControlOperationDispatcher {
         &self,
         project: Uuid,
         listing_started: NodeTypeListingStarted,
-        listing: &ListProjectNodeTypesToolResult,
+        listing: &ProjectNodeTypesReadFromSource,
     ) {
         self.project_node_types_last_listed.take_in_the_listing(
             project,
