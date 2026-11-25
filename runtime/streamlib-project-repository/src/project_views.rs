@@ -89,35 +89,42 @@ fn the_view_type_named_by_its_projects_name(project_name: &str, view_folder_name
 /// Each view of the project at `project_directory` and its imports whose project's name or UUID
 /// is one of `projects_placed`, by `<project name>:<view folder>` and by
 /// `<project uuid>:<view folder>`, mapped to its type when that is another; the project's own
-/// views first, then each import's in the order its project file records them, the first view
-/// a name and folder name wins.
+/// views first, then each import's in the order its project file records them, a
+/// `<project uuid>:<view folder>` before any name, and the first view a name and folder wins.
 pub(crate) fn the_type_of_each_view_placed_by_its_folder(
     project_directory: &Path,
     projects_placed: &HashSet<String>,
 ) -> Result<HashMap<String, String>, ProjectRepositoryRefusal> {
-    let mut type_of_each_view_placed_by_its_folder = HashMap::new();
-    for view in every_view_a_project_and_its_imports_bring(project_directory)? {
-        let brought_by = &view.brought_by;
-        let project = brought_by.project.to_string();
-        if !projects_placed.contains(&brought_by.project_name)
-            && !projects_placed.contains(&project)
-        {
-            continue;
-        }
-        for type_before in [
+    let views_placed: Vec<ProjectViewFolderRead> =
+        every_view_a_project_and_its_imports_bring(project_directory)?
+            .into_iter()
+            .filter(|view| {
+                projects_placed.contains(&view.brought_by.project_name)
+                    || projects_placed.contains(&view.brought_by.project.to_string())
+            })
+            .collect();
+    let by_its_projects_uuid = views_placed.iter().map(|view| {
+        (
+            the_view_type_of(view.brought_by.project, &view.view_folder_name),
+            view,
+        )
+    });
+    let by_its_projects_name = views_placed.iter().map(|view| {
+        (
             the_view_type_named_by_its_projects_name(
-                &brought_by.project_name,
+                &view.brought_by.project_name,
                 &view.view_folder_name,
             ),
-            the_view_type_of(brought_by.project, &view.view_folder_name),
-        ] {
-            if type_before != view.view_type {
-                type_of_each_view_placed_by_its_folder
-                    .entry(type_before)
-                    .or_insert_with(|| view.view_type.clone());
-            }
-        }
+            view,
+        )
+    });
+    let mut type_of_each_view_placed_by_its_folder = HashMap::new();
+    for (type_before, view) in by_its_projects_uuid.chain(by_its_projects_name) {
+        type_of_each_view_placed_by_its_folder
+            .entry(type_before)
+            .or_insert_with(|| view.view_type.clone());
     }
+    type_of_each_view_placed_by_its_folder.retain(|type_before, type_now| type_before != type_now);
     Ok(type_of_each_view_placed_by_its_folder)
 }
 
