@@ -44,7 +44,7 @@ GROUPS_THE_ADD_NODE_SEARCH_LISTS = {
     "Audio",
 }
 
-AUDIO_VIDEO_PREVIEW_VIEW_TYPE = "Core Nodes:audio_video_preview"
+AUDIO_VIDEO_PREVIEW_VIEW_TYPE = "ba5fc2b1-df25-4e86-bec3-aba1564d6233:audio_video_preview"
 
 
 def every_declared_node() -> dict[str, Any]:

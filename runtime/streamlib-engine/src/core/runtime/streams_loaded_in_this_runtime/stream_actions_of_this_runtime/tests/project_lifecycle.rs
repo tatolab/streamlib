@@ -848,7 +848,7 @@ fn the_node_catalog_of_a_stream_of_a_closed_project_lists_the_native_types_readi
         "the native type of the stream's node is listed"
     );
     assert!(
-        types_while_closed.contains(&format!("{TEST_PROJECT_NAME}:meter")),
+        types_while_closed.contains(&format!("{}:meter", project.project)),
         "the view the stream's project brings is listed"
     );
     // Other tests may register native types meanwhile, so the catalog read later holds at least

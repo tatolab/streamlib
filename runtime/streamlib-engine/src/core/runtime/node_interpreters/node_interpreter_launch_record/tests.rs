@@ -6,7 +6,7 @@ use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescripto
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::runtime::a_project_on_disk_for_a_test::{
-    THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST, options_loading_a_stream_of_the_test_project_at,
+    options_loading_a_stream_of_the_test_project_at,
     options_loading_a_stream_of_the_test_project_in,
 };
 use crate::core::runtime::{
@@ -375,9 +375,12 @@ fn a_load_after_one_a_machine_shutdown_interrupted_describes_normally() {
 #[serial]
 fn a_view_that_does_not_open_beside_a_type_not_described_refuses_both_with_each_refusal() {
     let python_type = import_path("my_app.beside_a_view_that_does_not_open:Blur");
-    let view_type = import_path(&format!("{THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST}:stage"));
     let project_directory = tempfile::tempdir().expect("a project directory");
     let options = a_stream_with_no_environment(project_directory.path());
+    let view_type = import_path(&streamlib_project_repository::the_view_type_of(
+        options.stream_location.project,
+        "stage",
+    ));
     a_view_that_does_not_open_in(project_directory.path(), "stage");
 
     let refusal = the_refusal_of(

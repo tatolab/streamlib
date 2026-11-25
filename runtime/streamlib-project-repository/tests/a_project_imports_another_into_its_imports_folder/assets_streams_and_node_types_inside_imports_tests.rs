@@ -273,11 +273,8 @@ fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth()
         json!({ "stream": { "asset": arm.stream, "from": arm.project() } }),
     );
 
-    let resolved = graph_document_with_each_stream_fragment_reference_resolved(
-        &cell.directory(),
-        &cell.main_document(),
-    )
-    .unwrap();
+    let resolved =
+        graph_document_as_its_project_reads_it(&cell.directory(), &cell.main_document()).unwrap();
 
     let type_named = |level: &Value, name: &str| -> Value {
         level["nodes"]
@@ -373,11 +370,8 @@ fn a_fragment_holds_a_reference_and_each_load_reads_the_stream_it_names() {
         stored["nodes"][0].get("fragment").is_none(),
         "a stream fragment stores no nodes: {stored}"
     );
-    let resolved = graph_document_with_each_stream_fragment_reference_resolved(
-        &imports.cell.directory(),
-        &stored,
-    )
-    .unwrap();
+    let resolved =
+        graph_document_as_its_project_reads_it(&imports.cell.directory(), &stored).unwrap();
     let placed = &resolved["nodes"][0]["fragment"]["nodes"][0];
     assert_eq!(placed["name"], "grade");
     let arm_node = imports.arm.main_document()["nodes"][0]["id"]
@@ -402,11 +396,8 @@ fn a_fragment_holds_a_reference_and_each_load_reads_the_stream_it_names() {
         serde_json::from_slice(&std::fs::read(&imported_stream).unwrap()).unwrap();
     edited["nodes"][0]["name"] = json!("grade-edited");
     std::fs::write(&imported_stream, edited.to_string()).unwrap();
-    let reloaded = graph_document_with_each_stream_fragment_reference_resolved(
-        &imports.cell.directory(),
-        &stored,
-    )
-    .unwrap();
+    let reloaded =
+        graph_document_as_its_project_reads_it(&imports.cell.directory(), &stored).unwrap();
     assert_eq!(
         reloaded["nodes"][0]["fragment"]["nodes"][0]["name"], "grade-edited",
         "an edit of the module's stream changes what the next load reads"
@@ -433,11 +424,8 @@ fn a_stream_that_holds_itself_through_another_is_refused_at_load_by_name() {
         json!({ "stream": { "asset": other } }),
     );
 
-    let refusal = graph_document_with_each_stream_fragment_reference_resolved(
-        &cell.directory(),
-        &cell.main_document(),
-    )
-    .unwrap_err();
+    let refusal = graph_document_as_its_project_reads_it(&cell.directory(), &cell.main_document())
+        .unwrap_err();
 
     assert!(refusal.contains("cycle"), "{refusal}");
     assert!(refusal.contains("`other`"), "{refusal}");
@@ -457,7 +445,7 @@ fn a_project_with_a_module_zipped_and_unzipped_elsewhere_reads_the_modules_strea
     std::fs::remove_dir_all(imports.arm.directory()).unwrap();
 
     let reopened = ProjectRepository::open(elsewhere.path()).unwrap();
-    let resolved = graph_document_with_each_stream_fragment_reference_resolved(
+    let resolved = graph_document_as_its_project_reads_it(
         elsewhere.path(),
         &reopened
             .stream_graph_document(imports.cell.stream)

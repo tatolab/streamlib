@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::stream_fragment_references::each_view_placed_by_its_projects_name_placed_by_its_type;
 
 impl ProjectRepository {
     /// Every asset, ordered by UUID: each sidecar's, and each stream's, read from its graph
@@ -249,7 +250,8 @@ impl ProjectRepository {
         Ok(operations)
     }
 
-    /// The graph document of the stream asset `stream`, as it is on disk now.
+    /// The graph document of the stream asset `stream`, as it is on disk now, each node placing a
+    /// view by its project's name read as placing it by the view's type.
     pub fn stream_graph_document(
         &self,
         stream: Uuid,
@@ -268,12 +270,16 @@ impl ProjectRepository {
             .filter(|asset| asset.kind == ProjectAssetKind::Stream)
             .ok_or(ProjectRepositoryRefusal::NoSuchStream(stream))?;
         let bytes = std::fs::read(stream_asset.path.on_disk_under(&self.project_directory))?;
-        let document = StreamGraphDocument::from_bytes(&bytes).map_err(|why| {
+        let mut document = StreamGraphDocument::from_bytes(&bytes).map_err(|why| {
             ProjectRepositoryRefusal::GraphDocumentUnreadable {
                 path: stream_asset.path.to_string(),
                 why,
             }
         })?;
+        each_view_placed_by_its_projects_name_placed_by_its_type(
+            &self.project_directory,
+            document.node_values_mut(),
+        );
         Ok((stream_asset.path.clone(), document))
     }
 

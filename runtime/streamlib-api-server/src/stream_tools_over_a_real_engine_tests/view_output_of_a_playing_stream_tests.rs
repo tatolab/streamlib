@@ -242,7 +242,7 @@ async fn an_add_node_saving_a_value_on_a_view_outputs_input_is_refused() {
         .the_answer_or_the_refusal_of(
             "add_node",
             json!({ "stream": project.stream_asset_of("main"),
-                    "type": format!("{TEST_PROJECT_NAME}:deck"), "name": "deck",
+                    "type": format!("{}:deck", project.project), "name": "deck",
                     "pins": { "cue": "intro" } }),
         )
         .await
@@ -344,7 +344,7 @@ async fn a_live_transaction_setting_one_input_twice_is_refused_before_anything_i
     let configuring_the_deck = json!({ "operation": "set_node_config", "stream": stream_asset,
                                        "node": DECK_NODE_UUID, "config": {} });
     let adding_a_second_deck = json!({ "operation": "add_node", "stream": stream_asset,
-                                       "type": format!("{TEST_PROJECT_NAME}:deck"),
+                                       "type": format!("{}:deck", project.project),
                                        "name": "second", "as": "second" });
 
     for (operations, second_index, node_named) in [

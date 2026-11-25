@@ -664,7 +664,7 @@
     {
       "id": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
       "name": "stage",
-      "type": "Paint Pulse:stage",
+      "type": "8ff54702-1ad7-4922-b94e-3e71f2d57512:stage",
       "studio": {
         "contract": 1,
         "position": [
@@ -676,7 +676,7 @@
     {
       "id": "c39fea05-57b1-5144-87db-7c614307bfbf",
       "name": "audio_video_preview",
-      "type": "Core Nodes:audio_video_preview",
+      "type": "ba5fc2b1-df25-4e86-bec3-aba1564d6233:audio_video_preview",
       "studio": {
         "contract": 1,
         "position": [

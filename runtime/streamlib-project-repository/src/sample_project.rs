@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::project_file::{PROJECT_FILE_NAME, THIS_RUNTIME_VERSION, TatolabProjectFile};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::STREAM_DOCUMENT_ASSET_KEY;
+use crate::project_views::place_each_own_view_of_a_copy_by_its_type_in_the_copy;
 use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 /// Where a sample's one stream asset that a new project runs first sits in it.
@@ -137,8 +138,9 @@ fn read_a_sample_project_folder(
 
 impl SampleProjectTheRuntimeUnitCarries {
     /// Copy every file of the sample into `project_directory`, made when missing, as the project
-    /// `project` named `project_name`, created with this runtime. Refused, with nothing written,
-    /// when `project_directory` already holds any file the copy would write.
+    /// `project` named `project_name`, created with this runtime, each of its streams placing the
+    /// sample's own views by the copy's UUID. Refused, with nothing written, when
+    /// `project_directory` already holds any file the copy would write.
     pub fn copy_into(
         &self,
         project_directory: &Path,
@@ -175,7 +177,16 @@ impl SampleProjectTheRuntimeUnitCarries {
             project_directory.join(PROJECT_FILE_NAME),
             project_file.canonical_bytes()?,
         )?;
-        Ok(())
+        place_each_own_view_of_a_copy_by_its_type_in_the_copy(
+            project_directory,
+            self.project_file.project,
+            &self.project_file.name,
+            |relative| {
+                files_the_copy_writes
+                    .binary_search_by(|copied| copied.as_str().cmp(relative))
+                    .is_ok()
+            },
+        )
     }
 }
 
