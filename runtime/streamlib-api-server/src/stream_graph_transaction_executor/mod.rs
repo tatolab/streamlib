@@ -17,13 +17,13 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_control_contract::GraphEditMode;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, GET_VARIABLE_NODE_TYPE, GRAPH_DOCUMENT_FILE_SUFFIX,
-    GRAPH_VARIABLE_NAME_CONFIG_KEY, GraphEditStream, PREVIOUS_VALUE_NODE_INPUT_PORT,
-    PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE, ProjectAction,
-    ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation, ProjectRelativeAssetPath,
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
-    ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
+    AppliedProjectTransaction, GET_VARIABLE_NODE_TYPE, GET_VARIABLE_SET_VARIABLE_CONFIG_KEY,
+    GRAPH_DOCUMENT_FILE_SUFFIX, GRAPH_VARIABLE_NAME_CONFIG_KEY, GraphEditStream,
+    PREVIOUS_VALUE_NODE_INPUT_PORT, PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE,
+    ProjectAction, ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation,
+    ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionLinkMadeUnjudged,
     ProjectTransactionNodeInsertedOnALink, ProjectTransactionReversal,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction,
     StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,

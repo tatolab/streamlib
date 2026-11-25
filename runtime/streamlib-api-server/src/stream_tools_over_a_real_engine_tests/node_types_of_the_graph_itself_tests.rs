@@ -356,3 +356,60 @@ async fn renaming_a_variable_keeps_every_getter_reading_it() {
         "the getter's drawn link still renders: {graph}"
     );
 }
+
+/// Clearing a getter's variable lets go of the setter it named too, so the getter names no
+/// variable and is refused as one naming none always was, rather than reading on.
+///
+/// Mental-revert: clearing only `variable` leaves `set_variable`, which the getter reads first.
+#[tokio::test(flavor = "multi_thread")]
+async fn clearing_a_getters_variable_is_refused_rather_than_kept_reading_its_setter() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    a_venv_listing_no_node_type_of_its_own_in(&project);
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = project.stream_asset_of("main");
+    let set_on = |node: &str, input: &str, value: Value| {
+        json!({ "operation": "set_node_input_value", "stream": stream, "node": node,
+                "input": input, "value": value })
+    };
+    let transact = |operations: Value| {
+        tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
+        )
+    };
+    tool_answer(
+        &transact(json!([
+            { "operation": "add_node", "stream": stream, "as": "set_level", "name": "set_level",
+              "type": "tatolab.stream:SetVariable" },
+            set_on("set_level", "variable", json!("level")),
+            { "operation": "add_node", "stream": stream, "as": "get_level", "name": "get_level",
+              "type": "tatolab.stream:GetVariable" },
+            set_on("get_level", "variable", json!("level")),
+        ]))
+        .await,
+    )
+    .expect("a stream holding a variable is built");
+    let getter_uuid = the_node_named(&engine.the_live_graph_of(&stream_id), "get_level")["id"]
+        .as_str()
+        .expect("the getter has a UUID")
+        .to_string();
+    let before = the_input_values_of(&project.the_graph_document_of("main"), &getter_uuid);
+
+    let left_out = json!({ "operation": "set_node_input_value", "stream": stream,
+                           "node": getter_uuid, "input": "variable" });
+    for cleared in [
+        set_on(&getter_uuid, "variable", Value::Null),
+        set_on(&getter_uuid, "variable", json!("")),
+        left_out,
+    ] {
+        let refused = tool_answer(&transact(json!([cleared])).await)
+            .expect_err("a getter naming no variable is refused");
+        assert!(refused.contains("names no variable"), "{refused}");
+    }
+    assert_eq!(
+        the_input_values_of(&project.the_graph_document_of("main"), &getter_uuid),
+        before
+    );
+}

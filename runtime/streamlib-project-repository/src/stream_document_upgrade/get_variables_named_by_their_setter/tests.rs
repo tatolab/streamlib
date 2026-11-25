@@ -80,3 +80,36 @@ fn a_get_naming_a_variable_two_setters_of_its_level_set_keeps_it() {
         json!({ "variable": "pulse" })
     );
 }
+
+#[test]
+fn a_get_whose_setter_reference_is_null_names_its_variables_setter() {
+    let (changed, document) = upgraded(json!({
+        "nodes": [
+            {"id": SET_PULSE, "name": "set-pulse", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "pulse"}},
+            {"name": "get-pulse", "type": "tatolab.stream:GetVariable",
+             "input_values": {"set_variable": null, "variable": "pulse"}}
+        ]
+    }));
+    assert!(changed);
+    assert_eq!(
+        document["nodes"][1]["input_values"],
+        json!({ "set_variable": SET_PULSE })
+    );
+}
+
+#[test]
+fn a_get_of_a_setter_whose_id_is_no_uuid_keeps_its_variable() {
+    let (_, document) = upgraded(json!({
+        "nodes": [
+            {"id": "set-pulse", "name": "set-pulse", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "pulse"}},
+            {"name": "get-pulse", "type": "tatolab.stream:GetVariable",
+             "input_values": {"variable": "pulse"}}
+        ]
+    }));
+    assert_eq!(
+        document["nodes"][1]["input_values"],
+        json!({ "variable": "pulse" })
+    );
+}
