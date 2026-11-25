@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::stream_document_upgrade::NODE_INPUT_VALUES_KEY;
 use crate::stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphOperation, node_name_of, node_uuid_of,
+    StreamGraphOperation, node_name_of, node_uuid_of, uuid_placed_under,
 };
 use crate::stream_graph_fragment_fold::StreamGraphDocumentValueAtItsPosition;
 use crate::stream_graph_placed_stream_ports::{
@@ -42,7 +42,7 @@ impl StreamGraphLevelOfAPlacedStream {
             .iter()
             .rev()
             .fold(own, |placed, placing_node| {
-                Uuid::new_v5(placing_node, placed.as_bytes())
+                uuid_placed_under(*placing_node, placed)
             })
     }
 

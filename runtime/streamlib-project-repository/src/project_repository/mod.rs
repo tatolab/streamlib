@@ -65,6 +65,7 @@ mod assets_and_transactions;
 mod creating_and_opening;
 mod imports_and_dependencies;
 mod node_ui_elements_created;
+mod placed_stream_ports;
 mod project_files;
 mod stream_documents;
 mod undo_and_redo;
