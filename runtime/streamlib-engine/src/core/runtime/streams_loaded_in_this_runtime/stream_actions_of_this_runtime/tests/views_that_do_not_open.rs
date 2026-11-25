@@ -8,7 +8,8 @@ use crate::core::test_support::{
 
 /// A project whose view does not open, beside a node type its interpreter describes, opens with
 /// that type described and only the view's node held, in the `Error` state, carrying the view's
-/// refusal; the stream's failure names the view and its refusal once.
+/// refusal; the stream's failure names the view and its refusal once. The stream places the view
+/// by `<project name>:<view folder>` and reads it as the view of the project's UUID.
 ///
 /// Mental-revert: refusing every type of the describe for the one view that does not open holds
 /// the described type's node as a placeholder carrying the view's refusal too.
@@ -18,14 +19,15 @@ fn a_view_that_does_not_open_holds_only_its_own_node_and_the_rest_is_described()
     let state_directory = tempfile::tempdir().unwrap();
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
     let described_type = NodeClassImportPath::new("nodes.cell:Cell").unwrap();
-    let view_type = format!("{TEST_PROJECT_NAME}:stage");
+    let view_type_placed_by_its_projects_name = format!("{TEST_PROJECT_NAME}:stage");
     let mut graph = the_graph_of_a_stream_named("camera");
     graph["nodes"].as_array_mut().unwrap().extend([
         serde_json::json!({"name": "cell", "type": described_type.as_str()}),
-        serde_json::json!({"name": "stage", "type": view_type}),
+        serde_json::json!({"name": "stage", "type": view_type_placed_by_its_projects_name}),
     ]);
     let project = ProjectWithGraphDocuments::holding(graph);
     a_view_that_does_not_open_in(project.path(), "stage");
+    let view_type_read = streamlib_project_repository::the_view_type_of(project.project, "stage");
     let describe_document = serde_json::json!({
         "described_node_types": [{
             "import_path": described_type.as_str(),
@@ -72,7 +74,9 @@ fn a_view_that_does_not_open_holds_only_its_own_node_and_the_rest_is_described()
             .is_none()
     );
     let stage_placeholder = node_types
-        .placeholder_of_the_node_type_not_described(&NodeClassImportPath::new(&view_type).unwrap())
+        .placeholder_of_the_node_type_not_described(
+            &NodeClassImportPath::new(&view_type_read).unwrap(),
+        )
         .expect("the view's node is held as a placeholder");
     assert!(
         stage_placeholder
@@ -102,7 +106,7 @@ fn a_view_that_does_not_open_holds_only_its_own_node_and_the_rest_is_described()
     assert_eq!(listed.state, StreamListingState::Failed);
     let failed_because = listed.failed_because.as_deref().unwrap_or_default();
     assert!(
-        failed_because.contains(&format!("`{view_type}`")),
+        failed_because.contains(&format!("`{view_type_read}`")),
         "{failed_because}"
     );
     assert_eq!(

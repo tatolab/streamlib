@@ -11,8 +11,8 @@ use streamlib_project_repository::{
     ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
     ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentNode,
-    StreamGraphOperation, StreamGraphOperationOnAStream,
-    graph_document_with_each_stream_fragment_reference_resolved, the_file_of_an_imported_asset,
+    StreamGraphOperation, StreamGraphOperationOnAStream, graph_document_as_its_project_reads_it,
+    the_file_of_an_imported_asset,
 };
 use uuid::Uuid;
 

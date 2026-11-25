@@ -45,7 +45,8 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
     assert!(
         !catalog
             .iter()
-            .any(|descriptor| descriptor.node_class_import_path.as_str() == "acme-dj:broken"),
+            .any(|descriptor| descriptor.node_class_import_path.as_str()
+                == format!("{ACME_DJ}:broken")),
         "a view that does not open is no type"
     );
 }
@@ -296,11 +297,11 @@ fn a_node_naming_a_view_that_does_not_open_is_refused_with_why() {
     let stream = AStreamOfAProjectBringingViews::load();
 
     let refusal = stream
-        .add_a_node("acme-dj:broken", "broken")
+        .add_a_node(&format!("{ACME_DJ}:broken"), "broken")
         .expect_err("a view that does not open is no type")
         .to_string();
     assert!(
-        refusal.contains("`acme-dj:broken` does not open") && refusal.contains("title"),
+        refusal.contains(&format!("`{ACME_DJ}:broken` does not open")) && refusal.contains("title"),
         "{refusal}"
     );
 }

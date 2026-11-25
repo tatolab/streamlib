@@ -204,7 +204,7 @@ async fn a_bundle_only_a_class_a_view_shadows_declares_is_not_offered() {
         .loaded_stream_of_the_id(&stream_id)
         .expect("the stream is loaded");
     let node_types = loaded.node_types_this_stream_resolves();
-    let the_view_type = format!("{TEST_PROJECT_NAME}:synth");
+    let the_view_type = format!("{}:synth", project.project);
     for descriptor in [
         a_python_function_node_type(
             THERMOMETER_TYPE,

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -11,6 +11,9 @@ use uuid::Uuid;
 use crate::project_file::TatolabProjectFile;
 use crate::project_import_folders::the_folder_of_an_import;
 use crate::project_stream_document::{ProjectStreamDocument, project_stream_documents};
+use crate::project_views::{
+    retype_each_node_at_every_level, the_type_of_each_view_placed_by_its_projects_name,
+};
 use crate::stream_document_upgrade::{NODE_INPUT_VALUES_KEY, stream_document_in_the_current_shape};
 use crate::stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
@@ -89,8 +92,81 @@ fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTree
 /// UUIDv5(fragment node's UUID, its own UUID), each asset reference into an import names
 /// that import with `from`, and each node type an import's own node code defines is led by the
 /// import's folder, `imports/<folder>/<module>:<qualname>`, so it is imported from there. Refused, naming each stream, when a stream holds itself, directly
-/// or through another stream, and when a held stream does not read.
-pub fn graph_document_with_each_stream_fragment_reference_resolved(
+/// or through another stream, and when a held stream does not read. A node, at any level, that
+/// is typed `<project name>:<view folder>` for a view the project or one of its imports brings
+/// takes that view's type.
+pub fn graph_document_as_its_project_reads_it(
+    project_directory: &Path,
+    graph_document: &Value,
+) -> Result<Value, String> {
+    let mut read = graph_document_with_each_stream_fragment_reference_resolved(
+        project_directory,
+        graph_document,
+    )?;
+    if let Some(node_values) = read.get_mut("nodes").and_then(Value::as_array_mut) {
+        each_view_placed_by_its_projects_name_placed_by_its_type(project_directory, node_values);
+    }
+    Ok(read)
+}
+
+/// Retype each node of `node_values`, at every level, typed `<project name>:<view folder>` for
+/// a view the project at `project_directory` or one of its imports brings to that view's type;
+/// nothing changes when no node is so typed or the projects are not read, which the load
+/// refuses on its own.
+pub(crate) fn each_view_placed_by_its_projects_name_placed_by_its_type(
+    project_directory: &Path,
+    node_values: &mut [Value],
+) {
+    let mut parts_before_the_colon = HashSet::new();
+    each_part_before_the_colon_of_a_node_type_at_every_level(
+        node_values,
+        &mut parts_before_the_colon,
+    );
+    if parts_before_the_colon.is_empty() {
+        return;
+    }
+    match the_type_of_each_view_placed_by_its_projects_name(
+        project_directory,
+        &parts_before_the_colon,
+    ) {
+        Ok(retyped) if !retyped.is_empty() => {
+            retype_each_node_at_every_level(node_values, &retyped);
+        }
+        Ok(_) => {}
+        Err(not_read) => tracing::debug!(
+            project_directory = %project_directory.display(),
+            %not_read,
+            "no view placed by its project's name is retyped: the project is not read"
+        ),
+    }
+}
+
+/// Add to `parts` the part before the `:` of each node type of `node_values`, and of each
+/// fragment one of them places, that is not a UUID.
+fn each_part_before_the_colon_of_a_node_type_at_every_level(
+    node_values: &[Value],
+    parts: &mut HashSet<String>,
+) {
+    for node in node_values {
+        if let Some((before_the_colon, _)) = node
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(|node_type| node_type.split_once(':'))
+            && Uuid::parse_str(before_the_colon).is_err()
+        {
+            parts.insert(before_the_colon.to_owned());
+        }
+        if let Some(fragment_nodes) = node
+            .get("fragment")
+            .and_then(|fragment| fragment.get("nodes"))
+            .and_then(Value::as_array)
+        {
+            each_part_before_the_colon_of_a_node_type_at_every_level(fragment_nodes, parts);
+        }
+    }
+}
+
+fn graph_document_with_each_stream_fragment_reference_resolved(
     project_directory: &Path,
     graph_document: &Value,
 ) -> Result<Value, String> {

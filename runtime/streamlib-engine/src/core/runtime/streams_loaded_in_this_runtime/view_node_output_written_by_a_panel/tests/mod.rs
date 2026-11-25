@@ -31,7 +31,15 @@ mod view_node_tests;
 
 const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
 
-const DECK_VIEW_TYPE: &str = "acme-dj:deck";
+/// The UUID of the project `acme-dj`, which leads the type of each view it brings.
+macro_rules! acme_dj {
+    () => {
+        "3c9e7a52-6b1f-4d84-a0e3-9f2b5c7d1e46"
+    };
+}
+const ACME_DJ: &str = acme_dj!();
+
+const DECK_VIEW_TYPE: &str = concat!(acme_dj!(), ":deck");
 
 fn the_deck_manifest() -> Value {
     json!({
@@ -43,7 +51,7 @@ fn the_deck_manifest() -> Value {
     })
 }
 
-const PULSE_VIEW_TYPE: &str = "acme-dj:pulse";
+const PULSE_VIEW_TYPE: &str = concat!(acme_dj!(), ":pulse");
 
 fn the_pulse_manifest() -> Value {
     json!({
@@ -53,7 +61,7 @@ fn the_pulse_manifest() -> Value {
     })
 }
 
-const BOARD_VIEW_TYPE: &str = "acme-dj:board";
+const BOARD_VIEW_TYPE: &str = concat!(acme_dj!(), ":board");
 
 fn the_board_manifest() -> Value {
     json!({
@@ -64,7 +72,7 @@ fn the_board_manifest() -> Value {
     })
 }
 
-const LEVEL_VIEW_TYPE: &str = "acme-dj:level";
+const LEVEL_VIEW_TYPE: &str = concat!(acme_dj!(), ":level");
 
 fn the_level_manifest() -> Value {
     json!({
@@ -75,7 +83,7 @@ fn the_level_manifest() -> Value {
     })
 }
 
-const MIXER_VIEW_TYPE: &str = "acme-dj:mixer";
+const MIXER_VIEW_TYPE: &str = concat!(acme_dj!(), ":mixer");
 
 fn the_mixer_manifest() -> Value {
     json!({
@@ -102,9 +110,12 @@ impl AStreamOfAProjectBringingViews {
         let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
         std::fs::write(
             project_directory.path().join(PROJECT_FILE_NAME),
-            TatolabProjectFile::of_a_new_project("acme-dj")
-                .canonical_bytes()
-                .unwrap(),
+            TatolabProjectFile {
+                project: ACME_DJ.parse().unwrap(),
+                ..TatolabProjectFile::of_a_new_project("acme-dj")
+            }
+            .canonical_bytes()
+            .unwrap(),
         )
         .unwrap();
         a_view_in(project_directory.path(), "deck", &the_deck_manifest());

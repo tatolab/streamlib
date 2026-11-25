@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::project_views::place_each_own_view_of_a_copy_by_its_type_in_the_copy;
 use streamlib_runtime_client_contract::process_umask_kept_from_iceoryx2_listener_binds::create_directory_and_its_missing_parents_at_the_process_umask;
 
 impl ProjectRepository {
@@ -150,7 +151,8 @@ impl ProjectRepository {
 
     /// Duplicate the project into `into`, a path that must not exist yet, as a project of its
     /// own: every file a copy of it carries and its whole history, under a new UUID and the name
-    /// `<name> copy`, the duplicate committed on that history by `author`. Its `.venv` and the
+    /// `<name> copy`, each of its streams placing its own views by that UUID, the duplicate
+    /// committed on that history by `author`. Its `.venv` and the
     /// rest of its runtime folder stay behind. Refused, nothing left at `into`, for a relative
     /// `into`, one that exists, and one inside this project.
     pub fn duplicate_into(
@@ -198,6 +200,11 @@ impl ProjectRepository {
         write_file_whole(
             &into.join(PROJECT_FILE_NAME),
             &duplicate_project_file.canonical_bytes()?,
+        )?;
+        place_each_own_view_of_a_copy_by_its_type_in_the_copy(
+            into,
+            self.project_file.project,
+            &self.project_file.name,
         )?;
         let duplicate = Self::open(into)?;
         duplicate.history.commit_tracked_files(

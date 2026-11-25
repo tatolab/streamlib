@@ -268,7 +268,7 @@ class ModuleProjectArchives(unittest.TestCase):
             entry["views"],
             [
                 {
-                    "view_type": "Camera:program",
+                    "view_type": "8b0a5a52-3d5d-4f43-8f43-0b6c7b0d1e2f:program",
                     "title": "Program",
                     "description": "The show as the audience gets it.",
                     "placement": "node",

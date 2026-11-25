@@ -98,7 +98,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     assert_eq!(
         views[0],
         json!({
-            "view_type": format!("{TEST_PROJECT_NAME}:deck"),
+            "view_type": format!("{}:deck", cell.project),
             "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
             "view_folder_in_the_project": "views/deck",
             "opens": true, "not_opened_because": null,
@@ -113,7 +113,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     );
     assert_eq!(
         views[1]["view_type"],
-        format!("{TEST_PROJECT_NAME}:older"),
+        format!("{}:older", cell.project),
         "{listed}"
     );
     assert_eq!(views[1]["opens"], false, "{listed}");
@@ -125,7 +125,11 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
         "a view whose port is declared by `family` is listed with the reader's words: {listed}"
     );
     let views = &views[1..];
-    assert_eq!(views[1]["view_type"], "levels:broken", "{listed}");
+    assert_eq!(
+        views[1]["view_type"],
+        format!("{}:broken", levels.project),
+        "{listed}"
+    );
     assert_eq!(views[1]["opens"], false, "{listed}");
     assert_eq!(views[1]["import_folder"], folder, "{listed}");
     assert!(
@@ -134,7 +138,11 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
             .is_some_and(|why| why.starts_with("`tatolab_view.json` is not JSON: ")),
         "{listed}"
     );
-    assert_eq!(views[2]["view_type"], "levels:meter", "{listed}");
+    assert_eq!(
+        views[2]["view_type"],
+        format!("{}:meter", levels.project),
+        "{listed}"
+    );
     assert_eq!(views[2]["project"], json!(levels.project), "{listed}");
     assert_eq!(views[2]["project_name"], "levels", "{listed}");
     assert_eq!(views[2]["placement"], "area", "{listed}");
@@ -182,7 +190,7 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
     let live_graph = engine.the_live_graph_of(&stream_id);
     let deck = the_node_named(&live_graph, "deck");
     assert_eq!(deck["id"], DECK_NODE_UUID, "{deck}");
-    assert_eq!(deck["type"], format!("{TEST_PROJECT_NAME}:deck"), "{deck}");
+    assert_eq!(deck["type"], format!("{}:deck", project.project), "{deck}");
     assert!(
         deck.to_string().contains("waveform") && deck.to_string().contains("crossfader"),
         "the view node takes the view's ports: {deck}"

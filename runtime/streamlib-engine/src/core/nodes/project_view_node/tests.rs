@@ -13,6 +13,10 @@ use super::*;
 fn a_view_read_from(view_type: &str, manifest_json: JsonValue) -> ProjectViewFolderRead {
     ProjectViewFolderRead {
         view_type: view_type.to_string(),
+        view_folder_name: view_type
+            .rsplit_once(':')
+            .map_or(view_type, |(_, view_folder_name)| view_folder_name)
+            .to_string(),
         brought_by: ProjectBringingAView {
             project: uuid::Uuid::nil(),
             project_name: "acme-dj".to_string(),

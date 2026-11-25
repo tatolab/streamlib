@@ -382,11 +382,15 @@ fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
 }
 
 fn the_node_type_renamed(node: &mut Map<String, Value>) -> bool {
-    let Some(renamed_to) = node
-        .get("type")
-        .and_then(Value::as_str)
-        .and_then(the_type_a_node_type_was_renamed_to)
-    else {
+    the_node_type_renamed_by(node, the_type_a_node_type_was_renamed_to)
+}
+
+/// Give `node` the type `renamed` maps its type to; whether it had one to take.
+pub(crate) fn the_node_type_renamed_by<'renamed>(
+    node: &mut Map<String, Value>,
+    renamed: impl Fn(&str) -> Option<&'renamed str>,
+) -> bool {
+    let Some(renamed_to) = node.get("type").and_then(Value::as_str).and_then(renamed) else {
         return false;
     };
     node.insert("type".to_owned(), Value::String(renamed_to.to_owned()));
