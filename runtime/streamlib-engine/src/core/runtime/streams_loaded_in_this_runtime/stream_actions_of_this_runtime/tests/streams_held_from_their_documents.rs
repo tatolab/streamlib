@@ -527,7 +527,7 @@ fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_se
             "id": "5e8c2b7a-1d4f-4c6e-9a3b-8f2d6c1e7a54",
             "name": "echo",
             "type": crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
-            "input_values": {"port": "echo"},
+            "input_values": {"port": "echo", "pin_type": {"type": "string"}},
         }));
     graph["links"]
         .as_array_mut()

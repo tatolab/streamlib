@@ -134,8 +134,8 @@ fn the_form_a_held_annotation_is_not_of(
 /// Refuse a setting of the `GraphInput` `node` stating an annotation of its `value` that the
 /// `pin_type` it chooses does not take, naming the annotation and those the type takes, or one
 /// that holds a value of another form; and one stating any annotation but `range` while it
-/// chooses no pin type. A `range` on an Input that chooses no pin type is checked against its
-/// family.
+/// chooses no pin type. A `range` on an Input that chooses no pin type yet, or a Tensor, whose
+/// numbers it bounds, is checked with the Input's other settings.
 pub(super) fn refuse_an_annotation_the_chosen_type_does_not_take(
     node: &GraphSnapshotNode,
     pin_type: Option<&PinType>,
@@ -160,6 +160,9 @@ pub(super) fn refuse_an_annotation_the_chosen_type_does_not_take(
                 node.name
             )));
         };
+        if annotation == PinAnnotationName::Range && matches!(pin_type, PinType::Tensor {}) {
+            continue;
+        }
         let row = built_in_pin_type(pin_type.built_in_name());
         if !row.annotations.contains(&annotation) {
             let taken: Vec<String> = THE_ANNOTATION_SETTINGS_OF_A_GRAPH_INPUT

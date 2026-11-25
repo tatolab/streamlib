@@ -14,7 +14,10 @@ const ANY_RECORDS_SINK: &str = "VerdictCheckAnyRecordsSink";
 const ANY_RECORDS_RELAY: &str = "VerdictCheckAnyRecordsRelay";
 
 fn an_untyped_records_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(name, name, true, PinDeclaration::exactly(PinType::String {}))
+    PortDescriptor {
+        pin_declaration: None,
+        ..PortDescriptor::new(name, name, true, PinDeclaration::exactly(PinType::String {}))
+    }
 }
 
 fn register_the_named_type_fixture_node_types() {
@@ -101,8 +104,8 @@ fn a_named_type_into_another_name_is_refused_naming_both_types() {
     assert_eq!(the_links_in(&compiler), 0);
 }
 
-/// Mental-revert: without the named type's own check, the untyped Records input takes the link
-/// by its family, and would read the class's bytes as a Records message.
+/// Mental-revert: without the named type's own check, the untyped input takes the link, and would
+/// read the class's bytes as a message of another kind.
 #[test]
 fn a_named_type_into_an_untyped_input_is_refused_naming_the_type_and_both_ends() {
     register_the_named_type_fixture_node_types();

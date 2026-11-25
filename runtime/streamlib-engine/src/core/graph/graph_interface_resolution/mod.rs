@@ -699,7 +699,7 @@ impl GraphInterfaceAsDrawn {
 
     /// Refuse a port the interface declares whose linked port is not a port of
     /// the right direction on a node of `graph_the_runtime_runs`, or that the
-    /// link rules refuse between it and a port of the declared family.
+    /// link rules refuse between it and a port of the pin type it carries.
     pub fn validate(
         &self,
         graph_the_runtime_runs: &GraphSnapshot,

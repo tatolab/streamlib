@@ -473,7 +473,7 @@ fn an_interface_port_of_another_pin_type_than_its_linked_port_is_refused_naming_
     assert!(
         input_refusal.contains("`GraphInput` node `encoded`")
             && input_refusal.contains("String")
-            && input_refusal.contains("EncodedVideo"),
+            && input_refusal.contains("Encoded video"),
         "{input_refusal}"
     );
 }

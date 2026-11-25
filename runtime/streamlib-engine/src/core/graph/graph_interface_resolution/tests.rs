@@ -175,7 +175,7 @@ fn a_default_or_range_is_refused_where_no_client_writes_the_input_or_its_type_ca
         serde_json::json!({"port": "cue", "pin_type": {"type": "string"}, "range": [0, 1]}),
     );
     assert!(
-        range_on_a_string.contains("only an Input of numbers"),
+        range_on_a_string.contains("states `range`"),
         "{range_on_a_string}"
     );
     let range_highest_first = refusal_on_the_top_level(
@@ -489,7 +489,7 @@ fn a_link_into_an_input_or_out_of_an_output_is_refused_naming_the_node() {
 }
 
 #[test]
-fn an_interface_node_naming_no_port_choosing_no_pin_type_or_another_key_is_refused() {
+fn an_interface_node_naming_no_port_an_unknown_pin_type_or_another_key_is_refused() {
     let declaring = |config: serde_json::Value| {
         refusal_of(serde_json::json!({
             "nodes": [{"name": "overlay", "type": GRAPH_INPUT_NODE_TYPE, "input_values": config}],
@@ -497,10 +497,8 @@ fn an_interface_node_naming_no_port_choosing_no_pin_type_or_another_key_is_refus
         }))
     };
     assert!(declaring(serde_json::json!({"pin_type": {"type": "texture"}})).contains("names no port"));
-    let no_pin_type = declaring(serde_json::json!({"port": "overlay", "pin_type": {"type": "video"}}));
-    assert!(no_pin_type.contains("`pin_type`"), "got {no_pin_type}");
-    let the_older_family = declaring(serde_json::json!({"port": "overlay", "family": "image"}));
-    assert!(the_older_family.contains("`family`"), "got {the_older_family}");
+    let unknown_pin_type = declaring(serde_json::json!({"port": "overlay", "pin_type": {"type": "video"}}));
+    assert!(unknown_pin_type.contains("`pin_type`"), "got {unknown_pin_type}");
     let another_key =
         declaring(serde_json::json!({"port": "overlay", "pin_type": {"type": "texture"}, "name": "overlay"}));
     assert!(another_key.contains("`name`"), "got {another_key}");

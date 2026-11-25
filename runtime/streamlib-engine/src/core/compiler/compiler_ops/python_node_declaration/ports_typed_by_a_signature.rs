@@ -79,8 +79,8 @@ pub(super) fn ports_a_function_node_signature_types(
     Ok(typed_ports)
 }
 
-/// Each port a shader node's program types exactly, by name, with its declaration: its inputs
-/// of numbers, a Float exactly a 32-bit Float, the four bytes its push constant holds, and a
+/// Each port a shader node's program types exactly, by name, with its declaration: its image
+/// inputs, each a Texture of any format; its inputs of numbers, a Float exactly a 32-bit Float, the four bytes its push constant holds, and a
 /// Color or a Vector as its signature states it, each part a 32-bit push constant too; and its
 /// output, a Texture of the format the runtime writes every shader's output in.
 pub(super) fn ports_a_shader_node_program_types(
@@ -95,11 +95,22 @@ pub(super) fn ports_a_shader_node_program_types(
         };
         (port.to_string(), PinDeclaration::exactly(pin_type))
     });
+    let image_inputs = program.image_input_ports().map(|port| {
+        (
+            port.to_string(),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        )
+    });
     let output = (
         program.output_port.clone(),
         PinDeclaration::exactly(shader_node_output_texture()),
     );
-    number_inputs.chain(std::iter::once(output)).collect()
+    image_inputs
+        .chain(number_inputs)
+        .chain(std::iter::once(output))
+        .collect()
 }
 
 /// The Texture every shader node's output is: of the one format the runtime writes it in.

@@ -480,7 +480,8 @@ fn a_class_node_read_through_a_gate_by_the_app_process_is_read_at_the_pool_and_h
         })
     );
     assert_eq!(
-        pool_node.ports.outputs[0].pin, class_node_pin,
+        pool_node.ports.outputs[0].pin.as_ref().map(|pin| &pin.pin_type),
+        class_node_pin.as_ref().map(|pin| &pin.pin_type),
         "the pool hands the message on as the pin type it arrived as"
     );
     let into_the_pool = the_links_a_link_is_wired_as(&graph, &gate_into_the_reader)

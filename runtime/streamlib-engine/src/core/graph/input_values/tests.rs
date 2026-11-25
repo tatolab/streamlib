@@ -148,8 +148,8 @@ fn a_typed_value_a_process_nodes_read_cannot_carry_is_refused_and_a_function_or_
         &text_input,
         &json!("loud"),
     )
-    .expect_err("a process node's read carries no text");
-    assert_eq!(refusal.code, InputValueRefusalCode::InputValueNotValid);
+    .expect_err("a process node's wired read takes no value");
+    assert_eq!(refusal.code, InputValueRefusalCode::InputTakesNoValue);
     assert!(refusal.words.contains("`label`"), "{refusal}");
     for reads_typed_values in [
         NodeKind::Shader,

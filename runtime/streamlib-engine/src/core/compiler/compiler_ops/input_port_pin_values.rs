@@ -205,7 +205,7 @@ pub(crate) mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            refusal.contains("`gain`") && refusal.contains("a number or a bool"),
+            refusal.contains("`gain`") && refusal.contains("takes a number"),
             "got {refusal}"
         );
         refuse_a_pin_value_a_process_node_cannot_read(

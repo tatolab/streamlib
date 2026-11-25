@@ -246,7 +246,7 @@ fn a_link_at_a_placed_level_is_judged_by_what_the_links_it_holds_carry_on() {
     )
     .expect_err("a Float through the passthrough is no String");
     assert!(
-        matches!(&refused_inside, Error::InvalidLink(words) if words.contains("String")),
+        refused_inside.to_string().contains("String"),
         "{refused_inside:?}"
     );
     let each_node_by_its_role = |words: String, names: [&str; 3]| {

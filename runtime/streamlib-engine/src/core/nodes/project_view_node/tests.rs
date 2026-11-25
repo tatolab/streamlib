@@ -375,7 +375,7 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
     assert!(
         refusal
             .to_string()
-            .contains("output `fader` of node `board` carries Array"),
+            .contains("output `fader` of node `board` carries Tensor"),
         "{refusal}"
     );
     assert!(board.current_value_of_each_output.is_empty());

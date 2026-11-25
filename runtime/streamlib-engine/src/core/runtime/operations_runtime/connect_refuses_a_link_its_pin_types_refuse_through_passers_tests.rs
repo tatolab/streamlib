@@ -150,9 +150,10 @@ fn a_link_its_pin_types_refuse_is_refused_before_any_link_exists() {
     )
     .expect_err("a String output never feeds a Tensor input");
 
-    let Error::InvalidLink(refusal) = refusal else {
-        panic!("a link of types that do not connect is an invalid link: {refusal}");
+    let Error::PinLinkRefused(refusal) = refusal else {
+        panic!("a link of types that do not connect is refused by its pin types: {refusal}");
     };
+    let refusal = refusal.to_string();
     assert!(refusal.contains("String"), "{refusal}");
     assert!(refusal.contains("Tensor"), "{refusal}");
     assert_eq!(the_links_in(&compiler), 0, "the refused link is never added");

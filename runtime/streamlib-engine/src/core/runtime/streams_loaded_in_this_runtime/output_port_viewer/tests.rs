@@ -576,11 +576,11 @@ impl ARunningCameraWithNoLinks {
 }
 
 /// A viewer of a typed port is answered the port's pin type and reads every message of an Audio
-/// port and the latest of any other type, a number carried on Channels included; a port with no
-/// pin type answers none and reads by its family, every message of a Channels port.
+/// port and the latest of any other type; a port with no pin type answers none and reads the
+/// latest message.
 ///
-/// Mental-revert: read by family alone, the Float port, which carries Channels, reads every
-/// message, and no answer names a pin type.
+/// Mental-revert: reading every message of each port that travels as a Channels block, the
+/// Float port reads every message too.
 #[test]
 #[serial]
 fn a_viewer_of_a_typed_port_is_answered_its_pin_type_and_reads_every_message_only_of_audio() {
@@ -598,7 +598,7 @@ fn a_viewer_of_a_typed_port_is_answered_its_pin_type_and_reads_every_message_onl
     >(crate::core::test_support::MockChannelsSourceNode::node_class_import_path());
     assert_eq!(
         tone.viewed_as("audio", None),
-        (None, OutputPortViewerReads::EveryMessage)
+        (None, OutputPortViewerReads::LatestMessage)
     );
     assert_eq!(
         tone.viewed_as("audio", Some(PinType::Audio {})),

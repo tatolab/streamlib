@@ -151,7 +151,7 @@ fn an_annotation_the_chosen_type_does_not_take_is_refused_naming_it() {
         "{step_on_a_string}"
     );
     let control_with_no_type = the_refusal_of_a_top_level_graph_input_saved_with(json!({
-        "port": "lines", "pin_type": {"type": "float"}, "control": "dial",
+        "port": "lines", "control": "dial",
     }));
     assert!(
         control_with_no_type.contains("states `control`")

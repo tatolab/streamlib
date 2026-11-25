@@ -479,7 +479,7 @@ fn an_output_following_an_input_the_node_does_not_declare_is_refused_naming_both
         "pin_declaration": {"pin_type": {"kind": "same_as_input", "input_port_name": "value"}, "flow": "stream"},
     }])));
     assert!(
-        refusal.contains("\"result\"") && refusal.contains("input port \"value\""),
+        refusal.contains("\"result\"") && refusal.contains("input \"value\""),
         "got {refusal}"
     );
 }
@@ -521,11 +521,11 @@ fn a_declared_borrow_quota_reaches_the_descriptor_and_one_past_the_most_is_refus
 }
 
 #[test]
-fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is_refused() {
+fn a_declared_pin_default_reaches_the_descriptor_and_one_its_pin_type_does_not_take_is_refused() {
     let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
         {"name": "level", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"}, "description": "",
          "delivery_profile": "newest", "pin_default": 0.5},
-        {"name": "maybe", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "description": "",
+        {"name": "maybe", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream", "may_be_unset": true}, "description": "",
          "delivery_profile": "newest", "pin_default": null},
     ])))
     .unwrap_or_else(|refusal| panic!("a number and a null default read: {refusal}"));
@@ -543,7 +543,7 @@ fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is
         "delivery_profile": "newest", "pin_default": 1,
     }])));
     assert!(
-        refusal.contains("\"frames\"") && refusal.contains("Channels"),
+        refusal.contains("\"frames\"") && refusal.contains("takes text"),
         "got {refusal}"
     );
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
@@ -551,7 +551,7 @@ fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is
         "delivery_profile": "newest", "pin_default": "loud",
     }])));
     assert!(
-        refusal.contains("\"level\"") && refusal.contains("a number or a bool"),
+        refusal.contains("\"level\"") && refusal.contains("takes a number"),
         "got {refusal}"
     );
 }

@@ -419,6 +419,24 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         // A setting its schema alone types is checked by that schema when its node is set up.
         return Ok(());
     }
+    if let Some(pin) = port.pin.as_ref().filter(|pin| {
+        port.is_a_setting() && !value.is_null() && !pin.pin_type.holds_a_stored_value()
+    }) {
+        // A setting of a type that holds no stored value, as a Tensor or Audio a client writes
+        // onto a `GraphInput`, takes what its type packs into the message it publishes.
+        return crate::core::pin_value_packing::pack_pin_value(&pin.pin_type, value, 0)
+            .map(|_| ())
+            .map_err(|why| {
+                InputValueRefusal::of(
+                    InputValueRefusalCode::InputValueNotValid,
+                    format!(
+                        "the value of input `{input}` of `{node_name}` is {value}, and `{input}` \
+                         carries {}: {why}",
+                        pin.pin_type
+                    ),
+                )
+            });
+    }
     if let Some(checked) = port.check_value(value) {
         checked.map_err(|not_taken| {
             InputValueRefusal::of(

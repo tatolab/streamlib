@@ -290,6 +290,7 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
             "pin_type",
             "flow",
             "stream_facts",
+            "annotations",
         ],
     );
 }
@@ -311,7 +312,7 @@ fn an_output_port_with_no_pin_type_renders_none_of_the_facts_it_carries() {
             }
             .into(),
         )
-        .expect_err("a port with no pin type carries no facts");
+        .expect("a port with no pin type holds the facts its node sets");
     let replaced = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_eq!(
         replaced["ports"]["outputs"][0].get("stream_facts"),
@@ -338,6 +339,7 @@ fn a_port_of_no_pin_type_renders_its_values_unchecked_in_the_graph_and_the_regis
             "name",
             "description",
             "required",
+            "delivery_profile",
             "values_checked",
         ],
     );

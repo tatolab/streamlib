@@ -30,6 +30,10 @@ fn node_types_resolving_a_function_and_a_shader_node_type() -> NodeTypesOneStrea
 /// Register `scale` and `tint` in `node_types`.
 fn register_a_function_and_a_shader_node_type(node_types: &NodeTypesOneStreamResolves) {
     let mut scale = a_function_node_type(SCALE, &["y"], &["result"]);
+    scale.inputs[0].pin_declaration = Some(PinDeclaration {
+        pin_type: crate::core::descriptors::DeclaredPinType::Any,
+        ..PinDeclaration::exactly(PinType::Float { exact_size: None })
+    });
     scale = scale.with_input(
         PortDescriptor::new("x", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
         .with_delivery_profile("newest"),
@@ -133,7 +137,7 @@ fn a_function_nodes_input_values_are_checked() {
     assert_eq!(
         the_refusal_of(&node_types, SCALE, "y", Some(json!("any value"))),
         Ok(()),
-        "an input naming no pin type takes any value a function reads"
+        "an input of any pin type takes any value a function reads"
     );
     assert_eq!(
         the_code_of(the_refusal_of(&node_types, SCALE, "z", Some(json!(1)))),

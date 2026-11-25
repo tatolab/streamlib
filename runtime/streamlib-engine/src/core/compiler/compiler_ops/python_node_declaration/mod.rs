@@ -144,6 +144,12 @@ impl PythonNodeDeclaration {
             .inputs
             .iter()
             .chain(&descriptor.outputs)
+            .chain(
+                descriptor
+                    .pin_groups
+                    .iter()
+                    .flat_map(|group| group.inputs.iter().chain(&group.outputs)),
+            )
             .find(|port| port.pin_declaration.is_none())
         {
             return Err(format!(
@@ -152,6 +158,7 @@ impl PythonNodeDeclaration {
                 untyped.name
             ));
         }
+        refuse_a_pin_default_its_pin_type_does_not_take(&descriptor)?;
 
         Ok(Self {
             descriptor,
@@ -655,11 +662,35 @@ fn read_pin_default(
                 )
             });
     }
-    Err(format!(
-        "input port {:?} declares a pin default, and it declares no pin type the default is a \
-         value of",
-        port.name
-    ))
+    // A port typed by its program or its signature is checked once every port is typed.
+    Ok(pin_default.clone())
+}
+
+/// Refuse a pin default the pin type of its port does not take, each port typed.
+fn refuse_a_pin_default_its_pin_type_does_not_take(
+    descriptor: &NodeDescriptor,
+) -> std::result::Result<(), String> {
+    for port in descriptor.inputs.iter().chain(
+        descriptor
+            .pin_groups
+            .iter()
+            .flat_map(|group| group.inputs.iter()),
+    ) {
+        let (Some(pin_default), Some(pin_declaration)) =
+            (&port.pin_default, &port.pin_declaration)
+        else {
+            continue;
+        };
+        pin_declaration
+            .check_value(pin_default)
+            .map_err(|not_taken| {
+                format!(
+                    "input port {:?} declares the pin default {pin_default}, and it takes {}",
+                    port.name, not_taken.takes
+                )
+            })?;
+    }
+    Ok(())
 }
 
 fn read_audio_window_contract(

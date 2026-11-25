@@ -27,7 +27,7 @@ fn a_value_wire_into_the_port_of_a_graph_input_is_refused() {
             a_graph_input_in_a_document(
                 echo,
                 "echo",
-                json!({ "port": "echo" }),
+                json!({ "port": "echo", "pin_type": { "type": "string" } }),
             ),
         ],
     );
@@ -61,7 +61,7 @@ fn a_document_linking_into_the_port_of_a_graph_input_is_refused_at_load() {
         "nodes": [
             { "name": "cues", "type": MockOutputOnlyNode::node_class_import_path().as_str() },
             a_graph_input_in_a_document(
-                Uuid::new_v4(), "echo", json!({ "port": "echo" }),
+                Uuid::new_v4(), "echo", json!({ "port": "echo", "pin_type": { "type": "string" } }),
             ),
         ],
         "links": [{

@@ -565,7 +565,7 @@ fn a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_r
             "paced_by_real_time": false,
             "config_schema": {"type": "object"},
             "input_ports": [],
-            "output_ports": [{"name": port_name_too_long_for_a_channel, "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}}],
+            "output_ports": [{"name": port_name_too_long_for_a_channel, "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "texture"}}, "flow": "stream"}}],
         }],
         "refused_node_types": [],
     });
