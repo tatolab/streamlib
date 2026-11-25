@@ -16,6 +16,7 @@ import {
   type StreamGraphAction,
   type TatoAppViewConnection,
   type ViewInputEvent,
+  wordsOfTheMessageRead,
 } from "@tatolab/tato-app-view-sdk";
 import { projectedOnThePicture, seaPointAt, stageCameraFrame, worldOf, type StageCamera } from "./stage_camera.ts";
 import { NODE_IDS, STAGE_HOME, STREAM_ASSET } from "./stage_graph.ts";
@@ -481,7 +482,7 @@ function onVideo(inputEvent: ViewInputEvent): void {
       else notice.textContent = `The stage can't draw ${inputEvent.format_wire_name} pixels.`;
       return;
     case "message":
-      notice.textContent = `video carries ${inputEvent.reading.family}, not a picture.`;
+      notice.textContent = `video carries ${wordsOfTheMessageRead(inputEvent.reading)}, not a picture.`;
       return;
     case "unwired":
     case "reopening":
@@ -492,7 +493,7 @@ function onVideo(inputEvent: ViewInputEvent): void {
 }
 
 function onStation(inputEvent: ViewInputEvent): void {
-  if (inputEvent.kind === "message" && inputEvent.reading.family === "records") showTheStation(inputEvent.reading.record);
+  if (inputEvent.kind === "message" && inputEvent.reading.message === "records_message") showTheStation(inputEvent.reading.record);
 }
 
 function onOpenProject(reading: OpenProjectReading): void {

@@ -13,7 +13,7 @@ const AUDIO_LEAD_SECONDS = 0.08;
 const AUDIO_MOST_LEAD_SECONDS = 0.4;
 
 /** One Channels block a port viewer read. */
-type ChannelsBlock = Extract<PortViewerMessageReading, { family: "channels" }>;
+type ChannelsBlock = Extract<PortViewerMessageReading, { message: "channels_block" }>;
 
 /** The sound the stage plays, muted or not; it opens its audio context on the first block it plays. */
 export class StageSound {

@@ -54,7 +54,7 @@ export default class SweepOnItsWire extends HTMLElement implements InputControlE
 function wordsForWhatArrived(event: ViewInputEvent): string {
   switch (event.kind) {
     case "message":
-      return event.reading.family === "bytes" ? `A sweep of ${String(event.reading.byte_length)} bytes` : "The wire carries no sweep";
+      return event.reading.message === "bytes" ? `A sweep of ${String(event.reading.byte_length)} bytes` : "The wire carries no sweep";
     case "image_frame":
       event.video_frame.close();
       return "The wire carries no sweep";

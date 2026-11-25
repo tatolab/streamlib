@@ -4,7 +4,7 @@
 import type { PortViewerMessageReading } from "@tatolab/tato-app-view-sdk";
 
 /** A Channels reading, which carries the block's samples. */
-export type ChannelsReading = Extract<PortViewerMessageReading, { family: "channels" }>;
+export type ChannelsReading = Extract<PortViewerMessageReading, { message: "channels_block" }>;
 
 // How far ahead of the audio clock a block is scheduled, so a block that
 // reaches the view late still plays on time.
