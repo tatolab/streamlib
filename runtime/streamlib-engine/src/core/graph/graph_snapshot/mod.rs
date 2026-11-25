@@ -152,14 +152,7 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a node",
-    spec_keys: &[
-        "id",
-        "name",
-        "type",
-        "input_values",
-        "studio",
-        "fragment",
-    ],
+    spec_keys: &["id", "name", "type", "input_values", "studio", "fragment"],
     // `exposed_config_fields` and `config_checksum` stay so the graphs recorded while `graph`
     // rendered them still load; neither is read.
     live_keys: &[
