@@ -5,8 +5,7 @@ use serde_json::json;
 
 use super::*;
 use crate::core::descriptors::{
-    NodeInputMode, PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    SettingReadTime,
+    NodeInputMode, PinDeclaration, PinType, PortDescriptor, SettingReadTime,
 };
 
 fn a_setting_read_at_setup(name: &str, default: Value) -> PortInfo {
@@ -15,11 +14,8 @@ fn a_setting_read_at_setup(name: &str, default: Value) -> PortInfo {
             name,
             name,
             false,
-            PortFamilyDeclaration::of_family(PortFamily::Records),
+            PinDeclaration::exactly(PinType::Integer { exact_size: None }),
         )
-        .with_pin_declaration(PinDeclaration::exactly(PinType::Integer {
-            exact_size: None,
-        }))
         .with_input_mode(NodeInputMode::SettingOnly {
             read: SettingReadTime::AtSetup,
         })
@@ -32,11 +28,7 @@ fn each_setting_read_at_setup_reads_its_value_or_else_its_default() {
     let inputs = [
         a_setting_read_at_setup("sample_rate", json!(48_000)),
         a_setting_read_at_setup("channel_count", json!(1)),
-        PortInfo::declaring_only_a_family(
-            "array",
-            "",
-            PortFamilyDeclaration::of_family(PortFamily::Array),
-        ),
+        PortInfo::declared_by_no_node_type("array", None),
     ];
     let input_values = Map::from_iter([
         ("kept".to_string(), json!(true)),
@@ -50,11 +42,7 @@ fn each_setting_read_at_setup_reads_its_value_or_else_its_default() {
 
 #[test]
 fn a_node_with_no_setting_read_at_setup_reads_the_values_it_holds() {
-    let inputs = [PortInfo::declaring_only_a_family(
-        "array",
-        "",
-        PortFamilyDeclaration::of_family(PortFamily::Array),
-    )];
+    let inputs = [PortInfo::declared_by_no_node_type("array", None)];
     assert_eq!(the_values_port_facts_read(&inputs, &Map::new()), json!({}));
     let input_values = Map::from_iter([("rate".to_string(), json!(2))]);
     assert_eq!(

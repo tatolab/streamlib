@@ -125,7 +125,7 @@ fn every_operation_and_its_inverse_leave_the_document_as_it_was() {
 fn a_look_fragment_run(blur_radius: u32, with_tint: bool) -> Value {
     let mut nodes = vec![
         json!({"name": "graphinput", "type": "tatolab.stream:GraphInput",
-               "input_values": {"port": "video", "family": "packets"}}),
+               "input_values": {"port": "video", "pin_type": {"type": "encoded_video"}}}),
         json!({"name": "soft", "type": "generators.soft:soft",
         "fragment": {
             "nodes": [{"name": "blur", "type": "nodes.blur:Blur",

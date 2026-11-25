@@ -53,11 +53,10 @@ SHAPES_MODULE_SOURCE = "\n".join(
 BOUNDS_OUTPUTS = [
     {
         "name": "low",
-        "family": "channels",
         "description": "The least value.",
         "annotation": "Annotated[float, Description('The least value.')]",
     },
-    {"name": "high", "family": "channels", "description": "", "annotation": "float"},
+    {"name": "high", "description": "", "annotation": "float"},
 ]
 
 
@@ -123,8 +122,8 @@ def test_a_named_tuple_imported_from_another_module_is_listed_as_one_output_per_
     # A class subclassing a NamedTuple holds that NamedTuple's fields, as its `_fields` does.
     assert outputs_by_node_type["nodes.limits:KeptLimits"] == BOUNDS_OUTPUTS
     assert outputs_by_node_type["nodes.limits:Widen"] == [
-        {"name": "width", "family": "channels", "description": "", "annotation": "float"},
-        {"name": "count", "family": "channels", "description": "", "annotation": "int"},
+        {"name": "width", "description": "", "annotation": "float"},
+        {"name": "count", "description": "", "annotation": "int"},
     ]
 
 
@@ -248,13 +247,13 @@ def test_the_core_separate_nodes_are_listed_with_a_float_output_per_component() 
 
     outputs_by_node_type = {
         node_type["type"]: [
-            (port["name"], port["family"], port["annotation"]) for port in node_type["outputs"]
+            (port["name"], port["annotation"]) for port in node_type["outputs"]
         ]
         for node_type in read["node_types"]
     }
     assert outputs_by_node_type["core_nodes.combine_and_separate:SeparateColor"] == [
-        (component, "channels", "float") for component in ("red", "green", "blue", "alpha")
+        (component, "float") for component in ("red", "green", "blue", "alpha")
     ]
     assert outputs_by_node_type["core_nodes.combine_and_separate:SeparateVector"] == [
-        (component, "channels", "float") for component in ("x", "y", "z", "w")
+        (component, "float") for component in ("x", "y", "z", "w")
     ]

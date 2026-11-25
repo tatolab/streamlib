@@ -73,7 +73,8 @@ fn a_reader_linked_again_reads_the_value_a_graph_input_carries() {
     let project_directory = a_project_on_disk();
     let cue = Uuid::new_v4();
     let recorder = Uuid::new_v4();
-    let carried = json!({ "track": format!("intro-{}", Uuid::new_v4()) });
+    let track = format!("intro-{}", Uuid::new_v4());
+    let carried = json!({ "value": track });
     let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
     stream
         .load_graph_snapshot_into_this_stream(
@@ -81,7 +82,7 @@ fn a_reader_linked_again_reads_the_value_a_graph_input_carries() {
                 "nodes": [
                     a_graph_input_in_a_document(
                         cue, "cue",
-                        json!({ "port": "cue", "family": "records", "default": carried }),
+                        json!({ "port": "cue", "pin_type": { "type": "string" }, "default": track }),
                     ),
                     { "id": recorder, "name": "recorder",
                       "type": GraphInputTestRecordsRecorder::node_class_import_path().as_str() },
@@ -127,7 +128,7 @@ fn a_graph_input_whose_lifetime_a_reconcile_makes_kept_keeps_its_live_value_acro
         json!({ "nodes": [a_graph_input_in_a_document(
             fader,
             "fader",
-            json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": lifetime }),
+            json!({ "port": "fader", "pin_type": {"type": "tensor"}, "default": 0.0, "lifetime": lifetime }),
         )] })
     };
     let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
@@ -175,7 +176,7 @@ fn a_graph_input_refuses_an_array_value_holding_a_number_outside_its_range() {
         vec![a_graph_input_in_a_document(
             fader,
             "fader",
-            json!({ "port": "fader", "family": "array", "range": [0, 1], "default": 0 }),
+            json!({ "port": "fader", "pin_type": {"type": "tensor"}, "range": [0, 1], "default": 0 }),
         )],
     );
     play(&stream);
@@ -228,7 +229,7 @@ fn a_live_value_held_already_wins_over_the_value_a_graph_input_kept_under_its_ol
         vec![a_graph_input_in_a_document(
             lights,
             "lights",
-            json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+            json!({ "port": "lights", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "default": { "level": 0.0 } }),
         )],
     );
 

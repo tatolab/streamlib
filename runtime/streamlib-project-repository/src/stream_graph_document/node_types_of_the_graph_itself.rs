@@ -12,8 +12,9 @@ pub use streamlib_node_schema::{
 /// The config key an interface node names the port it declares under.
 pub const GRAPH_INTERFACE_PORT_CONFIG_KEY: &str = "port";
 
-/// The config key an interface node names its port's family under.
-pub const GRAPH_INTERFACE_FAMILY_CONFIG_KEY: &str = "family";
+/// The setting of a `GraphInput` and a `GraphOutput` that chooses the pin type of its `value`
+/// port; unset, the first port linked to it decides it.
+pub const GRAPH_INTERFACE_PIN_TYPE_SETTING: &str = "pin_type";
 
 /// The one port an interface node has: a `GraphOutput`'s input, a
 /// `GraphInput`'s output.

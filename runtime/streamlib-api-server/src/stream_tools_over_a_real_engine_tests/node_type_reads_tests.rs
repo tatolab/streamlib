@@ -15,7 +15,7 @@ use super::*;
 
 use streamlib::sdk::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PortDescriptor,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
@@ -66,9 +66,9 @@ pub(super) fn the_project_source() -> Value {
                 "type": "nodes.mix:Mixer", "kind": "function",
                 "description": "Mixes two levels.\n\nThe second is scaled first.",
                 "category": "Audio", "path": "nodes/mix.py", "line": 7,
-                "inputs": [{ "name": "level", "family": "channels", "description": "the level",
+                "inputs": [{ "name": "level", "description": "the level",
                              "annotation": "float", "pin_default": 0.5 }],
-                "outputs": [{ "name": "mixed", "family": "channels", "description": "",
+                "outputs": [{ "name": "mixed", "description": "",
                               "annotation": null, "pin_default": null }],
             },
             {
@@ -162,16 +162,8 @@ async fn a_conversion_no_node_can_be_built_for_is_not_listed() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         let port = |name: &str, pin_type: PinType| {
-            PortDescriptor::new(
-                name,
-                "",
-                true,
-                PortFamilyDeclaration::of_family(
-                    PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-                ),
-            )
-            .with_delivery_profile("newest")
-            .with_pin_declaration(PinDeclaration::exactly(pin_type))
+            PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type))
+                .with_delivery_profile("newest")
         };
         let descriptor = NodeDescriptor {
             conversion: true,
@@ -391,9 +383,8 @@ async fn a_projects_node_types_are_listed_by_source_with_the_runtimes_own_last()
 }
 
 /// A built-in node type is described from the runtime's own description: a typed input with its
-/// mode, lifetime and value schema, an Image input as the Texture its family resolves to taking
-/// a link only, its config field as a setting read at setup with its field's schema, and its
-/// typed outputs.
+/// mode, lifetime and value schema, a Texture input taking a link only, its config field as a
+/// setting read at setup with its field's schema, and its typed outputs.
 ///
 /// Mental-revert: describing a built-in from source answers `not_described_because`.
 #[tokio::test(flavor = "multi_thread")]
@@ -453,7 +444,7 @@ async fn a_built_in_node_type_is_described_with_each_input_mode_value_schema_and
 }
 
 /// Project node types no loaded stream described are described from source in the order named:
-/// one whose source states its ports by family, annotation and literal default, and one that
+/// one whose source states its ports by annotation and literal default, and one that
 /// registers its ports in code carrying why it is not described, its file named; neither refuses
 /// the other.
 ///

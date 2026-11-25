@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`GraphInput` and `GraphOutput`: the ports a graph offers, each named, and of the type its
-`pin_type` setting chooses or the family its `family` names."""
+`pin_type` setting chooses or, unset, of the port first linked to it."""
 
 from __future__ import annotations
 
@@ -31,16 +31,7 @@ class GraphOutput(BuiltInNode):
     port: Annotated[str, SettingOnly(), Description("The Output's name, cast as every exposed name is")]
     pin_type: Annotated[
         PinTypeChoice | None,
-        Description("The type of what leaves the Output, any type; unset, `family` decides it"),
-    ] = None
-    family: Annotated[
-        Literal["image", "array", "channels", "packets", "records"] | None,
-        SettingOnly(),
-        Description(
-            "The Output's family, such as `image`, while no `pin_type` is "
-            "chosen; left out with it, the Output takes the family of the port linked into it, "
-            "and runs nothing until one is"
-        ),
+        Description("The type of what leaves the Output; unset, the type of the port linked into it"),
     ] = None
     value: InputPin[
         Annotated[
@@ -53,8 +44,7 @@ class GraphOutput(BuiltInNode):
 
 class GraphInput(BuiltInNode):
     """Declares one Input of the graph: every port `value` is linked to reads what enters it.
-    A stream's top-level Input of a type that holds a value, or of the Array, Channels or
-    Records family, runs, and carries the value a client sets with `set_node_input_value`
+    A stream's top-level Input of a type that holds a value, a Tensor or Audio, runs, and carries the value a client sets with `set_node_input_value`
     naming the Input and no node, kept as its `lifetime` says, else its saved `value`; a
     fragment's Input carries what the graph that adds the fragment wires into it. Its
     `range`, `step`, `unit`, `meaning` and `control` are the annotations of its `value`, each
@@ -66,16 +56,7 @@ class GraphInput(BuiltInNode):
     port: Annotated[str, SettingOnly(), Description("The Input's name, cast as every exposed name is")]
     pin_type: Annotated[
         PinTypeChoice | None,
-        Description("The type of what enters the Input, any type; unset, `family` decides it"),
-    ] = None
-    family: Annotated[
-        Literal["image", "array", "channels", "packets", "records"] | None,
-        SettingOnly(),
-        Description(
-            "The Input's family, such as `image`, while no `pin_type` is "
-            "chosen; left out with it, the Input takes the family of its first reader's port, "
-            "and runs nothing until one is linked"
-        ),
+        Description("The type of what enters the Input; unset, the type of the first port linked to it"),
     ] = None
     range: Annotated[
         list[float] | None,

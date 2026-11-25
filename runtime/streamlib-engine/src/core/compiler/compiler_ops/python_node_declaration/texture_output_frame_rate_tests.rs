@@ -15,19 +15,16 @@ fn a_described_node_type_whose_texture_output_states(
 ) -> serde_json::Value {
     let mut described = described_node_type_with_input_ports(serde_json::json!([{
         "name": "frames_per_second",
-        "family": {"family": "channels"},
         "description": "",
         "input_mode": {"mode": "setting_only"},
         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}}, "flow": "value"},
     }, {
         "name": "title",
-        "family": {"family": "records"},
         "description": "",
         "input_mode": {"mode": "setting_only"},
         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "value"},
     }, {
         "name": "rate",
-        "family": {"family": "records"},
         "description": "",
         "input_mode": {"mode": "setting_only"},
         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "bundle", "members": [
@@ -36,7 +33,6 @@ fn a_described_node_type_whose_texture_output_states(
         ]}}, "flow": "value"},
     }, {
         "name": "look",
-        "family": {"family": "records"},
         "description": "",
         "input_mode": {"mode": "setting_only"},
         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "bundle", "members": [
@@ -45,7 +41,6 @@ fn a_described_node_type_whose_texture_output_states(
     }]));
     described["output_ports"] = serde_json::json!([{
         "name": "video",
-        "family": {"family": "image"},
         "description": "",
         "pin_declaration": {
             "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
@@ -126,7 +121,6 @@ fn a_pin_groups_texture_output_reading_its_frame_rate_from_no_setting_is_refused
         "inputs": [],
         "outputs": [{
             "name": "picture",
-            "family": {"family": "image"},
             "description": "",
             "pin_declaration": {
                 "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},

@@ -4,8 +4,8 @@
 """The pins a typed node declares, as `StreamBuilder` checks a node's input values and port names against them.
 
 A typed node is one whose every port carries the `pin_declaration` bare `@node` reads, so its
-declaration names each input's type. A node of the family grammar declares no such thing, and
-the builder records what it is given unchecked. A port of a slot of a node's pin group,
+declaration names each input's type. A node whose ports declare no type is recorded as it is
+given, unchecked. A port of a slot of a node's pin group,
 `layers.2.picture`, is found as the slot's field it names, in any slot.
 """
 
@@ -28,6 +28,7 @@ from ._node_declaration import (
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
     NODE_DECLARATION_PIN_GROUPS_STAMP,
 )
+from ._function_node_declaration import NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP
 from ._pin_declaration import PinValueNotTaken, stored_form_of_a_pin_value
 from ._pin_type_choice import pin_type_in_words
 
@@ -60,6 +61,8 @@ class TypedNodePins:
     _outputs: Mapping[str, _DeclaredPort]
     _slot_inputs_by_group: Mapping[str, Mapping[str, _DeclaredPort]]
     _slot_outputs_by_group: Mapping[str, Mapping[str, _DeclaredPort]]
+    _config_field_names: frozenset[str]
+    """The fields of a Rust function node's config, whose values its native half checks."""
 
     @classmethod
     def of(cls, node_class: object, node: str) -> Optional[TypedNodePins]:
@@ -71,12 +74,16 @@ class TypedNodePins:
         ports = [*input_ports, *output_ports, *slot_ports]
         if not ports or not all(_PIN_DECLARATION_KEY in port for port in ports):
             return None
+        config_schema: Optional[dict[str, Any]] = getattr(
+            node_class, NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP, None
+        )
         return cls(
             node,
             _found_by_each_name(input_ports),
             _found_by_each_name(output_ports),
             {group["name"]: _found_by_each_name(group["inputs"]) for group in pin_groups},
             {group["name"]: _found_by_each_name(group["outputs"]) for group in pin_groups},
+            frozenset(config_schema["properties"]) if config_schema is not None else frozenset(),
         )
 
     def port_named(self, name: str, direction: PortDirection) -> str:
@@ -133,15 +140,20 @@ class TypedNodePins:
         """`input_values` keyed by the inputs they set, each in the stored form its pin type holds.
 
         A value on an input whose type another input chooses is checked against the type
-        `input_values` chooses for it, and kept as given when they choose none.
+        `input_values` chooses for it, and kept as given when they choose none. A value naming a
+        field of a Rust function node's config is kept as given, for its native half to check.
         """
         ports_and_values: list[tuple[_DeclaredPort, object]] = []
+        config_values: dict[str, Any] = {}
         for name, value in input_values.items():
             if not isinstance(name, str):
                 raise TypeError(
                     f"`{self.node}` is set an input value under {name!r}, of type "
                     f"`{type(name).__name__}`, and an input is named by a str"
                 )
+            if name in self._config_field_names:
+                config_values[name] = value
+                continue
             port = self._declared_port(name, "input")
             if any(set_port.name == port.name for set_port, _ in ports_and_values):
                 raise ValueError(
@@ -159,7 +171,7 @@ class TypedNodePins:
                 stored[port.name] = self._stored_value(
                     port, value, chosen=stored.get(pin_type_declared["input_name"])
                 )
-        return {port.name: stored[port.name] for port, _ in ports_and_values}
+        return {**{port.name: stored[port.name] for port, _ in ports_and_values}, **config_values}
 
     def _stored_value(self, port: _DeclaredPort, value: object, *, chosen: object = None) -> object:
         declaration = port.declaration

@@ -22,7 +22,6 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use crate::core::context::{LIVE_INPUT_VALUES_TABLE, key_of_the_node};
-use crate::core::descriptors::PortFamily;
 use crate::core::error::Error;
 use crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE;
 use crate::core::graph::graph_snapshot::GraphSnapshot;
@@ -287,7 +286,7 @@ fn a_value_set_live_on_a_graph_input_reaches_each_reader_and_leaves_the_saved_va
         vec![a_graph_input_in_a_document(
             cue,
             "cue",
-            json!({ "port": "cue", "family": "records", "default": { "track": "intro" } }),
+            json!({ "port": "cue", "pin_type": { "type": "bundle", "members": [{ "name": "track", "member_type": { "type": "string" } }] }, "default": { "track": "intro" } }),
         )],
     );
     play(&stream);
@@ -341,7 +340,7 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         vec![a_graph_input_in_a_document(
             fader,
             "fader",
-            json!({ "port": "fader", "family": "records", "default": { "level": 0.5 } }),
+            json!({ "port": "fader", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "default": { "level": 0.5 } }),
         )],
     );
     assert_eq!(
@@ -376,8 +375,11 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         .as_array()
         .and_then(|inputs| inputs.iter().find(|input| input["name"] == VALUE))
         .unwrap_or_else(|| panic!("the running `GraphInput` keeps its `value` input: {rendered}"));
-    assert_eq!(value_input["value"], json!({ "level": 0.75 }), "{rendered}");
-    assert_eq!(value_input["value_comes_from"], "saved", "{rendered}");
+    assert_eq!(
+        value_input["member_values"],
+        json!([{ "member": "level", "value": 0.75, "value_comes_from": "saved" }]),
+        "{rendered}"
+    );
     assert_eq!(
         rendered["components"]["graph_interface"]["current_value"],
         json!({ "level": 0.75 }),
@@ -399,7 +401,7 @@ fn an_array_set_on_a_graph_input_reaches_its_reader_as_an_array_frame() {
         vec![a_graph_input_in_a_document(
             fader,
             "fader",
-            json!({ "port": "Fader", "family": "array", "range": [0, 1], "default": 0 }),
+            json!({ "port": "Fader", "pin_type": {"type": "tensor"}, "range": [0, 1], "default": 0 }),
         )],
     );
     play(&stream);
@@ -424,7 +426,7 @@ fn an_array_set_on_a_graph_input_reaches_its_reader_as_an_array_frame() {
     stream.stop().expect("the stream ends");
 }
 
-/// A value the family of a `GraphInput` does not take, or a number outside its `range`, is
+/// A value the pin type of a `GraphInput` does not take, or a number outside its `range`, is
 /// refused naming why, and leaves the value it reads as it was.
 #[test]
 #[serial]
@@ -436,18 +438,22 @@ fn a_value_a_graph_input_does_not_carry_is_refused_naming_why() {
     load_the_graph_inputs(
         &stream,
         vec![
-            a_graph_input_in_a_document(cue, "cue", json!({ "port": "cue", "family": "records" })),
+            a_graph_input_in_a_document(
+                cue,
+                "cue",
+                json!({ "port": "cue", "pin_type": { "type": "string" } }),
+            ),
             a_graph_input_in_a_document(
                 fader,
                 "fader",
-                json!({ "port": "fader", "family": "array", "range": [0, 1] }),
+                json!({ "port": "fader", "pin_type": {"type": "tensor"}, "range": [0, 1] }),
             ),
         ],
     );
     play(&stream);
 
     for (node, value, words) in [
-        (cue, json!("drop"), ["carries Records", "JSON object"]),
+        (cue, json!(3), ["`cue`", "takes text"]),
         (fader, json!(2), ["`fader`", "from 0 to 1"]),
     ] {
         match set_live(&stream, node, value) {
@@ -479,14 +485,17 @@ fn a_stream_input_is_found_by_the_port_its_graph_input_declares() {
         vec![a_graph_input_in_a_document(
             cue,
             "cue",
-            json!({ "port": "Cue", "family": "records" }),
+            json!({ "port": "Cue", "pin_type": { "type": "string" } }),
         )],
     );
     let found_before_the_play = async_runtime
         .block_on(stream.read_the_top_level_graph_input_declaring("cue".to_string()))
         .expect("the input is found");
     assert_eq!(found_before_the_play.node, cue);
-    assert_eq!(found_before_the_play.family, PortFamily::Records);
+    assert_eq!(
+        found_before_the_play.pin_type,
+        Some(crate::core::descriptors::PinType::String {})
+    );
     assert!(
         found_before_the_play
             .refusal_while_its_node_does_not_run
@@ -533,10 +542,10 @@ fn a_kept_graph_input_reaches_a_new_reader_with_its_value_after_a_stop_play_and_
         a_graph_input_in_a_document(
             lights,
             "lights",
-            json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+            json!({ "port": "lights", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "default": { "level": 0.0 } }),
         )
     };
-    let written = json!({ "level": 0.8, "scene": "warm" });
+    let written = json!({ "level": 0.8 });
     {
         let (_runner, stream) =
             a_runner_holding_the_stream_of_the_project_at(project_directory.path());
@@ -580,7 +589,7 @@ fn a_reset_graph_input_starts_from_its_saved_value_after_a_stop() {
         vec![a_graph_input_in_a_document(
             trigger,
             "trigger",
-            json!({ "port": "trigger", "family": "records", "default": { "on": false },
+            json!({ "port": "trigger", "pin_type": { "type": "bundle", "members": [{ "name": "on", "member_type": { "type": "boolean" } }] }, "default": { "on": false },
                     "lifetime": "reset" }),
         )],
     );
@@ -627,7 +636,7 @@ fn the_value_a_graph_input_kept_under_its_old_key_is_carried_into_its_live_value
         vec![a_graph_input_in_a_document(
             lights,
             "lights",
-            json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+            json!({ "port": "lights", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "default": { "level": 0.0 } }),
         )],
     );
 
@@ -662,7 +671,7 @@ fn a_running_graph_input_takes_a_new_lifetime_from_a_change_of_its_config() {
         vec![a_graph_input_in_a_document(
             fader,
             "fader",
-            json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": "reset" }),
+            json!({ "port": "fader", "pin_type": {"type": "tensor"}, "default": 0.0, "lifetime": "reset" }),
         )],
     );
     play(&stream);
@@ -733,8 +742,7 @@ fn a_stream_saved_with_one_map_of_input_values_renders_that_map_and_no_older_key
             {"name": "sink", "type": sink_type.as_str(), "input_values": {"in1": {"level": 1}}},
             {"name": "lights",
              "type": crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
-             "input_values": {"port": "lights", "family": "records",
-                              "default": {"level": 0.0}}},
+             "input_values": {"port": "lights", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "default": {"level": 0.0}}},
         ]
     }))
     .unwrap();
@@ -760,7 +768,7 @@ fn a_stream_saved_with_one_map_of_input_values_renders_that_map_and_no_older_key
     let lights = node_named("lights");
     assert_eq!(
         lights["input_values"],
-        json!({"port": "lights", "family": "records", "value": {"level": 0.0}}),
+        json!({"port": "lights", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "value": {"level": 0.0}}),
         "a `GraphInput` holds its saved value on its `value` input"
     );
     assert_eq!(
@@ -778,15 +786,15 @@ fn a_stream_saved_with_one_map_of_input_values_renders_that_map_and_no_older_key
     stream.stop().expect("the stream ends");
 }
 
-/// A value the project's store keeps live for a `GraphInput` whose family no longer takes it is
+/// A value the project's store keeps live for a `GraphInput` whose pin type no longer takes it is
 /// dropped as the stream loads: the input reads its saved value, a reader is handed that, and
 /// the store keeps nothing for it.
 ///
 /// Mental-revert: holding every kept value without asking the input whether it takes it leaves
-/// the string live on an array input.
+/// the string live on a Float input.
 #[test]
 #[serial]
-fn a_kept_value_a_graph_inputs_family_no_longer_takes_is_dropped_at_load() {
+fn a_kept_value_a_graph_inputs_pin_type_no_longer_takes_is_dropped_at_load() {
     let project_directory = a_project_on_disk();
     let async_runtime = an_async_runtime();
     let fader = Uuid::new_v4();
@@ -805,7 +813,7 @@ fn a_kept_value_a_graph_inputs_family_no_longer_takes_is_dropped_at_load() {
         vec![a_graph_input_in_a_document(
             fader,
             "fader",
-            json!({ "port": "fader", "family": "array", "default": 0.25 }),
+            json!({ "port": "fader", "pin_type": {"type": "float"}, "default": 0.25 }),
         )],
     );
 
@@ -819,7 +827,7 @@ fn a_kept_value_a_graph_inputs_family_no_longer_takes_is_dropped_at_load() {
     let message = the_next_message_read(&mut reader);
     assert_eq!(
         message.payload_descriptor.known_kind().ok(),
-        Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+        Some(DataChannelPayloadDescriptorKind::ChannelsBlock)
     );
     stream.stop().expect("the stream ends");
 }
@@ -841,7 +849,7 @@ fn a_value_set_live_on_a_stopped_kept_graph_input_renders_and_reaches_the_next_p
         vec![a_graph_input_in_a_document(
             lights,
             "lights",
-            json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+            json!({ "port": "lights", "pin_type": { "type": "bundle", "members": [{ "name": "level", "member_type": { "type": "float" } }] }, "default": { "level": 0.0 } }),
         )],
     );
     play(&stream);
@@ -890,11 +898,15 @@ fn a_link_into_the_value_of_a_graph_input_is_refused() {
     load_the_graph_inputs(
         &stream,
         vec![
-            a_graph_input_in_a_document(cue, "cue", json!({ "port": "cue", "family": "records" })),
+            a_graph_input_in_a_document(
+                cue,
+                "cue",
+                json!({ "port": "cue", "pin_type": { "type": "string" } }),
+            ),
             a_graph_input_in_a_document(
                 echo,
                 "echo",
-                json!({ "port": "echo", "family": "records" }),
+                json!({ "port": "echo", "pin_type": { "type": "string" } }),
             ),
         ],
     );
@@ -928,7 +940,7 @@ fn a_document_linking_into_the_value_of_a_graph_input_is_refused_at_load() {
         "nodes": [
             { "name": "cues", "type": MockOutputOnlyNode::node_class_import_path().as_str() },
             a_graph_input_in_a_document(
-                Uuid::new_v4(), "echo", json!({ "port": "echo", "family": "records" }),
+                Uuid::new_v4(), "echo", json!({ "port": "echo", "pin_type": { "type": "string" } }),
             ),
         ],
         "links": [{

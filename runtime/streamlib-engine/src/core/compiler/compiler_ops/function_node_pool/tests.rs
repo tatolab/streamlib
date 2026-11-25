@@ -12,6 +12,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::shader_node_island::the_host_input_port_a_fused_shader_node_input_is_read_at;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
+use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 use crate::core::test_support::{MockInputOnlyNode, make_in1_a_setting_read_at_setup};
 
@@ -222,12 +223,17 @@ fn register_a_tint_shader_node_type(graph: &Graph) {
         "a shader node type for a test",
     );
     descriptor.node_kind = NodeKind::Shader;
-    for (port, family) in [
-        ("image", PortFamily::Image),
-        ("amount", PortFamily::Channels),
+    for (port, pin_type) in [
+        (
+            "image",
+            PinType::Texture {
+                pixel_formats: Vec::new(),
+            },
+        ),
+        ("amount", PinType::Float { exact_size: None }),
     ] {
         descriptor = descriptor.with_input(
-            PortDescriptor::new(port, "", true, PortFamilyDeclaration::of_family(family))
+            PortDescriptor::new(port, "", true, PinDeclaration::exactly(pin_type))
                 .with_delivery_profile("newest"),
         );
     }
@@ -235,7 +241,9 @@ fn register_a_tint_shader_node_type(graph: &Graph) {
         "result",
         "",
         true,
-        PortFamilyDeclaration::of_family(PortFamily::Image),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     ));
     graph
         .node_types_this_stream_resolves()
@@ -374,7 +382,7 @@ fn a_graph_resolving_a_manual_class_and_a_function_node_run_as_python() -> Graph
             input_port,
             "",
             true,
-            PortFamilyDeclaration::of_family(PortFamily::Channels),
+            PinDeclaration::exactly(PinType::Float { exact_size: None }),
         ));
     }
     node_types
@@ -425,8 +433,12 @@ fn only_the_island_running_python_into_a_manual_class_goes_to_the_pool() {
 /// `test_ops:gate`, whose `result` hands on the message at `value` unread.
 fn a_gate_type() -> NodeDescriptor {
     let mut gate = a_function_node_type("test_ops:gate", &["value", "open"], &[]);
-    let mut follows_its_value = PortFamilyDeclaration::of_family(PortFamily::Image);
-    follows_its_value.family_follows_input_port = Some("value".to_string());
+    let follows_its_value = PinDeclaration {
+        pin_type: crate::core::descriptors::DeclaredPinType::SameAsInput {
+            input_port_name: "value".to_string(),
+        },
+        ..PinDeclaration::exactly(PinType::Float { exact_size: None })
+    };
     gate = gate.with_output(PortDescriptor::new("result", "", true, follows_its_value));
     gate
 }
@@ -463,7 +475,7 @@ fn a_class_node_read_through_a_gate_by_the_app_process_is_read_at_the_pool_and_h
     .unwrap();
 
     let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
-    let class_node_family = graph
+    let class_node_pin = graph
         .traversal()
         .v(&class_node)
         .first()
@@ -473,21 +485,24 @@ fn a_class_node_read_through_a_gate_by_the_app_process_is_read_at_the_pool_and_h
         .iter()
         .find(|port| port.name == "out1")
         .unwrap()
-        .family
-        .family;
+        .pin
+        .clone();
     let pool_node = graph.traversal().v(&pool).first().unwrap();
     assert_eq!(
         pool_node.input_values["carries"][0],
         serde_json::json!({
             "input_port": "island_0",
             "output_port": "island_0_output",
-            "family": "message",
-            "message_family": class_node_family.wire_name(),
+            "written_as": "message",
         })
     );
     assert_eq!(
-        pool_node.ports.outputs[0].family.family, class_node_family,
-        "the pool hands the message on in the family it arrived in"
+        pool_node.ports.outputs[0]
+            .pin
+            .as_ref()
+            .map(|pin| &pin.pin_type),
+        class_node_pin.as_ref().map(|pin| &pin.pin_type),
+        "the pool hands the message on as the pin type it arrived as"
     );
     let into_the_pool = the_links_a_link_is_wired_as(&graph, &gate_into_the_reader)
         .into_iter()
@@ -671,7 +686,7 @@ fn an_island_into_a_setting_read_at_setup_is_carried_through_the_pool_written_at
         serde_json::json!([{
             "input_port": "island_0",
             "output_port": "island_0_output",
-            "family": "channels",
+            "written_as": "message",
             "written_at_setup": true,
         }])
     );

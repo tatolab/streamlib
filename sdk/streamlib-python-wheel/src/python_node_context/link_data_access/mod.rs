@@ -8,11 +8,11 @@ use pyo3::types::{PyBytes, PyDict};
 use streamlib::sdk::iceoryx2::{DataChannelPayloadDescriptor, PacketsUnitDescriptorBody};
 
 use crate::python_bag_conversion::records_message_payload_of;
+use crate::python_message_kind_read_types::channels_sample_type_of_wire_name;
 use crate::python_node_link_data_access::{
-    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, PortFamiliesOfTheRead,
-    PortFamilyOfTheRead, PortPayloadReadShape, PythonNodeLinkDataAccess,
+    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, MessageKindOfTheRead,
+    MessageKindsOfTheRead, PortPayloadReadShape, PythonNodeLinkDataAccess,
 };
-use crate::python_port_family_read_types::channels_sample_type_of_wire_name;
 use crate::python_port_payload::PythonPortPayloadLoan;
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
@@ -34,17 +34,17 @@ pub(crate) struct PythonLinkInputDataReader {
 
 #[pymethods]
 impl PythonLinkInputDataReader {
-    /// The next payload on `port_name`, or `None`: the type of the family
-    /// it arrived as among `families`, or the raw borrow when `families` is
+    /// The next payload on `port_name`, or `None`: the type of the kind of
+    /// message it arrived as among `kinds`, or the raw borrow when `kinds` is
     /// `None`.
-    #[pyo3(signature = (port_name, *, families = None))]
+    #[pyo3(signature = (port_name, *, kinds = None))]
     fn read<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
-        families: Option<Vec<PyBackedStr>>,
+        kinds: Option<Vec<PyBackedStr>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let read_shape = read_shape_of_the_families(port_name, families)?;
+        let read_shape = read_shape_of_the_kinds(port_name, kinds)?;
         self.link_data_access
             .get()
             .read_from_input_port_offering_gpu_access(
@@ -58,14 +58,14 @@ impl PythonLinkInputDataReader {
     /// The next message on `port_name` as a `Message` — payload, stamp, group
     /// flag, the messages its link lost since the previous read from it, and
     /// the link — or `None`. Its payload is read as `read` reads it.
-    #[pyo3(signature = (port_name, *, families = None))]
+    #[pyo3(signature = (port_name, *, kinds = None))]
     fn read_message<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
-        families: Option<Vec<PyBackedStr>>,
+        kinds: Option<Vec<PyBackedStr>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let read_shape = read_shape_of_the_families(port_name, families)?;
+        let read_shape = read_shape_of_the_kinds(port_name, kinds)?;
         self.link_data_access.get().read_message_from_input_port(
             python,
             port_name,
@@ -139,49 +139,49 @@ impl PythonLinkInputDataReader {
     }
 }
 
-/// What a read of `port_name` hands back: the type of the family a message
-/// arrived as among `families`, the first of which is the one the port
-/// declares, or the raw borrow when `families` is `None`.
-fn read_shape_of_the_families(
+/// What a read of `port_name` hands back: the type of the kind of message it
+/// arrived as among `kinds`, the first of which is the one the port's pin type
+/// travels as, or the raw borrow when `kinds` is `None`.
+fn read_shape_of_the_kinds(
     port_name: &str,
-    families: Option<Vec<PyBackedStr>>,
+    kinds: Option<Vec<PyBackedStr>>,
 ) -> PyResult<PortPayloadReadShape> {
-    let Some(families) = families else {
+    let Some(kinds) = kinds else {
         return Ok(PortPayloadReadShape::RawBorrow);
     };
-    let Some((declared_family, also_taken_families)) = families.split_first() else {
+    let Some((declared_kind, also_taken_kinds)) = kinds.split_first() else {
         return Err(PyValueError::new_err(format!(
-            "a read of input port {port_name:?} names no family to read it as"
+            "a read of input port {port_name:?} names no kind of message to read it as"
         )));
     };
-    also_taken_families
+    also_taken_kinds
         .iter()
         .try_fold(
-            PortFamiliesOfTheRead::of_the_declared_family_and_also(
-                port_family_named(port_name, declared_family)?,
+            MessageKindsOfTheRead::of_the_declared_kind_and_also(
+                message_kind_named(port_name, declared_kind)?,
                 [],
             ),
-            |families, family| Ok(families.also_taking(port_family_named(port_name, family)?)),
+            |kinds, kind| Ok(kinds.also_taking(message_kind_named(port_name, kind)?)),
         )
-        .map(PortPayloadReadShape::FamilyType)
+        .map(PortPayloadReadShape::OfItsKind)
 }
 
-/// Refuse each of `stated_keywords` a write as `family` does not take, naming it
-/// and the family that does; a write naming no family takes none of them.
-fn refuse_a_keyword_the_family_does_not_take(
+/// Refuse each of `stated_keywords` a write as `kind` does not take, naming it
+/// and the kind of message that does; a write naming no kind takes none of them.
+fn refuse_a_keyword_the_kind_does_not_take(
     port_name: &str,
-    family: Option<PortFamilyOfTheRead>,
+    kind: Option<MessageKindOfTheRead>,
     stated_keywords: &[(&str, bool)],
 ) -> PyResult<()> {
-    let taken: &[&str] = match family {
+    let taken: &[&str] = match kind {
         None => &[],
-        Some(PortFamilyOfTheRead::Records) => &["names"],
-        Some(PortFamilyOfTheRead::Packets) => &["codec"],
-        Some(PortFamilyOfTheRead::Channels) => {
+        Some(MessageKindOfTheRead::RecordsMessage) => &["names"],
+        Some(MessageKindOfTheRead::PacketsUnit) => &["codec"],
+        Some(MessageKindOfTheRead::ChannelsBlock) => {
             &["names", "sample_type", "start_sample", "sample_rate"]
         }
-        Some(PortFamilyOfTheRead::Image) => &["formats"],
-        Some(PortFamilyOfTheRead::Array) => &["names", "residency"],
+        Some(MessageKindOfTheRead::ImageFrame) => &["formats"],
+        Some(MessageKindOfTheRead::ArrayFrame) => &["names", "residency"],
     };
     match stated_keywords
         .iter()
@@ -190,17 +190,17 @@ fn refuse_a_keyword_the_family_does_not_take(
         None => Ok(()),
         Some((keyword, _)) => Err(PyTypeError::new_err(format!(
             "a write on output port {port_name:?} as {} takes no {keyword}=",
-            family.map_or("raw bytes", PortFamilyOfTheRead::wire_name)
+            kind.map_or("raw bytes", MessageKindOfTheRead::wire_name)
         ))),
     }
 }
 
-/// The family `family` names on the wire, such as `image`.
-fn port_family_named(port_name: &str, family: &str) -> PyResult<PortFamilyOfTheRead> {
-    PortFamilyOfTheRead::of_wire_name(family).ok_or_else(|| {
+/// The kind of message `kind` names on the wire, such as `image_frame`.
+fn message_kind_named(port_name: &str, kind: &str) -> PyResult<MessageKindOfTheRead> {
+    MessageKindOfTheRead::of_wire_name(kind).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "port {port_name:?} is read or written as family {family:?}, which is none of \
-             image, array, channels, packets, records"
+            "port {port_name:?} is read or written as the kind of message {kind:?}, which is \
+             none of image_frame, array_frame, channels_block, packets_unit, records_message"
         ))
     })
 }
@@ -216,8 +216,8 @@ pub(crate) struct PythonLinkOutputDataWriter {
 #[pymethods]
 impl PythonLinkOutputDataWriter {
     /// Publish one message to every downstream link on `port_name`: a copy of
-    /// `payload`, any contiguous buffer, when `family` is `None`, else the
-    /// family's type, written as the port's `codec`, `formats`, `names`,
+    /// `payload`, any contiguous buffer, when `kind` is `None`, else the
+    /// type of that kind of message, written as the port's `codec`, `formats`, `names`,
     /// `sample_type` and `residency` state it.
     #[pyo3(signature = (
         port_name,
@@ -225,7 +225,7 @@ impl PythonLinkOutputDataWriter {
         timestamp_ns = None,
         starts_group = true,
         *,
-        family = None,
+        kind = None,
         codec = None,
         formats = None,
         names = None,
@@ -236,7 +236,7 @@ impl PythonLinkOutputDataWriter {
     ))]
     #[allow(
         clippy::too_many_arguments,
-        reason = "each keyword is one fact of the port's family a write states"
+        reason = "each keyword is one fact of the kind of message a write states"
     )]
     fn write(
         &self,
@@ -245,7 +245,7 @@ impl PythonLinkOutputDataWriter {
         payload: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
         starts_group: bool,
-        family: Option<&str>,
+        kind: Option<&str>,
         codec: Option<String>,
         formats: Option<Vec<String>>,
         names: Option<Vec<String>>,
@@ -255,12 +255,12 @@ impl PythonLinkOutputDataWriter {
         sample_rate: Option<u32>,
     ) -> PyResult<()> {
         let link_data_access = self.link_data_access.get();
-        let family = family
-            .map(|family| port_family_named(port_name, family))
+        let kind = kind
+            .map(|kind| message_kind_named(port_name, kind))
             .transpose()?;
-        refuse_a_keyword_the_family_does_not_take(
+        refuse_a_keyword_the_kind_does_not_take(
             port_name,
-            family,
+            kind,
             &[
                 ("codec", codec.is_some()),
                 ("formats", formats.is_some()),
@@ -271,7 +271,7 @@ impl PythonLinkOutputDataWriter {
                 ("sample_rate", sample_rate.is_some()),
             ],
         )?;
-        let Some(family) = family else {
+        let Some(kind) = kind else {
             return link_data_access.write_described_by(
                 python,
                 port_name,
@@ -282,8 +282,8 @@ impl PythonLinkOutputDataWriter {
             );
         };
         let names = names.unwrap_or_default();
-        match family {
-            PortFamilyOfTheRead::Records => {
+        match kind {
+            MessageKindOfTheRead::RecordsMessage => {
                 let record_payload = records_message_payload_of(port_name, payload, &names)?;
                 link_data_access.write_described_by(
                     python,
@@ -294,7 +294,7 @@ impl PythonLinkOutputDataWriter {
                     |_| Ok(DataChannelPayloadDescriptor::records_message()),
                 )
             }
-            PortFamilyOfTheRead::Packets => {
+            MessageKindOfTheRead::PacketsUnit => {
                 let unit = PacketsUnitDescriptorBody {
                     codec: codec.unwrap_or_default(),
                 };
@@ -309,7 +309,7 @@ impl PythonLinkOutputDataWriter {
                     |_| Ok(descriptor),
                 )
             }
-            PortFamilyOfTheRead::Channels => {
+            MessageKindOfTheRead::ChannelsBlock => {
                 let (Some(start_sample), Some(sample_rate)) = (start_sample, sample_rate) else {
                     return Err(PyTypeError::new_err(format!(
                         "a write on Channels output port {port_name:?} names the block's first \
@@ -347,7 +347,7 @@ impl PythonLinkOutputDataWriter {
                     starts_group,
                 )
             }
-            PortFamilyOfTheRead::Image => link_data_access.write_image_frame_to_output_port(
+            MessageKindOfTheRead::ImageFrame => link_data_access.write_image_frame_to_output_port(
                 python,
                 port_name,
                 payload,
@@ -356,7 +356,7 @@ impl PythonLinkOutputDataWriter {
                 timestamp_ns,
                 starts_group,
             ),
-            PortFamilyOfTheRead::Array => {
+            MessageKindOfTheRead::ArrayFrame => {
                 let declared_residency = residency
                     .map(|residency| {
                         ArrayOutputPortDeclaredResidency::of_wire_name(residency).ok_or_else(|| {
@@ -429,8 +429,8 @@ impl PythonLinkOutputDataWriter {
     }
 
     /// Replace the stream facts `port_name` carries with `stream_facts`, one of
-    /// `tatolab.stream.stream_facts`'s types. The parent refuses facts of
-    /// another family than the port's.
+    /// `tatolab.stream.stream_facts`'s types. The parent refuses
+    /// facts of another kind than the port's.
     fn set_stream_facts(
         &self,
         python: Python<'_>,

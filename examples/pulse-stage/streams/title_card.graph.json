@@ -36,7 +36,9 @@
     {
       "id": "7a460338-4840-544c-af0a-7f50ab1d9367",
       "input_values": {
-        "family": "image",
+        "pin_type": {
+          "type": "texture"
+        },
         "port": "video_in"
       },
       "name": "video_in",
@@ -52,7 +54,6 @@
     {
       "id": "53d259e5-6b73-565b-be79-0794683b34ce",
       "input_values": {
-        "family": "channels",
         "port": "seconds"
       },
       "name": "seconds",
@@ -83,7 +84,9 @@
     {
       "id": "910e4314-4d41-5cb3-a067-cafd2ef2c2ce",
       "input_values": {
-        "family": "image",
+        "pin_type": {
+          "type": "texture"
+        },
         "port": "video_out"
       },
       "name": "video_out",

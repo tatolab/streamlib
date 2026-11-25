@@ -58,7 +58,6 @@ def test_the_only_pin_is_one_newest_texture_input_showing_a_preview_and_the_node
     video = next(port for port in input_ports if port["name"] == "video")
 
     assert video["delivery_profile"] == "newest"
-    assert video["family"] == {"family": "image"}
     assert video["pin_declaration"] == {
         "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
         "flow": "stream",

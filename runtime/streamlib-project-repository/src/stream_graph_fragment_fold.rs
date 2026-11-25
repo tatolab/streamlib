@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::project_stream_document::STREAM_DOCUMENT_ASSET_KEY;
 use crate::stream_document_upgrade::{NODE_INPUT_VALUES_KEY, upgrade_a_node_in_place};
 use crate::stream_graph_document::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
@@ -78,15 +78,18 @@ impl StreamGraphDocument {
     /// The collapse of the nodes `nodes`, each of this level, into a new stream of the project,
     /// the stream asset `placed_stream`, placed by a new fragment node `fragment` named
     /// `fragment_name`: each link between two of them kept in the new stream, and each link that
-    /// crossed the selection carried through a `GraphInput` or `GraphOutput` node of it, of the
-    /// family `family_of_an_output_port` reads at the link's source.
+    /// crossed the selection carried through a `GraphInput` or `GraphOutput` node of it, choosing
+    /// the pin type `pin_type_of_an_output_port` reads at the link's source, else none, so its
+    /// first link decides it.
     pub fn the_collapse_of_nodes_into_a_placed_stream(
         &self,
         nodes: &[Uuid],
         fragment: Uuid,
         fragment_name: &str,
         placed_stream: Uuid,
-        family_of_an_output_port: &dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<String, String>,
+        pin_type_of_an_output_port: &dyn Fn(
+            &StreamGraphDocumentLinkEnd,
+        ) -> Result<Option<Value>, String>,
         new_node_uuid: &mut dyn FnMut() -> Uuid,
     ) -> Result<StreamGraphSelectionCollapsedIntoAPlacedStream, String> {
         if nodes.is_empty() {
@@ -184,7 +187,7 @@ impl StreamGraphDocument {
                 graph_input,
                 &port,
                 GRAPH_INPUT_NODE_TYPE,
-                &family_of_an_output_port(&sources[0])?,
+                pin_type_of_an_output_port(&sources[0])?,
             ));
             inner_links.push(link_value(
                 StreamGraphDocumentLinkEnd {
@@ -215,7 +218,7 @@ impl StreamGraphDocument {
                 graph_output,
                 &port,
                 GRAPH_OUTPUT_NODE_TYPE,
-                &family_of_an_output_port(&source)?,
+                pin_type_of_an_output_port(&source)?,
             ));
             inner_links.push(link_value(
                 source,
@@ -668,15 +671,20 @@ fn push_the_end_under(
     }
 }
 
-fn an_interface_node(node: Uuid, port: &str, node_type: &str, family: &str) -> Value {
+/// An interface node of `node_type` declaring `port`, choosing `pin_type` when one is given.
+fn an_interface_node(node: Uuid, port: &str, node_type: &str, pin_type: Option<Value>) -> Value {
+    let mut input_values = serde_json::Map::from_iter([(
+        GRAPH_INTERFACE_PORT_CONFIG_KEY.to_owned(),
+        Value::String(port.to_owned()),
+    )]);
+    if let Some(pin_type) = pin_type {
+        input_values.insert(GRAPH_INTERFACE_PIN_TYPE_SETTING.to_owned(), pin_type);
+    }
     json!({
         "id": node,
         "name": port,
         "type": node_type,
-        NODE_INPUT_VALUES_KEY: {
-            GRAPH_INTERFACE_PORT_CONFIG_KEY: port,
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY: family,
-        },
+        NODE_INPUT_VALUES_KEY: input_values,
     })
 }
 

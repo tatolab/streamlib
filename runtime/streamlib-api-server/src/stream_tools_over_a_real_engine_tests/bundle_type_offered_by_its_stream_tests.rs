@@ -350,9 +350,6 @@ fn a_described_port(name: &str, pin_type: PinType) -> Value {
     json!({
         "name": name,
         "description": "",
-        "family": PortFamilyDeclaration::of_family(
-            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-        ),
         "delivery_profile": "newest",
         "pin_declaration": PinDeclaration::exactly(pin_type),
     })

@@ -59,10 +59,10 @@ pub(super) fn the_refusal_of_bundle_frames_into_an_untyped_input(
 }
 
 /// Refuse a link from the whole of `from`, an output that carries, or may carry as one of its
-/// alternatives, a bundle or a List holding a Texture, Audio or an encoded unit, to `to`, an
-/// input that states no pin type: the output's messages travel as Bundle frames, which an input
-/// judged by its family alone, such as a relay's send node, reads as they arrive and cannot take
-/// apart. The refusal names each member that makes it one.
+/// alternatives, a bundle or a List holding a Texture, Audio or an encoded unit, to `to`, an input
+/// that states no pin type: the output's messages travel as Bundle frames, which an untyped input,
+/// such as a relay's send node's, reads as they arrive and cannot take apart. The refusal names
+/// each member that makes it one.
 pub(super) fn refuse_bundle_frames_into_an_untyped_input(
     graph: &Graph,
     from: &OutputLinkPortRef,

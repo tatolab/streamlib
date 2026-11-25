@@ -21,11 +21,11 @@ pub mod node_reference_in_config;
 pub mod node_schema;
 pub mod node_settings;
 pub mod node_value_lifetime;
+pub mod output_port_annotations;
 pub mod pin_group;
 #[cfg(test)]
 mod pin_group_tests;
 pub mod pin_type;
-pub mod port_family;
 pub mod port_stream_facts;
 
 pub use execution_config::ExecutionConfig;
@@ -67,22 +67,17 @@ pub use node_settings::{
     the_input_of_a_setting, the_menu_of_a_setting,
 };
 pub use node_value_lifetime::NodeValueLifetime;
+pub use output_port_annotations::{
+    ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
+    ImageOutputPortFrameRate, output_port_frame_rate_resolved_against_config,
+    the_pin_type_a_choice_holds,
+};
 pub use pin_group::{
     PIN_GROUP_MOST_SLOTS, PIN_GROUP_SLOT_PORT_NAME_SEPARATOR, PinGroupDescriptor,
     PinGroupSlotCount, PinGroupSlotPort,
 };
-pub use port_family::{
-    ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
-    IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,
-    PortFamilyDeclaration, PortFamilyDeclarationDirection, PortFamilyLinkEndpoint,
-    PortFamilyLinkRefusal, output_port_codec_resolved_against_config,
-    output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
-    output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
-    refusal_of_required_names, refusal_of_the_names_and_codec_a_link_carries,
-    the_pin_type_a_choice_holds,
-};
 pub use port_stream_facts::{
     ImageStreamContentLightLevel, ImageStreamFacts, ImageStreamFrameRate,
     ImageStreamMasteringDisplayColourVolume, PacketsStreamFacts, PortStreamFacts,
-    StreamFactsOfAnotherFamily, refuse_stream_facts_of_another_family,
+    StreamFactsOfAnotherPinType, refuse_stream_facts_of_another_pin_type,
 };

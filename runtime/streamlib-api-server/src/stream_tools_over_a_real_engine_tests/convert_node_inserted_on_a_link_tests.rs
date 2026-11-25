@@ -419,8 +419,8 @@ async fn a_tensor_to_texture_holding_no_format_is_judged_by_the_format_it_writes
 /// `set_node_input_value` choosing `bgra8_unorm` for its `format` setting is refused naming the
 /// wired link, and the document keeps the format it held; one keeping `rgba8_unorm` is taken.
 ///
-/// Mental-revert: checking a set only by the families of the links out of the node takes
-/// `bgra8_unorm`, since its output states one Texture whatever it holds.
+/// Mental-revert: checking a set only by the pin type the node's output states takes
+/// `bgra8_unorm`, since it states one Texture whatever it holds.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tensor_to_texture_format_its_wired_link_refuses_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();

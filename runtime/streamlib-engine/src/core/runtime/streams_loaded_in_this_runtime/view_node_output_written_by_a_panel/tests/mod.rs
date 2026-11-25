@@ -12,7 +12,7 @@ use streamlib_ipc_types::{
 use streamlib_project_repository::{PROJECT_FILE_NAME, TatolabProjectFile};
 
 use super::*;
-use crate::core::descriptors::{NodeClassImportPath, PortFamily};
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::NodeInstanceWithItsOutOfProcessLinkWiring;
 use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,

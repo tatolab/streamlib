@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use quote::quote;
-use streamlib_node_schema::{NodeSchemaExecution, OutputPortDeclaredNames};
+use streamlib_node_schema::{ChannelsOutputPortSampleRate, NodeSchemaExecution};
 
 use super::*;
 
@@ -310,13 +310,13 @@ fn a_settings_key_binds_the_settings_type_and_no_config() {
     let parsed = parse_ok(quote! {
         execution = reactive,
         settings = crate::blur::BlurSettings,
-        output("blurred", pin_type = Audio, names = from_setting("channel_names")),
+        output("blurred", pin_type = Audio, rate = from_setting("sample_rate")),
     });
     assert!(parsed.settings_type.is_some());
     assert_eq!(
-        parsed.outputs[0].family.names,
-        Some(OutputPortDeclaredNames::FromConfig {
-            config_key: "channel_names".to_string()
+        parsed.outputs[0].annotations.sample_rate,
+        Some(ChannelsOutputPortSampleRate::FromSetting {
+            setting: "sample_rate".to_string()
         })
     );
 }

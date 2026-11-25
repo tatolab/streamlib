@@ -147,8 +147,7 @@ fn an_image_outputs_frame_rate_renders_under_the_port() {
             "delivery_profile": null,
             "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
             "flow": "stream",
-            "family": {
-                "family": "image",
+            "annotations": {
                 "frame_rate": {"stated": {"numerator": 30000, "denominator": 1001}}
             }
         }, {
@@ -158,9 +157,8 @@ fn an_image_outputs_frame_rate_renders_under_the_port() {
             "delivery_profile": null,
             "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
             "flow": "stream",
-            "family": {
-                "family": "image",
-                "frame_rate": {"from_config": {"config_key": "frames_per_second"}}
+            "annotations": {
+                "frame_rate": {"from_setting": {"setting": "frames_per_second"}}
             }
         }]
     });

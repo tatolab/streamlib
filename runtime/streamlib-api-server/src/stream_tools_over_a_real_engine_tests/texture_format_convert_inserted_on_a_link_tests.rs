@@ -164,7 +164,7 @@ fn a_project_whose_main_stream_holds_a_graph_input_saved_with_a_default()
               "studio": { "position": [200.0, 100.0] } },
             { "id": GRAPH_INPUT_NODE_UUID, "name": "brightness",
               "type": "tatolab.stream:GraphInput",
-              "input_values": { "port": "brightness", "family": "channels",
+              "input_values": { "port": "brightness", "pin_type": { "type": "float" },
                                 "default": 0.5, "range": [0.0, 1.0] } },
         ],
         "links": [],

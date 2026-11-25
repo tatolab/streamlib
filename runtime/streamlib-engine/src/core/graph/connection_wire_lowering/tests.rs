@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::core::descriptors::{
     NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PinDeclaration, PinType, PortDescriptor,
 };
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotWithGraphOnlyNodesResolved, NodeChangeADrawnLinkBlocks,
@@ -25,12 +25,11 @@ fn a_connection_port(name: &str, connection_type: &str, sole_referrer: bool) -> 
         name,
         name,
         false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
+        PinDeclaration::exactly(PinType::Connection {
+            connection_type: NamedPinTypeImportPath::new(connection_type).unwrap(),
+            one_referrer_per_referenced_node: sole_referrer,
+        }),
     )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Connection {
-        connection_type: NamedPinTypeImportPath::new(connection_type).unwrap(),
-        one_referrer_per_referenced_node: sole_referrer,
-    }))
 }
 
 /// A relay giving itself out as a `RelayConnection`; a track taking one on `relay` and giving

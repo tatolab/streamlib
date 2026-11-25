@@ -398,10 +398,16 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
             Some(pin) if !pin.pin_type.holds_a_stored_value() => format!(
                 "input `{input}` of `{node_name}` is wire only and takes no value. To fix: link it"
             ),
-            _ => format!(
+            Some(pin) => format!(
                 "input `{input}` of `{node_name}` carries {}, and a pin value is a control value, \
-                 which only a Channels input reads. To fix: link `{input}` instead",
-                port.family.family
+                 which only an input of a number, a Boolean or a value of parts reads. To fix: \
+                 link `{input}` instead",
+                pin.pin_type
+            ),
+            None => format!(
+                "input `{input}` of `{node_name}` carries no pin type yet, and a pin value is a \
+                 control value, which only an input of a number, a Boolean or a value of parts \
+                 reads. To fix: link `{input}` instead"
             ),
         };
         return Err(InputValueRefusal::of(
@@ -410,7 +416,26 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         ));
     }
     if port.is_a_setting() && port.pin.is_none() {
-        return refuse_a_value_a_setting_of_a_family_does_not_carry(node_name, port, value);
+        // A setting its schema alone types is checked by that schema when its node is set up.
+        return Ok(());
+    }
+    if let Some(pin) = port.pin.as_ref().filter(|pin| {
+        port.is_a_setting() && !value.is_null() && !pin.pin_type.holds_a_stored_value()
+    }) {
+        // A setting of a type that holds no stored value, as a Tensor or Audio a client writes
+        // onto a `GraphInput`, takes what its type packs into the message it publishes.
+        return crate::core::pin_value_packing::pack_pin_value(&pin.pin_type, value, 0)
+            .map(|_| ())
+            .map_err(|why| {
+                InputValueRefusal::of(
+                    InputValueRefusalCode::InputValueNotValid,
+                    format!(
+                        "the value of input `{input}` of `{node_name}` is {value}, and `{input}` \
+                         carries {}: {why}",
+                        pin.pin_type
+                    ),
+                )
+            });
     }
     if let Some(checked) = port.check_value(value) {
         checked.map_err(|not_taken| {
@@ -444,30 +469,6 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         ));
     }
     Ok(())
-}
-
-/// Refuse `value`, set on `port`, a setting of the node named `node_name` that names no pin type
-/// and carries the family it declares, when that family's message does not take it.
-fn refuse_a_value_a_setting_of_a_family_does_not_carry(
-    node_name: &str,
-    port: &PortInfo,
-    value: &Value,
-) -> Result<(), InputValueRefusal> {
-    let family = port.family.family;
-    crate::core::pin_value_packing::the_message_a_value_written_onto_an_output_is(family, value, 0)
-        .map(|_| ())
-        .map_err(|why| {
-            InputValueRefusal::of(
-                InputValueRefusalCode::InputValueNotValid,
-                format!(
-                    "the value of input `{}` of `{node_name}` is {value}, and `{}` carries {}: \
-                     {why}",
-                    port.name,
-                    port.name,
-                    family.declaration_name()
-                ),
-            )
-        })
 }
 
 /// Refuse `value` set on input `input` of `node_name` when a number it holds lies outside

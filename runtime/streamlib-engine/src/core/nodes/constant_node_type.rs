@@ -10,12 +10,12 @@ use std::sync::LazyLock;
 
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime, VectorComponentCount,
+    PortDescriptor, SettingReadTime, VectorComponentCount,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_PIN_TYPE_SETTING;
 
-use super::graph_interface_node_types::{setting, value_port_of_family};
+use super::graph_interface_node_types::{setting, value_port};
 
 /// The category a `Constant` is filed under.
 const CONSTANT_NODE_TYPE_CATEGORY: &str = "Math";
@@ -111,13 +111,8 @@ pub fn the_descriptor_of_a_constant() -> NodeDescriptor {
 }
 
 /// A `value` port of a `Constant` stating `description`, carried as a value of the type its
-/// `pin_type` chooses, on the family a Float travels on until that type is resolved; one a
-/// person may clear, and a link naming any of `former_names` resolves to.
+/// `pin_type` chooses; one a person may clear, and a link naming any of `former_names` resolves
+/// to.
 fn the_value_port_of_a_constant(description: &str, former_names: Vec<String>) -> PortDescriptor {
-    value_port_of_family(
-        description,
-        former_names,
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Channels),
-    )
+    value_port(description, former_names, true)
 }

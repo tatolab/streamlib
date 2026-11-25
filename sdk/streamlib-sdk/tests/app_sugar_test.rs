@@ -155,7 +155,9 @@ fn app_connect_is_a_faithful_passthrough_of_the_streams_connect() {
 }
 
 fn register_ported_type(short: &str, input: &str, output: &str) -> NodeClassImportPath {
-    use streamlib::sdk::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
+    use streamlib::sdk::descriptors::{
+        NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor,
+    };
     use streamlib::sdk::nodes::NODE_REGISTRY;
 
     let import_path = NodeClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
@@ -168,17 +170,17 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> NodeClassImpo
         input,
         "",
         false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     ))
     .with_output(PortDescriptor::new(
         output,
         "",
         false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     ));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path

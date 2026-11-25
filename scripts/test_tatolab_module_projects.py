@@ -228,8 +228,8 @@ class ModuleProjectArchives(unittest.TestCase):
                     "name": "FrameMaker",
                     "import_path": "tatolab.camera:FrameMaker",
                     "summary": "Makes frames out of nothing.",
-                    "inputs": [{"name": "pattern", "family": "image", "description": "A picture to tile"}],
-                    "outputs": [{"name": "video", "family": "image", "description": "The frames it makes"}],
+                    "inputs": [{"name": "pattern", "description": "A picture to tile"}],
+                    "outputs": [{"name": "video", "description": "The frames it makes"}],
                 }
             ],
         )

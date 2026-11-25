@@ -167,7 +167,6 @@ def test_a_named_type_pin_declares_its_type_reads_only_its_link_and_travels_as_n
         "flow": "stream",
     }
     assert "pin_default" not in face
-    assert face["family"] == {"family": "records"}
     spare = input_port(Frame, "spare")
     assert spare["pin_declaration"]["may_be_unset"] is True
     assert spare["pin_default"] is None

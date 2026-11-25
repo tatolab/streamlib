@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::descriptors::{NodeDescriptor, PortDescriptor};
-use crate::{NodeClassImportPath, NodeClassShortName, PortFamily, PortFamilyDeclaration};
+use crate::{NodeClassImportPath, NodeClassShortName};
 
 fn texture() -> PinType {
     PinType::Texture {
@@ -227,23 +227,29 @@ fn a_node_type_with(inputs: Vec<PortDescriptor>, outputs: Vec<PortDescriptor>) -
     descriptor
 }
 
-fn a_port(name: &str, family: PortFamily) -> PortDescriptor {
-    PortDescriptor::new(name, "", true, PortFamilyDeclaration::of_family(family))
+fn a_port(name: &str, pin_type: PinType) -> PortDescriptor {
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type))
+}
+
+fn an_untyped_port(name: &str) -> PortDescriptor {
+    PortDescriptor {
+        pin_declaration: None,
+        ..a_port(name, PinType::Trigger {})
+    }
 }
 
 #[test]
 fn a_typed_input_that_states_no_delivery_reads_by_its_pins_default_and_a_stated_one_wins() {
     let descriptor = a_node_type_with(
         vec![
-            a_port("picture", PortFamily::Image),
-            a_port("level", PortFamily::Channels)
-                .with_pin_declaration(PinDeclaration::exactly(float())),
-            a_port("levels", PortFamily::Channels)
+            a_port("picture", texture()),
+            a_port("level", float()).with_pin_declaration(PinDeclaration::exactly(float())),
+            a_port("levels", float())
                 .with_pin_declaration(declared_with_flow(float(), PinFlow::Stream)),
-            a_port("every_picture", PortFamily::Image).with_delivery_profile("ordered"),
-            a_port("records", PortFamily::Records).with_delivery_profile("newest"),
+            a_port("every_picture", texture()).with_delivery_profile("ordered"),
+            an_untyped_port("records").with_delivery_profile("newest"),
         ],
-        vec![a_port("out", PortFamily::Image)],
+        vec![a_port("out", texture())],
     )
     .with_input_deliveries_defaulted_by_pin()
     .unwrap();
@@ -271,7 +277,7 @@ fn a_node_type_is_refused_a_flow_its_type_does_not_take_and_keeps_an_untyped_inp
     let audio_read_as_a_value = a_node_type_with(
         vec![],
         vec![
-            a_port("audio", PortFamily::Channels)
+            a_port("audio", float())
                 .with_pin_declaration(declared_with_flow(PinType::Audio {}, PinFlow::Value)),
         ],
     );
@@ -283,10 +289,9 @@ fn a_node_type_is_refused_a_flow_its_type_does_not_take_and_keeps_an_untyped_inp
          not allow; it flows as `stream`"
     );
 
-    let untyped_with_no_delivery =
-        a_node_type_with(vec![a_port("records", PortFamily::Records)], vec![])
-            .with_input_deliveries_defaulted_by_pin()
-            .unwrap();
+    let untyped_with_no_delivery = a_node_type_with(vec![an_untyped_port("records")], vec![])
+        .with_input_deliveries_defaulted_by_pin()
+        .unwrap();
     assert_eq!(untyped_with_no_delivery.inputs[0].delivery_profile, None);
 }
 
@@ -294,7 +299,7 @@ fn a_node_type_is_refused_a_flow_its_type_does_not_take_and_keeps_an_untyped_inp
 fn a_windowed_input_whose_pins_default_skips_messages_is_refused_by_name() {
     let windowed_value = a_node_type_with(
         vec![
-            a_port("level", PortFamily::Channels)
+            a_port("level", float())
                 .with_pin_declaration(PinDeclaration::exactly(float()))
                 .with_audio_window_contract(crate::AudioWindowContract::MatchDevice {}),
         ],
@@ -317,8 +322,8 @@ fn a_trigger_input_reads_ordered_and_is_refused_any_other_stated_delivery() {
     let trigger = || PinDeclaration::exactly(PinType::Trigger {});
     let defaulted = a_node_type_with(
         vec![
-            a_port("go", PortFamily::Records).with_pin_declaration(trigger()),
-            a_port("stated", PortFamily::Records)
+            a_port("go", PinType::Trigger {}).with_pin_declaration(trigger()),
+            a_port("stated", float())
                 .with_pin_declaration(trigger())
                 .with_delivery_profile("ordered"),
         ],
@@ -337,7 +342,7 @@ fn a_trigger_input_reads_ordered_and_is_refused_any_other_stated_delivery() {
 
     let read_newest = a_node_type_with(
         vec![
-            a_port("go", PortFamily::Records)
+            a_port("go", float())
                 .with_pin_declaration(trigger())
                 .with_delivery_profile("newest"),
         ],

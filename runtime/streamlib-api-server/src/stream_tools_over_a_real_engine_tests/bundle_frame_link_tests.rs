@@ -8,7 +8,6 @@
 
 use streamlib::sdk::descriptors::{
     BundleMember, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType, PortDescriptor,
-    PortFamily, PortFamilyDeclaration,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
@@ -40,14 +39,8 @@ fn a_source_of(node_type: &str, port: &str, pin_type: PinType) -> NodeDescriptor
         "a node type of one typed output",
     )
     .with_output(
-        PortDescriptor::new(
-            port,
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Records),
-        )
-        .with_delivery_profile("newest")
-        .with_pin_declaration(PinDeclaration::exactly(pin_type)),
+        PortDescriptor::new(port, "", true, PinDeclaration::exactly(pin_type))
+            .with_delivery_profile("newest"),
     )
 }
 
@@ -91,19 +84,15 @@ fn the_bundle_frame_link_node_types_registered() {
                 send,
                 "a node type whose one input states no pin type",
             )
-            .with_input(PortDescriptor::new(
-                "content",
-                "",
-                true,
-                PortFamilyDeclaration {
-                    also_takes_families: vec![
-                        PortFamily::Records,
-                        PortFamily::Channels,
-                        PortFamily::Array,
-                    ],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                },
-            )),
+            .with_input(PortDescriptor {
+                pin_declaration: None,
+                ..PortDescriptor::new(
+                    "content",
+                    "",
+                    true,
+                    PinDeclaration::exactly(PinType::String {}),
+                )
+            }),
         ] {
             NODE_REGISTRY
                 .register_descriptor_only(descriptor)
@@ -125,8 +114,8 @@ fn a_project_whose_main_stream_holds_two_sources_and_a_send() -> ProjectWithGrap
     }))
 }
 
-/// Mental-revert: judged by its families alone, the bundle's Records family is one `content`
-/// takes, so `connect` makes the link and `check_link` answers `connects`.
+/// Mental-revert: without the check, a link into an input of no pin type is not judged yet, so
+/// `connect` makes the link and `check_link` answers `connects`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bundle_holding_a_texture_into_an_untyped_input_is_refused_by_connect_and_check_link_alike()
  {

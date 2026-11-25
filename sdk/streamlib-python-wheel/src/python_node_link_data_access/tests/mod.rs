@@ -20,16 +20,16 @@ use streamlib::sdk::rhi::TextureFormat;
 
 use super::*;
 use crate::python_bag_conversion::records_message_payload_of;
-use crate::python_node_context::PythonGpuContextLimitedAccess;
-use crate::python_port_family_read_types::{
+use crate::python_message_kind_read_types::{
     PythonAudio, PythonEncodedMedia, PythonTensorCpuAttribute,
 };
+use crate::python_node_context::PythonGpuContextLimitedAccess;
 use crate::python_port_payload::PythonPortPayloadBorrow;
 
 mod borrows_and_loans;
-mod family_round_trips;
 mod helper_wiring_boards_and_losses;
 mod image_and_array_frames;
+mod message_kind_round_trips;
 
 /// Unique per test: every test in this process shares one iceoryx2 domain,
 /// so a fixed name would let one test's channel meet the next one's.
@@ -98,25 +98,25 @@ fn one_wired_link(
     (source, destination)
 }
 
-/// The next message on the one-link fixture's input, read as its family's type.
-fn read_as_the_family_type<'py>(
+/// The next message on the one-link fixture's input, read as the type of `kind`.
+fn read_as_the_type_of_its_kind<'py>(
     python: Python<'py>,
     destination: &PythonNodeLinkDataAccess,
-    family: PortFamilyOfTheRead,
+    kind: MessageKindOfTheRead,
 ) -> Bound<'py, PyAny> {
     destination
         .read_from_input_port_offering_gpu_access(
             python,
             "frames_from_upstream",
-            PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(family)),
+            PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(kind)),
             None,
         )
         .unwrap()
         .expect("the wired input received nothing")
 }
 
-/// The stream distribution's source root on `sys.path`, where the family
-/// types a read builds live; a `cargo test` run has no installed
+/// The stream distribution's source root on `sys.path`, where the types
+/// of each kind of message a read builds live; a `cargo test` run has no installed
 /// `tatolab-stream`.
 fn put_the_stream_distribution_source_on_sys_path(python: Python<'_>) {
     let stream_distribution_source_root = concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
@@ -128,7 +128,7 @@ fn put_the_stream_distribution_source_on_sys_path(python: Python<'_>) {
     }
 }
 
-/// Lend this interpreter the one runtime callable a family type's claim
+/// Lend this interpreter the one runtime callable a message kind's type's claim
 /// reaches, as the runtime lends `tatolab.runtime._engine` to a node's.
 #[cfg(target_os = "linux")]
 fn lend_the_typed_read_gpu_offer_to_this_interpreter(python: Python<'_>) {

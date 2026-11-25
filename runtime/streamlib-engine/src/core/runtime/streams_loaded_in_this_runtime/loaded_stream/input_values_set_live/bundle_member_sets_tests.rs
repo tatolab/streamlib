@@ -20,7 +20,6 @@ use crate::core::compiler::compiler_ops::function_node_island::wire_a_link_from_
 use crate::core::compiler::compiler_ops::input_port_pin_values::tests::the_link_wiring_of;
 use crate::core::descriptors::{
     BundleMember, FloatSize, NodeClassImportPath, PinDeclaration, PinType, PortDescriptor,
-    PortFamilyDeclaration,
 };
 use crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery;
 use crate::iceoryx2::Iceoryx2Node;
@@ -43,14 +42,8 @@ fn float() -> PinType {
 }
 
 fn a_typed_input(name: &str, pin_type: PinType) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_delivery_profile("newest")
-    .with_pin_declaration(PinDeclaration::exactly(pin_type))
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type))
+        .with_delivery_profile("newest")
 }
 
 /// A graph resolving a function node type reading `reading`, a bundle of a Float `level` and a

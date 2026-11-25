@@ -97,7 +97,7 @@ async fn a_cleared_graph_input_value_stays_cleared_and_a_transact_clearing_it_re
 /// refused for that reason, not with the list of keys a fragment's Input takes.
 ///
 /// Mental-revert: refusing the range as a key the Input does not take answers "It takes:
-/// `port`, `pin_type`, `family`", which leaves out why.
+/// `port`, `pin_type`", which leaves out why.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_graph_input_choosing_a_type_a_client_does_not_write_is_refused_for_that_reason() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -122,7 +122,7 @@ async fn a_graph_input_choosing_a_type_a_client_does_not_write_is_refused_for_th
         "{refusal}"
     );
     assert!(
-        refusal.contains("a type that holds a value, or array, channels or records"),
+        refusal.contains("a type that holds a value, a Tensor or Audio"),
         "{refusal}"
     );
     assert!(!refusal.contains("It takes:"), "{refusal}");

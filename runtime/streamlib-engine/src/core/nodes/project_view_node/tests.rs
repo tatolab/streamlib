@@ -78,14 +78,16 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
                      "properties": { "bpm": { "type": "number", "default": 120 } },
                      "additionalProperties": false }))
     );
-    let ports = |ports: &[PortDescriptor]| -> Vec<(String, String, Vec<PortFamily>, bool)> {
+    let ports = |ports: &[PortDescriptor]| -> Vec<(String, String, Option<DeclaredPinType>, bool)> {
         ports
             .iter()
             .map(|port| {
                 (
                     port.name.clone(),
                     port.description.clone(),
-                    port.family.families_an_input_takes(),
+                    port.pin_declaration
+                        .as_ref()
+                        .map(|pin| pin.pin_type.clone()),
                     port.required,
                 )
             })
@@ -97,13 +99,17 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
             (
                 "waveform".to_string(),
                 "What plays.".to_string(),
-                vec![PortFamily::Channels],
+                Some(DeclaredPinType::Is {
+                    pin_type: PinType::Audio {}
+                }),
                 false
             ),
             (
                 "crossfader".to_string(),
                 "Left to right.".to_string(),
-                vec![PortFamily::Array],
+                Some(DeclaredPinType::Is {
+                    pin_type: PinType::Tensor {}
+                }),
                 false
             )
         ]
@@ -122,7 +128,9 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
         [(
             "crossfader".to_string(),
             "Left to right.".to_string(),
-            vec![PortFamily::Array],
+            Some(DeclaredPinType::Is {
+                pin_type: PinType::Tensor {}
+            }),
             false
         )]
     );
@@ -145,8 +153,10 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
         ("crossfader", "Left to right.")
     );
     assert_eq!(
-        setting.family.families_an_input_takes(),
-        vec![PortFamily::Array]
+        setting.pin_declaration.as_ref().map(|pin| &pin.pin_type),
+        Some(&DeclaredPinType::Is {
+            pin_type: PinType::Tensor {}
+        })
     );
     assert_eq!(
         setting.input_mode,
@@ -209,17 +219,6 @@ fn an_image_or_packets_output_has_no_input_of_its_name_and_is_no_value() {
     assert!(descriptor.outputs[1].flows_as_a_value());
 }
 
-#[test]
-fn a_panel_writes_array_channels_and_records_outputs_alone() {
-    assert_eq!(
-        PortFamily::ALL
-            .into_iter()
-            .filter(|family| a_panel_writes(*family))
-            .collect::<Vec<_>>(),
-        [PortFamily::Array, PortFamily::Channels, PortFamily::Records]
-    );
-}
-
 /// A view node handed a value one of its outputs does not carry makes no message of any other
 /// output first: its refusal is that output's, and no output's value or next block moves. The
 /// live set refuses such a value before it reaches the node; this holds for any delivery that
@@ -243,26 +242,21 @@ fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
         the_monitor_manifest(),
     ))
     .expect("a node view that opens is a node type");
-    let pins = |ports: &[PortDescriptor]| -> Vec<(
-        String,
-        Vec<PortFamily>,
-        Option<DeclaredPinType>,
-        Option<PinFlow>,
-    )> {
-        ports
-            .iter()
-            .map(|port| {
-                (
-                    port.name.clone(),
-                    port.family.families_an_input_takes(),
-                    port.pin_declaration
-                        .as_ref()
-                        .map(|pin| pin.pin_type.clone()),
-                    port.pin_declaration.as_ref().map(|pin| pin.flow),
-                )
-            })
-            .collect()
-    };
+    let pins =
+        |ports: &[PortDescriptor]| -> Vec<(String, Option<DeclaredPinType>, Option<PinFlow>)> {
+            ports
+                .iter()
+                .map(|port| {
+                    (
+                        port.name.clone(),
+                        port.pin_declaration
+                            .as_ref()
+                            .map(|pin| pin.pin_type.clone()),
+                        port.pin_declaration.as_ref().map(|pin| pin.flow),
+                    )
+                })
+                .collect()
+        };
     let string = || DeclaredPinType::Is {
         pin_type: PinType::String {},
     };
@@ -271,7 +265,6 @@ fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
         [
             (
                 "picture".to_string(),
-                vec![PortFamily::Image],
                 Some(DeclaredPinType::Is {
                     pin_type: PinType::Texture {
                         pixel_formats: vec![]
@@ -281,28 +274,17 @@ fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
             ),
             (
                 "gain".to_string(),
-                vec![PortFamily::Channels],
                 Some(DeclaredPinType::Is {
                     pin_type: PinType::Float { exact_size: None }
                 }),
                 Some(PinFlow::Value),
             ),
-            (
-                "caption".to_string(),
-                vec![PortFamily::Records],
-                Some(string()),
-                Some(PinFlow::Value)
-            ),
+            ("caption".to_string(), Some(string()), Some(PinFlow::Value)),
         ]
     );
     assert_eq!(
         pins(&descriptor.outputs),
-        [(
-            "caption".to_string(),
-            vec![PortFamily::Records],
-            Some(string()),
-            Some(PinFlow::Value)
-        )]
+        [("caption".to_string(), Some(string()), Some(PinFlow::Value))]
     );
 }
 
@@ -391,7 +373,7 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
     assert!(
         refusal
             .to_string()
-            .contains("output `fader` of node `board` carries Array"),
+            .contains("output `fader` of node `board` carries Tensor"),
         "{refusal}"
     );
     assert!(board.current_value_of_each_output.is_empty());
@@ -399,13 +381,12 @@ fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any(
 }
 
 /// A record of named numbers a panel writes onto an output of a bundle of numbers is one Records
-/// map of its members: the bytes the same record makes on an output declared by `family`
-/// `records` alone, which an untyped Records input of a node reads as it always has.
+/// map of its members.
 ///
 /// Mental-revert: packing the bundle as `{"value": ...}`, as a String travels, hands the node a
 /// map of one entry in which it finds no `yaw`.
 #[test]
-fn a_record_a_panel_writes_onto_a_bundle_output_is_the_records_map_a_family_output_makes() {
+fn a_record_a_panel_writes_onto_a_bundle_output_is_one_records_map_of_its_members() {
     let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
         "acme-dj:stage",
         json!({
@@ -417,10 +398,6 @@ fn a_record_a_panel_writes_onto_a_bundle_output_is_the_records_map_a_family_outp
         }),
     ))
     .expect("a node view of a bundle of numbers is a node type");
-    assert_eq!(
-        descriptor.outputs[0].family.families_an_input_takes(),
-        vec![PortFamily::Records]
-    );
     let node = GraphNode::new(
         descriptor.node_class_import_path.clone(),
         None,
@@ -444,14 +421,13 @@ fn a_record_a_panel_writes_onto_a_bundle_output_is_the_records_map_a_family_outp
         .the_message_to_publish("camera", &camera)
         .expect("a bundle of numbers carries the record");
 
-    let as_a_family_output_writes_it =
-        the_message_a_value_written_onto_an_output_is(PortFamily::Records, &camera, 0)
-            .expect("a record is a Records value");
     assert_eq!(
-        message.payload_descriptor.kind,
-        as_a_family_output_writes_it.payload_descriptor.kind
+        message.payload_descriptor.known_kind().ok(),
+        Some(streamlib_ipc_types::DataChannelPayloadDescriptorKind::RecordsMessage)
     );
-    assert_eq!(message.payload, as_a_family_output_writes_it.payload);
+    let read_back: JsonValue =
+        rmp_serde::from_slice(&message.payload).expect("a Records message is a msgpack map");
+    assert_eq!(read_back, camera);
     assert!(
         stage
             .the_message_to_publish("camera", &json!({ "yaw": "left" }))

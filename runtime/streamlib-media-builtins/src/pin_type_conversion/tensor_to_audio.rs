@@ -19,7 +19,7 @@ use super::conversion_node_config_defaults::{
     forty_eight_thousand_samples_per_second, one_channel_named_value,
 };
 use super::conversion_node_config_refusals::refuse_a_channels_output_config;
-use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
+use super::messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 
 const ARRAY_INPUT_PORT: &str = "array";
 const CHANNELS_OUTPUT_PORT: &str = "channels";
@@ -61,7 +61,6 @@ impl Default for TensorToAudioSettings {
         "channels",
         description = "One Channels block per frame, one channel per name in `channel_names`",
         pin_type = Audio,
-        names = from_setting("channel_names"),
         rate = from_setting("sample_rate")
     ),
 )]

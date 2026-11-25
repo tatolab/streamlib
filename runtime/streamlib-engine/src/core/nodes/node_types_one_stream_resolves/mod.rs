@@ -530,8 +530,8 @@ impl NodeTypesOneStreamResolves {
     /// link of the graph reads into, an exposed config field of a node of that type, or an
     /// input value of one that is not known to be config, which no schema says, so the value
     /// stays on an input as it was before a node held one map of them; each output is a port
-    /// a link reads from. Each takes the family of the port at its link's other end, else
-    /// Records, and an exposed field Channels.
+    /// a link reads from. Each takes the pin of the described port at its link's other end,
+    /// else carries no pin type.
     pub(crate) fn hold_a_placeholder_of_each_node_type_not_described(
         &self,
         graph: &crate::core::graph::graph_snapshot::GraphSnapshot,
@@ -540,7 +540,6 @@ impl NodeTypesOneStreamResolves {
         let every_node_type_is_held = self
             .why_every_node_type_is_held_as_a_placeholder()
             .is_some();
-        use crate::core::descriptors::{PortFamily, PortFamilyDeclaration};
         let node_type_of_each_node: HashMap<&str, &NodeClassImportPath> = graph
             .nodes
             .iter()
@@ -562,7 +561,7 @@ impl NodeTypesOneStreamResolves {
         if not_described.is_empty() {
             return;
         }
-        let family_of_a_described_port =
+        let pin_of_a_described_port =
             |node_name: &str, port_name: &str, direction: PortDirection| {
                 node_type_of_each_node
                     .get(node_name)
@@ -570,13 +569,14 @@ impl NodeTypesOneStreamResolves {
                     .and_then(|ports| {
                         ports
                             .the_one_a_name_finds(direction, port_name)
-                            .map(|port| port.family.clone())
+                            .and_then(|port| port.pin.clone())
                     })
-                    .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Records))
             };
-        let a_port = |name: &str, family: PortFamilyDeclaration, is_input: bool| PortInfo {
+        let a_port = |name: &str,
+                      pin: Option<crate::core::descriptors::ResolvedPin>,
+                      is_input: bool| PortInfo {
             delivery_profile: is_input.then(|| "newest".to_string()),
-            ..PortInfo::declaring_only_a_family(name, String::new(), family)
+            ..PortInfo::declared_by_no_node_type(name, pin)
         };
         let mut placeholders: HashMap<NodeClassImportPath, PlaceholderOfANodeTypeNotDescribed> =
             HashMap::new();
@@ -604,7 +604,7 @@ impl NodeTypesOneStreamResolves {
                 };
             for link in &graph.links {
                 if node_type_of_each_node.get(link.target.node.as_str()) == Some(&node_type) {
-                    let family = family_of_a_described_port(
+                    let pin = pin_of_a_described_port(
                         &link.source.node,
                         &link.source.port,
                         PortDirection::Output,
@@ -612,11 +612,11 @@ impl NodeTypesOneStreamResolves {
                     add_once(
                         ports,
                         PortDirection::Input,
-                        a_port(&link.target.port, family, true),
+                        a_port(&link.target.port, pin, true),
                     );
                 }
                 if node_type_of_each_node.get(link.source.node.as_str()) == Some(&node_type) {
-                    let family = family_of_a_described_port(
+                    let pin = pin_of_a_described_port(
                         &link.target.node,
                         &link.target.port,
                         PortDirection::Input,
@@ -624,7 +624,7 @@ impl NodeTypesOneStreamResolves {
                     add_once(
                         ports,
                         PortDirection::Output,
-                        a_port(&link.source.port, family, false),
+                        a_port(&link.source.port, pin, false),
                     );
                 }
             }
@@ -637,26 +637,10 @@ impl NodeTypesOneStreamResolves {
                     !fields_its_config_schema_lists.contains(*input)
                         && !node.exposed_config_fields.contains(*input)
                 }) {
-                    add_once(
-                        ports,
-                        PortDirection::Input,
-                        a_port(
-                            input,
-                            PortFamilyDeclaration::of_family(PortFamily::Records),
-                            true,
-                        ),
-                    );
+                    add_once(ports, PortDirection::Input, a_port(input, None, true));
                 }
                 for exposed in &node.exposed_config_fields {
-                    add_once(
-                        ports,
-                        PortDirection::Input,
-                        a_port(
-                            exposed,
-                            PortFamilyDeclaration::of_family(PortFamily::Channels),
-                            true,
-                        ),
-                    );
+                    add_once(ports, PortDirection::Input, a_port(exposed, None, true));
                     if !placeholder.config_fields_its_nodes_expose.contains(exposed) {
                         placeholder
                             .config_fields_its_nodes_expose

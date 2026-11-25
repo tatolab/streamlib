@@ -4,6 +4,7 @@
 //! Fixtures shared by the graph snapshot's tests.
 
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 use std::collections::HashSet;
 
 use uuid::Uuid;
@@ -34,17 +35,17 @@ fn a_registered_camera_class() -> &'static str {
             "frames_in",
             "",
             false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         ))
         .with_output(crate::core::descriptors::PortDescriptor::new(
             "video",
             "",
             false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         )),
     );
     REGISTERED_CAMERA_CLASS

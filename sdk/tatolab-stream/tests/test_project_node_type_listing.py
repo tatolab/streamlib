@@ -247,7 +247,6 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         "inputs": [
             {
                 "name": "target",
-                "family": "image",
                 "description": "The target pose.",
                 "annotation": (
                     "InputPin[Annotated[Texture, StreamDelivery('newest'), "
@@ -258,7 +257,6 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         "outputs": [
             {
                 "name": "joint_angles",
-                "family": None,
                 "description": "",
                 "annotation": "OutputPin[joint_angles_type()]",
             }
@@ -273,28 +271,25 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     assert split["inputs"] == [
         {
             "name": "x",
-            "family": "channels",
             "description": "Solves joint angles for a target pose.",
             "annotation": "'Annotated[float, Description(INVERSE_KINEMATICS_DESCRIPTION)] | None'",
         },
-        {"name": "threshold", "family": "channels", "description": "", "annotation": "float", "pin_default": 0.5},
+        {"name": "threshold", "description": "", "annotation": "float", "pin_default": 0.5},
     ]
     assert split["outputs"] == [
         {
             "name": "low",
-            "family": "channels",
             "description": "What falls under `threshold`.",
             "annotation": "Annotated[float, Description('What falls under `threshold`.')]",
         },
-        {"name": "high", "family": "channels", "description": "", "annotation": "float | None"},
+        {"name": "high", "description": "", "annotation": "float | None"},
     ]
     ramp = node_types["nodes.inverse_kinematics:ramp"]
     assert ramp["description"] == ""
-    assert ramp["inputs"] == [{"name": "rate", "family": "channels", "description": "", "annotation": "float"}]
+    assert ramp["inputs"] == [{"name": "rate", "description": "", "annotation": "float"}]
     assert ramp["outputs"] == [
         {
             "name": "result",
-            "family": "channels",
             "description": "The ramp.",
             "annotation": "Annotated[float, Description('The ramp.')]",
         }
@@ -302,8 +297,8 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     tint = node_types["nodes.inverse_kinematics:tint"]
     assert tint["kind"] == "shader"
     assert (tint["category"], tint["description"]) == ("Color", "Scales every channel by `amount`.")
-    assert [port["family"] for port in tint["inputs"]] == ["image", "channels", "channels", "channels"]
-    assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "Texture"}]
+    assert [port["name"] for port in tint["inputs"]] == ["image", "amount", "hue", "shift"]
+    assert tint["outputs"] == [{"name": "result", "description": "", "annotation": "Texture"}]
 
     assert project["graph_generators"] == [
         {
@@ -493,18 +488,17 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
     bounds_outputs = [
         {
             "name": "low",
-            "family": "channels",
             "description": "The least value.",
             "annotation": "Annotated[float, Description('The least value.')]",
         },
-        {"name": "high", "family": "channels", "description": "", "annotation": "float"},
-        {"name": "count", "family": "channels", "description": "", "annotation": "int"},
-        {"name": "mixed_case", "family": "channels", "description": "", "annotation": "int"},
+        {"name": "high", "description": "", "annotation": "float"},
+        {"name": "count", "description": "", "annotation": "int"},
+        {"name": "mixed_case", "description": "", "annotation": "int"},
     ]
     assert outputs_by_node_type["nodes.limits:Limits"] == bounds_outputs
     assert outputs_by_node_type["nodes.limits:Count"] == bounds_outputs
     assert outputs_by_node_type["nodes.limits:Widen"] == [
-        {"name": "width", "family": "channels", "description": "", "annotation": "float"}
+        {"name": "width", "description": "", "annotation": "float"}
     ]
     # A named pin type is one pin, and a dataclass one bundle pin.
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:Measure"]] == ["result"]
@@ -539,16 +533,13 @@ def test_a_class_under_bare_node_is_listed_with_its_fields_and_pins_and_no_state
         "process",
         "Blurs each picture.",
     )
-    assert [(port["name"], port["family"]) for port in blur["inputs"]] == [
-        ("video", "image"),
-        ("radius", "channels"),
-    ]
+    assert [port["name"] for port in blur["inputs"]] == ["video", "radius"]
     assert blur["inputs"][0]["description"] == "The pictures."
     assert blur["inputs"][1]["pin_default"] == 4.0
-    assert [(port["name"], port["family"]) for port in blur["outputs"]] == [("result", "image")]
+    assert [port["name"] for port in blur["outputs"]] == ["result"]
 
 
-def test_a_pin_typed_by_a_bound_type_parameter_is_listed_with_the_family_of_its_bound() -> None:
+def test_a_pin_typed_by_a_type_parameter_is_listed_with_its_description() -> None:
     module_source = "\n".join(
         [
             "from typing import Annotated",
@@ -568,12 +559,9 @@ def test_a_pin_typed_by_a_bound_type_parameter_is_listed_with_the_family_of_its_
     )
 
     (hands_on,) = read["node_types"]
-    assert [(port["name"], port["family"]) for port in hands_on["inputs"]] == [
-        ("picture_in", "image"),
-        ("other", None),
-    ]
+    assert [port["name"] for port in hands_on["inputs"]] == ["picture_in", "other"]
     assert hands_on["inputs"][0]["description"] == "The pictures."
-    assert [(port["name"], port["family"]) for port in hands_on["outputs"]] == [("picture_out", "image")]
+    assert [port["name"] for port in hands_on["outputs"]] == ["picture_out"]
 
 
 def test_a_named_pin_type_is_listed_by_its_import_path_and_description_from_source() -> None:
@@ -648,7 +636,7 @@ def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: 
     ] == [
         (
             "imports/gripper/nodes.gripper:Gripper",
-            [{"name": "grip", "family": "channels", "description": "", "annotation": "stream.InputPin[float]"}],
+            [{"name": "grip", "description": "", "annotation": "stream.InputPin[float]"}],
         )
     ]
     assert [node_type["category"] for node_type in dependency_source["node_types"]] == [None]
@@ -674,12 +662,12 @@ def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
         "tatolab_fixture_ops:Missing",
     ]
     assert node_types["tatolab_fixture_ops:Add"]["inputs"] == [
-        {"name": "a", "family": "channels", "description": "", "annotation": "float", "pin_default": 0.0},
-        {"name": "b", "family": "channels", "description": "", "annotation": "float", "pin_default": 0.0},
+        {"name": "a", "description": "", "annotation": "float", "pin_default": 0.0},
+        {"name": "b", "description": "", "annotation": "float", "pin_default": 0.0},
     ]
     assert node_types["tatolab_fixture_ops:ImageFile"]["path"] == "tatolab_fixture_ops/image_file.py"
     assert node_types["tatolab_fixture_ops:ImageFile"]["outputs"] == [
-        {"name": "video", "family": "image", "description": "", "annotation": "OutputPin[Texture]"}
+        {"name": "video", "description": "", "annotation": "OutputPin[Texture]"}
     ]
     assert node_types["tatolab_fixture_ops:Lerp"]["kind"] == "function"
     assert node_types["tatolab_fixture_ops:Lerp"]["inputs"] is None

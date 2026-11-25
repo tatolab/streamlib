@@ -24,9 +24,6 @@ fn port_named(name: &str) -> PortDescriptor {
         delivery_profile: None,
         borrow_quota: None,
         audio_window: None,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
         pin_default: None,
         pin_declaration: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,

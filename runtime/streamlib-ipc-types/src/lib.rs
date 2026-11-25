@@ -30,7 +30,7 @@ mod gpu_pool_claim_table_mach_memory_entry;
 mod gpu_pool_claim_table_memfd;
 mod gpu_pool_slot_frame_descriptor_body;
 mod helper_process_loss_count_board;
-mod port_family_payload_descriptor_bodies;
+mod payload_descriptor_bodies;
 mod port_key;
 mod reserved_slot_reader;
 mod stream_clock_board;
@@ -97,7 +97,7 @@ pub use helper_process_loss_count_board::{
     HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
     OutputPortBagCountBoardEntry, STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS,
 };
-pub use port_family_payload_descriptor_bodies::{
+pub use payload_descriptor_bodies::{
     ARRAY_FRAME_ATTRIBUTE_DTYPE_BYTES, ARRAY_FRAME_ATTRIBUTE_MAX_DIMENSIONS,
     ARRAY_FRAME_ATTRIBUTE_NAME_BYTES, ARRAY_FRAME_ATTRIBUTE_ROW_BYTES,
     ARRAY_FRAME_ATTRIBUTE_ROW_CPU_DATA_BYTE_LEN_OFFSET,

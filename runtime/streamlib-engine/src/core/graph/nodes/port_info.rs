@@ -24,17 +24,13 @@ pub struct PortInfo {
     /// port renders exactly what it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
-    /// The port family this port declares. Mirrors the field on
-    /// [`crate::core::descriptors::PortDescriptor`].
-    pub family: crate::core::descriptors::PortFamilyDeclaration,
     /// The value this input reads while nothing is linked into it and no pin
     /// value is set on its node. Mirrors the field on
     /// [`crate::core::descriptors::PortDescriptor`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_default: Option<serde_json::Value>,
     /// The pin type this port carries, resolved from what its node type declares, and its
-    /// flow; `None` on a port whose type the code does not state exactly, which links by its
-    /// family alone.
+    /// flow; `None` on a port whose type its graph finds, from a link or a setting.
     #[serde(flatten)]
     pub pin: Option<crate::core::descriptors::ResolvedPin>,
     /// The pin type this port's node type declares, or how its graph finds it, and its flow;
@@ -156,7 +152,6 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
-            family: port.family.clone(),
             pin_default: port.pin_default.clone(),
             former_names: declared_pin
                 .as_ref()
@@ -183,6 +178,30 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
 }
 
 impl PortInfo {
+    /// A port named `name` that no node type declares, carrying `pin` when one is known, such as
+    /// a port of a node whose node code did not describe it, held by the links and values its
+    /// nodes have.
+    pub(crate) fn declared_by_no_node_type(
+        name: &str,
+        pin: Option<crate::core::descriptors::ResolvedPin>,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            description: String::new(),
+            delivery_profile: None,
+            borrow_quota: None,
+            audio_window: None,
+            pin_default: None,
+            pin,
+            declared_pin_type: None,
+            lifetime: Default::default(),
+            former_names: Vec::new(),
+            may_be_unset: false,
+            input_mode: None,
+            annotations: PortAnnotations::default(),
+        }
+    }
+
     /// The lowest and highest number this input takes, as its pin states them; `None` when it
     /// states no range.
     pub fn range(&self) -> Option<crate::core::descriptors::PinNumberRange> {
@@ -195,14 +214,10 @@ impl PortInfo {
         self.annotations.0.meaning.as_deref()
     }
 
-    /// The frame rate this output's stream has, stated or read from one of its node's settings:
-    /// as its pin states it, else as its family declares it; `None` when neither states one.
+    /// The frame rate this output's stream has, stated or read from one of its node's settings,
+    /// as its pin states it; `None` when it states none.
     pub fn stated_frame_rate(&self) -> Option<&crate::core::descriptors::ImageOutputPortFrameRate> {
-        self.annotations
-            .0
-            .frame_rate
-            .as_ref()
-            .or(self.family.frame_rate.as_ref())
+        self.annotations.0.frame_rate.as_ref()
     }
 
     /// Whether a link may end at this input of a node of `node_type`, by the one rule
@@ -302,30 +317,14 @@ impl PortInfo {
         }
         Some(pin.pin_type.check_value(value))
     }
-
-    /// A port named `name` that declares only `family`, typed as any port declaring that family
-    /// is.
-    pub fn declaring_only_a_family(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        family: crate::core::descriptors::PortFamilyDeclaration,
-    ) -> Self {
-        Self::from(&crate::core::descriptors::PortDescriptor::new(
-            name,
-            description,
-            true,
-            family,
-        ))
-    }
 }
 
 impl PortInfo {
     /// Whether `other` is the input of the same name that takes the values this one takes: its
-    /// family, its pin type and how its graph finds it, its range, its input mode, its lifetime
+    /// pin type and how its graph finds it, its range, its input mode, its lifetime
     /// and whether it may be unset, whatever its description.
     pub(crate) fn takes_the_values_it_takes(&self, other: &PortInfo) -> bool {
         self.name == other.name
-            && self.family == other.family
             && self.pin == other.pin
             && self.declared_pin_type == other.declared_pin_type
             && self.range().map(InputNumberRange) == other.range().map(InputNumberRange)

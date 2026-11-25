@@ -21,6 +21,7 @@ from tatolab.stream import (
     Texture,
     NumberRange,
     NumberStep,
+    PinTypeChoice,
     StreamBuilder,
     graph_generator,
     node,
@@ -94,7 +95,7 @@ def glow_look(
     picture = stream_builder.add(
         GraphInput,
         name="video_in",
-        input_values={"port": "video_in", "family": "image"},
+        input_values={"port": "video_in", "pin_type": PinTypeChoice(Texture)},
     )
     blurred = picture.output("value")
     for pass_index in range(max(1, passes)):
@@ -111,6 +112,6 @@ def glow_look(
     glowing = stream_builder.add(
         GraphOutput,
         name="video_out",
-        input_values={"port": "video_out", "family": "image"},
+        input_values={"port": "video_out", "pin_type": PinTypeChoice(Texture)},
     )
     stream_builder.connect(bloom.output("result"), glowing.input("value"))

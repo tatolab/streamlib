@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `AudioToTensor` takes Audio and `TensorToAudio` gives Audio, so `connect` judges a link
-//! between either and a Float by their pin types and refuses it, where the Channels family both
-//! messages belong to would have let it through. A saved graph that already holds such a link,
-//! under the conversion's old name, still loads with the link kept, since its families take it.
+//! between either and a Float by their pin types and refuses it, though both travel as Channels
+//! blocks. A saved graph that already holds such a link, under the conversion's old name, still
+//! loads with the link kept, since both its ends travel as one kind of message.
 
 use std::sync::Arc;
 
 use streamlib::sdk::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PortDescriptor,
 };
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
@@ -24,9 +24,8 @@ fn a_float_port(name: &str) -> PortDescriptor {
         name,
         "a Float",
         false,
-        PortFamilyDeclaration::of_family(PortFamily::Channels),
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
     )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }))
 }
 
 fn a_fixture_node_type(class_name: &str) -> NodeDescriptor {

@@ -3,7 +3,8 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
+    PortDescriptor,
 };
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::Runner;
@@ -37,17 +38,17 @@ fn register_test_type(short: &str) -> NodeClassImportPath {
         "_unused_in",
         "",
         false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     ))
     .with_output(PortDescriptor::new(
         "_unused_out",
         "",
         false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     ));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path

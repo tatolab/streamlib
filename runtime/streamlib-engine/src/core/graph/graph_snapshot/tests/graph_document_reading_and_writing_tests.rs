@@ -4,6 +4,7 @@
 //! Reading and writing a graph document: its keys, node UUIDs, link ends, and the node types and settings it is validated against.
 
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 #[test]
 fn a_graph_document_parses_with_its_live_keys_ignored() {
@@ -506,9 +507,9 @@ fn a_type_described_in_the_stream_validates_against_that_streams_ports() {
                 "video",
                 "",
                 false,
-                crate::core::descriptors::PortFamilyDeclaration::of_family(
-                    crate::core::descriptors::PortFamily::Image,
-                ),
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
             )),
             crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                 Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),

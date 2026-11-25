@@ -8,7 +8,7 @@
 
 use streamlib::sdk::descriptors::{
     FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PinDeclaration, PinType, PortDescriptor,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
@@ -22,15 +22,7 @@ const SPARE_UUID: &str = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
 
 /// A typed port of `pin_type` named `name`, delivered newest when it is an input.
 fn a_typed_port(name: &str, pin_type: PinType, is_an_input: bool) -> PortDescriptor {
-    let port = PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(
-            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-        ),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(pin_type));
+    let port = PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type));
     if is_an_input {
         port.with_delivery_profile("newest")
     } else {

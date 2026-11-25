@@ -142,8 +142,8 @@ returned, and a parameter named `config` the node's config record. A value is an
 `f64`, `i64` or `bool`; a record is a struct of them deriving
 `FunctionNodeRecord`, whose `Default` is its first state or its config's defaults.
 
-A pin typed `UnreadMessage` takes a message of any family, which the body can
-only hand on to an `UnreadMessage` output, whose family follows that input's; a
+A pin typed `UnreadMessage` takes a message of any type, which the body can
+only hand on to an `UnreadMessage` output, whose type follows that input's; a
 function handing one out takes exactly one. `Option<UnreadMessage>` takes `None`
 when it holds nothing. An output typed `Option<T>` hands out nothing on `None`,
 and a record of outputs types each field that may hand out nothing `Option<T>`.

@@ -22,10 +22,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Final, Literal, Optional
 
 from ._class_node_pins import InputPin, OutputPin
-from ._class_node_type_choice import (
-    family_declaration_of_an_output_a_setting_types,
-    give_each_type_choice_what_it_may_choose,
-)
+from ._class_node_type_choice import give_each_type_choice_what_it_may_choose
 from ._contract_pin_types import PinDeclarationOnTheWire, PinType
 from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
@@ -47,11 +44,6 @@ from ._pin_declaration import (
     read_pin_declaration,
 )
 from ._former_name_check import refuse_former_names_that_find_no_one_pin
-from ._pin_family import (
-    family_a_pin_travels_on,
-    family_declaration_of_a_typed_output,
-    family_declaration_of_an_input_of_several_types,
-)
 
 __all__ = [
     "ClassNodeMember",
@@ -218,13 +210,6 @@ class _ClassNodeReading:
             give_each_type_choice_what_it_may_choose(
                 self._node, input_ports, output_ports, self._among_of_each_choosing_setting
             )
-        for output_port in output_ports:
-            followed = output_port["family"].get("family_follows_input_port")
-            if followed is not None and "family" not in output_port["family"]:
-                output_port["family"] = {
-                    "family": self._input_port_by_name[followed]["family"]["family"],
-                    "family_follows_input_port": followed,
-                }
         return input_ports, output_ports, tuple(members)
 
     def _refusal(
@@ -410,7 +395,6 @@ class _ClassNodeReading:
         port: DeclaredPort = {
             "name": self._cast_port_name(attribute_name),
             "description": description or "",
-            "family": {"family": _family_a_declared_pin_travels_on(declared.declaration)},
             "pin_declaration": declared.declaration,
         }
         if declared.default_value is not NO_DEFAULT:
@@ -434,7 +418,6 @@ class _ClassNodeReading:
         return port, {
             "name": port["name"],
             "description": port["description"],
-            "family": dict(port["family"]),
             "pin_declaration": output_declaration,
         }
 
@@ -510,11 +493,6 @@ class _ClassNodeReading:
         port: DeclaredPort = {
             "name": port_name,
             "description": description or "",
-            "family": (
-                family_declaration_of_an_input_of_several_types(declared_pin_type["pin_types"])
-                if (declared_pin_type := declared.declaration["pin_type"])["kind"] == "one_of"
-                else {"family": _family_a_declared_pin_travels_on(declared.declaration)}
-            ),
             "pin_declaration": declared.declaration,
         }
         delivery: Optional[StreamDelivery] = deliveries[0] if deliveries else None  # pyright: ignore[reportAssignmentType]
@@ -587,24 +565,8 @@ class _ClassNodeReading:
         return {
             "name": port_name,
             "description": description or "",
-            "family": (
-                family_declaration_of_an_output_a_setting_types(declared.declaration, declared.chosen_among)
-                if declared.chosen_among
-                else self._family_of_an_output_pin(port_name, declared.declaration)
-            ),
             "pin_declaration": declared.declaration,
         }
-
-    def _family_of_an_output_pin(
-        self, port_name: str, declaration: PinDeclarationOnTheWire
-    ) -> dict[str, Any]:
-        declared_pin_type = declaration["pin_type"]
-        if declared_pin_type["kind"] == "is":
-            return family_declaration_of_a_typed_output(port_name, declaration)
-        if declared_pin_type["kind"] == "same_as_input":
-            # The family of the input it follows, filled in once every input is read.
-            return {"family_follows_input_port": declared_pin_type["input_port_name"]}
-        return {"family": _family_a_declared_pin_travels_on(declaration)}
 
     def _cast_port_name(self, spelling: str) -> str:
         try:
@@ -619,19 +581,6 @@ class _ClassNodeReading:
             )
         self._port_spelling_by_cast_name[port_name] = spelling
         return port_name
-
-
-# The family a pin whose type a setting or its link chooses declares until the runtime resolves
-# that type.
-_FAMILY_OF_A_PIN_TYPED_ELSEWHERE: Final = "records"
-
-
-def _family_a_declared_pin_travels_on(declaration: PinDeclarationOnTheWire) -> str:
-    """The family of a pin of one type, or of the Records family for one a setting or its link
-    types."""
-    if declaration["pin_type"]["kind"] in ("set_by_input", "any"):
-        return _FAMILY_OF_A_PIN_TYPED_ELSEWHERE
-    return family_a_pin_travels_on(declaration)
 
 
 def _chooses_a_pin_type(declaration: PinDeclarationOnTheWire) -> bool:

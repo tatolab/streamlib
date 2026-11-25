@@ -68,7 +68,7 @@ class MicrophoneWiredToAReader:
         deadline = time.monotonic() + FIRST_BLOCKS_DEADLINE_SECONDS
         while len(blocks) < block_count:
             block = link_input_data_reader_of(self.reader).read(
-                AUDIO_OUTPUT_PORT, families=["channels"]
+                AUDIO_OUTPUT_PORT, kinds=["channels_block"]
             )
             if block is not None:
                 blocks.append(block)

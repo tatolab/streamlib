@@ -129,10 +129,9 @@ def test_a_receive_writes_the_type_its_choice_holds_a_moq_record_by_default():
         {"type": "encoded_audio", "codecs": ["opus"]},
         MOQ_RECORD,
     ]
-    assert content_out["family"] == {
-        "family": "records",
-        "family_from_config_key": "content_type",
-        "codec_from_config_key": "content_type",
+    assert content_out["pin_declaration"]["pin_type"] == {
+        "kind": "set_by_input",
+        "input_name": "content_type",
     }
 
 
@@ -143,11 +142,11 @@ def a_node_built(node_class: type, **field_values: Any) -> Any:
     return construct_class_node(node_class, field_values=field_values, pins=pins)
 
 
-def test_a_receive_hands_its_native_half_the_family_and_codec_its_choice_holds():
+def test_a_receive_hands_its_native_half_what_it_carries_and_the_codec_its_choice_holds():
     by_default = a_node_built(MoqTrackReceive)
-    assert (by_default._family, by_default._codec) == ("named", None)
+    assert (by_default._carries, by_default._codec) == ("named", None)
     h264 = a_node_built(MoqTrackReceive, content_type=PinTypeChoice(Annotated[EncodedVideo, EncodedCodecs("h264")]))
-    assert (h264._family, h264._codec) == ("packets", "h264")
+    assert (h264._carries, h264._codec) == ("encoded", "h264")
 
 
 def test_the_names_a_gateway_and_a_track_give_are_cast_and_a_receive_reads_its_names_as_written():

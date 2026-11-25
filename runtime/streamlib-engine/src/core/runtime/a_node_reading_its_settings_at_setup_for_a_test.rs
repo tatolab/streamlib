@@ -17,8 +17,7 @@ use uuid::Uuid;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinDeclaration,
-    PinGroupDescriptor, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    SettingReadTime,
+    PinGroupDescriptor, PinType, PortDescriptor, SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -66,16 +65,11 @@ fn the_fixture_node_type() -> NodeClassImportPath {
 }
 
 fn a_setting_read_at_setup(name: &str, pin_type: PinType) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        name,
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(pin_type)).with_input_mode(
+        NodeInputMode::SettingOnly {
+            read: SettingReadTime::AtSetup,
+        },
     )
-    .with_pin_declaration(PinDeclaration::exactly(pin_type))
-    .with_input_mode(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    })
 }
 
 /// A node reading `kernel_size`, `width` and `height` once, at setup, refusing to build with the
@@ -300,17 +294,12 @@ fn register_the_source_node_type_once() {
             the_source_node_type(),
             "a node whose Integer output a test writes",
         );
-        descriptor.outputs = vec![
-            PortDescriptor::new(
-                THE_SOURCES_OUTPUT,
-                THE_SOURCES_OUTPUT,
-                false,
-                PortFamilyDeclaration::of_family(
-                    PortFamily::carrying(&integer).unwrap_or(PortFamily::Records),
-                ),
-            )
-            .with_pin_declaration(PinDeclaration::exactly(integer.clone())),
-        ];
+        descriptor.outputs = vec![PortDescriptor::new(
+            THE_SOURCES_OUTPUT,
+            THE_SOURCES_OUTPUT,
+            false,
+            PinDeclaration::exactly(integer.clone()),
+        )];
         descriptor.inputs = vec![a_setting_read_at_setup(THE_SOURCES_SETTING, integer)];
         let described = descriptor.clone();
         NODE_REGISTRY
@@ -453,11 +442,8 @@ fn register_the_layered_node_type_once() {
                     "layer",
                     "layer",
                     false,
-                    PortFamilyDeclaration::of_family(
-                        PortFamily::carrying(&integer).unwrap_or(PortFamily::Records),
-                    ),
+                    PinDeclaration::exactly(integer.clone()),
                 )
-                .with_pin_declaration(PinDeclaration::exactly(integer.clone()))
                 .with_input_mode(NodeInputMode::WireOrValue),
             ],
             Vec::new(),

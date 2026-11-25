@@ -8,7 +8,7 @@
 
 use streamlib::sdk::descriptors::{
     FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PortDescriptor,
 };
 use streamlib::sdk::execution::ProcessExecution;
 
@@ -21,13 +21,8 @@ const SWITCH_TYPE: &str = "transaction_reader_rule::Switch";
 const READER_TYPE: &str = "transaction_reader_rule::Meter";
 
 fn a_records_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_delivery_profile("newest")
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(PinType::String {}))
+        .with_delivery_profile("newest")
 }
 
 fn a_node_type(

@@ -199,7 +199,7 @@ class PublisherWiredToEncoders:
         starts_group: bool = True,
     ) -> None:
         link_output_data_writer_of(self.encoder_context).write(
-            encoder_output_port, payload, timestamp_ns, starts_group, family="packets"
+            encoder_output_port, payload, timestamp_ns, starts_group, kind="packets_unit"
         )
         self.publisher.process(
             _engine.limited_access_view_of_runtime_context_for_helper_process(

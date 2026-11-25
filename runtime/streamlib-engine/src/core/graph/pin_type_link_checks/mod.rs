@@ -1,39 +1,38 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The judgement of a link by its two ends' pin types, or by their families when one is untyped.
+//! The judgement of a link by its two ends' pin types, by the one rule [`pin_link_verdict`]. A
+//! link with an end its graph does not type yet is judged once that end is typed; one from an
+//! output of any type, which nothing types, is made as it is, and its reader judges each message
+//! it reads.
 
 use super::bundle_member_link_ends::{
     refuse_a_link_into_a_member_no_bundle_is_built_with, refuse_a_member_its_port_does_not_hold,
     refuse_a_whole_link_beside_a_member_link, what_a_link_end_at_a_port_carries,
 };
 use super::pin_type_resolution::{
-    PinTypeInItsGraph, states_one_type_exactly, the_conversion_whose_output_follows_a_setting,
-    the_pin_type_it_states, the_pin_type_of_a_port_in_its_graph,
-    the_type_a_convert_node_gives_under,
-};
-use super::port_family_link_checks::{
-    FamiliesTakeTheLink, refuse_a_link_between_ports_whose_families_do_not_match,
-    refuse_what_a_link_carries_on_past_its_input, the_inputs_an_input_is_carried_on_to,
-    the_outputs_a_link_carries_on,
+    PinTypeInItsGraph, the_conversion_whose_output_follows_a_setting, the_pin_type_it_states,
+    the_pin_type_of_a_port_in_its_graph, the_type_a_convert_node_gives_under,
 };
 use super::{
     Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef,
     PendingDeletionComponent, PortInfo,
 };
 use crate::core::descriptors::{
-    BundleMember, ConvertNodeToInsert, DeclaredPinType, NodeClassImportPath, PinConversion,
-    PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType,
-    PortFamilyDeclaration, PortFamilyLinkEndpoint, pin_link_verdict,
-    refusal_of_the_names_and_codec_a_link_carries,
+    BundleMember, DeclaredPinType, NodeClassImportPath, PinConversion, PinLinkEnd, PinLinkInputEnd,
+    PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType, pin_link_verdict,
 };
+use crate::core::pin_value_packing::message_kind_of;
 use crate::core::{Error, PortDirection, Result};
+use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 
 mod bundle_frames_into_an_untyped_input;
+mod named_type_at_an_untyped_end;
 mod wired_links_past_an_input;
 
 use bundle_frames_into_an_untyped_input::refuse_bundle_frames_into_an_untyped_input;
 pub(crate) use bundle_frames_into_an_untyped_input::the_bundle_frame_type_an_output_may_carry;
+use named_type_at_an_untyped_end::refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other;
 use wired_links_past_an_input::{
     the_first_wired_link_past_an_input_refused, the_wired_links_out_of,
 };
@@ -45,8 +44,8 @@ pub(crate) enum ALinkConnected {
     /// Image output may write a format an input it reaches does not read, is refused.
     MadeNow,
     /// A link a saved graph already holds, so the graph opens: one the verdict refuses by its
-    /// pin types alone, or whose Image formats alone are refused, is kept when its ports'
-    /// families, names and codec take it, each refusal logged as a warning.
+    /// pin types alone is kept when both its ends travel as one kind of message, the refusal
+    /// logged as a warning.
     OfASavedGraph,
 }
 
@@ -68,18 +67,19 @@ struct TypedLinkEnds<'graph> {
 }
 
 impl TypedLinkEnds<'_> {
-    /// Whether each end carries exactly the one type it declares. Any other end is judged by its
-    /// family first, as an untyped port is: one of any type or of one of several carries its
-    /// message on its family whatever type it takes, and one whose type follows another pin or a
-    /// setting has its family follow it too.
-    fn states_one_type_exactly_at_each_end(&self) -> bool {
-        states_one_type_exactly(self.output_port) && states_one_type_exactly(self.input_port)
-    }
-
-    /// Whether either end is at a member of a bundle, which its member's type judges, not the
-    /// family of the whole port it is a member of.
-    fn ends_at_a_member(&self) -> bool {
-        self.output_member.is_some() || self.input_member.is_some()
+    /// Whether a type the output may carry and a type the input may read travel as one kind of
+    /// message, so a saved link between them still carries what it carried when it was saved.
+    fn both_travel_as_one_kind_of_message(&self) -> bool {
+        fn kinds(
+            pin_type: &PinTypeInItsGraph,
+        ) -> impl Iterator<Item = DataChannelPayloadDescriptorKind> + '_ {
+            pin_type
+                .the_types_it_may_carry()
+                .iter()
+                .filter_map(message_kind_of)
+        }
+        kinds(&self.output_pin_type)
+            .any(|output_kind| kinds(&self.input_pin_type).any(|kind| kind == output_kind))
     }
 
     /// The verdict on the link among `conversions`: [`verdict_between`] its two typed ends.
@@ -180,11 +180,7 @@ impl<'end> TypedEnd<'end> {
 
     /// Each type it may carry: its one type, or each of several.
     fn the_types_it_may_carry(&self) -> &'end [PinType] {
-        match self.pin_type {
-            PinTypeInItsGraph::Is(pin_type) => std::slice::from_ref(pin_type),
-            PinTypeInItsGraph::OneOf(pin_types) => pin_types,
-            PinTypeInItsGraph::Any | PinTypeInItsGraph::Untyped => &[],
-        }
+        self.pin_type.the_types_it_may_carry()
     }
 }
 
@@ -312,14 +308,11 @@ fn what_the_input_end_of_a_link_carries(
     }
 }
 
-/// What a link is judged by at its two ends: what each port carries in its graph, and its
-/// family declaration.
+/// What a link is judged by at its two ends: what each port carries in its graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TheEndsALinkIsJudgedBy {
     output_pin_type: PinTypeInItsGraph,
-    output_family: PortFamilyDeclaration,
     input_pin_type: PinTypeInItsGraph,
-    input_family: PortFamilyDeclaration,
 }
 
 /// What a link from `from` to `to` is judged by at its ends; `None` when either end is no port
@@ -340,14 +333,12 @@ pub(crate) fn the_ends_a_link_is_judged_by(
             output_port,
             PortDirection::Output,
         ),
-        output_family: output_port.family.clone(),
         input_pin_type: the_pin_type_of_a_port_in_its_graph(
             graph,
             to_node,
             input_port,
             PortDirection::Input,
         ),
-        input_family: input_port.family.clone(),
     })
 }
 
@@ -361,80 +352,6 @@ pub(crate) fn the_verdict_on_a_link_between_typed_ends(
     conversions: &[PinConversion],
 ) -> Option<PinLinkVerdict> {
     the_typed_ends_of(graph, from, to).map(|ends| ends.verdict(conversions))
-}
-
-/// Refuse the two links a node of `convert_node`'s conversion, not yet in `graph`, would carry
-/// between `from` and `to` by the names and codec each carries, as connect refuses each link
-/// once the node is made: from `from` into the node's input, and from its output, holding the
-/// settings `convert_node` picked, into `to`. A conversion whose node type `graph`'s stream does
-/// not describe is left for connect to judge.
-pub(crate) fn refuse_the_names_and_codec_the_links_through_a_convert_node_refuse(
-    graph: &Graph,
-    from: &OutputLinkPortRef,
-    to: &InputLinkPortRef,
-    convert_node: &ConvertNodeToInsert,
-) -> Result<()> {
-    let conversion = &convert_node.conversion;
-    let (Some(from_node), Some(to_node)) = (
-        graph.traversal().v(from.node_run_id()).first(),
-        graph.traversal().v(to.node_run_id()).first(),
-    ) else {
-        return Ok(());
-    };
-    let (Some(output_port), Some(input_port)) = (
-        from_node.output_port(from.port_name()),
-        to_node.input_port(to.port_name()),
-    ) else {
-        return Ok(());
-    };
-    let Some(ports) = graph
-        .node_types_this_stream_resolves()
-        .port_info(&conversion.node_type)
-    else {
-        return Ok(());
-    };
-    let a_port_named =
-        |ports: &[PortInfo], name: &str| ports.iter().find(|port| port.name == name).cloned();
-    let (Some(into_it), Some(out_of_it)) = (
-        a_port_named(&ports.inputs, &conversion.input_port_name),
-        a_port_named(&ports.outputs, &conversion.output_port_name),
-    ) else {
-        return Ok(());
-    };
-    let convert_node_name = conversion.node_type.to_string();
-    let held =
-        crate::core::graph::the_values_port_facts_read(&ports.inputs, &convert_node.input_values);
-    let refusal = refusal_of_the_names_and_codec_a_link_carries(
-        PortFamilyLinkEndpoint {
-            node_name: &from_node.display_name,
-            port_name: &output_port.name,
-            declaration: &output_port.family,
-        },
-        output_port.family.family,
-        Some(&from_node.the_values_its_port_facts_read()),
-        PortFamilyLinkEndpoint {
-            node_name: &convert_node_name,
-            port_name: &into_it.name,
-            declaration: &into_it.family,
-        },
-    )
-    .or_else(|| {
-        refusal_of_the_names_and_codec_a_link_carries(
-            PortFamilyLinkEndpoint {
-                node_name: &convert_node_name,
-                port_name: &out_of_it.name,
-                declaration: &out_of_it.family,
-            },
-            out_of_it.family.family,
-            Some(&held),
-            PortFamilyLinkEndpoint {
-                node_name: &to_node.display_name,
-                port_name: &input_port.name,
-                declaration: &input_port.family,
-            },
-        )
-    });
-    refusal.map_or(Ok(()), |refusal| Err(Error::InvalidLink(refusal)))
 }
 
 /// Refuse `input_values`, the values the node `node_run_id` names would hold after a set, when it
@@ -542,47 +459,19 @@ pub(crate) fn a_link_made_now_would_be_refused(
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
 ) -> bool {
-    the_link_its_pin_types_or_families_take(graph, from, to, ALinkConnected::MadeNow).is_err()
+    refuse_a_link_its_pin_types_refuse(graph, from, to, ALinkConnected::MadeNow).is_err()
 }
 
 /// Refuse a link from `from` to `to` its verdict among the conversions `graph`'s stream
-/// resolves, or its families, refuse; `a_link_connected` says whether one the verdict, or its
-/// Image formats, refuse alone is kept. Answers the verdict of a link between two typed ends
-/// that connects, and `None` for one its families judge or take.
-pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
+/// resolves refuses; `a_link_connected` says whether one the verdict refuses by its pin types
+/// alone is kept. Answers the verdict of a link between two typed ends that connects, and `None`
+/// for one with an end its graph does not type yet, which is judged once it is.
+pub(crate) fn refuse_a_link_its_pin_types_refuse(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
     a_link_connected: ALinkConnected,
 ) -> Result<Option<PinLinkVerdict>> {
-    let LinkTaken { verdict, families } =
-        the_link_its_pin_types_or_families_take(graph, from, to, a_link_connected)?;
-    if let FamiliesTakeTheLink::ButForImageFormatsNotRead(refusal) = families {
-        tracing::warn!(
-            from = %from,
-            to = %to,
-            "a saved link is kept, its ports' families taking it, though its output may write an \
-             Image format an input it reaches does not read: {refusal}"
-        );
-    }
-    Ok(verdict)
-}
-
-/// How a link neither its verdict nor its families refuse is taken: the verdict of its two typed
-/// ends when it connects, and how its families take it.
-struct LinkTaken {
-    verdict: Option<PinLinkVerdict>,
-    families: FamiliesTakeTheLink,
-}
-
-/// How a link from `from` to `to` that neither its verdict nor its families refuse is taken, as
-/// [`refuse_a_link_its_pin_types_or_families_refuse`] judges it.
-fn the_link_its_pin_types_or_families_take(
-    graph: &Graph,
-    from: &OutputLinkPortRef,
-    to: &InputLinkPortRef,
-    a_link_connected: ALinkConnected,
-) -> Result<LinkTaken> {
     refuse_a_member_its_port_does_not_hold(graph, from, to)?;
     refuse_a_link_into_a_member_no_bundle_is_built_with(graph, to)?;
     if a_link_connected == ALinkConnected::MadeNow {
@@ -592,25 +481,20 @@ fn the_link_its_pin_types_or_families_take(
     let Some(ends) = the_typed_ends_of(graph, from, to) else {
         if let Some(member) = from.member() {
             return Err(Error::InvalidLink(format!(
-                "a link from member `{member}` of `{from}` enters `{to}`, which states no pin \
-                 type, and a member is read only by a typed input. To fix: link the whole port, \
+                "a link from member `{member}` of `{from}` enters `{to}`, which carries no type \
+                 yet, and a member is read only by a typed input. To fix: link the whole port, \
                  or link the member to a typed input"
             )));
         }
         if let Some(member) = to.member() {
             return Err(Error::InvalidLink(format!(
-                "a link from `{from}` ends at member `{member}` of `{to}`, and `{from}` states no \
-                 pin type, so the member's value cannot be read off its messages. To fix: link \
-                 the member from a typed output, or link the whole port"
+                "a link from `{from}` ends at member `{member}` of `{to}`, and `{from}` carries \
+                 no type yet, so the member's value cannot be read off its messages. To fix: \
+                 link the member from a typed output, or link the whole port"
             )));
         }
         refuse_bundle_frames_into_an_untyped_input(graph, from, to)?;
-        let families = refuse_a_link_between_ports_whose_families_do_not_match(
-            graph,
-            from,
-            to,
-            a_link_connected,
-        )?;
+        refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(graph, from, to)?;
         if a_link_connected == ALinkConnected::MadeNow {
             refuse_a_link_made_now_a_wired_link_past_its_input_refuses(
                 graph,
@@ -619,110 +503,36 @@ fn the_link_its_pin_types_or_families_take(
                 &conversions,
             )?;
         }
-        return Ok(LinkTaken {
-            verdict: None,
-            families,
-        });
+        return Ok(None);
     };
-    let families_judged_first =
-        if ends.states_one_type_exactly_at_each_end() || ends.ends_at_a_member() {
-            None
-        } else {
-            Some(refuse_a_link_between_ports_whose_families_do_not_match(
-                graph,
-                from,
-                to,
-                a_link_connected,
-            )?)
-        };
     let verdict = ends.verdict(&conversions);
-    let TypedLinkEnds {
-        from_node,
-        output_port,
-        to_node,
-        input_port,
-        ..
-    } = &ends;
-    let (from_node, output_port, to_node, input_port) =
-        (*from_node, *output_port, *to_node, *input_port);
     if let Some(refusal) = verdict.refusal_of_the_link_made_as_it_is() {
         if a_link_connected == ALinkConnected::OfASavedGraph
             && matches!(refusal, PinLinkRefusal::PinTypesDoNotConnect { .. })
-            && let Ok(families) = families_judged_first.clone().map_or_else(
-                || {
-                    refuse_a_link_between_ports_whose_families_do_not_match(
-                        graph,
-                        from,
-                        to,
-                        a_link_connected,
-                    )
-                },
-                Ok,
-            )
+            && ends.both_travel_as_one_kind_of_message()
         {
             tracing::warn!(
                 from = %from,
                 to = %to,
-                "a saved link is kept, its ports' families taking it, though its pin types \
-                 refuse it: {refusal}"
+                "a saved link is kept, both its ends travelling as one kind of message, though \
+                 its pin types refuse it: {refusal}"
             );
-            return Ok(LinkTaken {
-                verdict: None,
-                families,
-            });
+            return Ok(None);
         }
         return Err(Error::PinLinkRefused(Box::new(refusal.clone())));
     }
-    let families = match families_judged_first {
-        Some(families) => families,
-        None => {
-            if let Some(refusal) = refusal_of_the_names_and_codec_a_link_carries(
-                PortFamilyLinkEndpoint {
-                    node_name: &from_node.display_name,
-                    port_name: &output_port.name,
-                    declaration: &output_port.family,
-                },
-                output_port.family.family,
-                Some(&from_node.the_values_its_port_facts_read()),
-                PortFamilyLinkEndpoint {
-                    node_name: &to_node.display_name,
-                    port_name: &input_port.name,
-                    declaration: &input_port.family,
-                },
-            ) {
-                return Err(Error::InvalidLink(refusal));
-            }
-            let mut families = FamiliesTakeTheLink::Wholly;
-            let inputs_carried_on_to =
-                the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
-            for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
-                refuse_what_a_link_carries_on_past_its_input(
-                    carried_on,
-                    &inputs_carried_on_to,
-                    from,
-                    to,
-                    a_link_connected,
-                    &mut families,
-                )?;
-            }
-            families
-        }
-    };
     if a_link_connected == ALinkConnected::MadeNow
         && let Some(refused) = the_first_wired_link_past_an_input_refused(
             graph,
-            to_node,
-            &input_port.name,
+            ends.to_node,
+            &ends.input_port.name,
             &ends.output_pin_type,
             &conversions,
         )
     {
         return Err(Error::InvalidLink(refused));
     }
-    Ok(LinkTaken {
-        verdict: Some(verdict),
-        families,
-    })
+    Ok(Some(verdict))
 }
 
 /// Refuse a link from `from` to `to` made now, its input untyped, when the output it comes from

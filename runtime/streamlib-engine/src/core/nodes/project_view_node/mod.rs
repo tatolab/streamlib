@@ -20,8 +20,7 @@ use streamlib_project_repository::{
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
-    PortFamily, PortFamilyDeclaration, SettingReadTime,
+    NodeValueLifetime, PinDeclaration, PinFlow, PinType, PortDescriptor, SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -35,9 +34,7 @@ use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_t
 use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
 use crate::core::nodes::{THE_DESCRIPTOR_OF_A_CONSTANT, the_node_type_of_a_graph_input};
 pub use crate::core::pin_value_packing::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
-use crate::core::pin_value_packing::{
-    PackedPinValue, pack_pin_value, the_message_a_value_written_onto_an_output_is,
-};
+use crate::core::pin_value_packing::{PackedPinValue, pack_pin_value};
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
 };
@@ -105,15 +102,16 @@ pub(crate) fn the_node_type_of_a_project_view(
 }
 
 /// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
-/// output's name, family and description, a setting read each run that takes no wire and holds
-/// no saved value, and returned to no value at Stop, since what a panel writes is live data. It
-/// takes a value of the output's pin type where that type holds one; an Audio block or a Tensor,
-/// which holds none, it takes as the output's family carries it.
+/// output's name and description, a setting read each run that takes no wire and holds no saved
+/// value, and returned to no value at Stop, since what a panel writes is live data. It is of the
+/// output's pin type, read as a value where that type holds one; an Audio block or a Tensor,
+/// which holds none, flows as its type does and takes what that type packs into the message the
+/// output publishes.
 fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     let pin_declaration = if port.pin_type.holds_a_stored_value() {
         exactly_as_a_value(&port.pin_type)
     } else {
-        carried_as_a_value(Vec::new())
+        PinDeclaration::exactly(port.pin_type.clone())
     };
     the_port_a_view_declares(port)
         .with_pin_declaration(pin_declaration)
@@ -149,18 +147,6 @@ fn is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(
             .any(|port| port.name == input && port.is_a_setting())
 }
 
-/// A port carried as a value of any type, its family alone deciding what it takes; an output so
-/// declared keeps its last message for a reader that connects later.
-fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
-    PinDeclaration {
-        pin_type: DeclaredPinType::Any,
-        flow: PinFlow::Value,
-        annotations: PinAnnotations::default(),
-        former_names,
-        may_be_unset: false,
-    }
-}
-
 /// A port of exactly `pin_type`, read as a value; an output so declared keeps its last message
 /// for a reader that connects later.
 fn exactly_as_a_value(pin_type: &PinType) -> PinDeclaration {
@@ -170,15 +156,14 @@ fn exactly_as_a_value(pin_type: &PinType) -> PinDeclaration {
     }
 }
 
-/// The pin an output `port`, one a panel writes, declares, read as a value, which keeps its last
-/// message for a reader that connects later: exactly its pin type where that type flows as a
-/// value; else, for an Audio block, which flows only as a stream, a value of any type, its
-/// family alone deciding what it takes.
+/// The pin an output `port`, one a panel writes, declares: exactly its pin type, read as a value,
+/// which keeps its last message for a reader that connects later, where that type flows as a
+/// value; else, for an Audio block, which flows only as a stream, as a stream.
 fn written_as_a_value(port: &TatolabViewDeclaredPort) -> PinDeclaration {
     if port.pin_type.flows().contains(&PinFlow::Value) {
         exactly_as_a_value(&port.pin_type)
     } else {
-        carried_as_a_value(Vec::new())
+        PinDeclaration::exactly(port.pin_type.clone())
     }
 }
 
@@ -248,15 +233,14 @@ fn the_config_schema_of_a_view_node(settings: Option<&JsonValue>) -> JsonValue {
     config_schema
 }
 
-/// The port `port` declares: of exactly its pin type, and of the family that type is carried as.
+/// The port `port` declares: of exactly its pin type.
 fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     PortDescriptor::new(
         port.name.clone(),
         port.description.clone().unwrap_or_default(),
         false,
-        PortFamilyDeclaration::of_family(port.family),
+        PinDeclaration::exactly(port.pin_type.clone()),
     )
-    .with_pin_declaration(PinDeclaration::exactly(port.pin_type.clone()))
 }
 
 /// The node that is the source of the values a client sets, a stream's top-level `GraphInput` or a
@@ -266,8 +250,7 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
 pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
-    family_of_each_output: HashMap<String, PortFamily>,
-    pin_type_of_each_typed_output: HashMap<String, PinType>,
+    pin_type_of_each_output: HashMap<String, PinType>,
     current_value_of_each_output: HashMap<String, JsonValue>,
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
@@ -287,8 +270,7 @@ struct MessageToPublish<'value> {
 
 impl ValueSourceNode {
     /// The value source a top-level `GraphInput` runs as: both its `value` ports of the pin type
-    /// its `pin_type` setting chooses and the family that type travels on, else of the family
-    /// its `family` setting names.
+    /// its `pin_type` setting chooses, or a link resolved.
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
         Self::with_value_ports_carrying(
             node,
@@ -299,16 +281,13 @@ impl ValueSourceNode {
     }
 
     /// The value source a `Constant` runs as: both its `value` ports of the pin type its
-    /// `pin_type` setting chooses, else a Float, and the family that type travels on.
+    /// `pin_type` setting chooses, else a Float.
     pub(crate) fn for_a_constant(node: &GraphNode) -> Result<Self> {
         Self::with_value_ports_carrying(
             node,
             "Constant",
             THE_DESCRIPTOR_OF_A_CONSTANT.clone(),
-            |settings| {
-                what_the_value_ports_of_a_constant_carry(settings)
-                    .map(|(chosen, family)| (Some(chosen), family))
-            },
+            |settings| what_the_value_ports_of_a_constant_carry(settings).map(Some),
         )
     }
 
@@ -319,32 +298,21 @@ impl ValueSourceNode {
         node: &GraphNode,
         type_name: &str,
         mut descriptor: NodeDescriptor,
-        carried: impl FnOnce(
-            Option<&JsonValue>,
-        ) -> std::result::Result<(Option<PinType>, PortFamily), String>,
+        carried: impl FnOnce(Option<&JsonValue>) -> std::result::Result<Option<PinType>, String>,
     ) -> Result<Self> {
         let settings = JsonValue::Object(node.input_values.clone());
-        let (chosen, family) = carried(Some(&settings)).map_err(|why| {
+        let chosen = carried(Some(&settings)).map_err(|why| {
             Error::Configuration(format!("`{type_name}` node `{}`: {why}", node.display_name))
         })?;
         carry_on_every_value_port(
             descriptor.inputs.iter_mut().chain(&mut descriptor.outputs),
-            family,
             chosen.as_ref(),
         );
         Ok(Self::for_the_node(node, descriptor))
     }
 
     pub(crate) fn for_the_node(node: &GraphNode, descriptor: NodeDescriptor) -> Self {
-        let family_of_each_output = descriptor
-            .outputs
-            .iter()
-            .filter_map(|port| {
-                let families = port.family.families_an_input_takes();
-                (families.len() == 1).then(|| (port.name.clone(), families[0]))
-            })
-            .collect();
-        let pin_type_of_each_typed_output = descriptor
+        let pin_type_of_each_output = descriptor
             .outputs
             .iter()
             .filter_map(|port| match &port.pin_declaration.as_ref()?.pin_type {
@@ -355,8 +323,7 @@ impl ValueSourceNode {
         Self {
             node_name: node.display_name.clone(),
             descriptor,
-            family_of_each_output,
-            pin_type_of_each_typed_output,
+            pin_type_of_each_output,
             current_value_of_each_output: HashMap::new(),
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
@@ -364,19 +331,18 @@ impl ValueSourceNode {
         }
     }
 
-    /// The message `value`, written onto output `port`, is sent as: packed as its pin type where
-    /// the output names one, else as its family carries it; refused in the words of the output's
-    /// family when it carries no such value.
+    /// The message `value`, written onto output `port`, is sent as: packed as its pin type;
+    /// refused in the words of the output's type when it carries no such value.
     fn the_message_to_publish<'value>(
         &self,
         port: &'value str,
         value: &'value JsonValue,
     ) -> Result<MessageToPublish<'value>> {
-        let Some(&family) = self.family_of_each_output.get(port) else {
+        let Some(pin_type) = self.pin_type_of_each_output.get(port) else {
             return Err(Error::PortError(format!(
-                "node `{}` has no output `{port}`; its outputs are {}",
+                "node `{}` has no output `{port}` of one pin type; its outputs of one are {}",
                 self.node_name,
-                the_names_listed(self.family_of_each_output.keys())
+                the_names_listed(self.pin_type_of_each_output.keys())
             )));
         };
         let next_start_sample = self
@@ -387,17 +353,17 @@ impl ValueSourceNode {
         let PackedPinValue {
             payload_descriptor,
             payload,
-        } = match self.pin_type_of_each_typed_output.get(port) {
-            Some(pin_type) => pack_pin_value(pin_type, value, next_start_sample),
-            None => the_message_a_value_written_onto_an_output_is(family, value, next_start_sample),
-        }
-        .map_err(|why| {
-            the_refusal_of_a_value_an_output_does_not_carry(&self.node_name, port, family, &why)
+        } = pack_pin_value(pin_type, value, next_start_sample).map_err(|why| {
+            the_refusal_of_a_value_an_output_does_not_carry(&self.node_name, port, pin_type, &why)
         })?;
-        let channels_start_sample_after = (family == PortFamily::Channels).then(|| {
-            let body = ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
-            next_start_sample + u64::from(body.samples_per_channel)
-        });
+        let channels_start_sample_after =
+            (crate::core::pin_value_packing::message_kind_of(pin_type)
+                == Some(streamlib_ipc_types::DataChannelPayloadDescriptorKind::ChannelsBlock))
+            .then(|| {
+                let body =
+                    ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
+                next_start_sample + u64::from(body.samples_per_channel)
+            });
         Ok(MessageToPublish {
             port,
             value,
@@ -422,7 +388,7 @@ impl ValueSourceNode {
         let mut read_by_an_input_alone = serde_json::Map::new();
         let mut messages = Vec::new();
         for (input, value) in input_values {
-            if !self.family_of_each_output.contains_key(input) {
+            if !self.pin_type_of_each_output.contains_key(input) {
                 read_by_an_input_alone.insert(input.clone(), value.clone());
                 continue;
             }
@@ -482,17 +448,16 @@ pub(crate) fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> S
     names.join(", ")
 }
 
-/// The refusal of a value output `port` of the node named `node_name`, of `family`, does not
+/// The refusal of a value output `port` of the node named `node_name`, of `pin_type`, does not
 /// carry, for `why`.
 pub(crate) fn the_refusal_of_a_value_an_output_does_not_carry(
     node_name: &str,
     port: &str,
-    family: PortFamily,
+    pin_type: &PinType,
     why: &str,
 ) -> Error {
     Error::PortError(format!(
-        "output `{port}` of node `{node_name}` carries {}, and {why}",
-        family.declaration_name()
+        "output `{port}` of node `{node_name}` carries {pin_type}, and {why}"
     ))
 }
 

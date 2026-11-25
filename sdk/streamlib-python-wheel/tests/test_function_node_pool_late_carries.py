@@ -33,8 +33,8 @@ def test_a_running_function_node_pool_takes_a_late_carry_it_is_handed(stand_in_p
             if frame.get("op") != "log":
                 return frame
 
-    first_carry = {"input_port": "island_0", "output_port": "island_0_output", "family": "channels"}
-    late_carry = {"input_port": "island_1", "output_port": "island_1_output", "family": "records"}
+    first_carry = {"input_port": "island_0", "output_port": "island_0_output", "written_as": "message"}
+    late_carry = {"input_port": "island_1", "output_port": "island_1_output", "written_as": "record"}
     stand_in_parent.send(
         {
             "cmd": "setup",

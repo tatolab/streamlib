@@ -109,7 +109,7 @@ fn a_node_view_manifest_reads_with_its_defaults_filled_in() {
 
     assert_eq!(manifest.title, "DJ Deck");
     assert_eq!(manifest.placement, TatolabViewPlacement::Node);
-    assert_eq!(manifest.inputs[0].family, PortFamily::Channels);
+    assert_eq!(manifest.inputs[0].family, TatolabViewPortFamily::Channels);
     assert_eq!(manifest.outputs[0].range, Some([0.0, 1.0]));
     assert_eq!(manifest.capabilities, vec![TatolabViewCapability::Camera]);
     assert!(manifest.accepts.files.is_empty());
@@ -301,17 +301,17 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
         [
             (
                 "picture",
-                PortFamily::Image,
+                TatolabViewPortFamily::Image,
                 PinType::Texture {
                     pixel_formats: vec![]
                 }
             ),
             (
                 "level",
-                PortFamily::Channels,
+                TatolabViewPortFamily::Channels,
                 PinType::Float { exact_size: None }
             ),
-            ("weights", PortFamily::Array, PinType::Tensor {}),
+            ("weights", TatolabViewPortFamily::Array, PinType::Tensor {}),
         ]
     );
 }
@@ -319,7 +319,7 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
 /// A port of a bundle of numbers, a record of named numbers to or from a node, rides Records,
 /// whole, as one map of its members; a bundle holding a Texture rides no message a view reads.
 ///
-/// Mental-revert: finding the family with `PortFamily::carrying` alone refuses the bundle of
+/// Mental-revert: finding the family with `TatolabViewPortFamily::carrying` alone refuses the bundle of
 /// numbers, which no built-in type's family carries.
 #[test]
 fn a_port_of_a_bundle_of_numbers_rides_records_and_one_holding_a_texture_is_refused() {
@@ -332,7 +332,7 @@ fn a_port_of_a_bundle_of_numbers_rides_records_and_one_holding_a_texture_is_refu
         json!([{ "name": "camera", "pin_type": camera }]),
     ))
     .expect("a bundle of numbers opens");
-    assert_eq!(manifest.outputs[0].family, PortFamily::Records);
+    assert_eq!(manifest.outputs[0].family, TatolabViewPortFamily::Records);
     assert_eq!(
         manifest.outputs[0].pin_type,
         serde_json::from_value::<PinType>(camera).expect("a bundle pin type")

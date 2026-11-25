@@ -190,15 +190,15 @@ fn a_spawned_nodes_writer_and_mailboxes_reach_their_nodes_stream_facts() {
             .upstream_stream_facts("in1", None)
             .expect("a port fed by one link answers"),
         None,
-        "the upstream Records port states no facts"
+        "the upstream String port states no facts"
     );
 
     let refusal = source_output
         .set_stream_facts("out1", ImageStreamFacts::default())
-        .expect_err("the node's Records port carries no Image facts")
+        .expect_err("the node's String port carries no Texture facts")
         .to_string();
     assert!(
-        refusal.contains("out1") && refusal.contains("Records"),
+        refusal.contains("out1") && refusal.contains("String"),
         "the writer reached the node's ports; got {refusal}"
     );
 

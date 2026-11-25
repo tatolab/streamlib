@@ -20,6 +20,7 @@ use node_references_that_became_wires::INPUTS_THAT_HELD_A_NODE_REFERENCE;
 use pin_type_chosen_from_a_family_and_codec::PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC;
 
 mod inputs_moved_onto_pin_group_slots;
+mod interface_pin_type_named_by_its_family;
 mod merged_inputs;
 mod node_references_that_became_wires;
 mod pin_type_chosen_from_a_family_and_codec;
@@ -359,8 +360,9 @@ fn upgrade_a_node_with(node: &mut Value, merged_inputs: &[MergedInput]) -> bool 
     any_changed
 }
 
-/// Rename one node's type, fold its retired fields and choose the pin type its saved family and
-/// codec name, and upgrade every level of a fragment it holds; whether any changed. Its own old inputs are merged with the level's links after.
+/// Rename one node's type, fold its retired fields, choose the pin type its saved family and codec
+/// name, or an interface node's saved family implied, and upgrade every level of a fragment it
+/// holds; whether any changed. Its own old inputs are merged with the level's links after.
 fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
     let Some(node) = node.as_object_mut() else {
         return false;
@@ -375,6 +377,8 @@ fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
         node,
         PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC,
     );
+    any_changed |=
+        interface_pin_type_named_by_its_family::the_family_of_an_interface_node_chosen(node);
     if let Some(fragment) = node.get_mut("fragment") {
         any_changed |= upgrade_the_document_with(fragment, merged_inputs);
     }

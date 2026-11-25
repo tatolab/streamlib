@@ -13,8 +13,8 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::descriptors::{
-    ImageStreamFacts, ImageStreamFrameRate, PortFamily, PortStreamFacts,
-    output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
+    DeclaredPinType, ImageStreamFacts, ImageStreamFrameRate, PinType, PortStreamFacts,
+    output_port_frame_rate_resolved_against_config,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
@@ -22,7 +22,8 @@ use crate::iceoryx2::InboundLinkName;
 
 #[derive(Debug)]
 struct StreamFactsOfOneOutputPort {
-    family: PortFamily,
+    /// The one type the port carries under its node's settings; `None` while its graph finds it.
+    pin_type: Option<PinType>,
     /// The frame rate its declaration resolved to when it last took the facts it declares.
     declared_frame_rate: Option<ImageStreamFrameRate>,
     current_facts: Option<PortStreamFacts>,
@@ -34,8 +35,8 @@ pub(crate) struct StreamFactsOfOutputPorts {
 }
 
 impl StreamFactsOfOutputPorts {
-    /// Each output port with its family resolved against `node_config`, an
-    /// Image port carrying the frame rate it declares.
+    /// Each output port with its pin type resolved against `node_config`, a
+    /// Texture port carrying the frame rate it declares.
     pub(crate) fn as_declared_by(
         output_ports: &[PortInfo],
         node_config: Option<&serde_json::Value>,
@@ -68,11 +69,11 @@ impl StreamFactsOfOutputPorts {
         }
     }
 
-    /// Carry each of `output_ports` on the family and frame rate its declaration resolves to
-    /// against `node_values` again: a port whose family or declared frame rate that changes
+    /// Carry each of `output_ports` on the pin type and frame rate its declaration resolves to
+    /// against `node_values` again: a port whose pin type or declared frame rate that changes
     /// takes the facts it declares, as [`Self::as_declared_by`] reads them, and every other port
     /// keeps what it carries.
-    pub(crate) fn take_the_families_declared_by(
+    pub(crate) fn take_the_pin_types_declared_by(
         &self,
         output_ports: &[PortInfo],
         node_values: Option<&serde_json::Value>,
@@ -82,7 +83,7 @@ impl StreamFactsOfOutputPorts {
             let declared = the_facts_declared_by(port, node_values);
             match facts_by_output_port.get_mut(&port.name) {
                 Some(held)
-                    if held.family == declared.family
+                    if held.pin_type == declared.pin_type
                         && held.declared_frame_rate == declared.declared_frame_rate => {}
                 Some(held) => *held = declared,
                 None => {
@@ -103,7 +104,7 @@ impl StreamFactsOfOutputPorts {
     }
 
     /// Replace `output_port`'s facts, refusing a port the node does not declare
-    /// and facts of another family than the port's.
+    /// and facts that do not describe a stream of the port's pin type.
     pub(crate) fn replace_facts_of(&self, output_port: &str, facts: PortStreamFacts) -> Result<()> {
         let output_port = cast_exposed_name_to_url_safe(output_port)?;
         let mut facts_by_output_port = self.facts_by_output_port.write();
@@ -116,11 +117,13 @@ impl StreamFactsOfOutputPorts {
                 listed_or_none(&declared_output_ports)
             )));
         };
-        crate::core::descriptors::refuse_stream_facts_of_another_family(
-            &output_port,
-            port.family,
-            &facts,
-        )?;
+        if let Some(pin_type) = &port.pin_type {
+            crate::core::descriptors::refuse_stream_facts_of_another_pin_type(
+                &output_port,
+                pin_type,
+                &facts,
+            )?;
+        }
         port.current_facts = Some(facts);
         Ok(())
     }
@@ -236,14 +239,13 @@ impl UpstreamStreamFactsByInboundLink {
     }
 }
 
-/// The facts output `port` declares, its family and frame rate resolved against `node_config`:
-/// the frame rate its pin states, else the one its family declaration states.
+/// The facts output `port` declares, its pin type and frame rate resolved against `node_config`:
+/// the frame rate its pin states.
 fn the_facts_declared_by(
     port: &PortInfo,
     node_config: Option<&serde_json::Value>,
 ) -> StreamFactsOfOneOutputPort {
-    let family = output_port_family_resolved_against_config(&port.family, node_config)
-        .unwrap_or(port.family.family);
+    let pin_type = the_pin_type_of_an_output_under(port, node_config);
     let declared_frame_rate =
         output_port_frame_rate_resolved_against_config(port.stated_frame_rate(), node_config)
             .ok()
@@ -255,10 +257,28 @@ fn the_facts_declared_by(
         })
     });
     StreamFactsOfOneOutputPort {
-        family,
+        pin_type,
         declared_frame_rate,
         current_facts,
     }
+}
+
+/// The one type output `port` carries while its node holds `node_config`: the one it states, or
+/// the one the setting that chooses it holds; `None` for a port its graph types.
+fn the_pin_type_of_an_output_under(
+    port: &PortInfo,
+    node_config: Option<&serde_json::Value>,
+) -> Option<PinType> {
+    if let Some(DeclaredPinType::SetByInput { input_name }) = port
+        .declared_pin_type
+        .as_ref()
+        .map(|declared| &declared.pin_type)
+    {
+        return node_config
+            .and_then(|config| config.get(input_name))
+            .and_then(|held| serde_json::from_value(held.clone()).ok());
+    }
+    port.pin.as_ref().map(|pin| pin.pin_type.clone())
 }
 
 #[cfg(test)]
@@ -267,30 +287,27 @@ mod tests {
 
     use super::*;
     use crate::core::descriptors::{
-        ImageOutputPortFrameRate, ImageStreamFrameRate, PacketsStreamFacts, PortFamilyDeclaration,
+        ImageOutputPortFrameRate, ImageStreamFrameRate, PacketsStreamFacts,
     };
 
-    fn output_port(name: &str, family: PortFamilyDeclaration) -> PortInfo {
-        PortInfo {
-            name: name.to_string(),
-            description: String::new(),
-            delivery_profile: None,
-            borrow_quota: None,
-            audio_window: None,
-            pin_default: None,
-            pin: None,
-            declared_pin_type: None,
-            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
-            former_names: Vec::new(),
-            may_be_unset: false,
-            family,
-            input_mode: None,
-            annotations: Default::default(),
+    fn output_port(name: &str, pin_type: PinType) -> PortInfo {
+        PortInfo::declared_by_no_node_type(
+            name,
+            Some(crate::core::descriptors::ResolvedPin {
+                flow: pin_type.default_flow(),
+                pin_type,
+            }),
+        )
+    }
+
+    fn texture() -> PinType {
+        PinType::Texture {
+            pixel_formats: Vec::new(),
         }
     }
 
-    fn packets_port(name: &str) -> PortInfo {
-        output_port(name, PortFamilyDeclaration::of_family(PortFamily::Packets))
+    fn encoded_audio_port(name: &str) -> PortInfo {
+        output_port(name, PinType::EncodedAudio { codecs: Vec::new() })
     }
 
     fn opus_facts() -> PortStreamFacts {
@@ -304,18 +321,20 @@ mod tests {
     }
 
     #[test]
-    fn an_image_port_carries_the_frame_rate_its_declaration_reads_from_config() {
-        let camera_video = output_port(
-            "video",
-            PortFamilyDeclaration {
-                frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
-                    setting: "frames_per_second".into(),
-                }),
-                ..PortFamilyDeclaration::of_family(PortFamily::Image)
-            },
-        );
+    fn a_texture_port_carries_the_frame_rate_its_pin_reads_from_config() {
+        let camera_video = PortInfo {
+            annotations: crate::core::graph::PortAnnotations(
+                crate::core::descriptors::PinAnnotations {
+                    frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
+                        setting: "frames_per_second".into(),
+                    }),
+                    ..Default::default()
+                },
+            ),
+            ..output_port("video", texture())
+        };
         let facts = StreamFactsOfOutputPorts::as_declared_by(
-            &[camera_video.clone(), packets_port("encoded")],
+            &[camera_video.clone(), encoded_audio_port("encoded")],
             Some(&json!({"frames_per_second": 30})),
         );
         assert_eq!(
@@ -336,8 +355,6 @@ mod tests {
         );
     }
 
-    /// Mental-revert: reading the frame rate from the family declaration alone gives a port whose
-    /// pin states it, as a Python Texture output's does, no frame rate.
     #[test]
     fn an_image_port_carries_the_frame_rate_its_pin_states_stated_or_read_from_a_setting() {
         let port_stating = |frame_rate: ImageOutputPortFrameRate| PortInfo {
@@ -347,7 +364,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            ..output_port("video", PortFamilyDeclaration::of_family(PortFamily::Image))
+            ..output_port("video", texture())
         };
         let image_facts_at = |numerator, denominator| {
             Some(PortStreamFacts::Image(ImageStreamFacts {
@@ -380,7 +397,7 @@ mod tests {
         );
     }
 
-    /// Mental-revert: taking the facts again only when a port's family changes leaves a stream
+    /// Mental-revert: taking the facts again only when a port's pin type changes leaves a stream
     /// whose setting now reads 60 frames a second carrying the 24 it was set up with.
     #[test]
     fn an_image_ports_frame_rate_follows_the_setting_it_is_read_from_and_keeps_what_it_carries_otherwise()
@@ -394,7 +411,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            ..output_port("video", PortFamilyDeclaration::of_family(PortFamily::Image))
+            ..output_port("video", texture())
         };
         let frame_rate_of = |facts: &StreamFactsOfOutputPorts| match facts.current_facts_of("video")
         {
@@ -406,7 +423,8 @@ mod tests {
             Some(&json!({"fps": 24})),
         );
 
-        facts.take_the_families_declared_by(std::slice::from_ref(&port), Some(&json!({"fps": 60})));
+        facts
+            .take_the_pin_types_declared_by(std::slice::from_ref(&port), Some(&json!({"fps": 60})));
         assert_eq!(
             frame_rate_of(&facts),
             Some(ImageStreamFrameRate {
@@ -425,57 +443,62 @@ mod tests {
         facts
             .replace_facts_of("video", measured.into())
             .expect("an Image port carries Image facts");
-        facts.take_the_families_declared_by(
+        facts.take_the_pin_types_declared_by(
             std::slice::from_ref(&port),
             Some(&json!({"fps": 60, "gain": 2})),
         );
         assert_eq!(
             facts.current_facts_of("video"),
             Some(measured.into()),
-            "a change that leaves its family and frame rate as they were keeps what it carries"
+            "a change that leaves its pin type and frame rate as they were keeps what it carries"
         );
     }
 
     #[test]
-    fn replaced_facts_are_the_ones_read_and_another_familys_are_refused_leaving_the_last() {
-        let facts = StreamFactsOfOutputPorts::as_declared_by(&[packets_port("encoded")], None);
+    fn replaced_facts_are_the_ones_read_and_those_of_another_pin_type_are_refused_leaving_the_last()
+    {
+        let facts =
+            StreamFactsOfOutputPorts::as_declared_by(&[encoded_audio_port("encoded")], None);
         facts
             .replace_facts_of("encoded", opus_facts())
-            .expect("a Packets port carries Packets facts");
+            .expect("an encoded port carries encoded facts");
         assert_eq!(facts.current_facts_of("encoded"), Some(opus_facts()));
 
         let refusal = facts
             .replace_facts_of("encoded", ImageStreamFacts::default().into())
-            .expect_err("a Packets port carries no Image facts")
+            .expect_err("an encoded port carries no Texture facts")
             .to_string();
         assert!(
-            refusal.contains("encoded") && refusal.contains("Packets") && refusal.contains("Image"),
+            refusal.contains("encoded") && refusal.contains("Texture"),
             "got {refusal}"
         );
         assert_eq!(facts.current_facts_of("encoded"), Some(opus_facts()));
     }
 
     #[test]
-    fn a_port_whose_family_comes_from_config_takes_the_facts_of_that_family() {
-        let received = output_port(
-            "media",
-            PortFamilyDeclaration {
-                family_from_config_key: Some("family".into()),
-                ..PortFamilyDeclaration::of_family(PortFamily::Records)
-            },
-        );
+    fn a_port_whose_pin_type_a_setting_chooses_takes_the_facts_of_that_type() {
+        let received = PortInfo {
+            declared_pin_type: Some(crate::core::graph::PinTypeAsDeclared {
+                pin_type: DeclaredPinType::SetByInput {
+                    input_name: "pin_type".into(),
+                },
+                flow: crate::core::descriptors::PinFlow::Stream,
+            }),
+            ..PortInfo::declared_by_no_node_type("media", None)
+        };
         let facts = StreamFactsOfOutputPorts::as_declared_by(
             &[received],
-            Some(&json!({"family": "packets"})),
+            Some(&json!({"pin_type": {"type": "encoded_audio"}})),
         );
         facts
             .replace_facts_of("media", opus_facts())
-            .expect("the config made the port Packets");
+            .expect("the setting made the port encoded audio");
     }
 
     #[test]
     fn facts_for_a_port_the_node_does_not_declare_are_refused_naming_the_ports_it_does() {
-        let facts = StreamFactsOfOutputPorts::as_declared_by(&[packets_port("encoded")], None);
+        let facts =
+            StreamFactsOfOutputPorts::as_declared_by(&[encoded_audio_port("encoded")], None);
         let refusal = facts
             .replace_facts_of("audio", opus_facts())
             .expect_err("a port the node does not declare carries no facts")
@@ -489,7 +512,7 @@ mod tests {
     #[test]
     fn a_reader_reads_the_current_facts_of_the_port_its_inbound_link_reads() {
         let upstream = Arc::new(StreamFactsOfOutputPorts::as_declared_by(
-            &[packets_port("encoded")],
+            &[encoded_audio_port("encoded")],
             None,
         ));
         let inbound = UpstreamStreamFactsByInboundLink::default();
@@ -536,14 +559,14 @@ mod tests {
     #[test]
     fn a_port_fed_by_two_links_is_asked_about_one_by_name() {
         let first = Arc::new(StreamFactsOfOutputPorts::as_declared_by(
-            &[packets_port("encoded")],
+            &[encoded_audio_port("encoded")],
             None,
         ));
         first
             .replace_facts_of("encoded", opus_facts())
             .expect("the first upstream states its facts");
         let second = Arc::new(StreamFactsOfOutputPorts::as_declared_by(
-            &[packets_port("encoded")],
+            &[encoded_audio_port("encoded")],
             None,
         ));
         let inbound = UpstreamStreamFactsByInboundLink::default();

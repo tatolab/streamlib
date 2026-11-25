@@ -6,16 +6,14 @@
 use crate::descriptors::PortDescriptor;
 use crate::pin_group::{PinGroupDescriptor, PinGroupSlotCount};
 use crate::pin_type::{NodeInputMode, PinDeclaration, PinType, SettingReadTime};
-use crate::port_family::{PortFamily, PortFamilyDeclaration};
 
 fn a_float_input(input_mode: Option<NodeInputMode>) -> PortDescriptor {
     let input = PortDescriptor::new(
         "opacity",
         "",
         false,
-        PortFamilyDeclaration::of_family(PortFamily::Channels),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }));
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    );
     match input_mode {
         Some(input_mode) => input.with_input_mode(input_mode),
         None => input,

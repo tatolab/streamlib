@@ -698,22 +698,37 @@ struct ValueOfAGraphInputRendered {
 }
 
 /// What `graph` renders of the `value` input of each top-level `GraphInput` of `graph`, by node
-/// UUID, running or not: the value it reads, a value set live over its saved one.
+/// UUID, running or not: the value it reads, a value set live over its saved one; of a bundle,
+/// the object of the members it reads.
 fn the_value_of_each_graph_input(
     graph: &crate::core::graph::Graph,
 ) -> HashMap<String, ValueOfAGraphInputRendered> {
     use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME;
+    use crate::core::graph::input_values::{ValuesABundleInputHolds, the_bundle_members_of};
     graph
         .every_graph_input()
         .filter_map(|node| {
             let port = node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)?;
-            let current_value = crate::core::graph::input_values::the_value_an_input_reads(
-                graph,
-                node,
-                port,
-                &crate::core::graph::WhatTheLinksIntoAnInputFeed::default(),
-            )
-            .and_then(|read| read.value)
+            let current_value = match the_bundle_members_of(port) {
+                Some(members) => {
+                    let live = graph
+                        .live_input_values()
+                        .value_of(node.node_uuid, &port.name);
+                    ValuesABundleInputHolds {
+                        live: live.as_ref(),
+                        saved: node.input_values.get(&port.name),
+                        input_default: port.pin_default.as_ref(),
+                    }
+                    .the_bundle_read(members)
+                }
+                None => crate::core::graph::input_values::the_value_an_input_reads(
+                    graph,
+                    node,
+                    port,
+                    &crate::core::graph::WhatTheLinksIntoAnInputFeed::default(),
+                )
+                .and_then(|read| read.value),
+            }
             .filter(|value| !value.is_null());
             Some((
                 node.node_uuid.to_string(),

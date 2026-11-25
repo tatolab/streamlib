@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A link between two ports of one family wires in silence: connect
+//! A link between two ports of one pin type wires in silence: connect
 //! emits no warning.
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -75,9 +76,9 @@ fn register_producer_and_consumer_descriptors() {
             "out",
             "output",
             true,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         ));
         NODE_REGISTRY
             .register_descriptor_only(producer)
@@ -93,9 +94,9 @@ fn register_producer_and_consumer_descriptors() {
                 "in",
                 "input",
                 true,
-                crate::core::descriptors::PortFamilyDeclaration::of_family(
-                    crate::core::descriptors::PortFamily::Image,
-                ),
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
             )
             .with_delivery_profile("newest"),
         );

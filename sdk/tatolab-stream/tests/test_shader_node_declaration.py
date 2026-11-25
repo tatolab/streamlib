@@ -50,18 +50,11 @@ def test_a_shader_node_carries_kind_shader_and_its_slang_source():
     assert getattr(blend, NODE_DECLARATION_SHADER_SOURCE_STAMP) == BLEND_SLANG
 
 
-def test_images_are_image_inputs_floats_are_channels_pins_and_the_return_is_result():
+def test_images_and_floats_are_inputs_in_order_and_the_return_is_result():
     input_ports = getattr(blend, NODE_DECLARATION_INPUT_PORTS_STAMP)
-    assert [(port["name"], port["family"]["family"]) for port in input_ports] == [
-        ("a", "image"),
-        ("b", "image"),
-        ("amount", "channels"),
-    ]
+    assert [port["name"] for port in input_ports] == ["a", "b", "amount"]
     assert input_ports[2]["pin_default"] == 0.5
-    assert [
-        (port["name"], port["family"]["family"])
-        for port in getattr(blend, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
-    ] == [("result", "image")]
+    assert [port["name"] for port in getattr(blend, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == ["result"]
 
 
 def test_the_signature_stamp_names_the_function_each_input_in_order_and_the_output():
@@ -221,7 +214,6 @@ def test_a_color_and_vectors_are_typed_pins_whose_signature_states_their_pin_typ
     ]
     input_ports = {port["name"]: port for port in getattr(tint_and_shift, NODE_DECLARATION_INPUT_PORTS_STAMP)}
     assert "pin_declaration" not in input_ports["image"]
-    assert input_ports["tint_color"]["family"] == {"family": "channels"}
     assert input_ports["tint_color"]["pin_declaration"]["pin_type"] == {
         "kind": "is",
         "pin_type": {"type": "color"},

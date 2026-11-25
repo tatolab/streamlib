@@ -11,6 +11,7 @@
 //! reaches (`input_port_pin_values`) and shader nodes reading their own Image in a cycle
 //! (`shader_node_island::tests`).
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -27,7 +28,7 @@ use crate::core::compiler::Compiler;
 use crate::core::compiler::compiler_ops::function_node_island::the_island_links_into_a_reactive_reader_only_islands_feed;
 use crate::core::descriptors::{
     AudioWindowContract, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName,
-    NodeDescriptor, NodeKind, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    NodeDescriptor, NodeKind, PortDescriptor,
 };
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
@@ -46,13 +47,8 @@ const HELPER_PROCESS_MANUAL_READER: &str = "app_process_check:manual_meter";
 const VIEW_READER: &str = "app_process_check:program";
 
 fn a_records_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_delivery_profile("newest")
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(PinType::String {}))
+        .with_delivery_profile("newest")
 }
 
 fn a_described_node_type(

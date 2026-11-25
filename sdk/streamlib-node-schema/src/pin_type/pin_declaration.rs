@@ -249,7 +249,7 @@ pub enum NodeInputMode {
 /// any setting of a node type of the graph itself — `GraphInput`, `GraphOutput`, `SetVariable`
 /// or `GetVariable` — which names a port of its stream or a variable, so fixes types across
 /// the graph before any link is judged, rather than running on a value. An input of no `mode`
-/// is a port that takes a wire; one of no `pin_type` links by its family.
+/// is a port that takes a wire, typed or not.
 pub fn an_input_takes_a_wire(
     node_type: &crate::NodeClassImportPath,
     mode: Option<NodeInputMode>,

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Python data across the boundary: msgpack decoded into ordinary Python data,
-//! config and graph JSON both ways, and the GPU capability a read offers the family
-//! type it builds. A message's payload otherwise crosses as the bytes it is;
+//! config and graph JSON both ways, and the GPU capability a read offers the type
+//! of a message's kind it builds. A message's payload otherwise crosses as the bytes it is;
 //! nothing here encodes one.
 
 use std::cell::RefCell;
@@ -16,15 +16,15 @@ use streamlib::sdk::iceoryx2::RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES;
 
 use crate::python_node_context::PythonGpuContextLimitedAccess;
 
-/// Call `family_type` with `keyword_arguments` while this read offers its GPU
-/// capability, as a family type a read builds is constructed.
-pub(crate) fn family_type_built_offering_gpu_access<'py>(
-    family_type: &Bound<'py, PyAny>,
+/// Call `type_of_its_kind` with `keyword_arguments` while this read offers its GPU
+/// capability, as the type of a message's kind a read builds is constructed.
+pub(crate) fn type_of_its_kind_built_offering_gpu_access<'py>(
+    type_of_its_kind: &Bound<'py, PyAny>,
     keyword_arguments: &Bound<'py, PyDict>,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
-    family_type.call((), Some(keyword_arguments))
+    type_of_its_kind.call((), Some(keyword_arguments))
 }
 
 // =============================================================================
@@ -36,7 +36,7 @@ thread_local! {
         RefCell<Option<Py<PythonGpuContextLimitedAccess>>> = const { RefCell::new(None) };
 }
 
-/// Opens the offer for one family type's construction and withdraws it on
+/// Opens the offer for one construction of a message kind's type and withdraws it on
 /// drop, whether it returned or raised.
 struct TypedReadGpuAccessOffer {
     /// Restored rather than cleared: a construction that reads input ports of
@@ -65,7 +65,7 @@ impl Drop for TypedReadGpuAccessOffer {
     }
 }
 
-/// The GPU capability of the read currently building a family type, a
+/// The GPU capability of the read currently building a message kind's type, a
 /// `Texture` or a `TensorGpuAttribute`, or `None` when no read is.
 ///
 /// The same capability as `ctx.gpu_limited_access`, offered so the type can do

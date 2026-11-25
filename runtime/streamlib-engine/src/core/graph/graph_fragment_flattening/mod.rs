@@ -20,7 +20,7 @@ use crate::core::compiler::compiler_ops::python_node_declaration::read_the_setti
 use crate::core::descriptors::PortDescriptor;
 use crate::core::graph::graph_interface_resolution::{
     GraphInterfaceAsDrawn, GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
-    is_a_graph_interface_node_type, the_family_a_port_linked_to_an_interface_node_carries,
+    is_a_graph_interface_node_type, the_pin_type_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_snapshot::{
     GraphFragment, GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode,
@@ -209,7 +209,7 @@ fn flatten_one_level(
             .with_graph_interface_resolved(
                 GraphInterfaceLevel::AFragment,
                 &|linked_port, direction| {
-                    the_family_a_port_linked_to_an_interface_node_carries(
+                    the_pin_type_a_port_linked_to_an_interface_node_carries(
                         node_types,
                         &fragment_level,
                         linked_port,

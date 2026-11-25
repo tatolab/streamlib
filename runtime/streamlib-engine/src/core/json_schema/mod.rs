@@ -12,8 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::{
-    DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict, PortFamilyDeclaration,
-    SettingReadTime,
+    DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict, SettingReadTime,
 };
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::nodes::{ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings};
@@ -115,36 +114,11 @@ impl NodeNamesByNodeRunId {
 // Node Catalog Response Schema (the MCP node catalog)
 // =============================================================================
 
-/// One list of the MCP node catalog: node types and the port families.
+/// One list of the MCP node catalog: its node types.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RegistryResponse {
     /// Every node type this process can add, with its descriptor.
     pub nodes: Vec<NodeDescriptorOutput>,
-    /// The five port families, each with its description.
-    pub families: Vec<PortFamilyDescriptorOutput>,
-}
-
-/// One port family, described as a node type is.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PortFamilyDescriptorOutput {
-    /// The family, as a graph, a config and the wire spell it.
-    pub family: crate::core::descriptors::PortFamily,
-    /// What a port of this family carries: CommonMark, as declared.
-    pub description: String,
-}
-
-impl PortFamilyDescriptorOutput {
-    /// Every port family, in declaration order.
-    pub fn every_port_family() -> Vec<Self> {
-        crate::core::descriptors::PortFamily::ALL
-            .into_iter()
-            .map(|family| Self {
-                family,
-                description: family.description().to_string(),
-            })
-            .collect()
-    }
 }
 
 /// The MCP node catalog: the native types every stream can add, then each loaded stream's
@@ -154,8 +128,6 @@ impl PortFamilyDescriptorOutput {
 pub struct MachineWideRegistryResponse {
     /// The node types compiled into this runtime, which any stream can add.
     pub nodes: Vec<NodeDescriptorOutput>,
-    /// The five port families, each with its description.
-    pub families: Vec<PortFamilyDescriptorOutput>,
     /// Each loaded stream's types described in its own interpreter.
     pub streams: Vec<NodeTypesDescribedInOneStreamOutput>,
 }
@@ -309,17 +281,13 @@ pub struct PortDescriptorOutput {
     /// rendering on a port that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
-    /// `false` on a Records port: its values are not checked against a type.
-    /// Absent on every other family.
+    /// `false` on a port of no pin type: its values are not checked against a
+    /// type. Absent on every other port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_checked: Option<bool>,
-    /// The port family this port declares and its family's keys. Absent on a
-    /// setting, which carries nothing on a wire.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub family: Option<PortFamilyDeclaration>,
     /// The pin type this port declares, or how it is found, as `pin_type`, and
     /// its flow, as `flow`. Both are absent from the rendering on a port whose
-    /// type the code does not state exactly, which links by its family alone,
+    /// type the code does not state, which takes the type of its first link,
     /// and on a setting whose schema states no type exactly.
     #[serde(flatten)]
     pub pin: Option<PortDeclaredPinOutput>,
@@ -356,7 +324,6 @@ impl PortDescriptorOutput {
             borrow_quota: None,
             audio_window: None,
             values_checked: None,
-            family: None,
             pin: setting.pin_type.map(|pin_type| PortDeclaredPinOutput {
                 flow: pin_type.default_flow(),
                 pin_type: DeclaredPinType::Is { pin_type },
@@ -510,10 +477,10 @@ fn input_port_rendered_over_any_settled_contract(
     rendered
 }
 
-/// `Some(false)` for a Records port, whose values no type checks; `None`
+/// `Some(false)` for a port of no pin type, whose values no type checks; `None`
 /// otherwise.
-fn values_checked_of(family: &PortFamilyDeclaration) -> Option<bool> {
-    (family.family == crate::core::descriptors::PortFamily::Records).then_some(false)
+fn values_checked_of(states_a_pin_type: bool) -> Option<bool> {
+    (!states_a_pin_type).then_some(false)
 }
 
 impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
@@ -526,7 +493,9 @@ impl From<&crate::core::graph::PortInfo> for GraphNodePortOnTheWire {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             stream_facts: None,
-            values_checked: values_checked_of(&port.family),
+            values_checked: values_checked_of(
+                port.pin.is_some() || port.declared_pin_type.is_some(),
+            ),
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             annotations: port.annotations.0.clone(),
@@ -784,8 +753,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
-            values_checked: values_checked_of(&port.family),
-            family: Some(port.family.clone()),
+            values_checked: values_checked_of(declared_pin.is_some()),
             pin: declared_pin.map(|declared| PortDeclaredPinOutput {
                 pin_type: declared.pin_type,
                 flow: declared.flow,

@@ -18,8 +18,8 @@ use streamlib::sdk::rhi::{TensorElementType, TensorStorageBufferLayout, TextureF
 
 use super::{PythonNodeLinkDataAccess, declared_port_name_the_spelling_names};
 use crate::python_bag_conversion::python_type_name_for_error_message;
+use crate::python_message_kind_read_types::PythonTensorCpuAttribute;
 use crate::python_node_context::PythonGpuContextLimitedAccess;
-use crate::python_port_family_read_types::PythonTensorCpuAttribute;
 
 impl PythonNodeLinkDataAccess {
     /// Publish `samples`, a `[channel][sample]` array, as one Channels block

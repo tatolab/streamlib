@@ -280,7 +280,7 @@ impl MessageAFunctionNodeIslandHolds {
     }
 }
 
-/// A message of any family a function node was handed to pass on without
+/// A message of any kind a function node was handed to pass on without
 /// reading it: the body can only hand it on, or keep it in its state.
 #[pyclass(name = "UnreadMessage", module = "tatolab.stream", frozen)]
 pub(crate) struct UnreadMessageAFunctionNodeHandsOn {

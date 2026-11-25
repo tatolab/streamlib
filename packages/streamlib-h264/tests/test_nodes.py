@@ -152,7 +152,6 @@ def test_the_encoder_converts_a_texture_into_h264_and_the_decoder_back_into_rgba
         "kind": "is",
         "pin_type": {"type": "encoded_video", "codecs": ["h264"]},
     }
-    assert encoded_output["family"] == {"family": "packets", "codec": "h264"}
     assert the_port(H264Decoder, ENCODED_VIDEO_OUTPUT_PORT)["pin_declaration"]["pin_type"] == {
         "kind": "is",
         "pin_type": {"type": "encoded_video", "codecs": ["h264"]},

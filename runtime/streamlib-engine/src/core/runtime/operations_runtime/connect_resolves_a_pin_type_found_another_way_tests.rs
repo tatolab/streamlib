@@ -17,7 +17,7 @@ use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
     NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
+    PortDescriptor, SettingReadTime,
 };
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
@@ -36,16 +36,12 @@ const STRING_OR_BOOLEAN_SINK: &str = "FoundAnotherWayStringOrBooleanSink";
 const PASS_ON: &str = "FoundAnotherWayPassOn";
 const CHOSEN_SOURCE: &str = "FoundAnotherWayChosenSource";
 const CHOSEN_BY_DEFAULT_SOURCE: &str = "FoundAnotherWayChosenByDefaultSource";
-const UNTYPED_PASS_ON: &str = "FoundAnotherWayUntypedPassOn";
-const IMAGE_STRING_SINK: &str = "FoundAnotherWayImageStringSink";
-const FAMILY_SET_IN_CONFIG_SOURCE: &str = "FoundAnotherWayFamilySetInConfigSource";
 const CHANNELS_FLOAT_SINK: &str = "FoundAnotherWayChannelsFloatSink";
 /// A node whose output `value`, typed by its setting `kind` choosing H.264, Opus or a named
-/// `Note` and choosing the `Note` by default, travels on the family and codec of the type `kind`
-/// holds, declared as a module declares an `OutputPin[Annotated[H264 | OPUS | Note,
-/// PinTypeFromSetting("kind")]]`: on the first type's family until `kind` is read, and as a
-/// stream.
-const FAMILY_CHOSEN_SOURCE: &str = "FoundAnotherWayFamilyChosenSource";
+/// `Note` and choosing the `Note` by default, carries the type `kind` holds, declared as a
+/// module declares an `OutputPin[Annotated[H264 | OPUS | Note, PinTypeFromSetting("kind")]]`, as
+/// a stream.
+const CODEC_CHOSEN_SOURCE: &str = "FoundAnotherWayCodecChosenSource";
 const H264_SINK: &str = "FoundAnotherWayH264Sink";
 /// A node whose input `value`, typed by its setting `kind`, takes a wire or a value.
 const CHOSEN_SINK_TAKING_A_VALUE: &str = "FoundAnotherWayChosenSinkTakingAValue";
@@ -71,7 +67,7 @@ fn a_note() -> PinType {
         .expect("a named type")
 }
 
-/// A port declaring `pin_type`, of a family no test here judges a link by.
+/// A port declaring `pin_type`.
 fn a_port(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
     let exactly = match &pin_type {
         DeclaredPinType::Is { pin_type } => PinDeclaration::exactly(pin_type.clone()),
@@ -81,12 +77,11 @@ fn a_port(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
         name,
         name,
         true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
+        PinDeclaration {
+            pin_type,
+            ..exactly
+        },
     )
-    .with_pin_declaration(PinDeclaration {
-        pin_type,
-        ..exactly
-    })
 }
 
 fn is(pin_type: PinType) -> DeclaredPinType {
@@ -168,34 +163,6 @@ fn register_the_fixture_node_types() {
                 },
             ),
             a_node_type(
-                UNTYPED_PASS_ON,
-                vec![PortDescriptor::new(
-                    "value",
-                    "value",
-                    true,
-                    PortFamilyDeclaration::of_family(PortFamily::Records),
-                )],
-                vec![a_port(
-                    PASSED_ON,
-                    DeclaredPinType::SameAsInput {
-                        input_port_name: "value".to_owned(),
-                    },
-                )],
-            ),
-            a_node_type(
-                IMAGE_STRING_SINK,
-                vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration::of_family(PortFamily::Image),
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
-                ],
-                Vec::new(),
-            ),
-            a_node_type(
                 CHOSEN_SINK_TAKING_A_VALUE,
                 vec![
                     a_type_choice(),
@@ -211,19 +178,16 @@ fn register_the_fixture_node_types() {
             ),
             a_node_type(
                 CHANNELS_FLOAT_SINK,
-                vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration::of_family(PortFamily::Channels),
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(float())),
-                ],
+                vec![PortDescriptor::new(
+                    "value",
+                    "value",
+                    true,
+                    PinDeclaration::exactly(float()),
+                )],
                 Vec::new(),
             ),
             a_node_type(
-                FAMILY_CHOSEN_SOURCE,
+                CODEC_CHOSEN_SOURCE,
                 vec![
                     a_port(
                         "kind",
@@ -243,57 +207,28 @@ fn register_the_fixture_node_types() {
                     })
                     .with_pin_default(json!(a_note())),
                 ],
-                vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration {
-                            family_from_config_key: Some("kind".to_owned()),
-                            codec_from_config_key: Some("kind".to_owned()),
-                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                        },
-                    )
-                    .with_pin_declaration(PinDeclaration {
+                vec![PortDescriptor::new(
+                    "value",
+                    "value",
+                    true,
+                    PinDeclaration {
                         pin_type: DeclaredPinType::SetByInput {
                             input_name: "kind".to_owned(),
                         },
                         flow: PinFlow::Stream,
                         ..PinDeclaration::exactly(PinType::String {})
-                    }),
-                ],
+                    },
+                )],
             ),
             a_node_type(
                 H264_SINK,
-                vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration {
-                            requires_codec: vec!["h264".to_owned()],
-                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                        },
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(encoded_video("h264"))),
-                ],
+                vec![PortDescriptor::new(
+                    "value",
+                    "value",
+                    true,
+                    PinDeclaration::exactly(encoded_video("h264")),
+                )],
                 Vec::new(),
-            ),
-            a_node_type(
-                FAMILY_SET_IN_CONFIG_SOURCE,
-                Vec::new(),
-                vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration {
-                            family_from_config_key: Some("family".to_owned()),
-                            ..PortFamilyDeclaration::of_family(PortFamily::Records)
-                        },
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
-                ],
             ),
         ] {
             NODE_REGISTRY
@@ -335,9 +270,11 @@ fn choosing(pin_type: PinType) -> serde_json::Map<String, Value> {
 /// `value`.
 fn the_output_of(compiler: &Compiler, node: &NodeRunId) -> &'static str {
     let is_a_pass_on = compiler.scope(|graph, _tx| {
-        graph.traversal().v(node).first().is_some_and(|node| {
-            node.node_type == class_path(PASS_ON) || node.node_type == class_path(UNTYPED_PASS_ON)
-        })
+        graph
+            .traversal()
+            .v(node)
+            .first()
+            .is_some_and(|node| node.node_type == class_path(PASS_ON))
     });
     if is_a_pass_on { PASSED_ON } else { "value" }
 }
@@ -450,7 +387,7 @@ fn a_link_into_an_input_an_output_takes_the_type_of_is_refused_when_that_outputs
     let pass_on = a_node_of(&compiler, PASS_ON);
     let string_sink = a_node_of(&compiler, STRING_SINK);
     connect(&compiler, &pass_on, &string_sink)
-        .expect("with nothing linked in, its families judge the link out");
+        .expect("with nothing linked in, nothing judges the link out yet");
 
     let float = a_node_of(&compiler, FLOAT_SOURCE);
     let refused = connect(&compiler, &float, &pass_on)
@@ -622,12 +559,12 @@ fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire
 }
 
 /// A wire starting at a member of a port whose setting chooses a bundle is judged by the
-/// member's type, not by the family of the whole port it is a member of.
+/// member's type, not by the type of the whole port it is a member of.
 ///
-/// Mental-revert: judging the families first refuses a Float member of a Records port wired to a
-/// Channels Float input, though the member and the input carry one type.
+/// Mental-revert: judging the whole port refuses a Float member of a bundle wired to a Float
+/// input, though the member and the input carry one type.
 #[test]
-fn a_wire_at_a_member_of_a_port_a_setting_types_is_judged_by_the_member_not_the_ports_family() {
+fn a_wire_at_a_member_of_a_port_a_setting_types_is_judged_by_the_member_not_the_whole_port() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(
@@ -645,7 +582,7 @@ fn a_wire_at_a_member_of_a_port_a_setting_types_is_judged_by_the_member_not_the_
     )
     .expect("the member `level` and the input both carry a Float");
     let refused = connect(&compiler, &chosen, &channels_float_sink)
-        .expect_err("the whole Records bundle does not feed a Channels input");
+        .expect_err("the whole bundle does not feed a Float input");
     assert!(
         matches!(refused, Error::InvalidLink(_) | Error::PinLinkRefused(_)),
         "{refused:?}"
@@ -653,7 +590,7 @@ fn a_wire_at_a_member_of_a_port_a_setting_types_is_judged_by_the_member_not_the_
 }
 
 #[test]
-fn an_output_whose_setting_chooses_no_type_yet_is_judged_by_its_family() {
+fn an_output_whose_setting_chooses_no_type_yet_is_judged_once_it_does() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_of(&compiler, CHOSEN_SOURCE);
@@ -664,7 +601,7 @@ fn an_output_whose_setting_chooses_no_type_yet_is_judged_by_its_family() {
         OutputLinkPortRef::new(chosen, "value"),
         InputLinkPortRef::new(float_sink, "value"),
     )
-    .expect("the two Records ports' families take the link");
+    .expect("an end not typed yet takes the link");
 
     assert_eq!(
         verdict, None,
@@ -693,26 +630,6 @@ fn a_link_into_the_first_of_a_chain_of_pass_ons_is_refused_when_the_last_ones_li
     );
     let string = a_node_of(&compiler, STRING_SOURCE);
     connect(&compiler, &string, &first).expect("a String passed on twice fits");
-}
-
-#[test]
-fn a_link_into_an_untyped_input_an_output_takes_the_type_of_is_refused_when_that_outputs_link_would_not_fit()
- {
-    register_the_fixture_node_types();
-    let compiler = Arc::new(Compiler::new());
-    let pass_on = a_node_of(&compiler, UNTYPED_PASS_ON);
-    let string_sink = a_node_of(&compiler, STRING_SINK);
-    connect(&compiler, &pass_on, &string_sink).expect("nothing typed is passed on yet");
-
-    let float = a_node_of(&compiler, FLOAT_SOURCE);
-    let words = connect(&compiler, &float, &pass_on)
-        .expect_err("its families take the link in, and a Float passed on would reach a String")
-        .to_string();
-
-    assert!(
-        words.contains("takes the type linked into `value`") && words.contains("String"),
-        "{words}"
-    );
 }
 
 #[test]
@@ -757,23 +674,7 @@ fn a_setting_holding_no_saved_type_chooses_the_type_it_declares_by_default() {
     connect(&compiler, &chosen, &string_sink).expect("the default chose a String");
 }
 
-#[test]
-fn a_port_whose_type_is_found_another_way_is_judged_by_its_family_though_it_resolves_to_one_type() {
-    register_the_fixture_node_types();
-    let compiler = Arc::new(Compiler::new());
-    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
-    let image_string_sink = a_node_of(&compiler, IMAGE_STRING_SINK);
-
-    let refused = connect(&compiler, &chosen, &image_string_sink)
-        .expect_err("a Records output does not feed an Image input, though both carry a String");
-
-    assert!(
-        matches!(refused, Error::InvalidLink(_)),
-        "refused by the families, not {refused:?}"
-    );
-}
-
-/// Whether output `value` of `node` carries stream facts of Packets now, which only a Packets
+/// Whether output `value` of `node` carries stream facts of Packets now, which only an encoded
 /// output takes.
 fn carries_packets_stream_facts(compiler: &Compiler, node: &NodeRunId) -> bool {
     let facts = compiler.scope(|graph, _tx| {
@@ -792,13 +693,13 @@ fn carries_packets_stream_facts(compiler: &Compiler, node: &NodeRunId) -> bool {
 }
 
 #[test]
-fn an_output_whose_family_its_choice_sets_travels_on_the_family_and_codec_of_the_type_chosen() {
+fn an_output_whose_choice_sets_its_type_carries_the_codec_of_the_type_chosen() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
 
     let chose_h264 = a_node_holding(
         &compiler,
-        FAMILY_CHOSEN_SOURCE,
+        CODEC_CHOSEN_SOURCE,
         choosing(encoded_video("h264")),
     );
     connect(&compiler, &chose_h264, &a_node_of(&compiler, H264_SINK))
@@ -807,7 +708,7 @@ fn an_output_whose_family_its_choice_sets_travels_on_the_family_and_codec_of_the
 
     let chose_opus = a_node_holding(
         &compiler,
-        FAMILY_CHOSEN_SOURCE,
+        CODEC_CHOSEN_SOURCE,
         choosing(PinType::EncodedAudio {
             codecs: vec!["opus".to_owned()],
         }),
@@ -815,28 +716,28 @@ fn an_output_whose_family_its_choice_sets_travels_on_the_family_and_codec_of_the
     let refused = connect(&compiler, &chose_opus, &a_node_of(&compiler, H264_SINK))
         .expect_err("a choice of Opus does not feed an H.264 input");
     assert!(
-        matches!(&refused, Error::InvalidLink(words) if words.contains("states \"opus\"")),
+        matches!(&refused, Error::PinLinkRefused(_)) && refused.to_string().contains("opus"),
         "refused naming the codec chosen, not {refused:?}"
     );
 }
 
 #[test]
-fn an_output_whose_choice_holds_no_value_travels_on_the_family_of_its_default() {
+fn an_output_whose_choice_holds_no_value_carries_the_type_of_its_default() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
-    let chose_by_default = a_node_holding(&compiler, FAMILY_CHOSEN_SOURCE, serde_json::Map::new());
-    let chose_a_note = a_node_holding(&compiler, FAMILY_CHOSEN_SOURCE, choosing(a_note()));
+    let chose_by_default = a_node_holding(&compiler, CODEC_CHOSEN_SOURCE, serde_json::Map::new());
+    let chose_a_note = a_node_holding(&compiler, CODEC_CHOSEN_SOURCE, choosing(a_note()));
 
     for (node, held) in [(chose_by_default, "by default"), (chose_a_note, "saved")] {
         let refused = connect(&compiler, &node, &a_node_of(&compiler, H264_SINK))
-            .expect_err("a `Note` chosen travels on Records, which feeds no Packets input");
+            .expect_err("a `Note` chosen feeds no Encoded video input");
         assert!(
-            matches!(&refused, Error::InvalidLink(words) if words.contains("(Records)")),
-            "a `Note` chosen {held} is refused by its family, not {refused:?}"
+            matches!(&refused, Error::PinLinkRefused(_)),
+            "a `Note` chosen {held} is refused by its pin type, not {refused:?}"
         );
         assert!(
             !carries_packets_stream_facts(&compiler, &node),
-            "a `Note` chosen {held} carries Records facts, though Packets is declared first"
+            "a `Note` chosen {held} carries no Packets facts, though H.264 is declared first"
         );
     }
 }
@@ -852,18 +753,6 @@ fn a_loop_of_pass_ons_resolves_untyped_rather_than_following_itself() {
 
     assert_eq!(the_type_served_on_the_output_of(&compiler, &first), None);
     assert_eq!(the_type_served_on_the_output_of(&compiler, &second), None);
-}
-
-#[test]
-fn graph_serves_the_pin_of_a_port_stating_its_type_exactly_though_its_config_sets_its_family() {
-    register_the_fixture_node_types();
-    let compiler = Arc::new(Compiler::new());
-    let source = a_node_of(&compiler, FAMILY_SET_IN_CONFIG_SOURCE);
-
-    assert_eq!(
-        the_type_served_on_the_output_of(&compiler, &source),
-        Some(PinType::String {})
-    );
 }
 
 #[test]

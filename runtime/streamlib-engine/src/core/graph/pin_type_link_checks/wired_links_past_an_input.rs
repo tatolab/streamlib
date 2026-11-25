@@ -8,11 +8,11 @@ use std::collections::HashSet;
 
 use super::super::bundle_member_link_ends::what_a_link_end_at_a_port_carries;
 use super::super::pin_type_resolution::{PinTypeInItsGraph, the_pin_type_of_a_port_in_its_graph};
-use super::super::port_family_link_checks::the_named_type_among;
 use super::super::{Graph, GraphEdgeWithComponents, GraphNode, Link, PendingDeletionComponent};
 use super::bundle_frames_into_an_untyped_input::{
     the_bundle_frame_type_among, the_refusal_of_bundle_frames_into_an_untyped_input,
 };
+use super::named_type_at_an_untyped_end::the_named_type_among;
 use super::{TypedEnd, is_typed, verdict_between, what_the_input_end_of_a_link_carries};
 use crate::core::PortDirection;
 use crate::core::descriptors::{DeclaredPinType, PinConversion};

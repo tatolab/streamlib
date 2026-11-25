@@ -35,11 +35,26 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
     assert_eq!(
         deck.outputs
             .iter()
-            .map(|port| (port.name.as_str(), port.family.families_an_input_takes()))
+            .map(|port| (
+                port.name.as_str(),
+                port.pin_declaration
+                    .as_ref()
+                    .map(|pin| pin.pin_type.clone())
+            ))
             .collect::<Vec<_>>(),
         [
-            ("cue", vec![PortFamily::Records]),
-            ("fader", vec![PortFamily::Array])
+            (
+                "cue",
+                Some(crate::core::descriptors::DeclaredPinType::Is {
+                    pin_type: crate::core::descriptors::PinType::String {}
+                })
+            ),
+            (
+                "fader",
+                Some(crate::core::descriptors::DeclaredPinType::Is {
+                    pin_type: crate::core::descriptors::PinType::Tensor {}
+                })
+            )
         ]
     );
     assert!(
@@ -102,7 +117,7 @@ fn a_write_the_port_or_node_does_not_take_is_refused_naming_why() {
         .unwrap_err()
         .to_string();
     assert!(
-        refusal.contains("`fader`") && refusal.contains("carries Array"),
+        refusal.contains("`fader`") && refusal.contains("carries Tensor"),
         "{refusal}"
     );
     let refusal = stream
@@ -542,7 +557,7 @@ fn a_reader_that_connects_after_a_write_reads_the_value_its_output_keeps() {
 
 #[test]
 #[serial]
-fn a_null_or_a_write_onto_an_output_no_panel_writes_is_refused_in_its_familys_words() {
+fn a_null_written_onto_an_output_is_refused_in_its_pin_types_words() {
     let stream = AStreamOfAProjectBringingViews::load();
     let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
     let deck_uuid = stream.run(&deck_id);
@@ -552,8 +567,8 @@ fn a_null_or_a_write_onto_an_output_no_panel_writes_is_refused_in_its_familys_wo
         .expect_err("null sets no value")
         .to_string();
     assert!(
-        refusal.contains("output `cue` of node `deck` carries Records")
-            && refusal.contains("a Records value is a JSON object"),
+        refusal.contains("output `cue` of node `deck` carries String")
+            && refusal.contains("`null` sets no value"),
         "{refusal}"
     );
 }

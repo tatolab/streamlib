@@ -160,9 +160,9 @@ pub enum Error {
         port_name: String,
     },
 
-    /// Stream facts stated for an output port of another family.
+    /// Stream facts stated for an output port of a pin type they do not describe.
     #[error(transparent)]
-    StreamFactsOfAnotherFamily(#[from] streamlib_node_schema::StreamFactsOfAnotherFamily),
+    StreamFactsOfAnotherPinType(#[from] streamlib_node_schema::StreamFactsOfAnotherPinType),
 
     /// A node named in a stream has no output port of the name given.
     #[error(
@@ -197,8 +197,8 @@ pub enum Error {
     /// A stream has no input of the name given: none of its top-level `GraphInput`s declares it.
     #[error(
         "the stream `{stream}` has no input `{input}`; its inputs are {}, each the port a \
-         top-level `GraphInput` of family array, channels or records declares. To fix: name one \
-         of them. To set an input of a node, name the node",
+         top-level `GraphInput` of a type that holds a value, a Tensor or Audio declares. To fix: \
+         name one of them. To set an input of a node, name the node",
         names_in_backticks_or_none(.inputs_the_stream_has)
     )]
     StreamHasNoInputNamed {

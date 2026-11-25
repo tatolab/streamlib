@@ -113,7 +113,7 @@ pub(crate) mod a_shader_node_in_this_process {
     use crate::core::compiler::compiler_ops::shader_node_native_evaluator::ShaderNodeNativeEvaluator;
     use crate::core::descriptors::{
         NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PinDeclaration, PinType,
-        PortDescriptor, PortFamily, PortFamilyDeclaration,
+        PortDescriptor,
     };
     use crate::core::error::Error;
     use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
@@ -132,7 +132,9 @@ pub(crate) mod a_shader_node_in_this_process {
                 "image",
                 "",
                 true,
-                PortFamilyDeclaration::of_family(PortFamily::Image),
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
             )
             .with_delivery_profile("newest"),
         )
@@ -141,16 +143,17 @@ pub(crate) mod a_shader_node_in_this_process {
                 "amount",
                 "",
                 true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
+                PinDeclaration::exactly(PinType::Float { exact_size: None }),
             )
-            .with_delivery_profile("newest")
-            .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None })),
+            .with_delivery_profile("newest"),
         )
         .with_output(PortDescriptor::new(
             "result",
             "",
             true,
-            PortFamilyDeclaration::of_family(PortFamily::Image),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         ))
     }
 

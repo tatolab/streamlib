@@ -66,7 +66,8 @@ fn a_channels_block_written_from_a_planar_array_reads_back_as_audio() {
                 .unwrap();
         }
 
-        let received = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Channels);
+        let received =
+            read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ChannelsBlock);
         assert!(received.cast::<PythonAudio>().is_ok());
         let attribute = |name: &str| received.getattr(name).unwrap();
         assert_eq!(attribute("channel_count").extract::<u32>().unwrap(), 2);
@@ -138,7 +139,11 @@ fn a_records_message_round_trips_a_dict_and_refuses_a_missing_declared_key() {
             )
             .unwrap();
 
-        let received = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Records);
+        let received = read_as_the_type_of_its_kind(
+            python,
+            &destination,
+            MessageKindOfTheRead::RecordsMessage,
+        );
         assert!(received.eq(&record).unwrap(), "got {received}");
 
         let missing_at = python.eval(c"{'kind': 'tap'}", None, None).unwrap();
@@ -152,7 +157,7 @@ fn a_records_message_round_trips_a_dict_and_refuses_a_missing_declared_key() {
 /// A read through a Packets input that also takes Records hands back a
 /// Records message as its dict; an input taking Packets alone refuses it.
 #[test]
-fn a_read_through_an_input_taking_several_families_builds_the_arriving_familys_type() {
+fn a_read_through_an_input_taking_several_kinds_builds_the_arriving_kinds_type() {
     Python::initialize();
     Python::attach(|python| {
         let (source, destination) = one_wired_link(python, "records-into-packets-or-records");
@@ -177,39 +182,41 @@ fn a_read_through_an_input_taking_several_families_builds_the_arriving_familys_t
                 )
                 .unwrap();
         };
-        let read_through = |families: PortFamiliesOfTheRead| {
+        let read_through = |kinds: MessageKindsOfTheRead| {
             destination.read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType(families),
+                PortPayloadReadShape::OfItsKind(kinds),
                 None,
             )
         };
 
         write_the_record();
-        let received = read_through(PortFamiliesOfTheRead::of_the_declared_family_and_also(
-            PortFamilyOfTheRead::Packets,
-            [PortFamilyOfTheRead::Records],
+        let received = read_through(MessageKindsOfTheRead::of_the_declared_kind_and_also(
+            MessageKindOfTheRead::PacketsUnit,
+            [MessageKindOfTheRead::RecordsMessage],
         ))
         .unwrap()
         .expect("the wired input received the record");
         assert!(received.eq(&record).unwrap(), "got {received}");
 
         write_the_record();
-        let refusal = read_through(PortFamiliesOfTheRead::of_one(PortFamilyOfTheRead::Packets))
-            .map(|_| ())
-            .expect_err("a Packets input alone does not take a Records message");
+        let refusal = read_through(MessageKindsOfTheRead::of_one(
+            MessageKindOfTheRead::PacketsUnit,
+        ))
+        .map(|_| ())
+        .expect_err("a Packets input alone does not take a Records message");
         assert!(refusal.is_instance_of::<PyTypeError>(python), "{refusal}");
     });
 }
 
 /// A read through a port attribute refuses a message whose descriptor
-/// kind is not its family's, naming both.
+/// kind is not one it takes, naming both.
 #[test]
-fn a_family_read_refuses_a_message_described_as_another_kind() {
+fn a_read_of_a_kind_refuses_a_message_described_as_another_kind() {
     Python::initialize();
     Python::attach(|python| {
-        let (source, destination) = one_wired_link(python, "family-kind-mismatch");
+        let (source, destination) = one_wired_link(python, "kind-mismatch");
         source
             .write_described_by(
                 python,
@@ -224,8 +231,8 @@ fn a_family_read_refuses_a_message_described_as_another_kind() {
             .read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
-                    PortFamilyOfTheRead::Records,
+                PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(
+                    MessageKindOfTheRead::RecordsMessage,
                 )),
                 None,
             )
@@ -322,7 +329,11 @@ fn a_packets_unit_reads_back_with_its_stamp_group_flag_and_codec() {
                 .unwrap();
         }
         for (codec, starts_group) in [("h264", false), ("", true)] {
-            let unit = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Packets);
+            let unit = read_as_the_type_of_its_kind(
+                python,
+                &destination,
+                MessageKindOfTheRead::PacketsUnit,
+            );
             assert!(unit.cast::<PythonEncodedMedia>().is_ok());
             assert_eq!(
                 unit.getattr("codec").unwrap().extract::<String>().unwrap(),

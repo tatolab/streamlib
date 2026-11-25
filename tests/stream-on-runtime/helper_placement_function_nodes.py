@@ -52,5 +52,5 @@ def Clamp(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:  # noqa
 
 @node
 def Gate[PinValue](value: PinValue, open: bool = True) -> PinValue | None:  # noqa: N802, A002
-    """`value` handed on unread while `open`, else nothing, of any family."""
+    """`value` handed on unread while `open`, else nothing, of any type."""
     return value if open else None

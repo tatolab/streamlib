@@ -51,7 +51,7 @@ fn a_type_its_describe_refuses_holds_only_its_own_node_and_the_rest_is_described
             "paced_by_real_time": false,
             "config_schema": {"type": "object"},
             "input_ports": [{"name": "video", "description": "",
-                             "family": {"family": "records"}, "delivery_profile": "newest"}],
+                             "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "delivery_profile": "newest"}],
             "output_ports": [],
         })
     };

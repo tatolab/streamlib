@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::core::descriptors::PortFamily;
 use serde_json::json;
 
 use crate::core::test_support::{
@@ -133,7 +132,6 @@ fn a_channels_input_typed(pin_type: crate::core::descriptors::PinType) -> PortIn
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Channels),
         input_mode: None,
         annotations: Default::default(),
     }
@@ -150,8 +148,8 @@ fn a_typed_value_a_process_nodes_read_cannot_carry_is_refused_and_a_function_or_
         &text_input,
         &json!("loud"),
     )
-    .expect_err("a process node's read carries no text");
-    assert_eq!(refusal.code, InputValueRefusalCode::InputValueNotValid);
+    .expect_err("a process node's wired read takes no value");
+    assert_eq!(refusal.code, InputValueRefusalCode::InputTakesNoValue);
     assert!(refusal.words.contains("`label`"), "{refusal}");
     for reads_typed_values in [
         NodeKind::Shader,
@@ -191,14 +189,13 @@ fn a_typed_value_a_process_nodes_read_cannot_carry_is_refused_and_a_function_or_
 /// Solid Color's colour and Image File's asset were on the rig.
 #[test]
 fn a_process_nodes_input_stating_it_takes_a_wire_or_a_value_takes_any_value_of_its_pin_type() {
-    use crate::core::descriptors::{NodeInputMode, PinType, PortFamilyDeclaration};
-    let a_field = |pin_type: PinType, family: PortFamily| PortInfo {
+    use crate::core::descriptors::{NodeInputMode, PinType};
+    let a_field = |pin_type: PinType| PortInfo {
         input_mode: Some(NodeInputMode::WireOrValue),
-        family: PortFamilyDeclaration::of_family(family),
         ..a_channels_input_typed(pin_type)
     };
-    let colour = a_field(PinType::Color {}, PortFamily::Channels);
-    let asset = a_field(PinType::Asset { media: Vec::new() }, PortFamily::Records);
+    let colour = a_field(PinType::Color {});
+    let asset = a_field(PinType::Asset { media: Vec::new() });
     for (field, value) in [
         (
             &colour,
@@ -289,7 +286,7 @@ fn a_live_set_replaces_an_earlier_one_only_on_the_member_or_the_whole_input_it_s
 #[test]
 fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
     use crate::core::descriptors::{
-        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, PortFamilyDeclaration,
+        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType,
     };
     use crate::core::graph::PinTypeAsDeclared;
     let members = PortInfo {
@@ -302,7 +299,6 @@ fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
             flow: PinFlow::Value,
         }),
         input_mode: Some(NodeInputMode::WireOrValue),
-        family: PortFamilyDeclaration::of_family(PortFamily::Records),
         ..a_channels_input_typed(PinType::String {})
     };
     let kind = PortInfo {
@@ -359,8 +355,7 @@ fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
 #[test]
 fn an_input_reading_a_bundle_holding_a_texture_takes_a_value_of_its_small_members() {
     use crate::core::descriptors::{
-        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, PortFamilyDeclaration,
-        TexturePixelFormat,
+        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, TexturePixelFormat,
     };
     use crate::core::graph::PinTypeAsDeclared;
     let members = PortInfo {
@@ -373,7 +368,6 @@ fn an_input_reading_a_bundle_holding_a_texture_takes_a_value_of_its_small_member
             flow: PinFlow::Value,
         }),
         input_mode: Some(NodeInputMode::WireOrValue),
-        family: PortFamilyDeclaration::of_family(PortFamily::Records),
         ..a_channels_input_typed(PinType::String {})
     };
     let kind = PortInfo {

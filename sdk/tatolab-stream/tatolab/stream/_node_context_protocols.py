@@ -55,10 +55,10 @@ class PortPayloadBorrow(Protocol):
 
 @runtime_backed_protocol
 class UnreadMessage(Protocol):
-    """A message of any family a node hands on without reading it.
+    """A message of any kind a node hands on without reading it.
 
     Its body can only return it, or `None` to hand out nothing, and keep it in
-    its state; the output takes the family of what is linked into the input it
+    its state; the output takes the type of what is linked into the input it
     came from. A pooled GPU frame it names stays claimed while any copy lives.
     """
 
@@ -607,14 +607,15 @@ class LinkInputDataReader(Protocol):
     A port name is cast the way a node's pins cast it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
-    `families` names, by wire name, the families a read takes: `"image"`, `"array"`,
-    `"channels"`, `"packets"` or `"records"`, the first the one the port declares.
+    `kinds` names, by wire name, the kinds of message a read takes: `"image_frame"`,
+    `"array_frame"`, `"channels_block"`, `"packets_unit"` or `"records_message"`, the first
+    the one the port's type travels as.
     """
 
-    def read(self, port_name: str, *, families: Sequence[str] | None = None) -> Any:
+    def read(self, port_name: str, *, kinds: Sequence[str] | None = None) -> Any:
         """The next message's payload on `port_name`, or `None` when none is waiting.
 
-        Naming `families`, the payload is the type of the family it arrived as,
+        Naming `kinds`, the payload is the type of the kind it arrived as,
         built from the message's descriptor: `Texture`, `Tensor`,
         `Audio`, `EncodedVideo`, `EncodedAudio`, or a `dict` for Records. Naming none,
         it is a `PortPayloadBorrow` of the sample it arrived in.
@@ -622,7 +623,7 @@ class LinkInputDataReader(Protocol):
         ...
 
     def read_message(
-        self, port_name: str, *, families: Sequence[str] | None = None
+        self, port_name: str, *, kinds: Sequence[str] | None = None
     ) -> Message[Any] | None:
         """The next message on `port_name` with its stamp, group flag, losses and link, or `None`.
 
@@ -690,7 +691,7 @@ class LinkOutputDataWriter(Protocol):
         timestamp_ns: int | None = None,
         starts_group: bool = True,
         *,
-        family: str | None = None,
+        kind: str | None = None,
         codec: str | None = None,
         formats: Sequence[str] | None = None,
         names: Sequence[str] | None = None,
@@ -701,7 +702,7 @@ class LinkOutputDataWriter(Protocol):
     ) -> None:
         """Publish one message carrying a copy of `payload` to every downstream link on `port_name`.
 
-        Naming `family` by its wire name, `payload` is the family's object and
+        Naming `kind` by its wire name, `payload` is the kind's object and
         the runtime builds its descriptor: an Image write takes a `Texture`
         this node read, a `TextureToWrite`, or a texture it acquired from a
         pool, whose colour is then unspecified, in one of `formats` when any is
@@ -712,9 +713,9 @@ class LinkOutputDataWriter(Protocol):
         unit's bytes as `codec`; and a Records write a `dict` of at most 64 KiB
         carrying every one of `names`.
 
-        Naming no family, `payload` is any contiguous buffer — `bytes`, a
-        `memoryview`, a numpy array. A keyword the named family does not take,
-        or any of them with no family, raises `TypeError` naming it.
+        Naming no kind, `payload` is any contiguous buffer — `bytes`, a
+        `memoryview`, a numpy array. A keyword the named kind does not take,
+        or any of them with no kind, raises `TypeError` naming it.
 
         Omitting `timestamp_ns` stamps stream time now. `starts_group=True` says
         the message stands alone; only encoded media passes `False`, for a
@@ -760,8 +761,8 @@ class LinkOutputDataWriter(Protocol):
         """Replace the stream facts `port_name` carries — what `graph` renders
         under the port and what a downstream reader reads off its inbound link.
 
-        Facts of another family than the port's raise naming the port and both
-        families, and the port keeps the facts it had.
+        Facts of another kind than the port's raise naming the port and both
+        kinds, and the port keeps the facts it had.
         """
         ...
 
@@ -770,7 +771,7 @@ class LinkOutputDataWriter(Protocol):
 def gpu_limited_access_of_the_typed_read_in_progress() -> (
     GpuContextLimitedAccess | None
 ):
-    """The GPU capability of the read currently building a family type, an
+    """The GPU capability of the read currently building a message kind's type, an
     `Texture` or an Array frame's GPU attribute, or `None` when no read is.
 
     The same capability as `ctx.gpu_limited_access`, offered so the type can do

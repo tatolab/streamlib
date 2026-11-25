@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
+use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::runtime::a_project_on_disk_for_a_test::{
@@ -88,9 +89,9 @@ fn a_rust_type_registered_as(short_name: &str) -> NodeClassImportPath {
             "video",
             "",
             false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         )),
     );
     rust_type
@@ -159,7 +160,7 @@ fn a_described_type(node_type: &NodeClassImportPath, input_port: &str) -> serde_
         "scheduling_priority": null,
         "paced_by_real_time": false,
         "config_schema": {"type": "object"},
-        "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}, "delivery_profile": "newest"}],
+        "input_ports": [{"name": input_port, "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "delivery_profile": "newest"}],
         "output_ports": [],
     })
 }
@@ -558,9 +559,9 @@ fn a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_r
             "video_in",
             "",
             false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         )),
     );
 
@@ -578,7 +579,7 @@ fn a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_r
             "paced_by_real_time": false,
             "config_schema": {"type": "object"},
             "input_ports": [],
-            "output_ports": [{"name": port_name_too_long_for_a_channel, "description": "", "family": {"family": "records"}}],
+            "output_ports": [{"name": port_name_too_long_for_a_channel, "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "texture"}}, "flow": "stream"}}],
         }],
         "refused_node_types": [],
     });
@@ -831,7 +832,7 @@ fn an_installed_module_that_cannot_be_described_leaves_the_load_standing() {
 fn a_described_conversion(node_type: &NodeClassImportPath) -> serde_json::Value {
     let picture = |name: &str| {
         serde_json::json!({
-            "name": name, "description": "", "family": {"family": "image"},
+            "name": name, "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "texture"}}, "flow": "stream"},
             "delivery_profile": "newest",
         })
     };

@@ -116,7 +116,9 @@
       "id": "9019522b-3430-40db-9a66-4f763eb3feb7",
       "input_values": {
         "default": 0.5,
-        "family": "channels",
+        "pin_type": {
+          "type": "float"
+        },
         "port": "brightness",
         "range": [
           0.0,

@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use quote::quote;
+use streamlib_node_schema::ChannelsOutputPortSampleType;
 use streamlib_node_schema::pin_type::{PinFlow, PinType, TexturePixelFormat};
-use streamlib_node_schema::{ChannelsOutputPortSampleType, PortFamily};
 
 use super::*;
 
 #[test]
-fn a_port_declared_by_pin_type_serves_the_family_its_messages_belong_to() {
+fn a_port_declared_by_pin_type_reaches_the_schema_with_it() {
     let parsed = parse_ok(quote! {
         execution = manual,
         input("gain", pin_type = Float, delivery_profile = "newest"),
@@ -21,20 +21,17 @@ fn a_port_declared_by_pin_type_serves_the_family_its_messages_belong_to() {
         schema.inputs[0].pin_type,
         Some(PinType::Float { exact_size: None })
     );
-    assert_eq!(schema.inputs[0].family.family, PortFamily::Channels);
     assert_eq!(schema.outputs[0].pin_type, Some(PinType::Boolean {}));
-    assert_eq!(schema.outputs[0].family.family, PortFamily::Channels);
     assert_eq!(
         schema.outputs[1].pin_type,
         Some(PinType::Texture {
             pixel_formats: vec![TexturePixelFormat::Rgba8Unorm]
         })
     );
-    assert_eq!(schema.outputs[1].family.family, PortFamily::Image);
 }
 
 #[test]
-fn a_string_port_serves_the_records_family_and_states_its_flow() {
+fn a_string_port_states_its_flow() {
     let schema = parse_ok(quote! {
         execution = manual,
         input("cue", pin_type = String, flow = Stream, delivery_profile = "newest"),
@@ -43,7 +40,6 @@ fn a_string_port_serves_the_records_family_and_states_its_flow() {
     .to_node_schema();
 
     assert_eq!(schema.inputs[0].pin_type, Some(PinType::String {}));
-    assert_eq!(schema.inputs[0].family.family, PortFamily::Records);
     assert_eq!(schema.inputs[0].flow, Some(PinFlow::Stream));
     assert_eq!(schema.outputs[0].pin_type, Some(PinType::String {}));
     assert_eq!(schema.outputs[0].flow, None);
@@ -77,7 +73,7 @@ fn a_texture_output_stating_no_format_is_refused_and_an_input_may_state_none() {
 }
 
 #[test]
-fn a_pin_type_beside_the_family_it_is_carried_in_is_taken_with_its_family_keys() {
+fn a_pin_type_is_taken_with_the_stream_facts_it_states() {
     let schema = parse_ok(quote! {
         execution = manual,
         output("audio", pin_type = Audio, dtype = "f32"),
@@ -87,7 +83,7 @@ fn a_pin_type_beside_the_family_it_is_carried_in_is_taken_with_its_family_keys()
 
     assert_eq!(schema.outputs[0].pin_type, Some(PinType::Audio {}));
     assert_eq!(
-        schema.outputs[0].family.dtype,
+        schema.outputs[0].annotations.sample_type,
         Some(ChannelsOutputPortSampleType::F32)
     );
     assert_eq!(
@@ -96,10 +92,9 @@ fn a_pin_type_beside_the_family_it_is_carried_in_is_taken_with_its_family_keys()
             pixel_formats: vec![TexturePixelFormat::Bgra8Unorm]
         })
     );
-    assert_eq!(schema.outputs[1].family.formats, vec!["bgra8_unorm"]);
 }
 
-/// Mental-revert: a port declares its family again beside, or in place of, its pin type.
+/// Mental-revert: a port declares a family again beside, or in place of, its pin type.
 #[test]
 fn the_retired_family_key_is_refused_by_name() {
     let msg = parse_err(quote! {
@@ -225,7 +220,7 @@ fn a_windowed_input_whose_pins_default_skips_messages_is_refused() {
 }
 
 #[test]
-fn a_trigger_port_carries_records_flows_as_a_trigger_and_reads_ordered_alone() {
+fn a_trigger_port_flows_as_a_trigger_and_reads_ordered_alone() {
     let schema = parse_ok(quote! {
         execution = reactive,
         input("go", pin_type = Trigger),
@@ -235,7 +230,6 @@ fn a_trigger_port_carries_records_flows_as_a_trigger_and_reads_ordered_alone() {
     .to_node_schema();
     for port in schema.inputs.iter().chain(&schema.outputs) {
         assert_eq!(port.pin_type, Some(PinType::Trigger {}), "{}", port.name);
-        assert_eq!(port.family.family, PortFamily::Records, "{}", port.name);
     }
 
     let msg = parse_err(quote! {

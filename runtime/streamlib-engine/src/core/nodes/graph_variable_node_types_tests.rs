@@ -4,7 +4,7 @@
 use super::graph_variable_node_types::the_settings_of_a_graph_variable_node;
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeInputMode, PinDeclaration, PinType, PortDescriptor,
-    PortFamily, PortFamilyDeclaration, SettingReadTime,
+    SettingReadTime,
 };
 use crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference;
 use crate::core::graph::graph_variable_resolution::{
@@ -108,13 +108,7 @@ fn the_reference_a_set_variable_holds_is_found_through_its_node_reference_input(
 #[test]
 fn an_input_of_the_node_reference_type_is_found_as_a_key_holding_a_reference() {
     let input = |name: &str, pin_type: PinType| {
-        PortDescriptor::new(
-            name,
-            "",
-            false,
-            PortFamilyDeclaration::of_family(PortFamily::Records),
-        )
-        .with_pin_declaration(PinDeclaration::exactly(pin_type))
+        PortDescriptor::new(name, "", false, PinDeclaration::exactly(pin_type))
     };
     let keys = streamlib_node_schema::inputs_holding_a_node_reference(&[
         input("label", PinType::String {}),

@@ -313,7 +313,7 @@ async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config(
     );
 }
 
-/// A native reader of Records on its input `cue`, which does nothing with them.
+/// A native reader of Strings on its input `cue`, which does nothing with them.
 #[streamlib::sdk::node(
     execution = manual,
     input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
@@ -329,7 +329,7 @@ impl ManualNode for StreamToolsTestRecordsReader::Node {
 /// The UUID the graph document of the Graph Input test gives its `cue` Input.
 const CUE_GRAPH_INPUT_NODE_UUID: &str = "c0ec0ec0-ec0e-4c0e-8c0e-c0ec0ec0ec0e";
 
-/// The graph of `main` with a top-level Records `GraphInput` declaring `cue`, holding `default`
+/// The graph of `main` with a top-level String `GraphInput` declaring `cue`, holding `default`
 /// as its config's, read by two [`StreamToolsTestRecordsReader`]s.
 fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -339,7 +339,7 @@ fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value
         "stream": "main",
         "nodes": [
             { "id": CUE_GRAPH_INPUT_NODE_UUID, "name": "cue", "type": "tatolab.stream:GraphInput",
-              "input_values": { "port": "cue", "family": "records", "default": default } },
+              "input_values": { "port": "cue", "pin_type": { "type": "string" }, "default": default } },
             { "name": "left", "type": reader_type.as_str() },
             { "name": "right", "type": reader_type.as_str() },
         ],
@@ -356,7 +356,7 @@ fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value
 async fn a_top_level_graph_input_loads_linked_to_its_readers() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(
-        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!({ "track": "intro" })),
+        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!("intro")),
     );
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let document_before = project.the_graph_document_of("main");
@@ -364,17 +364,14 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers() {
     let live_graph = engine.the_live_graph_of(&stream_id);
     let cue = the_node_named(&live_graph, "cue");
     assert_eq!(cue["id"], CUE_GRAPH_INPUT_NODE_UUID, "{cue}");
-    assert_eq!(
-        cue["input_values"]["value"],
-        json!({ "track": "intro" }),
-        "{cue}"
-    );
+    assert_eq!(cue["input_values"]["value"], json!("intro"), "{cue}");
     assert_eq!(
         cue["components"]["graph_interface"],
         json!({
             "direction": "input",
             "port": "cue",
-            "current_value": { "track": "intro" }
+            "pin_type": { "type": "string" },
+            "current_value": "intro"
         }),
         "a node not running shows the value it carries at its next Play, its default: {cue}"
     );
@@ -409,7 +406,7 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers() {
 async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_input() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(
-        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!({ "track": "intro" })),
+        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!("intro")),
     );
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
@@ -417,7 +414,7 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
     engine
         .the_answer_or_the_refusal_of(
             "set_node_input_value",
-            json!({ "stream": stream_asset, "input": "cue", "value": { "track": "drop" },
+            json!({ "stream": stream_asset, "input": "cue", "value": "drop",
                     "author": an_agent_named("alice") }),
         )
         .await
@@ -432,7 +429,7 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
         .unwrap_or_else(|| panic!("the document holds the Input: {document}"));
     assert_eq!(
         saved_cue["input_values"]["value"],
-        json!({ "track": "drop" }),
+        json!("drop"),
         "{saved_cue}"
     );
     assert!(
@@ -440,11 +437,7 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
         "{saved_cue}"
     );
     let cue = the_node_named(&engine.the_live_graph_of(&stream_id), "cue");
-    assert_eq!(
-        cue["input_values"]["value"],
-        json!({ "track": "drop" }),
-        "{cue}"
-    );
+    assert_eq!(cue["input_values"]["value"], json!("drop"), "{cue}");
     let document_before = project.the_graph_document_of("main");
 
     let refusal = engine
@@ -473,7 +466,7 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
         .the_answer_or_the_refusal_of(
             "set_node_input_value",
             json!({ "stream": stream_asset, "level": [CUE_GRAPH_INPUT_NODE_UUID],
-                    "input": "cue", "value": { "track": "outro" },
+                    "input": "cue", "value": "outro",
                     "author": an_agent_named("alice") }),
         )
         .await
@@ -500,12 +493,12 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 
-/// A `GraphInput` whose `default` its family does not take is refused at load, naming the node.
+/// A `GraphInput` whose `default` its pin type does not take is refused at load, naming the node.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_graph_input_default_its_family_does_not_take_is_refused_at_load() {
+async fn a_graph_input_default_its_pin_type_does_not_take_is_refused_at_load() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(
-        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!("intro")),
+        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!(3)),
     );
 
     let refusal = engine
@@ -513,9 +506,7 @@ async fn a_graph_input_default_its_family_does_not_take_is_refused_at_load() {
         .to_string();
 
     assert!(
-        refusal.contains("`cue`")
-            && refusal.contains("`default`")
-            && refusal.contains("JSON object"),
+        refusal.contains("`cue`") && refusal.contains("`default`") && refusal.contains("String"),
         "{refusal}"
     );
 }

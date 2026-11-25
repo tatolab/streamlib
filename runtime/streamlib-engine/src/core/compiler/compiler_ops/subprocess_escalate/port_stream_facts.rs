@@ -99,27 +99,18 @@ mod tests {
 
     use super::*;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
-    use crate::core::descriptors::{PacketsStreamFacts, PortFamily, PortStreamFacts};
+    use crate::core::descriptors::{PacketsStreamFacts, PortStreamFacts};
     use crate::core::graph::PortInfo;
     use crate::iceoryx2::InboundLinkName;
 
     fn output_port_named(name: &str) -> PortInfo {
-        PortInfo {
-            name: name.to_string(),
-            description: String::new(),
-            delivery_profile: None,
-            borrow_quota: None,
-            audio_window: None,
-            pin_default: None,
-            pin: None,
-            declared_pin_type: None,
-            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
-            former_names: Vec::new(),
-            may_be_unset: false,
-            family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
-            input_mode: None,
-            annotations: Default::default(),
-        }
+        PortInfo::declared_by_no_node_type(
+            name,
+            Some(crate::core::descriptors::ResolvedPin {
+                pin_type: crate::core::descriptors::PinType::EncodedVideo { codecs: Vec::new() },
+                flow: crate::core::descriptors::PinFlow::Stream,
+            }),
+        )
     }
 
     fn dispatched(
@@ -201,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn a_set_of_another_familys_facts_is_refused_naming_the_port_and_both_families() {
+    fn a_set_of_facts_of_another_pin_type_is_refused_naming_the_port_and_both_types() {
         let what_the_node_reaches = WhatAHelperPlacedNodeReaches {
             stream_facts_of_its_output_ports: Arc::new(StreamFactsOfOutputPorts::as_declared_by(
                 &[output_port_named("encoded")],
@@ -219,13 +210,11 @@ mod tests {
             }),
         );
         let EscalateResponse::Err(refusal) = refused else {
-            panic!("another family's facts are refused; got {refused:?}");
+            panic!("facts of another pin type are refused; got {refused:?}");
         };
         assert_eq!(refusal.request_id, "set-2");
         assert!(
-            refusal.message.contains("encoded")
-                && refusal.message.contains("Packets")
-                && refusal.message.contains("Image"),
+            refusal.message.contains("encoded") && refusal.message.contains("Texture"),
             "got {}",
             refusal.message
         );

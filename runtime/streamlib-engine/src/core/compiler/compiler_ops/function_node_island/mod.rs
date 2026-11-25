@@ -485,7 +485,7 @@ fn record_the_stream_facts_an_island_link_carries_on(
         .ok_or_else(|| Error::NodeNotFound(link.source().node_run_id().to_string()))?;
     let outputs_carried_on =
         the_outputs_a_link_carries_on(graph, island_output_node, link.source().port_name());
-    let [(carried_on_node, carried_on_port, _)] = outputs_carried_on.as_slice() else {
+    let [(carried_on_node, carried_on_port)] = outputs_carried_on.as_slice() else {
         return Ok(());
     };
     if is_a_function_node(graph, &carried_on_node.id) {

@@ -143,7 +143,7 @@ pub(super) fn graph_operation_for_the_request(
         run_the_graph_generator,
         place_the_imported_stream,
         document_of_a_placed_stream,
-        family_of_an_output_port,
+        pin_type_of_an_output_port,
         function_nodes_of_the_running_stream,
         convert_node_a_link_needs,
         refuse_a_link_judged_before_commit,
@@ -496,7 +496,7 @@ pub(super) fn graph_operation_for_the_request(
                     &name,
                     placed_stream,
                     &|end| {
-                        family_of_an_output_port(end)
+                        pin_type_of_an_output_port(end)
                             .map_err(|refusal| refusal.words_kept_in(&kept))
                     },
                     &mut Uuid::new_v4,

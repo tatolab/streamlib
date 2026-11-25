@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 #[test]
 #[serial]
@@ -526,7 +527,7 @@ fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_se
             "id": "5e8c2b7a-1d4f-4c6e-9a3b-8f2d6c1e7a54",
             "name": "echo",
             "type": crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
-            "input_values": {"port": "echo", "family": "records"},
+            "input_values": {"port": "echo", "pin_type": {"type": "string"}},
         }));
     graph["links"]
         .as_array_mut()
@@ -619,7 +620,6 @@ fn a_stream_whose_load_is_refused_is_held_from_its_document_reading_none_of_its_
 fn a_native_function_node_type_of_records() -> NodeClassImportPath {
     use crate::core::descriptors::{
         FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor,
-        PortFamily, PortFamilyDeclaration,
     };
     let switch_type = NodeClassImportPath::new(format!("{}::Switch", module_path!())).unwrap();
     static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
@@ -634,7 +634,7 @@ fn a_native_function_node_type_of_records() -> NodeClassImportPath {
                 "result",
                 "",
                 true,
-                PortFamilyDeclaration::of_family(PortFamily::Records),
+                PinDeclaration::exactly(PinType::String {}),
             )
             .with_delivery_profile("newest"),
         );
@@ -747,10 +747,7 @@ fn a_recorded_stream_whose_document_feeds_an_island_into_the_app_process_opens_a
 #[serial]
 fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
     use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
-    use crate::core::descriptors::{
-        NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor, PortFamily,
-        PortFamilyDeclaration,
-    };
+    use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor};
     use crate::core::{InputLinkPortRef, OutputLinkPortRef};
     let state_directory = tempfile::tempdir().unwrap();
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
@@ -770,7 +767,9 @@ fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
             "image",
             "",
             true,
-            PortFamilyDeclaration::of_family(PortFamily::Image),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         )
         .with_delivery_profile("newest"),
     )
@@ -778,7 +777,9 @@ fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
         "result",
         "",
         true,
-        PortFamilyDeclaration::of_family(PortFamily::Image),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     ));
     blur.node_kind = NodeKind::Shader;
     held.node_types_this_stream_resolves()

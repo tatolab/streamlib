@@ -26,9 +26,8 @@ use streamlib_node_schema::pin_type::{
     BundleMessage, ColorPinValue, RectanglePinValue, TransformPinValue, VectorComponentCount,
     VectorPinValue,
 };
-use streamlib_project_repository::FAMILIES_A_PANEL_WRITES;
 
-use crate::core::descriptors::{PinType, PortFamily, the_integer_a_float_is_cast_to};
+use crate::core::descriptors::{PinType, the_integer_a_float_is_cast_to};
 
 mod bundle_frame_packing;
 #[cfg(test)]
@@ -598,67 +597,6 @@ pub fn the_channel_values_a_pin_type_reads(
             ));
         }
     })
-}
-
-/// The message `value`, written by a client onto an output of `family` that names no pin type,
-/// is sent as: a Records output takes a JSON object; an Array output a Tensor, a number or a list
-/// of numbers nested to any depth, as its `values` attribute, or an object of such attributes by
-/// name; a Channels output a number or a bool as a control message, or an Audio block. Image and
-/// Packets are not written by a client.
-pub fn the_message_a_value_written_onto_an_output_is(
-    family: PortFamily,
-    value: &Value,
-    next_start_sample: u64,
-) -> Result<PackedPinValue, String> {
-    match family {
-        PortFamily::Records => {
-            if !value.is_object() {
-                return Err("a Records value is a JSON object".to_string());
-            }
-            let payload = rmp_serde::to_vec_named(value)
-                .map_err(|why| format!("the record does not encode: {why}"))?;
-            Ok(PackedPinValue {
-                payload_descriptor: DataChannelPayloadDescriptor::records_message(),
-                payload,
-            })
-        }
-        PortFamily::Array => match value {
-            Value::Object(attributes_by_name) if !attributes_by_name.is_empty() => {
-                the_array_frame_of_attributes(
-                    &attributes_by_name
-                        .iter()
-                        .map(|(name, attribute)| the_array_attribute_of_a_value(name, attribute))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )
-            }
-            Value::Object(_) => Err("an Array value names at least one attribute".into()),
-            _ => pack_pin_value(&PinType::Tensor {}, value, next_start_sample),
-        },
-        PortFamily::Channels => match value {
-            Value::Number(_) => pack_pin_value(
-                &PinType::Float { exact_size: None },
-                value,
-                next_start_sample,
-            ),
-            Value::Bool(_) => pack_pin_value(&PinType::Boolean {}, value, next_start_sample),
-            Value::Object(_) => pack_pin_value(&PinType::Audio {}, value, next_start_sample),
-            _ => Err(
-                "a Channels value is a number, a bool or `{\"samples\": [[...], ...], \"sample_rate\"}`"
-                    .to_string(),
-            ),
-        },
-        PortFamily::Image | PortFamily::Packets => Err(why_a_client_never_writes(family)),
-    }
-}
-
-/// Why a client never writes a value onto an output of `family`.
-pub(crate) fn why_a_client_never_writes(family: PortFamily) -> String {
-    let [families_listed @ .., last] = FAMILIES_A_PANEL_WRITES.map(PortFamily::declaration_name);
-    format!(
-        "a client writes {} and {last} values, never {}",
-        families_listed.join(", "),
-        family.declaration_name()
-    )
 }
 
 /// An Array attribute read off a JSON value: its shape, outermost first, and its elements.

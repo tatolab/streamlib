@@ -8,8 +8,8 @@ from `tatolab.stream`: bare `@node` classes, bare `@node` and `@node.shader` fun
 `X = node.rust_function(...)` assignments and `@graph_generator` functions, each node's
 `@node.meta` beside its kind decorator, and `@named_pin_type` classes, each a pin type of the
 module named by its import path. A port is listed where the declaration states it in source,
-with the family its pin type travels on; one whose type source alone does not say is listed
-with no family, and a node whose ports only its native half knows is listed with none. A node
+with its annotation as written, and a node whose ports only its native half knows is listed with
+none. A node
 declared in a retired form, and a retired name imported, is no node type: each is read only to
 be refused where it is written. A record a function node returns is read where it is defined: in its own module or
 in another of the same source that the module imports it from, so a `NamedTuple` imported from
@@ -36,8 +36,6 @@ from ._node_type_source_records import (
     imported_names_by_local_name,
     named_tuples_called_by_name,
 )
-from ._pin_family import family_a_pin_type_travels_on
-from ._pin_types import PIN_TYPE_SPELLINGS
 from ._retired_declarations import (
     RETIRED_DECLARATIONS,
     RETIRED_IMPORTS_BY_NAME,
@@ -64,14 +62,6 @@ DESCRIPTION_DECLARATION = f"{SDK_MODULE_NAME}.Description"
 
 # The text a module that declares a node or a generator must hold: it imports the SDK.
 SDK_IMPORT_MARKER = "tatolab"
-
-# The family a port travels on, by the type its annotation names: each built-in pin type an
-# author writes by one name, as the SDK spells it.
-_PORT_FAMILY_OF_EACH_PIN_TYPE_WRITTEN_FORM = {
-    spelling.written_form: family_a_pin_type_travels_on({"type": spelling.pin_type_name})
-    for spelling in PIN_TYPE_SPELLINGS
-    if spelling.pin_type_name != "list_of"
-}
 
 _NODE_META_KEYS = ("category", "description")
 
@@ -371,7 +361,6 @@ class _ModuleDeclarationReading:
         or an `OutputPin`, in the order written; `_private` and `ClassVar` ones are state."""
         inputs: list[dict[str, Any]] = []
         outputs: list[dict[str, Any]] = []
-        bound_of_each_type_parameter = _the_bound_of_each_type_parameter_of(node_class)
         for statement in node_class.body:
             if not isinstance(statement, ast.AnnAssign) or not isinstance(statement.target, ast.Name):
                 continue
@@ -381,11 +370,6 @@ class _ModuleDeclarationReading:
                 continue
             port: dict[str, Any] = {
                 "name": _port_name_as_cast(attribute_name),
-                "family": _function_port_family(
-                    _read_with_each_type_parameter_as_its_bound(
-                        type_annotation, bound_of_each_type_parameter
-                    )
-                ),
                 "description": self._described_text_of(statement.annotation)
                 or self._described_text_of(type_annotation),
                 "annotation": ast.unparse(statement.annotation),
@@ -576,7 +560,6 @@ class _ModuleDeclarationReading:
     ) -> dict[str, Any]:
         function_port: dict[str, Any] = {
             "name": _port_name_as_cast(spelling),
-            "family": _function_port_family(annotation),
             "description": self._described_text_of(annotation),
             "annotation": None if annotation is None else ast.unparse(annotation),
         }
@@ -815,55 +798,6 @@ def _annotated_type_name(annotation: Optional[ast.expr]) -> Optional[str]:
             return None
     dotted_name = _dotted_name_of(annotation)
     return None if dotted_name is None else dotted_name.rsplit(".", 1)[-1]
-
-
-def _function_port_family(annotation: Optional[ast.expr]) -> Optional[str]:
-    """The family a function or shader port's annotation types, or `None` where source alone does not say."""
-    if annotation is None:
-        return None
-    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
-        try:
-            return _function_port_family(ast.parse(annotation.value, mode="eval").body)
-        except SyntaxError:
-            return None
-    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
-        for side, other_side in ((annotation.left, annotation.right), (annotation.right, annotation.left)):
-            if isinstance(other_side, ast.Constant) and other_side.value is None:
-                return _function_port_family(side)
-        return None
-    type_name = _annotated_type_name(annotation)
-    if isinstance(annotation, ast.Subscript):
-        arguments = _subscript_arguments(annotation)
-        if type_name == _OPTIONAL_ANNOTATION and arguments:
-            return _function_port_family(arguments[0])
-        if type_name == _ANNOTATED_ANNOTATION and arguments:
-            return _function_port_family(arguments[0])
-    if type_name is None:
-        return None
-    return _PORT_FAMILY_OF_EACH_PIN_TYPE_WRITTEN_FORM.get(type_name)
-
-
-def _the_bound_of_each_type_parameter_of(node_class: ast.ClassDef) -> dict[str, ast.expr]:
-    """Each type parameter the class statement binds to a type, `class X[Frame: Texture]`, by its name."""
-    return {
-        type_parameter.name: type_parameter.bound
-        for type_parameter in node_class.type_params
-        if isinstance(type_parameter, ast.TypeVar) and type_parameter.bound is not None
-    }
-
-
-def _read_with_each_type_parameter_as_its_bound(
-    annotation: ast.expr, bound_of_each_type_parameter: dict[str, ast.expr]
-) -> ast.expr:
-    """`annotation` with each name of a bound type parameter written as its bound, so a pin
-    typed `Frame` of `[Frame: Texture]` is read as a `Texture` pin."""
-    if isinstance(annotation, ast.Name):
-        return bound_of_each_type_parameter.get(annotation.id, annotation)
-    if isinstance(annotation, ast.Subscript) and _annotated_type_name(annotation) == _ANNOTATED_ANNOTATION:
-        arguments = _subscript_arguments(annotation)
-        if arguments and isinstance(arguments[0], ast.Name):
-            return bound_of_each_type_parameter.get(arguments[0].id, annotation)
-    return annotation
 
 
 def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:

@@ -22,15 +22,13 @@ fn layers() -> serde_json::Value {
         "description": "The layers, the bottom one first.",
         "inputs": [
             {
-                "name": "picture", "description": "", "family": {"family": "image"},
-                "pin_declaration": {
+                "name": "picture", "description": "", "pin_declaration": {
                     "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
                     "flow": "stream",
                 },
             },
             {
-                "name": "opacity", "description": "", "family": {"family": "channels"},
-                "pin_declaration": {
+                "name": "opacity", "description": "", "pin_declaration": {
                     "pin_type": {"kind": "is", "pin_type": {"type": "float"}},
                     "flow": "value",
                 },
@@ -89,8 +87,7 @@ fn a_group_holding_only_outputs_has_its_count_set() {
         "name": "elements", "description": "",
         "inputs": [],
         "outputs": [{
-            "name": "element", "description": "", "family": {"family": "channels"},
-            "pin_declaration": {
+            "name": "element", "description": "", "pin_declaration": {
                 "pin_type": {"kind": "is", "pin_type": {"type": "float"}},
                 "flow": "value",
             },
@@ -136,17 +133,17 @@ fn a_pin_group_no_node_type_may_declare_is_refused_naming_it() {
 }
 
 #[test]
-fn a_slot_input_declaring_no_family_is_refused_naming_the_group() {
-    let mut no_family = layers();
-    no_family["inputs"][0]
+fn a_slot_input_declaring_no_pin_type_is_refused_naming_the_group() {
+    let mut no_pin_type = layers();
+    no_pin_type["inputs"][0]
         .as_object_mut()
         .expect("an input is a dict")
-        .remove("family");
+        .remove("pin_declaration");
 
     assert!(
         refusal_of(&a_described_class_node_with_pin_groups(serde_json::json!(
-            [no_family]
+            [no_pin_type]
         )))
-        .contains("port \"picture\" declares no family")
+        .contains("port \"picture\" declares no pin type")
     );
 }

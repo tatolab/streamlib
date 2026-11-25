@@ -433,11 +433,11 @@ impl StreamGraphTransactionExecutor<'_> {
                 project_repository,
             )
         };
-        let family_of_an_output_port = |end: &StreamGraphDocumentLinkEnd| {
+        let pin_type_of_an_output_port = |end: &StreamGraphDocumentLinkEnd| {
             let rendered_graph = self
                 .async_runtime
                 .block_on(stream_operations.to_json_async())?;
-            Ok(the_family_of_an_output_port_in(
+            Ok(the_pin_type_of_an_output_port_in(
                 &rendered_graph,
                 end,
                 &|node_type| stream_operations.the_ports_a_node_type_declares(node_type),
@@ -490,7 +490,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 run_the_graph_generator: &run_the_graph_generator,
                 place_the_imported_stream: &place_the_imported_stream,
                 document_of_a_placed_stream: &document_of_a_placed_stream,
-                family_of_an_output_port: &family_of_an_output_port,
+                pin_type_of_an_output_port: &pin_type_of_an_output_port,
                 function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
                 convert_node_a_link_needs: &convert_node_a_link_needs,
                 refuse_a_link_judged_before_commit: &refuse_a_link_judged_before_commit,

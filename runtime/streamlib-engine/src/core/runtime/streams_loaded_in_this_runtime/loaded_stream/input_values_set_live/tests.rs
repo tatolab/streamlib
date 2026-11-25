@@ -709,8 +709,8 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
     );
 }
 
-/// A string set live on a Channels input of a function node run in a helper of its own is
-/// refused, as that helper reads only a number or a bool there, and the saved value still reads.
+/// A string set live on a Float input of a function node, read inside an island or run in a
+/// helper of its own, is refused, and the saved value still reads.
 ///
 /// Mental-revert: holding the string live hands the helper no value for the input, and the live
 /// string hides the saved one in `graph`.
@@ -726,10 +726,8 @@ fn a_string_set_live_on_a_function_node_in_a_helper_of_its_own_is_refused() {
     let remap_uuid = the_uuid_of(&graph, &remap);
     let graph = RwLock::new(graph);
     assert!(
-        the_values_set_live(&graph, &[a_set(remap_uuid, "x", Some(json!("loud")))])
-            .unwrap()
-            .is_some(),
-        "a function node read inside an island is handed the string whole"
+        the_values_set_live(&graph, &[a_set(remap_uuid, "x", Some(json!("loud")))]).is_err(),
+        "a Float input of a function node read inside an island refuses a string"
     );
     graph
         .read()

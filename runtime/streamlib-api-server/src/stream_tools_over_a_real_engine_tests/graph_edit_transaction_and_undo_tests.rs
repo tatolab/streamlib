@@ -3,7 +3,7 @@
 
 //! Graph edits are transactions: kept across a restart, undone per author, read back from the
 //! change feed when refused, and applied once under an idempotency key; and an interface node
-//! added with no port or family takes the next free input name or its first link's family.
+//! added with no port or pin type takes the next free input name or its first link's pin type.
 
 use super::*;
 
@@ -202,14 +202,14 @@ async fn an_interface_node_added_with_no_pin_type_takes_the_pin_type_of_its_firs
         linked_output["components"]["graph_interface"],
         json!({
             "direction": "output", "port": "output1",
-            "pin_type": { "type": "texture" },
+            "pin_type": { "type": "texture", "pixel_formats": ["rgba8_unorm"] },
         }),
         "{linked_output}"
     );
     assert_eq!(linked_output["input_values"], json!({ "port": "output1" }));
 }
 
-/// A top-level `GraphInput` naming its family that a transaction adds, renames, gives another
+/// A top-level `GraphInput` choosing its pin type that a transaction adds, renames, gives another
 /// port, moves or takes out renders as one loaded from its document does, with no reload: its
 /// interface with the value it carries.
 #[tokio::test(flavor = "multi_thread")]
@@ -244,7 +244,7 @@ async fn a_graph_input_a_transaction_adds_renames_and_takes_out_renders_its_inte
             { "operation": "add_node", "stream": stream_asset,
               "type": "tatolab.stream:GraphInput", "as": "t" },
             set_on_t("port", json!("tint")),
-            set_on_t("family", json!("array")),
+            set_on_t("pin_type", json!({ "type": "tensor" })),
             set_on_t("default", json!([1, 0.5, 0.25])),
             set_on_t("range", json!([0, 1])),
         ]))

@@ -302,7 +302,7 @@ impl RefusalCodeAndPlace {
             | Error::NodeConfigRefused { .. }
             | Error::DescriptorPortNameNotCast { .. }
             | Error::DescriptorPortNameDeclaredTwice { .. }
-            | Error::StreamFactsOfAnotherFamily(_)
+            | Error::StreamFactsOfAnotherPinType(_)
             | Error::Configuration(_)
             | Error::CaptureDeviceAccessNeverAskedFor { .. }
             | Error::Config(_)

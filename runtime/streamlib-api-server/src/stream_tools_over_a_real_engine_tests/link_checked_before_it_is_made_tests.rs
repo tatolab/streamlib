@@ -7,8 +7,7 @@
 
 use streamlib::sdk::descriptors::{
     AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
-    NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration,
+    NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor,
 };
 use streamlib_node_schema::pin_type::{PinLinkWarning, VectorComponentCount};
 
@@ -28,7 +27,7 @@ fn a_project_whose_main_stream_holds_a_mixer_and_a_graph_input() -> ProjectWithG
     let mut graph = project.the_graph_document_of("main");
     graph["nodes"].as_array_mut().expect("nodes").push(json!({
         "id": VOLUME_GRAPH_INPUT_NODE_UUID, "name": "volume", "type": "tatolab.stream:GraphInput",
-        "input_values": { "port": "volume", "family": "channels" },
+        "input_values": { "port": "volume", "pin_type": { "type": "float" } },
     }));
     project.write_the_graph_document(graph);
     project
@@ -88,7 +87,7 @@ async fn check_link_answers_the_refusal_connect_answers_for_each_link_it_refuses
             ),
         ),
         (
-            "a typed output into an untyped input whose family refuses it",
+            "a Float into a Texture input",
             the_link(
                 stream.clone(),
                 (MIXER_NODE_UUID, "level"),
@@ -264,12 +263,12 @@ async fn check_link_answers_what_connect_answers_for_a_link_inside_a_placed_stre
     assert_eq!(project.the_graph_document_of("sub"), sub_before);
 }
 
-/// The function node type `node_type`, taking `inputs`, each a Records input or, with an audio
-/// window, a Channels one declaring it, and giving `outputs`, each of its family.
+/// The function node type `node_type`, taking `inputs`, each a Float input or, with an audio
+/// window, an Audio one declaring it, and giving `outputs`, each of its pin type.
 fn a_function_node_type(
     node_type: &str,
     inputs: &[(&str, Option<AudioWindowContract>)],
-    outputs: &[(&str, PortFamily)],
+    outputs: &[(&str, PinType)],
 ) -> NodeDescriptor {
     let node_type = NodeClassImportPath::new(node_type).expect("a node type");
     let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
@@ -282,64 +281,55 @@ fn a_function_node_type(
         language: FunctionNodeLanguage::Python,
     };
     for (input, audio_window) in inputs {
-        let family = match audio_window {
-            Some(_) => PortFamily::Channels,
-            None => PortFamily::Records,
+        let pin_type = match audio_window {
+            Some(_) => PinType::Audio {},
+            None => PinType::Float { exact_size: None },
         };
-        let mut port =
-            PortDescriptor::new(*input, "", true, PortFamilyDeclaration::of_family(family))
-                .with_delivery_profile("newest");
+        let mut port = PortDescriptor::new(*input, "", true, PinDeclaration::exactly(pin_type))
+            .with_delivery_profile("newest");
         port.audio_window = audio_window.clone();
         descriptor = descriptor.with_input(port);
     }
-    for (output, family) in outputs {
+    for (output, pin_type) in outputs {
         descriptor = descriptor.with_output(PortDescriptor::new(
             *output,
             "",
             true,
-            PortFamilyDeclaration::of_family(*family),
+            PinDeclaration::exactly(pin_type.clone()),
         ));
     }
     descriptor
 }
 
 /// A pass-through stand-in for the `PreviousValue` node type a loop of function nodes closes
-/// through, not the node interpreter's own, which takes and gives a Float: it takes a value of
-/// any type into `value`, of the Records or the Channels family, and gives it back on `result`
-/// as the type and family of the link into `value`. A link closing a loop inside a placed
-/// stream has the links through the node judged among the level's nodes, and these tests close
-/// loops carrying Records as well as Floats, so the stand-in passes each through as it came.
+/// through, not the node interpreter's own, which takes and gives a Float: it takes a value of any
+/// type into `value` and gives it back on `result` as the type of the link into `value`. A link
+/// closing a loop inside a placed stream has the links through the node judged among the level's
+/// nodes, and these tests close loops of Floats, so the stand-in passes each through as it came.
 fn a_previous_value_node_type() -> NodeDescriptor {
     let any_flow = PinDeclaration::exactly(PinType::Float { exact_size: None });
-    let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
-    value_family.also_takes_families = vec![PortFamily::Channels];
     let value = PortDescriptor::new(
         streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT,
         "",
         true,
-        value_family,
+        PinDeclaration {
+            pin_type: DeclaredPinType::Any,
+            ..any_flow.clone()
+        },
     )
-    .with_delivery_profile("newest")
-    .with_pin_declaration(PinDeclaration {
-        pin_type: DeclaredPinType::Any,
-        ..any_flow.clone()
-    });
-    let mut result_family = PortFamilyDeclaration::of_family(PortFamily::Records);
-    result_family.family_follows_input_port =
-        Some(streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT.to_owned());
+    .with_delivery_profile("newest");
     let result = PortDescriptor::new(
         streamlib_project_repository::PREVIOUS_VALUE_NODE_OUTPUT_PORT,
         "",
         true,
-        result_family,
-    )
-    .with_pin_declaration(PinDeclaration {
-        pin_type: DeclaredPinType::SameAsInput {
-            input_port_name: streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT
-                .to_owned(),
+        PinDeclaration {
+            pin_type: DeclaredPinType::SameAsInput {
+                input_port_name: streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT
+                    .to_owned(),
+            },
+            ..any_flow
         },
-        ..any_flow
-    });
+    );
     a_function_node_type(
         streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
         &[],
@@ -381,16 +371,7 @@ fn a_node_type_with_a_port_meaning(
     let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
     let mut pin = PinDeclaration::exactly(pin_type.clone());
     pin.annotations.meaning = Some(meaning.to_owned());
-    let port = PortDescriptor::new(
-        port,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(
-            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-        ),
-    )
-    .with_delivery_profile("newest")
-    .with_pin_declaration(pin);
+    let port = PortDescriptor::new(port, "", true, pin).with_delivery_profile("newest");
     let descriptor = NodeDescriptor::new(
         NodeClassShortName::new(short_name).expect("a short name"),
         node_type,
@@ -410,17 +391,21 @@ pub(super) fn register_the_link_check_node_types_once() {
     REGISTERED.call_once(|| {
         for descriptor in [
             a_previous_value_node_type(),
-            a_function_node_type(LFO_TYPE, &[], &[("result", PortFamily::Records)]),
-            a_function_node_type(WAVE_TYPE, &[], &[("result", PortFamily::Channels)]),
+            a_function_node_type(
+                LFO_TYPE,
+                &[],
+                &[("result", PinType::Float { exact_size: None })],
+            ),
+            a_function_node_type(WAVE_TYPE, &[], &[("result", PinType::Audio {})]),
             a_function_node_type(
                 MIX_TYPE,
                 &[("a", None), ("b", None)],
-                &[("result", PortFamily::Records)],
+                &[("result", PinType::Float { exact_size: None })],
             ),
             a_function_node_type(
                 REMAP_TYPE,
                 &[("x", None)],
-                &[("result", PortFamily::Records)],
+                &[("result", PinType::Float { exact_size: None })],
             ),
             a_function_node_type(
                 WINDOWED_TYPE,

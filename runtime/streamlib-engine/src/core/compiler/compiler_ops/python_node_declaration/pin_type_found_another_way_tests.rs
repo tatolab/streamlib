@@ -18,7 +18,6 @@ fn described_with(
     let port = |(name, pin_type): &(&str, serde_json::Value)| {
         serde_json::json!({
             "name": name,
-            "family": {"family": "records"},
             "description": "",
             "delivery_profile": "newest",
             "pin_declaration": {"pin_type": pin_type, "flow": "value"},
@@ -135,7 +134,7 @@ fn a_64_bit_integer_on_a_single_pin_is_refused_with_the_reason() {
 }
 
 /// A typed function node as bare `@node` describes `def Gate[PinValue](value: PinValue, open:
-/// bool = True) -> PinValue | None`: `value` takes any type on every family, and `result`
+/// bool = True) -> PinValue | None`: `value` takes any type, and `result`
 /// follows it, both handed on unread.
 fn a_described_function_node_passing_its_input_on() -> serde_json::Value {
     serde_json::json!({
@@ -154,16 +153,11 @@ fn a_described_function_node_passing_its_input_on() -> serde_json::Value {
             {
                 "name": "value",
                 "description": "",
-                "family": {
-                    "family": "image",
-                    "also_takes_families": ["array", "channels", "packets", "records"],
-                },
                 "pin_declaration": {"pin_type": {"kind": "any"}, "flow": "value"},
             },
             {
                 "name": "open",
                 "description": "",
-                "family": {"family": "channels"},
                 "pin_declaration": {
                     "pin_type": {"kind": "is", "pin_type": {"type": "boolean"}},
                     "flow": "value",
@@ -175,7 +169,6 @@ fn a_described_function_node_passing_its_input_on() -> serde_json::Value {
             {
                 "name": "result",
                 "description": "",
-                "family": {"family": "image", "family_follows_input_port": "value"},
                 "pin_declaration": {
                     "pin_type": {"kind": "same_as_input", "input_port_name": "value"},
                     "flow": "value",
@@ -258,7 +251,6 @@ fn a_described_hold_frame() -> serde_json::Value {
             {
                 "name": "frame",
                 "description": "",
-                "family": {"family": "image"},
                 "pin_declaration": {
                     "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
                     "flow": "value",
@@ -269,7 +261,6 @@ fn a_described_hold_frame() -> serde_json::Value {
             {
                 "name": "refresh",
                 "description": "",
-                "family": {"family": "channels"},
                 "pin_declaration": {
                     "pin_type": {"kind": "is", "pin_type": {"type": "boolean"}},
                     "flow": "value",
@@ -281,7 +272,6 @@ fn a_described_hold_frame() -> serde_json::Value {
             {
                 "name": "result",
                 "description": "",
-                "family": {"family": "image", "family_follows_input_port": "frame"},
                 "pin_declaration": {
                     "pin_type": {"kind": "same_as_input", "input_port_name": "frame"},
                     "flow": "value",

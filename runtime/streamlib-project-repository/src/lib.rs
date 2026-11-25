@@ -164,7 +164,7 @@ pub use stream_graph_default_port_and_variable_names::{
     config_holding_the_default_name_of_a_graph_port_or_variable,
 };
 pub use stream_graph_document::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, NodeNotRead,
     PREVIOUS_VALUE_NODE_INPUT_PORT, PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
@@ -191,9 +191,10 @@ pub use streamlib_node_schema::CONSTANT_NODE_TYPE;
 /// staged imports and the project's store.
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
 pub use tatolab_view_manifest::{
-    FAMILIES_A_PANEL_WRITES, TatolabViewAcceptedFiles, TatolabViewCapability,
-    TatolabViewDeclaredPort, TatolabViewManifest, TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR,
-    VIEW_CONTRACT_READ_MINOR, a_panel_writes, read_tatolab_view_manifest,
+    TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,
+    TatolabViewPlacement, TatolabViewPortFamily, VIEW_CONTRACT_READ_MAJOR,
+    VIEW_CONTRACT_READ_MINOR, a_panel_writes, is_a_type_a_panel_writes_a_value_of,
+    read_tatolab_view_manifest,
 };
 #[cfg(feature = "history")]
 pub use view_manifest_check::{ViewManifestsChecked, check_a_projects_view_manifests};

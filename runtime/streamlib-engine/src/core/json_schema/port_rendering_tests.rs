@@ -2,34 +2,42 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
-/// Every key a rendered port with no exact pin type carries. A port that
-/// grows another field fails here, whatever the field is named.
-const PORT_INFO_KEYS: [&str; 4] = ["name", "description", "port_kind", "delivery_profile"];
-/// A picture port is a Texture, so it serves its pin type and flow beside its family.
-const PORT_DESCRIPTOR_OF_A_PICTURE_KEYS: [&str; 7] = [
-    "name",
-    "description",
-    "required",
-    "delivery_profile",
-    "family",
-    "pin_type",
-    "flow",
-];
-const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 5] = [
+/// Every key a rendered port with no pin type carries, its values unchecked. A port that grows
+/// another field fails here, whatever the field is named.
+const PORT_INFO_KEYS: [&str; 5] = [
     "name",
     "description",
     "port_kind",
     "delivery_profile",
+    "values_checked",
+];
+/// A picture port is a Texture, so it serves its pin type and flow.
+const PORT_DESCRIPTOR_OF_A_PICTURE_KEYS: [&str; 6] = [
+    "name",
+    "description",
+    "required",
+    "delivery_profile",
+    "pin_type",
+    "flow",
+];
+const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 6] = [
+    "name",
+    "description",
+    "port_kind",
+    "delivery_profile",
+    "values_checked",
     "audio_window",
 ];
-const PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS: [&str; 6] = [
+const PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS: [&str; 7] = [
     "name",
     "description",
     "required",
     "delivery_profile",
     "audio_window",
-    "family",
+    "pin_type",
+    "flow",
 ];
 const FORBIDDEN_PORT_TYPE_KEYS: [&str; 4] = ["data_type", "schema", "type", "schema_ident"];
 
@@ -54,8 +62,8 @@ fn assert_carries_no_type_key(json: &serde_json::Value) {
     }
 }
 
-/// The contract is opt-in: a port declaring none renders exactly the four
-/// keys it always did, with no `audio_window` present as a null.
+/// The contract is opt-in: a port declaring none renders exactly the keys it always did, with no
+/// `audio_window` present as a null.
 #[test]
 fn port_info_output_renders_exactly_the_declared_keys() {
     let port = crate::core::graph::PortInfo {
@@ -70,9 +78,6 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
         input_mode: None,
         annotations: Default::default(),
     };
@@ -86,7 +91,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
 }
 
 fn a_node_whose_output_is(
-    family: crate::core::descriptors::PortFamily,
+    pin_type: Option<crate::core::descriptors::PinType>,
     input_values: Option<serde_json::Value>,
     frame_rate: Option<crate::core::descriptors::ImageOutputPortFrameRate>,
 ) -> crate::core::graph::GraphNode {
@@ -106,25 +111,21 @@ fn a_node_whose_output_is(
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
-            // An Image port is a Texture, whose stream facts `graph` names by that pin type.
-            pin: (family == crate::core::descriptors::PortFamily::Image).then(|| {
-                crate::core::descriptors::ResolvedPin {
-                    pin_type: crate::core::descriptors::PinType::Texture {
-                        pixel_formats: Vec::new(),
-                    },
-                    flow: crate::core::descriptors::PinFlow::Stream,
-                }
+            pin: pin_type.map(|pin_type| crate::core::descriptors::ResolvedPin {
+                flow: pin_type.default_flow(),
+                pin_type,
             }),
             declared_pin_type: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             former_names: Vec::new(),
             may_be_unset: false,
-            family: crate::core::descriptors::PortFamilyDeclaration {
-                frame_rate,
-                ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
-            },
             input_mode: None,
-            annotations: Default::default(),
+            annotations: crate::core::graph::PortAnnotations(
+                crate::core::descriptors::PinAnnotations {
+                    frame_rate,
+                    ..Default::default()
+                },
+            ),
         }],
     )
 }
@@ -174,13 +175,10 @@ fn a_node_whose_one_setting_is_read(
             "port",
             "",
             false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Records,
+            crate::core::descriptors::PinDeclaration::exactly(
+                crate::core::descriptors::PinType::String {},
             ),
         )
-        .with_pin_declaration(crate::core::descriptors::PinDeclaration::exactly(
-            crate::core::descriptors::PinType::String {},
-        ))
         .with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly { read }),
     );
     crate::core::graph::GraphNode::new(
@@ -231,9 +229,7 @@ fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
         );
     }
     let output = serde_json::to_value(GraphNodeOutput::from(&a_node_whose_output_is(
-        crate::core::descriptors::PortFamily::Records,
-        None,
-        None,
+        None, None, None,
     )))
     .unwrap();
     assert!(
@@ -272,7 +268,9 @@ fn a_catalog_entry_renders_its_kind_and_a_function_node_its_language_beside_it()
 #[test]
 fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_facts() {
     let rendered = serde_json::to_value(GraphNodeOutput::from(&a_node_whose_output_is(
-        crate::core::descriptors::PortFamily::Image,
+        Some(crate::core::descriptors::PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
         Some(serde_json::json!({"frames_per_second": 30})),
         Some(
             crate::core::descriptors::ImageOutputPortFrameRate::FromSetting {
@@ -297,13 +295,14 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
             "pin_type",
             "flow",
             "stream_facts",
+            "annotations",
         ],
     );
 }
 
 #[test]
 fn an_output_port_with_no_pin_type_renders_none_of_the_facts_it_carries() {
-    let node = a_node_whose_output_is(crate::core::descriptors::PortFamily::Packets, None, None);
+    let node = a_node_whose_output_is(None, None, None);
     let unstated = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_renders_exactly(&unstated["ports"]["outputs"][0], &PORT_INFO_KEYS);
 
@@ -318,7 +317,7 @@ fn an_output_port_with_no_pin_type_renders_none_of_the_facts_it_carries() {
             }
             .into(),
         )
-        .expect("a Packets port carries Packets facts");
+        .expect("a port with no pin type holds the facts its node sets");
     let replaced = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_eq!(
         replaced["ports"]["outputs"][0].get("stream_facts"),
@@ -328,21 +327,19 @@ fn an_output_port_with_no_pin_type_renders_none_of_the_facts_it_carries() {
 }
 
 #[test]
-fn a_records_port_renders_its_values_unchecked_in_the_graph_and_the_registry() {
-    let node = a_node_whose_output_is(crate::core::descriptors::PortFamily::Records, None, None);
+fn a_port_of_no_pin_type_renders_its_values_unchecked_in_the_graph_and_the_registry() {
+    let node = a_node_whose_output_is(None, None, None);
     let rendered = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_eq!(
         rendered["ports"]["outputs"][0]["values_checked"],
         serde_json::json!(false)
     );
 
-    let declared = crate::core::PortDescriptor::new(
+    let declared = crate::core::PortDescriptor::of_a_pin_declared_or_not(
         "detections",
         "Detections",
-        true,
-        crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Records,
-        ),
+        false,
+        None,
     );
     let json = serde_json::to_value(PortDescriptorOutput::from(&declared)).unwrap();
     assert_eq!(json["values_checked"], serde_json::json!(false));
@@ -354,7 +351,6 @@ fn a_records_port_renders_its_values_unchecked_in_the_graph_and_the_registry() {
             "required",
             "delivery_profile",
             "values_checked",
-            "family",
         ],
     );
 }
@@ -375,9 +371,6 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
         input_mode: None,
         annotations: Default::default(),
     };
@@ -391,9 +384,9 @@ fn a_picture_ports_descriptor_renders_its_pin_type_and_flow_and_no_retired_type_
         "video",
         "Video output",
         true,
-        crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
     )
     .with_delivery_profile("ordered");
     let json = serde_json::to_value(PortDescriptorOutput::from(&pd)).unwrap();
@@ -416,15 +409,7 @@ fn a_typed_ports_descriptor_renders_the_range_unit_and_meaning_its_pin_declares(
     });
     declaration.annotations.unit = Some("Hz".to_owned());
     declaration.annotations.meaning = Some("frequency".to_owned());
-    let port = crate::core::PortDescriptor::new(
-        "frequency",
-        "",
-        true,
-        crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Channels,
-        ),
-    )
-    .with_pin_declaration(declaration);
+    let port = crate::core::PortDescriptor::new("frequency", "", true, declaration);
 
     let json = serde_json::to_value(PortDescriptorOutput::from(&port)).unwrap();
 
@@ -465,9 +450,6 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
         input_mode: None,
         annotations: Default::default(),
     };
@@ -513,9 +495,6 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
         input_mode: None,
         annotations: Default::default(),
     };
@@ -549,9 +528,6 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         former_names: Vec::new(),
         may_be_unset: false,
-        family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
-        ),
         input_mode: None,
         annotations: Default::default(),
     };
@@ -588,9 +564,6 @@ fn a_node_declaring_the_sentinel(
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             former_names: Vec::new(),
             may_be_unset: false,
-            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
             input_mode: None,
             annotations: Default::default(),
         }],
@@ -688,9 +661,7 @@ fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
         "audio",
         "Samples to frame",
         true,
-        crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Channels,
-        ),
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
     )
     .with_delivery_profile("ordered")
     .with_audio_window_contract(declared_window_contract());
@@ -706,9 +677,7 @@ fn a_contract_bearing_descriptor_renders_its_contract_too() {
         "audio",
         "Samples to frame",
         true,
-        crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Channels,
-        ),
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
     )
     .with_delivery_profile("ordered")
     .with_audio_window_contract(crate::core::descriptors::AudioWindowContract::MatchDevice {});

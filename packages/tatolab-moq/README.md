@@ -28,11 +28,11 @@ from tatolab.moq import MoqGateway, MoqTrack, MoqTrackReceive, MoqTrackSend
 - `MoqTrack` declares one track of a gateway's broadcast: `gateway` (the reference `add`
   returned), `track`, and an optional `catalog` entry replacing its send's upstream entry. It has
   no ports; hold it in a `SetVariable` and read it anywhere with a `GetVariable`.
-- `MoqTrackSend` writes each message of `content` (Packets, Records, Channels or CPU-resident
-  Array) to the `track` it names by reference. One send per track.
+- `MoqTrackSend` writes each message of `content` (encoded media, a record, Audio or a
+  CPU-resident Tensor) to the `track` it names by reference. One send per track.
 - `MoqTrackReceive` reads `track` of `broadcast` at the relay its `gateway` dials, each name
-  exactly as its publisher wrote it, and writes it on `content` as `family` (`packets` with a
-  `codec`, or `records`), stamped on this machine's clock. `max_age` is how late a group may
+  exactly as its publisher wrote it, and writes it on `content` as the type `content_type` chooses
+  (encoded video or audio of one codec, or a MoQ record), stamped on this machine's clock. `max_age` is how late a group may
   arrive, in milliseconds of the track's own time; 100 by default.
 
 The send, track and receive nodes reach their gateway over iceoryx2 shared memory; only the

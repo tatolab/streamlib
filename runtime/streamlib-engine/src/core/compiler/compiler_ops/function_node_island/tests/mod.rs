@@ -3,12 +3,12 @@
 
 //! Fixtures shared by the evaluation island's tests.
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use std::sync::Arc;
 
 use super::*;
 use crate::core::descriptors::{
     FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
-    PortFamily, PortFamilyDeclaration,
 };
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -41,7 +41,7 @@ pub(crate) fn a_function_node_type(
                 *input_port,
                 "",
                 true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
+                PinDeclaration::exactly(PinType::Float { exact_size: None }),
             )
             .with_delivery_profile("newest"),
         );
@@ -51,7 +51,7 @@ pub(crate) fn a_function_node_type(
             *output_port,
             "",
             true,
-            PortFamilyDeclaration::of_family(PortFamily::Channels),
+            PinDeclaration::exactly(PinType::Float { exact_size: None }),
         ));
     }
     descriptor

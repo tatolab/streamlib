@@ -12,8 +12,7 @@ use super::*;
 fn a_described_class_node_with_typed_fields() -> serde_json::Value {
     described_node_type_with_input_ports(serde_json::json!([
         {
-            "name": "quality", "description": "", "family": {"family": "records"},
-            "pin_declaration": {
+            "name": "quality", "description": "", "pin_declaration": {
                 "pin_type": {"kind": "is", "pin_type": {"type": "menu", "option_names": ["fast", "fine"]}},
                 "flow": "value",
             },
@@ -22,8 +21,7 @@ fn a_described_class_node_with_typed_fields() -> serde_json::Value {
             "lifetime": "reset",
         },
         {
-            "name": "wet", "description": "", "family": {"family": "channels"},
-            "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
+            "name": "wet", "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
             "pin_default": 1.0,
             "input_mode": {"mode": "wire_only"},
         },
@@ -70,9 +68,10 @@ fn a_mode_or_lifetime_off_a_typed_input_is_refused_naming_the_port() {
     let mut unknown_mode = a_described_class_node_with_typed_fields();
     unknown_mode["input_ports"][0]["input_mode"] = serde_json::json!({"mode": "sometimes"});
 
+    let refusal = refusal_of(&mode_on_an_untyped_input);
     assert!(
-        refusal_of(&mode_on_an_untyped_input)
-            .contains("input port \"wet\" declares an input_mode and no pin type")
+        refusal.contains("\"wet\"") && refusal.contains("no pin type"),
+        "{refusal}"
     );
     assert!(refusal_of(&lifetime_on_an_output).contains("port \"levels\" declares a lifetime"));
     assert!(refusal_of(&unknown_mode).contains("input port \"quality\": input_mode"));

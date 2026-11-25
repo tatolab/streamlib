@@ -8,7 +8,14 @@ use super::*;
 #[test]
 fn a_reader_reaches_the_stream_facts_of_the_class_node_an_island_hands_on_unread() {
     let mut gate = a_function_node_type("test_ops:gate", &["value"], &["result"]);
-    gate.outputs[0].family.family_follows_input_port = Some("value".into());
+    gate.outputs[0].pin_declaration = Some(crate::core::descriptors::PinDeclaration {
+        pin_type: crate::core::descriptors::DeclaredPinType::SameAsInput {
+            input_port_name: "value".into(),
+        },
+        ..crate::core::descriptors::PinDeclaration::exactly(
+            crate::core::descriptors::PinType::Float { exact_size: None },
+        )
+    });
     let mut graph = a_graph_resolving_these_function_node_types([
         gate,
         a_function_node_type("test_ops:remap", &["x"], &["result"]),

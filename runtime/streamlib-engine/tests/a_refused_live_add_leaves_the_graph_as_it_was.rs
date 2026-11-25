@@ -98,15 +98,14 @@ fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
             "id": Uuid::new_v4(),
             "name": "leak_probe",
             "type": "tatolab.stream:GraphInput",
-            "input_values": {"port": "leak_probe", "family": "Channels"},
+            "input_values": {"port": "leak_probe", "pin_type": {"type": "video"}},
         }),
     )
-    .expect_err("a GraphInput naming no family is refused")
+    .expect_err("a GraphInput choosing no pin type is refused")
     .to_string();
 
     assert!(
-        refusal.contains("`GraphInput` node `leak_probe`")
-            && refusal.contains("names family \"Channels\""),
+        refusal.contains("`GraphInput` node `leak_probe`") && refusal.contains("`pin_type`"),
         "{refusal}"
     );
     assert_eq!(the_node_names_the_graph_answers(&stream), before);

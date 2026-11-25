@@ -569,7 +569,7 @@ fn a_refusal_names_both_ends_and_both_types() {
 /// Mental-revert: naming a node by the two ends' families tells a person to place a
 /// `ChannelsToRecords`, which the runtime does not register.
 #[test]
-fn a_refusal_no_stated_conversion_bridges_names_no_node_between_the_families() {
+fn a_refusal_no_stated_conversion_bridges_names_no_node() {
     let PinLinkOutcome::Refused(refusal) =
         the_outcome_between(&PinType::Audio {}, &PinType::String {})
     else {
@@ -658,7 +658,7 @@ fn a_link_one_built_in_conversion_bridges_goes_through_its_node() {
 }
 
 /// A conversion whose input states the formats it takes bridges only a Texture of those; an
-/// `nv12` Texture into a Tensor is refused naming no node, the family table's included.
+/// `nv12` Texture into a Tensor is refused naming no node.
 #[test]
 fn a_texture_of_a_format_no_conversion_takes_is_refused_naming_no_node() {
     use TexturePixelFormat::{Nv12, Rgba8Unorm};

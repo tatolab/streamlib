@@ -56,8 +56,8 @@ class OutputsRecordingEachWrite:
     def __init__(self) -> None:
         self.writes: "list[tuple[str, Any]]" = []
 
-    def write(self, port: str, frame: Any, *, family: str) -> None:
-        assert family == "image", "a placeholder frame is written as an Image frame"
+    def write(self, port: str, frame: Any, *, kind: str) -> None:
+        assert kind == "image_frame", "a placeholder frame is written as an Image frame"
         self.writes.append((port, frame))
 
 
@@ -67,13 +67,17 @@ class NodeContextOfTheTest:
         self._link_output_data_writer = OutputsRecordingEachWrite()
 
 
+def a_declaration_of(pin_type: "dict[str, Any]") -> "dict[str, Any]":
+    return {"pin_type": {"kind": "is", "pin_type": pin_type}, "flow": "stream"}
+
+
 def test_each_image_output_is_sent_one_frame_every_channel_zero_at_the_named_size():
     warnings: "list[tuple[str, dict]]" = []
     frames = TransparentFramesOnTheImageOutputsOfANodeNotReady(
         [
-            {"name": "video", "family": {"family": "image", "formats": ["rgba8_unorm"]}},
-            {"name": "matte", "family": {"family": "image"}},
-            {"name": "levels", "family": {"family": "records"}},
+            {"name": "video", "pin_declaration": a_declaration_of({"type": "texture", "pixel_formats": ["rgba8_unorm"]})},
+            {"name": "matte", "pin_declaration": a_declaration_of({"type": "texture"})},
+            {"name": "levels", "pin_declaration": a_declaration_of({"type": "string"})},
         ],
         lambda message, fields: warnings.append((message, fields)),
     )
@@ -93,7 +97,7 @@ def test_each_image_output_is_sent_one_frame_every_channel_zero_at_the_named_siz
 def test_a_frame_that_cannot_be_made_is_dropped_and_warned_of():
     warnings: "list[tuple[str, dict]]" = []
     frames = TransparentFramesOnTheImageOutputsOfANodeNotReady(
-        [{"name": "video", "family": {"family": "image"}}],
+        [{"name": "video", "pin_declaration": a_declaration_of({"type": "texture"})}],
         lambda message, fields: warnings.append((message, fields)),
     )
     context = NodeContextOfTheTest()

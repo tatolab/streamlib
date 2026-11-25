@@ -8,7 +8,7 @@
 
 use streamlib::sdk::descriptors::{
     NodeClassImportPath, NodeClassShortName, PinDeclaration, PinGroupDescriptor, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PortDescriptor,
 };
 
 use super::*;
@@ -27,10 +27,9 @@ fn a_float_port(name: &str) -> PortDescriptor {
         name,
         "",
         true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
     )
     .with_delivery_profile("newest")
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }))
 }
 
 fn a_node_type(node_type: &str) -> NodeDescriptor {

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The family types a read through a port attribute hands Python: a Channels
+//! The types of each kind of message a read through a port attribute hands Python: a Channels
 //! block's planar samples and an Array frame's CPU attributes, exported
 //! through DLPack, and a Packets unit's bytes, each borrowed in the sample it
 //! arrived in.

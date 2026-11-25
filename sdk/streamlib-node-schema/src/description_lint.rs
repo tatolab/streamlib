@@ -188,8 +188,8 @@ mod tests {
     use super::*;
     use crate::descriptors::PortDescriptor;
     use crate::{
-        NodeClassImportPath, NodeClassShortName, NodeValueLifetime, PortFamily,
-        PortFamilyDeclaration,
+        NodeClassImportPath, NodeClassShortName, NodeValueLifetime,
+        pin_type::{PinDeclaration, PinType},
     };
 
     fn port(name: &str, description: &str) -> PortDescriptor {
@@ -200,9 +200,10 @@ mod tests {
             delivery_profile: Some("newest".to_string()),
             borrow_quota: None,
             audio_window: None,
-            family: PortFamilyDeclaration::of_family(PortFamily::Image),
             pin_default: None,
-            pin_declaration: None,
+            pin_declaration: Some(PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            })),
             lifetime: NodeValueLifetime::Kept,
             input_mode: None,
         }

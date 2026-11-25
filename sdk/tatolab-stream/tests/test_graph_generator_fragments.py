@@ -31,23 +31,23 @@ CAMERA_NAMES = ["front", "back"]
 @graph_generator
 def invert_twice(stream_builder: StreamBuilder, strength: int = 4) -> None:
     """Two inverters between one Input and one Output."""
-    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": "packets"})
+    source = stream_builder.add(GraphInput, input_values={"port": "video"})
     first = stream_builder.add(FrameInverter, name="first", input_values={"strength": strength})
     second = stream_builder.add(FrameInverter, name="second")
     stream_builder.connect(source.output("value"), first.input("video_from_upstream"))
     stream_builder.connect(
         first.output("video_to_downstream"), second.input("video_from_upstream")
     )
-    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": "packets"})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video"})
     stream_builder.connect(second.output("video_to_downstream"), sink.input("value"))
 
 
 @graph_generator
 def look(stream_builder: StreamBuilder) -> None:
-    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": "packets"})
+    source = stream_builder.add(GraphInput, input_values={"port": "video"})
     soft = stream_builder.add(invert_twice, name="soft", strength=8)
     stream_builder.connect(source.output("value"), soft.input("video"))
-    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": "packets"})
+    sink = stream_builder.add(GraphOutput, input_values={"port": "video"})
     stream_builder.connect(soft.output("video"), sink.input("value"))
 
 
@@ -91,11 +91,11 @@ def places_one_that_names_a_clock(stream_builder: StreamBuilder) -> None:
 INVERT_TWICE_FRAGMENT: dict[str, Any] = {
     "nodes": [
         {"name": "graphinput", "type": GRAPH_INPUT_TYPE,
-         "input_values": {"port": "video", "family": "packets"}},
+         "input_values": {"port": "video"}},
         {"name": "first", "type": FRAME_INVERTER_TYPE, "input_values": {"strength": 8}},
         {"name": "second", "type": FRAME_INVERTER_TYPE, "input_values": {}},
         {"name": "graphoutput", "type": GRAPH_OUTPUT_TYPE,
-         "input_values": {"port": "video", "family": "packets"}},
+         "input_values": {"port": "video"}},
     ],
     "links": [
         {"source": {"node": "graphinput", "port": "value"},
@@ -106,7 +106,7 @@ INVERT_TWICE_FRAGMENT: dict[str, Any] = {
          "target": {"node": "graphoutput", "port": "value"}},
     ],
     "settings": [
-        {"name": "strength", "description": "", "family": {"family": "channels"},
+        {"name": "strength", "description": "",
          "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}},
                              "flow": "value"},
          "input_mode": {"mode": "setting_only", "read": "at_setup"},
@@ -123,11 +123,11 @@ def look_placed_as(name: str) -> dict[str, Any]:
         "fragment": {
             "nodes": [
                 {"name": "graphinput", "type": GRAPH_INPUT_TYPE,
-                 "input_values": {"port": "video", "family": "packets"}},
+                 "input_values": {"port": "video"}},
                 {"name": "soft", "type": "test_graph_generator_fragments:invert_twice",
                  "input_values": {"strength": 8}, "fragment": INVERT_TWICE_FRAGMENT},
                 {"name": "graphoutput", "type": GRAPH_OUTPUT_TYPE,
-                 "input_values": {"port": "video", "family": "packets"}},
+                 "input_values": {"port": "video"}},
             ],
             "links": [
                 {"source": {"node": "graphinput", "port": "value"},

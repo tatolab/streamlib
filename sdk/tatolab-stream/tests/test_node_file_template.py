@@ -52,11 +52,8 @@ def test_the_rendered_template_is_listed_as_a_node_type_of_the_project(tmp_path:
     assert node_type["type"] == "nodes.edge_glow:EdgeGlow"
     assert node_type["kind"] == "process"
     assert node_type["description"]
-    assert [(port["name"], port["family"]) for port in node_type["inputs"]] == [
-        ("picture_in", "image"),
-        ("every_nth", "channels"),
-    ]
-    assert [(port["name"], port["family"]) for port in node_type["outputs"]] == [("picture_out", "image")]
+    assert [port["name"] for port in node_type["inputs"]] == ["picture_in", "every_nth"]
+    assert [port["name"] for port in node_type["outputs"]] == ["picture_out"]
 
 
 def test_the_rendered_template_imports_as_a_declared_node_with_every_description(tmp_path: Path) -> None:

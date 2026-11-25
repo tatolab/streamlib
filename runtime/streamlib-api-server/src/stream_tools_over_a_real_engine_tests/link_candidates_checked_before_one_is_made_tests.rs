@@ -106,7 +106,7 @@ fn the_ports_of_the_live_graph(live_graph: &Value, direction: &str) -> Vec<(Stri
 /// exactly what `check_link` answers for its link; the graph document is left as it was.
 ///
 /// Mental-revert: a candidate judged by a rule of its own, such as the pin types alone, would
-/// answer `connects` where `check_link` answers the refusal of a setting or of a family.
+/// answer `connects` where `check_link` answers the refusal of a setting.
 #[tokio::test(flavor = "multi_thread")]
 async fn each_placed_candidate_answers_what_check_link_answers_from_either_direction() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -188,8 +188,9 @@ async fn a_refused_candidate_is_left_out_unless_the_refused_are_asked_for() {
 /// it for free, warning that the meanings differ, exactly as `check_link` answers for a placed
 /// node of that type; no node is left placed and the graph document is left as it was.
 ///
-/// Mental-revert: judging a node type's port by its family alone would answer `connects` with
-/// no warning; leaving the node held for the judgement would add a node to the live graph.
+/// Mental-revert: judging a node type's port by its pin type alone, its meaning left out, would
+/// answer `connects` with no warning; leaving the node held for the judgement would add a node to
+/// the live graph.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_types_port_answers_what_check_link_answers_for_a_placed_node_of_the_type() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();

@@ -1,12 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! An output port's stream facts: what its family states about the stream it
-//! carries, as typed fields of that family. `connect` never compares them.
+//! An output port's stream facts: what a Texture or an encoded output states about the stream
+//! it carries. `connect` never compares them.
 
 use serde::{Deserialize, Serialize};
 
-use crate::PortFamily;
 use crate::pin_type::{BuiltInPinTypeName, PinType};
 
 /// An Image stream's frame rate, as a rational number of frames per second.
@@ -84,7 +83,8 @@ pub struct PacketsStreamFacts {
     pub codec_configuration_hex: Option<String>,
 }
 
-/// An output port's stream facts, tagged by the family they belong to.
+/// An output port's stream facts: a Texture's, or an encoded stream's. The wire tags them
+/// `image` and `packets` under `family`, as the graph has always served them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "family", rename_all = "snake_case")]
 pub enum PortStreamFacts {
@@ -93,15 +93,7 @@ pub enum PortStreamFacts {
 }
 
 impl PortStreamFacts {
-    /// The family whose facts these are.
-    pub fn family(&self) -> PortFamily {
-        match self {
-            PortStreamFacts::Image(_) => PortFamily::Image,
-            PortStreamFacts::Packets(_) => PortFamily::Packets,
-        }
-    }
-
-    /// The Image facts, or `None` when these are another family's.
+    /// The Image facts, or `None` when these are an encoded stream's.
     pub fn image(&self) -> Option<&ImageStreamFacts> {
         match self {
             PortStreamFacts::Image(image) => Some(image),
@@ -109,7 +101,7 @@ impl PortStreamFacts {
         }
     }
 
-    /// The Packets facts, or `None` when these are another family's.
+    /// The Packets facts, or `None` when these are a Texture's.
     pub fn packets(&self) -> Option<&PacketsStreamFacts> {
         match self {
             PortStreamFacts::Packets(packets) => Some(packets),
@@ -118,10 +110,32 @@ impl PortStreamFacts {
     }
 
     /// The name of `pin_type` when these facts describe a stream of it, as Image facts describe
-    /// a Texture and Packets facts an encoded type; `None` for a type another family carries.
+    /// a Texture and Packets facts an encoded type; `None` for any other type.
     pub fn the_pin_type_they_describe(&self, pin_type: &PinType) -> Option<BuiltInPinTypeName> {
         let name = pin_type.built_in_name();
-        (PortFamily::carrying_a_pin_of(name) == Some(self.family())).then_some(name)
+        self.the_pin_types_they_describe()
+            .contains(&name)
+            .then_some(name)
+    }
+
+    /// The types these facts describe a stream of, and their name as a refusal words it.
+    fn the_pin_types_they_describe(&self) -> &'static [BuiltInPinTypeName] {
+        match self {
+            PortStreamFacts::Image(_) => &[BuiltInPinTypeName::Texture],
+            PortStreamFacts::Packets(_) => &[
+                BuiltInPinTypeName::EncodedVideo,
+                BuiltInPinTypeName::EncodedAudio,
+            ],
+        }
+    }
+
+    /// What these facts describe, as a refusal names it: the one type of
+    /// [`Self::the_pin_types_they_describe`], or `encoded` for the encoded types.
+    fn what_they_describe(&self) -> &'static str {
+        match self.the_pin_types_they_describe() {
+            [BuiltInPinTypeName::Texture] => "Texture",
+            _ => "encoded",
+        }
     }
 }
 
@@ -140,27 +154,27 @@ impl From<PacketsStreamFacts> for PortStreamFacts {
 /// Why stream facts were refused for an output port.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "output port `{port_name}` is of family {port_family} and cannot carry {facts_family} stream facts"
+    "output port `{port_name}` carries {pin_type} and cannot carry {facts_describe} stream facts"
 )]
-pub struct StreamFactsOfAnotherFamily {
+pub struct StreamFactsOfAnotherPinType {
     pub port_name: String,
-    pub port_family: PortFamily,
-    pub facts_family: PortFamily,
+    pub pin_type: PinType,
+    pub facts_describe: &'static str,
 }
 
-/// Refuse `facts` for `port_name` unless they are `port_family`'s.
-pub fn refuse_stream_facts_of_another_family(
+/// Refuse `facts` for `port_name`, of `pin_type`, unless they describe a stream of that type.
+pub fn refuse_stream_facts_of_another_pin_type(
     port_name: &str,
-    port_family: PortFamily,
+    pin_type: &PinType,
     facts: &PortStreamFacts,
-) -> Result<(), StreamFactsOfAnotherFamily> {
-    if facts.family() == port_family {
+) -> Result<(), StreamFactsOfAnotherPinType> {
+    if facts.the_pin_type_they_describe(pin_type).is_some() {
         return Ok(());
     }
-    Err(StreamFactsOfAnotherFamily {
+    Err(StreamFactsOfAnotherPinType {
         port_name: port_name.to_string(),
-        port_family,
-        facts_family: facts.family(),
+        pin_type: pin_type.clone(),
+        facts_describe: facts.what_they_describe(),
     })
 }
 
@@ -244,21 +258,24 @@ mod tests {
     }
 
     #[test]
-    fn another_familys_facts_are_refused_naming_the_port_and_both_families() {
-        let refusal = refuse_stream_facts_of_another_family(
+    fn facts_of_another_pin_type_are_refused_naming_the_port_and_both() {
+        let texture = PinType::Texture {
+            pixel_formats: Vec::new(),
+        };
+        let refusal = refuse_stream_facts_of_another_pin_type(
             "video",
-            PortFamily::Image,
+            &texture,
             &PacketsStreamFacts::default().into(),
         )
         .unwrap_err();
         assert_eq!(
             refusal.to_string(),
-            "output port `video` is of family Image and cannot carry Packets stream facts"
+            format!("output port `video` carries {texture} and cannot carry encoded stream facts")
         );
         assert!(
-            refuse_stream_facts_of_another_family(
+            refuse_stream_facts_of_another_pin_type(
                 "video",
-                PortFamily::Image,
+                &texture,
                 &ImageStreamFacts::default().into()
             )
             .is_ok()

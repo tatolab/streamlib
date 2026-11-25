@@ -526,8 +526,8 @@ class MoqTrackReceive:
 
     def __init__(self) -> None:
         chosen: Any = self.content_type.chosen
-        self._family = "named" if chosen["type"] == "named" else "packets"
-        self._codec: "str | None" = None if self._family == "named" else chosen["codecs"][0]
+        self._carries = "named" if chosen["type"] == "named" else "encoded"
+        self._codec: "str | None" = None if self._carries == "named" else chosen["codecs"][0]
         self._receive_thread: "_native.MoqTrackReceiveThread | None" = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -550,7 +550,7 @@ class MoqTrackReceive:
             broadcast=self.broadcast,
             track=self.track,
             max_age_milliseconds=self.max_age,
-            family=self._family,
+            carries=self._carries,
             codec=self._codec,
         )
 

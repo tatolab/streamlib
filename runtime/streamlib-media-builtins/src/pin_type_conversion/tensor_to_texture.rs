@@ -19,7 +19,7 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
-use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
+use super::messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 use super::texture_to_tensor::{
     TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME, tensor_element_and_channels_of_one_pixel,
 };

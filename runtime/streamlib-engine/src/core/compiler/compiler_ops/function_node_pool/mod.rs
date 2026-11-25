@@ -18,23 +18,36 @@ pub(crate) use carries_handed_to_the_running_pool::{
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::NodeRunId;
 use crate::core::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor, PortFamily,
-    PortFamilyDeclaration,
+    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
+    PinAnnotations, PinDeclaration, PortDescriptor, ResolvedPin,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, Link,
     LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
-    OutputLinkPortRef, PortInfo, the_family_a_link_out_of_an_output_carries,
+    OutputLinkPortRef, PortInfo, the_input_an_output_takes_the_type_of,
+    the_pin_a_link_out_of_an_output_carries,
 };
 use crate::core::nodes::NodeSpec;
+use crate::core::pin_value_packing::message_kind_of;
+use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 
 pub(crate) const FUNCTION_NODE_POOL_NODE_TYPE: &str =
     "tatolab.runtime._function_node_pool:FunctionNodePool";
 
 /// The input value of the pool naming every link it carries.
 pub(crate) const FUNCTION_NODE_POOL_CARRIES_INPUT: &str = "carries";
+
+/// The key of a carry naming how the pool writes what the island answers.
+const CARRY_WRITTEN_AS_KEY: &str = "written_as";
+
+/// A carry whose island answers a record, which the pool writes as a Records message.
+const CARRY_WRITTEN_AS_A_RECORD: &str = "record";
+
+/// A carry whose island answers a message the pool hands on as it was read: a control message,
+/// or one the island hands on unread.
+const CARRY_HANDED_ON_AS_A_MESSAGE: &str = "message";
 
 /// Every carry `pool` names under [`FUNCTION_NODE_POOL_CARRIES_INPUT`]; none when it names none.
 pub(crate) fn every_carry_of(pool: &crate::core::graph::GraphNode) -> Vec<JsonValue> {
@@ -78,14 +91,24 @@ pub(crate) fn the_function_node_pool_descriptor(
         descriptor.inputs = inputs
             .iter()
             .map(|port| {
-                PortDescriptor::new(&port.name, &port.description, true, port.family.clone())
-                    .with_delivery_profile("newest")
+                PortDescriptor::new(
+                    &port.name,
+                    &port.description,
+                    true,
+                    the_declaration_of_a_carry_of(port.pin.clone()),
+                )
+                .with_delivery_profile("newest")
             })
             .collect();
         descriptor.outputs = outputs
             .iter()
             .map(|port| {
-                PortDescriptor::new(&port.name, &port.description, false, port.family.clone())
+                PortDescriptor::new(
+                    &port.name,
+                    &port.description,
+                    false,
+                    the_declaration_of_a_carry_of(port.pin.clone()),
+                )
             })
             .collect();
     }
@@ -280,19 +303,18 @@ fn carry_one_link_through_the_pool(
                 .iter()
                 .find(|port| port.name == source.port_name())
         })
-        .is_some_and(|port| port.family.family_follows_input_port.is_some());
+        .is_some_and(|port| the_input_an_output_takes_the_type_of(port).is_some());
     let feeds_a_setting_read_at_setup =
         graph.is_a_setting_read_at_setup(destination.node_run_id(), destination.port_name());
-    let family =
-        the_family_a_link_out_of_an_output_carries(graph, source.node_run_id(), source.port_name())
-            .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Channels));
-    let carry_family = if hands_a_message_on_unread {
-        serde_json::json!({
-            "family": "message",
-            "message_family": family.family.wire_name(),
-        })
+    let pin =
+        the_pin_a_link_out_of_an_output_carries(graph, source.node_run_id(), source.port_name());
+    let written_as = if !hands_a_message_on_unread
+        && pin.as_ref().is_some_and(|pin| {
+            message_kind_of(&pin.pin_type) == Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+        }) {
+        CARRY_WRITTEN_AS_A_RECORD
     } else {
-        serde_json::json!({ "family": family_name(family.family) })
+        CARRY_HANDED_ON_AS_A_MESSAGE
     };
     let pool = graph
         .traversal_mut()
@@ -313,11 +335,15 @@ fn carry_one_link_through_the_pool(
         &pool_input_port,
         &description,
         true,
-        PortFamilyDeclaration::of_family(family.family),
+        the_declaration_of_a_carry_of(pin.clone()),
     )
     .with_delivery_profile("newest");
-    let output_descriptor =
-        PortDescriptor::new(&pool_output_port, &description, false, family.clone());
+    let output_descriptor = PortDescriptor::new(
+        &pool_output_port,
+        &description,
+        false,
+        the_declaration_of_a_carry_of(pin),
+    );
     pool.ports.inputs.push(PortInfo::from(&input_descriptor));
     pool.ports.outputs.push(PortInfo::from(&output_descriptor));
     let mut carry = serde_json::Map::from_iter([
@@ -330,9 +356,10 @@ fn carry_one_link_through_the_pool(
             JsonValue::String(pool_output_port.clone()),
         ),
     ]);
-    if let Some(carry_family) = carry_family.as_object() {
-        carry.extend(carry_family.clone());
-    }
+    carry.insert(
+        CARRY_WRITTEN_AS_KEY.to_owned(),
+        JsonValue::String(written_as.to_owned()),
+    );
     if feeds_a_setting_read_at_setup {
         carry.insert("written_at_setup".to_owned(), JsonValue::Bool(true));
     }
@@ -457,10 +484,21 @@ pub(crate) fn the_links_carried_through_the_function_node_pool_of(
         .collect()
 }
 
-fn family_name(family: PortFamily) -> &'static str {
-    match family {
-        PortFamily::Records => "records",
-        _ => "channels",
+/// What a carry of `pin` declares on each of its two ports: exactly the pin the link it carries
+/// carries, or any type while its graph has not settled one.
+fn the_declaration_of_a_carry_of(pin: Option<ResolvedPin>) -> PinDeclaration {
+    match pin {
+        Some(ResolvedPin { pin_type, flow }) => PinDeclaration {
+            flow,
+            ..PinDeclaration::exactly(pin_type)
+        },
+        None => PinDeclaration {
+            pin_type: DeclaredPinType::Any,
+            flow: crate::core::descriptors::PinFlow::Stream,
+            annotations: PinAnnotations::default(),
+            former_names: Vec::new(),
+            may_be_unset: false,
+        },
     }
 }
 

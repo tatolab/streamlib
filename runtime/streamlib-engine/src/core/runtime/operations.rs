@@ -40,9 +40,9 @@ pub struct PortOfANodeOfAType<'end> {
 /// What a live connect would make of one link, judged as it judges the link and made nowhere.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhatALiveConnectMakesOfALink {
-    /// It would make the link: the verdict of two typed ends that connect, `None` for ends
-    /// their families judge. A verdict that connects through a convert node names the node a
-    /// transaction's `connect` places between the two ends, connecting each to it.
+    /// It would make the link: the verdict of two typed ends that connect, `None` while an end
+    /// awaits the pin type its first link gives it. A verdict that connects through a convert node
+    /// names the node a transaction's `connect` places between the two ends, connecting each to it.
     Makes(Option<Box<crate::core::descriptors::PinLinkVerdict>>),
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
@@ -56,9 +56,9 @@ pub enum WhatALiveConnectMakesOfALink {
 }
 
 impl WhatALiveConnectMakesOfALink {
-    /// The verdict the connect judges the link by: that of two typed ends, `None` for ends their
-    /// families judge; refused with why, in the runtime's words, when it makes the link without
-    /// judging it.
+    /// The verdict the connect judges the link by: that of two typed ends, `None` while an end
+    /// awaits the pin type its first link gives it; refused with why, in the runtime's words, when
+    /// it makes the link without judging it.
     pub fn the_verdict_it_judges_by(
         self,
     ) -> std::result::Result<Option<Box<crate::core::descriptors::PinLinkVerdict>>, String> {

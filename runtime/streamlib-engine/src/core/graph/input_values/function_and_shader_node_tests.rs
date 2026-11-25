@@ -11,10 +11,8 @@ use serde_json::json;
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
-use crate::core::descriptors::PortFamily;
 use crate::core::descriptors::{
     NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor,
-    PortFamilyDeclaration,
 };
 use crate::core::error::Error;
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
@@ -34,15 +32,18 @@ fn node_types_resolving_a_function_and_a_shader_node_type() -> NodeTypesOneStrea
 /// Register `scale` and `tint` in `node_types`.
 fn register_a_function_and_a_shader_node_type(node_types: &NodeTypesOneStreamResolves) {
     let mut scale = a_function_node_type(SCALE, &["y"], &["result"]);
+    scale.inputs[0].pin_declaration = Some(PinDeclaration {
+        pin_type: crate::core::descriptors::DeclaredPinType::Any,
+        ..PinDeclaration::exactly(PinType::Float { exact_size: None })
+    });
     scale = scale.with_input(
         PortDescriptor::new(
             "x",
             "",
             true,
-            PortFamilyDeclaration::of_family(PortFamily::Channels),
+            PinDeclaration::exactly(PinType::Float { exact_size: None }),
         )
-        .with_delivery_profile("newest")
-        .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None })),
+        .with_delivery_profile("newest"),
     );
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
@@ -75,25 +76,20 @@ fn register_a_function_and_a_shader_node_type(node_types: &NodeTypesOneStreamRes
                 "image",
                 "",
                 true,
-                PortFamilyDeclaration::of_family(PortFamily::Image),
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
             )
             .with_delivery_profile("newest"),
         )
-        .with_input(
-            PortDescriptor::new(
-                "amount",
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )
-            .with_delivery_profile("newest")
-            .with_pin_declaration(amount),
-        )
+        .with_input(PortDescriptor::new("amount", "", true, amount).with_delivery_profile("newest"))
         .with_output(PortDescriptor::new(
             "result",
             "",
             true,
-            PortFamilyDeclaration::of_family(PortFamily::Image),
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
         ));
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
@@ -159,7 +155,7 @@ fn a_function_nodes_input_values_are_checked() {
     assert_eq!(
         the_refusal_of(&node_types, SCALE, "y", Some(json!("any value"))),
         Ok(()),
-        "an input naming no pin type takes any value a function reads"
+        "an input of any pin type takes any value a function reads"
     );
     assert_eq!(
         the_code_of(the_refusal_of(&node_types, SCALE, "z", Some(json!(1)))),

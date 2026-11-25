@@ -659,7 +659,7 @@ impl LoadedStreamInThisRuntime {
     /// judges a link, and made nowhere, the graph's lock taken once for them all. Nothing is
     /// described or registered: a type the stream has not described yet is judged only once a
     /// node of it is placed, as is a port of a type whose nodes run as no node of their own, a
-    /// fragment or a graph interface naming no family, and each link with an end at a node the
+    /// fragment or a graph interface choosing no pin type, and each link with an end at a node the
     /// graph as drawn holds and no node runs as.
     pub(crate) fn what_a_connect_makes_of_links_with_node_types_ports(
         &self,
@@ -801,11 +801,11 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// Whether `node`, a node of a graph document, runs as no node of its own: a fragment, a stream
-/// fragment, or a `GraphInput` or `GraphOutput` naming no family.
+/// fragment, or a `GraphInput` or `GraphOutput` choosing no pin type.
 pub(in crate::core::runtime) fn runs_as_no_node_of_its_own(node: &StreamGraphDocumentNode) -> bool {
     node.fragment.is_some()
         || node.node_type == STREAM_FRAGMENT_NODE_TYPE
-        || is_a_graph_interface_node_naming_no_family(&node.node_type, &node.input_values)
+        || is_a_graph_interface_node_choosing_no_pin_type(&node.node_type, &node.input_values)
 }
 
 /// How a link with a port of a node type is judged: answered before any node is placed, or on a
@@ -837,7 +837,10 @@ fn how_a_node_types_port_is_judged(
         }
     };
     if node_type.as_str() == STREAM_FRAGMENT_NODE_TYPE
-        || is_a_graph_interface_node_naming_no_family(node_type.as_str(), &serde_json::Map::new())
+        || is_a_graph_interface_node_choosing_no_pin_type(
+            node_type.as_str(),
+            &serde_json::Map::new(),
+        )
     {
         return HowANodeTypesPortIsJudged::Answered(Ok(
             WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade,
@@ -873,8 +876,8 @@ fn how_a_node_types_port_is_judged(
 }
 
 /// Whether a node of `node_type` holding `input_values` is a `GraphInput` or `GraphOutput` that
-/// states not what its port carries, so the family it carries is resolved with the graph's links.
-fn is_a_graph_interface_node_naming_no_family(
+/// states not what its port carries, so the pin type it carries is resolved with the graph's links.
+fn is_a_graph_interface_node_choosing_no_pin_type(
     node_type: &str,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> bool {

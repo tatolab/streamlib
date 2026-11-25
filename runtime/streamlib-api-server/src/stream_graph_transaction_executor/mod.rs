@@ -734,9 +734,10 @@ type ImportedStreamPlacement<'repository> =
 type DocumentOfAPlacedStream<'repository> =
     dyn Fn(&Value) -> Result<StreamGraphDocument, GraphRequestRefusal> + 'repository;
 
-/// The family wire name of an output port of the running stream, read from its `graph`.
-type FamilyOfAnOutputPortOfTheRunningStream<'stream> =
-    dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<String, GraphRequestRefusal> + 'stream;
+/// The pin type an output port of the running stream carries, read from its `graph`; `None`
+/// for one of no one type yet.
+type PinTypeOfAnOutputPortOfTheRunningStream<'stream> =
+    dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<Option<Value>, GraphRequestRefusal> + 'stream;
 
 /// The UUID of each node the running stream's `graph` renders as a function node.
 type FunctionNodesOfTheRunningStream<'stream> =
@@ -759,7 +760,7 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     run_the_graph_generator: &'reads GraphGeneratorRunOfTheStream<'reads>,
     place_the_imported_stream: &'reads ImportedStreamPlacement<'reads>,
     document_of_a_placed_stream: &'reads DocumentOfAPlacedStream<'reads>,
-    family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
+    pin_type_of_an_output_port: &'reads PinTypeOfAnOutputPortOfTheRunningStream<'reads>,
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
     convert_node_a_link_needs: &'reads ConvertNodeALinkOfTheRunningStreamNeeds<'reads>,
     refuse_a_link_judged_before_commit: &'reads RefusalOfALinkJudgedBeforeCommit<'reads>,
@@ -788,15 +789,15 @@ fn the_function_nodes_rendered_in(rendered_level: &Value, function_nodes: &mut H
     }
 }
 
-/// The family wire name the output port `end` carries in `rendered_graph`, a stream's `graph`
-/// render, its node at any level of the fragments the render holds: the family its pin type
-/// travels on, else, for a port of no one type yet, the family the port's node type declares
-/// it on, as `ports_of_a_node_type` reads the type.
-fn the_family_of_an_output_port_in(
+/// The pin type the output port `end` carries in `rendered_graph`, a stream's `graph` render, its
+/// node at any level of the fragments the render holds: the type the render serves on the port,
+/// else the one type the port's node type declares, as `ports_of_a_node_type` reads the type;
+/// `None` for a port of no one type yet. Refused for a node the render does not hold.
+fn the_pin_type_of_an_output_port_in(
     rendered_graph: &Value,
     end: &StreamGraphDocumentLinkEnd,
     ports_of_a_node_type: &dyn Fn(&str) -> Option<streamlib::sdk::graph::GraphNodePorts>,
-) -> Result<String, String> {
+) -> Result<Option<Value>, String> {
     fn the_rendered_node_at_any_level<'render>(
         rendered_level: &'render Value,
         node: &str,
@@ -814,37 +815,29 @@ fn the_family_of_an_output_port_in(
             })
     }
     let node = end.node.to_string();
-    let no_family = || {
+    let rendered_node = the_rendered_node_at_any_level(rendered_graph, &node).ok_or_else(|| {
         format!(
-            "the running stream declares no family for the output port {node}/{}, so the \
-             subgraph port carrying it cannot be declared",
+            "the running stream holds no node {node}, so the subgraph port carrying its output \
+             `{}` cannot be declared",
             end.port
         )
-    };
-    let rendered_node =
-        the_rendered_node_at_any_level(rendered_graph, &node).ok_or_else(no_family)?;
-    let carried_by_its_pin_type = rendered_node["ports"]["outputs"]
+    })?;
+    let served = rendered_node["ports"]["outputs"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|port| port["name"] == end.port.as_str())
-        .and_then(|port| {
-            <streamlib::sdk::descriptors::PinType as serde::Deserialize>::deserialize(
-                &port["pin_type"],
-            )
-            .ok()
-        })
-        .and_then(|pin_type| streamlib::sdk::descriptors::PortFamily::carrying(&pin_type));
-    carried_by_its_pin_type
-        .or_else(|| {
-            ports_of_a_node_type(rendered_node["type"].as_str()?)?
-                .outputs
-                .into_iter()
-                .find(|port| port.name == end.port)
-                .map(|port| port.family.family)
-        })
-        .map(|family| family.wire_name().to_owned())
-        .ok_or_else(no_family)
+        .map(|port| &port["pin_type"])
+        .filter(|pin_type| !pin_type.is_null())
+        .cloned();
+    Ok(served.or_else(|| {
+        let declared = ports_of_a_node_type(rendered_node["type"].as_str()?)?
+            .outputs
+            .into_iter()
+            .find(|port| port.name == end.port)?
+            .pin?;
+        serde_json::to_value(declared.pin_type).ok()
+    }))
 }
 
 /// The fragment the stream fragment node `fragment_node` places for `held_stream`,

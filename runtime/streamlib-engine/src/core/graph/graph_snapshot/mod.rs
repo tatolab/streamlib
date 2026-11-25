@@ -39,7 +39,7 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::GraphNodePorts;
 use crate::core::graph::graph_interface_resolution::{
     GraphInterfaceLevel, is_a_graph_interface_node_type,
-    the_family_a_port_linked_to_an_interface_node_carries,
+    the_pin_type_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_variable_resolution::is_a_graph_variable_node_type;
 use crate::core::graph::{
@@ -469,7 +469,7 @@ impl GraphSnapshot {
         let interface = top_level.with_graph_interface_resolved(
             GraphInterfaceLevel::TheStreamsTopLevel,
             &|linked_port, direction| {
-                the_family_a_port_linked_to_an_interface_node_carries(
+                the_pin_type_a_port_linked_to_an_interface_node_carries(
                     node_types,
                     top_level,
                     linked_port,

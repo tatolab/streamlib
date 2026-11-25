@@ -273,8 +273,8 @@ pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeVa
 
 /// Whether input `port` of a node running as `node_kind` takes a stored value: a setting does;
 /// else what its pin type holds and, on a node that is no function or shader node and whose
-/// input does not state that it takes a wire or a value, only a Channels input; on a port that
-/// names no pin type, any input of a function node.
+/// input does not state that it takes a wire or a value, only an input whose type travels as a
+/// control message; on a port that names no pin type, any input of a function node.
 pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &PortInfo) -> bool {
     if port.is_a_setting() {
         return true;
@@ -283,7 +283,8 @@ pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &P
         Some(pin) if !pin.pin_type.holds_a_stored_value() => false,
         Some(_) if the_node_reads_a_value_set_on_the_input_whole(node_kind, port) => true,
         None if matches!(node_kind, Some(NodeKind::Function { .. })) => true,
-        _ => port.family.family == crate::core::descriptors::PortFamily::Channels,
+        Some(pin) => crate::core::pin_value_packing::channel_count_of(&pin.pin_type).is_some(),
+        None => false,
     }
 }
 

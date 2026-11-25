@@ -202,7 +202,6 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                     {
                         "name": "audio_from_upstream",
                         "description": "windows from upstream",
-                        "family": {"family": "channels"},
                         "pin_declaration": {
                             "pin_type": {"kind": "is", "pin_type": {"type": "audio"}},
                             "flow": "stream",
@@ -222,7 +221,6 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                     {
                         "name": "frames_to_downstream",
                         "description": "frames to downstream",
-                        "family": {"family": "packets"},
                         "pin_declaration": {
                             "pin_type": {"kind": "is", "pin_type": {"type": "encoded_video"}},
                             "flow": "stream",

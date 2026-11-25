@@ -70,7 +70,6 @@ def test_gate_takes_any_type_and_hold_frame_takes_only_pictures():
     assert ports_of(Gate)["value"]["pin_declaration"]["pin_type"] == {"kind": "any"}
     frame = ports_of(HoldFrame)["frame"]
     assert frame["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "texture"}}
-    assert frame["family"] == {"family": "image"}, "a number's link, on Channels, finds no family here"
 
 
 def test_hold_frame_holds_the_first_frame_until_refresh_takes_a_newer_one():
