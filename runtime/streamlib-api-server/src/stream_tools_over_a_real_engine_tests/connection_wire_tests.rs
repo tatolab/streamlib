@@ -62,8 +62,8 @@ fn a_project_whose_track_is_wired_to_its_relay() -> ProjectWithGraphDocuments {
     ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
         "nodes": [
-            { "id": RELAY_UUID, "name": "cloudflare", "type": RELAY_TYPE, "config": {} },
-            { "id": TRACK_UUID, "name": "camera-track", "type": TRACK_TYPE, "config": {} },
+            { "id": RELAY_UUID, "name": "cloudflare", "type": RELAY_TYPE },
+            { "id": TRACK_UUID, "name": "camera-track", "type": TRACK_TYPE },
         ],
         "links": [{
             "source": { "node": RELAY_UUID, "port": "connection" },
@@ -72,7 +72,7 @@ fn a_project_whose_track_is_wired_to_its_relay() -> ProjectWithGraphDocuments {
     }))
 }
 
-/// The references `graph` renders, each as `node.key -> referenced node`.
+/// The references `graph` renders, each as `node -> referenced node`.
 fn the_references_in(graph: &Value) -> Vec<String> {
     graph["references"]
         .as_array()
@@ -80,9 +80,8 @@ fn the_references_in(graph: &Value) -> Vec<String> {
         .flatten()
         .map(|reference| {
             format!(
-                "{}.{} -> {}",
+                "{} -> {}",
                 reference["node"].as_str().unwrap_or_default(),
-                reference["config_key"].as_str().unwrap_or_default(),
                 reference["referenced_node"].as_str().unwrap_or_default()
             )
         })
@@ -101,7 +100,7 @@ async fn a_connection_wire_runs_as_its_reference_and_a_live_disconnect_and_conne
     assert_eq!(links_by_node_name_in(&live), [THE_WIRE], "{live}");
     assert_eq!(
         the_references_in(&live),
-        ["camera-track.relay -> cloudflare"],
+        ["camera-track -> cloudflare"],
         "{live}"
     );
 
@@ -132,7 +131,7 @@ async fn a_connection_wire_runs_as_its_reference_and_a_live_disconnect_and_conne
     assert_eq!(links_by_node_name_in(&live), [THE_WIRE], "{live}");
     assert_eq!(
         the_references_in(&live),
-        ["camera-track.relay -> cloudflare"],
+        ["camera-track -> cloudflare"],
         "{live}"
     );
 }

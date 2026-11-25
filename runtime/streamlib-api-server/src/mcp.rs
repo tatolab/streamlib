@@ -7,7 +7,8 @@
 //! the control operation registry's agent surface ([`crate::mcp_agent_tools`]): the operations
 //! the registry lists as tools of their own, and `list_operation_groups`,
 //! `describe_operations` and `call_operation`, which reach every other operation. Beside them
-//! it serves the node catalog and the live graph as resources ([`crate::mcp_resources`]).
+//! it serves the live graph and the stream actions under way as resources
+//! ([`crate::mcp_resources`]).
 //! `rmcp` owns the protocol; this module owns only what the runtime says through it.
 //!
 //! A graph edit answers when the engine accepted the change into its graph;

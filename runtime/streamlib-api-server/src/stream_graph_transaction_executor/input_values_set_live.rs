@@ -280,9 +280,8 @@ fn the_value_a_live_set_replaced(
         .cloned()
 }
 
-/// Each value `requests` sets live, in order, when every one is a `set_node_input_value` or a
-/// `set_pin_value` at its stream's own level naming its node by UUID, and all name one stream;
-/// `None` otherwise.
+/// Each value `requests` sets live, in order, when every one is a `set_node_input_value` at its
+/// stream's own level naming its node by UUID, and all name one stream; `None` otherwise.
 fn the_input_values_a_transaction_sets_live(
     requests: &[StreamGraphAction],
     stream_id_of_each_request: &[String],
@@ -342,7 +341,7 @@ struct ValueSetOfATransaction<'request> {
     member: Option<&'request str>,
 }
 
-/// Each value set of `requests` — a `set_node_input_value` or a `set_pin_value` — in order.
+/// Each `set_node_input_value` of `requests`, in order.
 fn the_value_set_of_each_request<'request>(
     requests: &'request [StreamGraphAction],
     stream_id_of_each_request: &[String],

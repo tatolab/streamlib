@@ -54,7 +54,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     .expect("the arm is imported");
     let folder = added["dependency"]["folder"].clone();
     let version = added["dependency"]["version"].clone();
-    let mut dependency_source = json!({
+    let dependency_source = json!({
         "source": "dependency", "project": arm.project, "folder": folder, "version": version,
         "node_types": [], "graph_generators": [], "unreadable_modules": [],
     });
@@ -65,7 +65,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     .expect("the listing document");
 
     let listed = call(
-        "list_project_node_types",
+        "list_node_types",
         json!({ "project_directory": cell.path() }),
     )
     .await
@@ -73,16 +73,36 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
 
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
-    dependency_source["project_name"] = json!(TEST_PROJECT_NAME);
-    dependency_source["named_pin_types"] = json!([]);
-    let mut project_source = project_source;
-    project_source["node_types"][0]["category_from"] = Value::Null;
-    project_source["named_pin_types"] = json!([]);
+    let sources = listed["sources"].as_array().expect("sources");
+    let project_listed = &sources[0];
+    assert_eq!(project_listed["source"], "project", "{listed}");
     assert_eq!(
-        listed["sources"],
-        json!([project_source, dependency_source]),
+        project_listed["node_types"][0]["node_type"], "nodes.ik:InverseKinematics",
         "{listed}"
     );
+    assert_eq!(
+        project_listed["unreadable_modules"], project_source["unreadable_modules"],
+        "{listed}"
+    );
+    let dependency_listed = &sources[1];
+    assert_eq!(
+        (
+            &dependency_listed["source"],
+            &dependency_listed["project"],
+            &dependency_listed["folder"],
+            &dependency_listed["version"],
+            &dependency_listed["project_name"],
+        ),
+        (
+            &json!("dependency"),
+            &json!(arm.project),
+            &folder,
+            &version,
+            &json!(TEST_PROJECT_NAME),
+        ),
+        "{listed}"
+    );
+    assert_eq!(dependency_listed["node_types"], json!([]), "{listed}");
     let request: Value = serde_json::from_slice(
         &std::fs::read(cell.path().join("listing-request.json")).expect("the listing's request"),
     )
@@ -196,9 +216,10 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
         ]),
     );
     dispatcher
-        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
-            project_directory: cell.path().to_path_buf(),
-        })
+        .the_node_types_the_project_offers_read_from_source(
+            "list_node_types",
+            cell.path().to_path_buf(),
+        )
         .await
         .expect("the cell's node types are listed");
 
@@ -226,7 +247,7 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
     else {
         unreachable!()
     };
-    assert_eq!(updated[0].node_type.description, "a camera, now with HDR");
+    assert_eq!(updated[0].node_type.documentation, "a camera, now with HDR");
     assert_eq!(
         serde_json::to_value(&updated[0].origin).expect("the origin serializes"),
         json!({ "source": "installed_distribution", "distribution": "tatolab-camera",
@@ -271,9 +292,10 @@ async fn a_project_refused_its_node_type_listing_is_listed_again_once_an_action_
         .project_repositories
         .subscribe_to_the_change_feed();
     dispatcher
-        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
-            project_directory: cell.path().to_path_buf(),
-        })
+        .the_node_types_the_project_offers_read_from_source(
+            "list_node_types",
+            cell.path().to_path_buf(),
+        )
         .await
         .expect_err("an interpreter that prints no listing is refused");
 
@@ -332,9 +354,10 @@ async fn a_project_is_listed_again_after_a_change_once_stream_action_changes_sto
         )]),
     );
     dispatcher
-        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
-            project_directory: cell.path().to_path_buf(),
-        })
+        .the_node_types_the_project_offers_read_from_source(
+            "list_node_types",
+            cell.path().to_path_buf(),
+        )
         .await
         .expect("the cell's node types are listed");
 
@@ -361,7 +384,7 @@ async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
     let refusal = tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
-            "list_project_node_types",
+            "list_node_types",
             json!({ "project_directory": cell.path() }),
         )
         .await,
@@ -369,8 +392,7 @@ async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
     .expect_err("an interpreter that prints nothing lists nothing");
 
     assert!(
-        refusal.contains("list_project_node_types failed")
-            && refusal.contains("printed no listing"),
+        refusal.contains("list_node_types failed") && refusal.contains("printed no listing"),
         "{refusal}"
     );
 }

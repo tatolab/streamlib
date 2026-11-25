@@ -305,8 +305,7 @@ fn a_project_recorded_in_format_3_lists_each_edit_in_the_current_forms() {
 }
 
 #[test]
-fn a_project_recorded_in_format_3_takes_an_edit_then_undoes_and_redoes_back_through_the_old_ones()
-{
+fn a_project_recorded_in_format_3_takes_an_edit_then_undoes_and_redoes_back_through_the_old_ones() {
     let root = tempfile::tempdir().unwrap();
     let mut project = the_recorded_project_under(root.path(), HISTORY_RECORDED_IN_FORMAT_3);
     assert_eq!(
@@ -333,10 +332,8 @@ fn a_project_recorded_in_format_3_takes_an_edit_then_undoes_and_redoes_back_thro
         the_input_values_of_the_mixer(&project),
         json!({ "gain": 0.25, "frame_width": 640 })
     );
-    let document_before_the_change_of_nothing = project
-        .stream_graph_document(stream())
-        .unwrap()
-        .to_value();
+    let document_before_the_change_of_nothing =
+        project.stream_graph_document(stream()).unwrap().to_value();
     assert_eq!(undo(&mut project).len(), 1);
     assert_eq!(
         project.stream_graph_document(stream()).unwrap().to_value(),

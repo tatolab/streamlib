@@ -437,7 +437,11 @@ impl StreamGraphTransactionExecutor<'_> {
             let rendered_graph = self
                 .async_runtime
                 .block_on(stream_operations.to_json_async())?;
-            Ok(the_family_of_an_output_port_in(&rendered_graph, end)?)
+            Ok(the_family_of_an_output_port_in(
+                &rendered_graph,
+                end,
+                &|node_type| stream_operations.the_ports_a_node_type_declares(node_type),
+            )?)
         };
         let function_nodes_of_the_running_stream = || {
             let rendered_graph = self

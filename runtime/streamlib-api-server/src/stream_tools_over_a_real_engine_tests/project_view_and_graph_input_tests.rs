@@ -104,9 +104,9 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
             "opens": true, "not_opened_because": null,
             "title": "DJ Deck", "description": "Two decks and a crossfader.",
             "icon": "icon.svg", "preview": "preview.png", "placement": "node",
-            "inputs": [{ "name": "waveform", "family": "channels", "pin_type": { "type": "audio" },
+            "inputs": [{ "name": "waveform", "pin_type": { "type": "audio" },
                          "description": null, "range": null }],
-            "outputs": [{ "name": "crossfader", "family": "array", "pin_type": { "type": "tensor" },
+            "outputs": [{ "name": "crossfader", "pin_type": { "type": "tensor" },
                           "description": null, "range": [-1.0, 1.0] }],
             "manifest": deck_manifest,
         })
@@ -154,11 +154,10 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
 const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
 
 /// A graph document holding a node of the project's view `deck` loads it with the view's ports,
-/// each of the pin type its manifest names, and a panel's write onto it is live data alone: refused while the node does not run, and the
-/// graph document on disk keeps nothing of it.
+/// each of the pin type its manifest names, and the graph document on disk is unchanged by the
+/// load.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_a_write_records_nothing()
- {
+async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     register_the_stream_tools_test_source_once();
     let mut graph = the_graph_of_a_stream_named("main");
@@ -195,30 +194,13 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
     );
     assert_eq!(waveform["flow"], "stream", "{waveform}");
 
-    let refused_result = tool_call_result(
-        engine.operations_on_the_loaded_streams(),
-        "write_studio_view_output",
-        json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
-                "value": 0.5 }),
-    )
-    .await;
-    assert_eq!(
-        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
-        "{refused_result}"
-    );
-    assert_eq!(
-        refused_result["structuredContent"]["refusal"]["refusal_code"], "node_not_running",
-        "{refused_result}"
-    );
-    let refusal = tool_answer(&refused_result).expect_err("a node not running publishes nothing");
-    assert!(refusal.contains("not running"), "{refusal}");
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 
 /// A view node renders each setting its manifest declares as an input before its ports, taking
 /// no wire and reading its config: `bpm` and `label` typed, as their schemas state a type
-/// exactly, and `curve`, free-form, of no pin type. The config `graph` serves keeps its keys, an
-/// untyped setting is still checked against its schema, and the graph document on disk is
+/// exactly, and `curve`, free-form, of no pin type. The input values `graph` serves keep their
+/// keys, an untyped setting is still checked against its schema, and the graph document on disk is
 /// unchanged by the load.
 ///
 /// Mental-revert: rendering the view node's declared ports alone leaves `bpm` out of its inputs.
@@ -276,7 +258,7 @@ async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config(
     assert_eq!(curve["takes_a_wire"], false, "{curve}");
     assert_eq!(curve["value"], json!({ "ease": "in" }), "{curve}");
     assert_eq!(
-        deck["config"],
+        deck["input_values"],
         json!({ "bpm": 128, "curve": { "ease": "in" } }),
         "{deck}"
     );
@@ -339,10 +321,9 @@ fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value
 }
 
 /// A stream's top-level Records `GraphInput` loads as a running node linked to both its readers,
-/// rendered as an interface node carrying its default; `write_graph_input` names it by its
-/// Input, and a refused write records nothing.
+/// rendered as an interface node carrying its default, and the load records nothing.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records_nothing() {
+async fn a_top_level_graph_input_loads_linked_to_its_readers() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(
         the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!({ "track": "intro" })),
@@ -359,15 +340,10 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         "{cue}"
     );
     assert_eq!(
-        cue["config"]["default"], cue["input_values"]["value"],
-        "{cue}"
-    );
-    assert_eq!(
         cue["components"]["graph_interface"],
         json!({
             "direction": "input",
             "port": "cue",
-            "family": "records",
             "current_value": { "track": "intro" }
         }),
         "a node not running shows the value it carries at its next Play, its default: {cue}"
@@ -391,43 +367,6 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         );
     }
 
-    let refused_result = tool_call_result(
-        engine.operations_on_the_loaded_streams(),
-        "write_graph_input",
-        json!({ "stream": stream_id, "input": "cue", "value": { "track": "drop" } }),
-    )
-    .await;
-    assert_eq!(
-        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
-        "{refused_result}"
-    );
-    assert_eq!(
-        refused_result["structuredContent"]["refusal"]["refusal_code"], "node_not_running",
-        "{refused_result}"
-    );
-    let refusal = tool_answer(&refused_result)
-        .expect_err("an Input whose node does not run reaches no reader");
-    assert!(refusal.contains("not running"), "{refusal}");
-    let refused_result = tool_call_result(
-        engine.operations_on_the_loaded_streams(),
-        "write_graph_input",
-        json!({ "stream": stream_id, "input": "fader", "value": 1 }),
-    )
-    .await;
-    assert_eq!(
-        refused_result["structuredContent"]["refusal"]["refusal_code"], "port_not_found",
-        "{refused_result}"
-    );
-    assert_eq!(
-        refused_result["structuredContent"]["refusal"]["refused_input"], "fader",
-        "{refused_result}"
-    );
-    let refusal =
-        tool_answer(&refused_result).expect_err("an Input no GraphInput declares is refused");
-    assert!(
-        refusal.contains("`fader`") && refusal.contains("`cue`"),
-        "the refusal names the Inputs the stream has: {refusal}"
-    );
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 
@@ -474,10 +413,6 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
     assert_eq!(
         cue["input_values"]["value"],
         json!({ "track": "drop" }),
-        "{cue}"
-    );
-    assert_eq!(
-        cue["config"]["default"], cue["input_values"]["value"],
         "{cue}"
     );
     let document_before = project.the_graph_document_of("main");

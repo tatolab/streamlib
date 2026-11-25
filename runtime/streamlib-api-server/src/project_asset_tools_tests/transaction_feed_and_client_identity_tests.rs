@@ -82,7 +82,10 @@ async fn a_listen_over_mcp_stdio_is_told_of_each_transaction_and_reads_it_from_t
     assert_eq!(newest["operations"][0]["operation"], "import_asset");
     assert_eq!(newest["inverse_operations"][0]["operation"], "delete_asset");
     assert_eq!(newest["status"], "applied");
-    assert_eq!(newest["format_version"], 3);
+    assert_eq!(
+        newest["format_version"],
+        streamlib_project_repository::PROJECT_TRANSACTION_FORMAT_VERSION
+    );
     assert!(newest.get("idempotency_key").is_none(), "{newest}");
     let import_commit = ProjectHistoryRepository::open_for_project(&served.project_directory())
         .unwrap()

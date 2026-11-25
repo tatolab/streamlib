@@ -35,10 +35,10 @@ type NodeAnActionNames = (String, Vec<Uuid>, String);
 
 impl StreamGraphTransactionExecutor<'_> {
     /// Refuse, before any edit is applied, a value set on an input that the input does not take:
-    /// each value of a `set_node_input_value`, `set_pin_value` or `set_node_config`, on a node
-    /// the graph documents hold at any level or one an earlier `add_node` names by its `as`, the
-    /// node holding each value the transaction set on it before. A value on a node this cannot
-    /// find is checked as it is applied.
+    /// each value of a `set_node_input_value`, on a node the graph documents hold at any level
+    /// or one an earlier `add_node` names by its `as`, the node holding each value the
+    /// transaction set on it before. A value on a node this cannot find is checked as it is
+    /// applied.
     pub(super) fn refuse_a_value_an_input_does_not_take_before_any_is_applied(
         &self,
         requests_and_the_stream_id_each_names: &[(StreamGraphAction, String)],

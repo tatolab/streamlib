@@ -97,8 +97,9 @@ fn the_keys_taken_off(recorded: &mut Value, keys: &[&str]) -> bool {
     let Some(recorded) = recorded.as_object_mut() else {
         return false;
     };
-    keys.iter()
-        .fold(false, |any_held, key| recorded.remove(*key).is_some() || any_held)
+    keys.iter().fold(false, |any_held, key| {
+        recorded.remove(*key).is_some() || any_held
+    })
 }
 
 /// The `set_node_input_value` action of each name a recorded `set_node_config` action sent in

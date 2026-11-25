@@ -262,11 +262,13 @@ async fn the_undo_of_a_collapse_is_refused_while_another_stream_places_its_subgr
     let sub_asset = the_stream_asset_placed_by(&project.the_graph_document_of("main"), &subgraph);
     engine
         .the_answer_of_the_tool(
-            "add_node",
-            json!({ "stream": project.stream_asset_of("other"),
-                    "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub",
-                    "config": { "stream": { "asset": sub_asset } },
-                    "author": an_agent_named("bob") }),
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": project.stream_asset_of("other"),
+                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub", "as": "sub" },
+                { "operation": "set_node_input_value", "stream": project.stream_asset_of("other"),
+                  "node": "sub", "input": "stream", "value": { "asset": sub_asset } },
+            ], "author": an_agent_named("bob") }),
         )
         .await
         .expect("bob places sub in other");
@@ -315,8 +317,9 @@ async fn an_edit_inside_a_stream_placed_twice_reaches_both_placements_and_undoes
             "transact",
             json!({ "operations": [
                 { "operation": "add_node", "stream": stream_asset, "as": "again",
-                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub-again",
-                  "config": { "stream": { "asset": sub_asset } } },
+                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub-again" },
+                { "operation": "set_node_input_value", "stream": stream_asset,
+                  "node": "again", "input": "stream", "value": { "asset": sub_asset } },
                 { "operation": "connect", "stream": stream_asset,
                   "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                   "target": { "node": "again", "port": "pass-sink-video" } },
@@ -390,13 +393,11 @@ async fn an_edit_inside_a_stream_placed_twice_reaches_both_placements_and_undoes
         );
     }
 
-    let mut renamed_port_config = graph_input["input_values"].clone();
-    renamed_port_config["port"] = json!("video_in");
     engine
         .the_answer_of_the_tool(
-            "set_node_config",
+            "set_node_input_value",
             json!({ "stream": stream_asset, "level": [subgraph], "node": graph_input_drawn,
-                    "config": renamed_port_config, "author": an_agent_named("alice") }),
+                    "input": "port", "value": "video_in", "author": an_agent_named("alice") }),
         )
         .await
         .expect("sub's port is renamed from inside it");
@@ -522,7 +523,6 @@ async fn an_add_inside_a_placed_stream_of_a_type_nothing_resolves_is_refused() {
             "add_node",
             json!({ "stream": project.stream_asset_of("main"), "level": [subgraph],
                     "type": GRAPH_OUTPUT_NODE_TYPE, "name": "out",
-                    "config": { "port": "out", "family": "image" },
                     "author": an_agent_named("alice") }),
         )
         .await
@@ -552,8 +552,9 @@ async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_t
             "transact",
             json!({ "operations": [
                 { "operation": "add_node", "stream": stream_asset, "as": "again",
-                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub-again",
-                  "config": { "stream": { "asset": sub_asset } } },
+                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub-again" },
+                { "operation": "set_node_input_value", "stream": stream_asset,
+                  "node": "again", "input": "stream", "value": { "asset": sub_asset } },
                 { "operation": "connect", "stream": stream_asset,
                   "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                   "target": { "node": "again", "port": "pass-sink-video" } },
@@ -566,8 +567,6 @@ async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_t
         .unwrap()
         .to_owned();
     let graph_input = the_node_named(&project.the_graph_document_of("sub"), "pass-sink-video");
-    let mut renamed_port_config = graph_input["input_values"].clone();
-    renamed_port_config["port"] = json!("video_in");
 
     engine
         .the_answer_of_the_tool(
@@ -575,10 +574,11 @@ async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_t
             json!({ "operations": [
                 { "operation": "collapse_selection_into_subgraph", "stream": stream_asset,
                   "nodes": [subgraph], "name": "wrapper" },
-                { "operation": "set_node_config", "stream": stream_asset, "level": [sub_again],
+                { "operation": "set_node_input_value", "stream": stream_asset,
+                  "level": [sub_again],
                   "node": the_uuid_a_held_node_takes_under(
                       &sub_again, graph_input["id"].as_str().unwrap()),
-                  "config": renamed_port_config },
+                  "input": "port", "value": "video_in" },
             ], "author": an_agent_named("alice") }),
         )
         .await

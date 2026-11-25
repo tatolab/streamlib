@@ -549,10 +549,10 @@ mod tests {
             ["tatolab.camera:CameraSource"]
         );
         assert_eq!(
-            changed.updated[0].node_type.description,
+            changed.updated[0].node_type.documentation,
             "a camera, now with HDR"
         );
-        assert_eq!(changed.removed[0].node_type.description, "a probe");
+        assert_eq!(changed.removed[0].node_type.documentation, "a probe");
     }
 
     #[test]

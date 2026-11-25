@@ -293,7 +293,7 @@ fn the_stream_a_node_of_the_level_places(
         Some(STREAM_FRAGMENT_NODE_TYPE) => {
             let held_stream = node_object
                 .get(NODE_INPUT_VALUES_KEY)
-                .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY));
+                .and_then(|input_values| input_values.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY));
             if let Some(from) = held_stream.and_then(|held| held.get("from")) {
                 return Err(format!(
                     "node {drawn} `{name}` places a stream of the import {from}, which is edited \
@@ -306,7 +306,7 @@ fn the_stream_a_node_of_the_level_places(
                 .and_then(|asset| Uuid::parse_str(asset).ok())
                 .ok_or_else(|| {
                     format!(
-                        "node {drawn} `{name}` names no stream: its config's \
+                        "node {drawn} `{name}` names no stream: its input value \
                          `{STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY}` holds no `asset` UUID"
                     )
                 })

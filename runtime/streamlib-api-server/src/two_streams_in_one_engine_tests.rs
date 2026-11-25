@@ -284,7 +284,7 @@ async fn describe_runtime_names_the_machine_the_graph_names() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_resources_render_every_stream() {
+async fn the_graph_resource_renders_every_stream() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
     let graph = resource_document(
@@ -301,28 +301,6 @@ async fn the_resources_render_every_stream() {
             .collect::<Vec<_>>(),
         [json!("first"), json!("second")],
         "{graph}"
-    );
-    let catalog = resource_document(
-        loaded.operations_on_the_loaded_streams(),
-        crate::mcp_resources::NODE_CATALOG_RESOURCE_URI,
-    )
-    .await;
-    assert!(
-        catalog["nodes"]
-            .as_array()
-            .expect("the native types")
-            .iter()
-            .any(|entry| entry["type"]
-                == TwoStreamsTestIdleNode::node_class_import_path().as_str()),
-        "{catalog}"
-    );
-    assert_eq!(
-        catalog["streams"],
-        json!([
-            { "stream": "first", "nodes": [], "installed": [] },
-            { "stream": "second", "nodes": [], "installed": [] },
-        ]),
-        "each stream lists the types its own interpreter described"
     );
 }
 

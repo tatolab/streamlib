@@ -788,11 +788,14 @@ fn the_function_nodes_rendered_in(rendered_level: &Value, function_nodes: &mut H
     }
 }
 
-/// The family wire name the output port `end` declares in `rendered_graph`, a stream's
-/// `graph` render, its node at any level of the fragments the render holds.
+/// The family wire name the output port `end` carries in `rendered_graph`, a stream's `graph`
+/// render, its node at any level of the fragments the render holds: the family its pin type
+/// travels on, else, for a port of no one type yet, the family the port's node type declares
+/// it on, as `ports_of_a_node_type` reads the type.
 fn the_family_of_an_output_port_in(
     rendered_graph: &Value,
     end: &StreamGraphDocumentLinkEnd,
+    ports_of_a_node_type: &dyn Fn(&str) -> Option<streamlib::sdk::graph::GraphNodePorts>,
 ) -> Result<String, String> {
     fn the_rendered_node_at_any_level<'render>(
         rendered_level: &'render Value,
@@ -811,22 +814,35 @@ fn the_family_of_an_output_port_in(
             })
     }
     let node = end.node.to_string();
-    the_rendered_node_at_any_level(rendered_graph, &node)
-        .and_then(|rendered_node| {
-            rendered_node["ports"]["outputs"]
-                .as_array()?
-                .iter()
-                .find(|port| port["name"] == end.port.as_str())
+    let no_family = || {
+        format!(
+            "the running stream declares no family for the output port {node}/{}, so the \
+             subgraph port carrying it cannot be declared",
+            end.port
+        )
+    };
+    let rendered_node =
+        the_rendered_node_at_any_level(rendered_graph, &node).ok_or_else(no_family)?;
+    let carried_by_its_pin_type = rendered_node["ports"]["outputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|port| port["name"] == end.port.as_str())
+        .and_then(|port| {
+            serde_json::from_value::<streamlib::sdk::descriptors::PinType>(port["pin_type"].clone())
+                .ok()
         })
-        .and_then(|port| port["family"]["family"].as_str())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "the running stream declares no family for the output port {node}/{}, so the \
-                 subgraph port carrying it cannot be declared",
-                end.port
-            )
+        .and_then(|pin_type| streamlib::sdk::descriptors::PortFamily::carrying(&pin_type));
+    carried_by_its_pin_type
+        .or_else(|| {
+            ports_of_a_node_type(rendered_node["type"].as_str()?)?
+                .outputs
+                .into_iter()
+                .find(|port| port.name == end.port)
+                .map(|port| port.family.family)
         })
+        .map(|family| family.wire_name().to_owned())
+        .ok_or_else(no_family)
 }
 
 /// The fragment the stream fragment node `fragment_node` places for `held_stream`,

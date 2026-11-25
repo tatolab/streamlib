@@ -850,11 +850,19 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             .as_str()
             .expect("the placing node")
             .to_owned();
+        let set_on_volume = |input: &str, value: &str| {
+            json!({ "operation": "set_node_input_value", "stream": stream_asset,
+                    "level": [subgraph], "node": "volume", "input": input, "value": value })
+        };
         self.the_answer_or_the_refusal_of(
-            "add_node",
-            json!({ "stream": stream_asset, "level": [subgraph], "type": streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
-                    "name": "volume", "config": { "port": "volume", "family": "channels" },
-                    "author": an_agent_named("alice") }),
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": stream_asset, "level": [subgraph],
+                  "type": streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
+                  "name": "volume", "as": "volume" },
+                set_on_volume("port", "volume"),
+                set_on_volume("family", "channels"),
+            ], "author": an_agent_named("alice") }),
         )
         .await
         .expect("a `GraphInput` is added inside `sub`");
