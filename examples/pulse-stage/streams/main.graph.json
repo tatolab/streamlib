@@ -602,6 +602,50 @@
             "name": "video_out",
             "type": "tatolab.stream:GraphOutput"
           }
+        ],
+        "settings": [
+          {
+            "name": "passes",
+            "description": "How many times the picture is blurred.",
+            "family": {
+              "family": "channels"
+            },
+            "pin_declaration": {
+              "pin_type": {
+                "kind": "is",
+                "pin_type": {
+                  "type": "integer"
+                }
+              },
+              "flow": "value"
+            },
+            "input_mode": {
+              "mode": "setting_only",
+              "read": "at_setup"
+            },
+            "pin_default": 3
+          },
+          {
+            "name": "strength",
+            "description": "How much of the blur is added back.",
+            "family": {
+              "family": "channels"
+            },
+            "pin_declaration": {
+              "pin_type": {
+                "kind": "is",
+                "pin_type": {
+                  "type": "float"
+                }
+              },
+              "flow": "value"
+            },
+            "input_mode": {
+              "mode": "setting_only",
+              "read": "at_setup"
+            },
+            "pin_default": 0.9
+          }
         ]
       },
       "id": "e6baa1a4-5a1b-596d-bba8-75c89c7c3670",

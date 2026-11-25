@@ -86,7 +86,9 @@ def GlowAdd(
 
 @graph_generator
 def glow_look(
-    stream_builder: StreamBuilder, passes: int = 3, strength: float = 0.9
+    stream_builder: StreamBuilder,
+    passes: Annotated[int, Description("How many times the picture is blurred.")] = 3,
+    strength: Annotated[float, Description("How much of the blur is added back.")] = 0.9,
 ) -> None:
     """A bloom: the picture into `video_in` blurred `passes` times and added back at `strength`."""
     picture = stream_builder.add(

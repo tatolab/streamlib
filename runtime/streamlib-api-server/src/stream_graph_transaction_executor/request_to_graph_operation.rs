@@ -168,12 +168,27 @@ pub(super) fn graph_operation_for_the_request(
             label,
             ..
         } => {
-            let placed: StreamGraphFragmentNodeAGeneratorRunPlaced = serde_json::from_value(
-                run_the_graph_generator(&generator, name.as_deref(), &config.unwrap_or_default())?,
-            )
-            .map_err(|unread| {
-                format!("graph generator `{generator}`'s run placed no fragment node: {unread}")
-            })?;
+            let given_settings = config.is_some();
+            let mut placed = the_fragment_node_a_run_places(
+                run_the_graph_generator,
+                &generator,
+                name.as_deref(),
+                &config.unwrap_or_default(),
+            )?;
+            // A re-import given no settings runs again with the ones the node it refreshes holds:
+            // which node that is, the run's name answers.
+            if let Some(held) = staged_graph.node_named(&placed.name)
+                && !given_settings
+                && held.fragment.is_some()
+                && held.input_values != placed.input_values
+            {
+                placed = the_fragment_node_a_run_places(
+                    run_the_graph_generator,
+                    &generator,
+                    Some(&placed.name),
+                    &held.input_values,
+                )?;
+            }
             let operation = match staged_graph.node_named(&placed.name) {
                 None => {
                     let node = Uuid::new_v4();
@@ -188,7 +203,7 @@ pub(super) fn graph_operation_for_the_request(
                             id: node,
                             name: placed.name,
                             node_type: placed.generator,
-                            input_values: placed.config.unwrap_or_default(),
+                            input_values: placed.input_values,
                             exposed_config_fields: Vec::new(),
                             studio: Default::default(),
                             fragment: Some(Box::new(fragment)),
@@ -196,32 +211,13 @@ pub(super) fn graph_operation_for_the_request(
                         links: Vec::new(),
                     }
                 }
-                Some(StreamGraphDocumentNode {
-                    id,
-                    node_type,
-                    input_values,
-                    fragment: Some(previous_fragment),
-                    ..
-                }) => {
-                    let fragment = fragment_with_each_node_uuid_kept_by_its_name(
-                        &placed.fragment,
-                        Some(&previous_fragment),
-                        &mut Uuid::new_v4,
-                    )?;
-                    label_the_node(label, id, node_by_label)?;
-                    StreamGraphOperation::RefreshFragment {
-                        node: id,
-                        from: StreamGraphFragmentPlacement {
-                            generator: node_type,
-                            input_values,
-                            fragment: *previous_fragment,
-                        },
-                        to: StreamGraphFragmentPlacement {
-                            generator: placed.generator,
-                            input_values: placed.config.unwrap_or_default(),
-                            fragment,
-                        },
-                    }
+                Some(
+                    held @ StreamGraphDocumentNode {
+                        fragment: Some(_), ..
+                    },
+                ) => {
+                    label_the_node(label, held.id, node_by_label)?;
+                    the_refresh_of_a_fragment_node_by_a_run(held, placed)?
                 }
                 Some(StreamGraphDocumentNode { id, node_type, .. }) => {
                     return Err(format!(
@@ -324,11 +320,20 @@ pub(super) fn graph_operation_for_the_request(
             ..
         } => {
             let node = the_node_named(&node, node_by_label)?;
+            let held = the_node_the_document_holds(staged_graph, node)?;
+            if held.node_type != STREAM_FRAGMENT_NODE_TYPE
+                && a_setting_its_generator_promotes(&held, &input)
+            {
+                return the_refresh_of_a_generated_fragment_with_one_setting_set(
+                    held,
+                    input,
+                    member,
+                    value,
+                    run_the_graph_generator,
+                );
+            }
             Ok(StreamGraphOperation::set_node_input_value_of(
-                &the_node_the_document_holds(staged_graph, node)?,
-                input,
-                member,
-                value,
+                &held, input, member, value,
             ))
         }
         StreamGraphAction::RenameNode { node, name, .. } => {
@@ -765,6 +770,100 @@ fn the_group_named(group: &str) -> Result<Uuid, String> {
     })
 }
 
+/// The refresh of `held`, a fragment node, by `placed`, a fresh run of its generator: each node
+/// the run builds keeps the UUID of the node of the same name `held` stores.
+fn the_refresh_of_a_fragment_node_by_a_run(
+    held: StreamGraphDocumentNode,
+    placed: StreamGraphFragmentNodeAGeneratorRunPlaced,
+) -> Result<StreamGraphOperation, GraphRequestRefusal> {
+    let StreamGraphDocumentNode {
+        id,
+        node_type,
+        input_values,
+        fragment: Some(previous_fragment),
+        ..
+    } = held
+    else {
+        return Err(format!("node {} stores no fragment for a run to refresh", held.id).into());
+    };
+    let fragment = fragment_with_each_node_uuid_kept_by_its_name(
+        &placed.fragment,
+        Some(&previous_fragment),
+        &mut Uuid::new_v4,
+    )?;
+    Ok(StreamGraphOperation::RefreshFragment {
+        node: id,
+        from: StreamGraphFragmentPlacement {
+            generator: node_type,
+            input_values,
+            fragment: *previous_fragment,
+        },
+        to: StreamGraphFragmentPlacement {
+            generator: placed.generator,
+            input_values: placed.input_values,
+            fragment,
+        },
+    })
+}
+
+/// The refresh of `held`, a fragment node a graph generator placed, run again with the value
+/// `value` set on its setting `input`, or with the setting taken off when `value` is `None`,
+/// beside every other value it holds. A setting has no member.
+fn the_refresh_of_a_generated_fragment_with_one_setting_set(
+    held: StreamGraphDocumentNode,
+    input: String,
+    member: Option<String>,
+    value: Option<Value>,
+    run_the_graph_generator: &GraphGeneratorRunOfTheStream<'_>,
+) -> Result<StreamGraphOperation, GraphRequestRefusal> {
+    if let Some(member) = member {
+        return Err(format!(
+            "node {} `{}` is placed by graph generator `{}`, whose setting `{input}` is set \
+             whole and has no member `{member}`",
+            held.id, held.name, held.node_type
+        )
+        .into());
+    }
+    let mut input_values = held.input_values.clone();
+    match value {
+        Some(value) => input_values.insert(input, value),
+        None => input_values.remove(&input),
+    };
+    let placed = the_fragment_node_a_run_places(
+        run_the_graph_generator,
+        &held.node_type,
+        Some(&held.name),
+        &input_values,
+    )?;
+    the_refresh_of_a_fragment_node_by_a_run(held, placed)
+}
+
+/// Whether `input` is one of the settings the run of the generator that placed `held` declared,
+/// which a set runs that generator again with; any other input of `held` is set as it holds it.
+fn a_setting_its_generator_promotes(held: &StreamGraphDocumentNode, input: &str) -> bool {
+    held.fragment
+        .as_deref()
+        .and_then(|fragment| fragment.get("settings"))
+        .and_then(Value::as_array)
+        .is_some_and(|settings| settings.iter().any(|setting| setting["name"] == input))
+}
+
+/// The fragment node one run of `generator`, named `name` and given `input_values`, places.
+fn the_fragment_node_a_run_places(
+    run_the_graph_generator: &GraphGeneratorRunOfTheStream<'_>,
+    generator: &str,
+    name: Option<&str>,
+    input_values: &Map<String, Value>,
+) -> Result<StreamGraphFragmentNodeAGeneratorRunPlaced, GraphRequestRefusal> {
+    Ok(
+        serde_json::from_value(run_the_graph_generator(generator, name, input_values)?).map_err(
+            |unread| {
+                format!("graph generator `{generator}`'s run placed no fragment node: {unread}")
+            },
+        )?,
+    )
+}
+
 /// The fragment node one graph generator run places, as the run entry prints it: its nodes
 /// and links by name.
 #[derive(Deserialize)]
@@ -773,6 +872,6 @@ struct StreamGraphFragmentNodeAGeneratorRunPlaced {
     #[serde(rename = "type")]
     generator: String,
     #[serde(default)]
-    config: Option<Map<String, Value>>,
+    input_values: Map<String, Value>,
     fragment: Value,
 }
