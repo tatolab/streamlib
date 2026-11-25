@@ -5,7 +5,10 @@ use serde_json::json;
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeTypeInputMode;
 
 use super::NodeTypePortsDescribedOnTheWire;
-use crate::core::descriptors::{FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, PinDeclaration, PinType, PortDescriptor, SettingReadTime};
+use crate::core::descriptors::{
+    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
+    NodeKind, PinDeclaration, PinType, PortDescriptor, SettingReadTime,
+};
 
 /// A node type of `node_kind` with one String input, `label`, that carries Records.
 fn a_node_type_reading_a_string_as_records(node_kind: NodeKind) -> NodeDescriptor {
@@ -17,9 +20,12 @@ fn a_node_type_reading_a_string_as_records(node_kind: NodeKind) -> NodeDescripto
             "",
         )
     }
-    .with_input(
-        PortDescriptor::new("label", "", false, PinDeclaration::exactly(PinType::String {})),
-    )
+    .with_input(PortDescriptor::new(
+        "label",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::String {}),
+    ))
 }
 
 /// A String input carrying Records takes no value on a process node, which reads a Records
@@ -64,9 +70,12 @@ fn an_input_whose_pin_type_takes_no_wire_is_described_as_a_setting() {
         NodeClassImportPath::new("nodes.choose:Chooser").unwrap(),
         "",
     )
-    .with_input(
-        PortDescriptor::new("kind", "", false, PinDeclaration::exactly(PinType::a_choice_of_any())),
-    );
+    .with_input(PortDescriptor::new(
+        "kind",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::a_choice_of_any()),
+    ));
 
     let described = NodeTypePortsDescribedOnTheWire::of(&descriptor);
 
@@ -87,8 +96,7 @@ fn an_input_whose_pin_type_takes_no_wire_is_described_as_a_setting() {
 fn each_input_says_whether_it_takes_a_wire_as_the_link_check_rules() {
     let float = || PinDeclaration::exactly(PinType::Float { exact_size: None });
     let an_input = |name: &str, mode: NodeInputMode| {
-        PortDescriptor::new(name, "", false, float())
-        .with_input_mode(mode)
+        PortDescriptor::new(name, "", false, float()).with_input_mode(mode)
     };
     let descriptor = NodeDescriptor::new(
         NodeClassShortName::new("Blur").unwrap(),

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use quote::quote;
-use streamlib_node_schema::pin_type::{PinFlow, PinType, TexturePixelFormat};
 use streamlib_node_schema::ChannelsOutputPortSampleType;
+use streamlib_node_schema::pin_type::{PinFlow, PinType, TexturePixelFormat};
 
 use super::*;
 

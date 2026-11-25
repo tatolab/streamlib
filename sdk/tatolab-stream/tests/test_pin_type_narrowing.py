@@ -80,10 +80,6 @@ def test_encoded_media_carries_its_codecs_and_an_output_of_one_codec_sends_it_on
         "type": "encoded_video",
         "codecs": ["h264", "h265"],
     }
-    assert ports["encoded"]["family"] == {"family": "packets"}
-    assert ports["reencoded"]["family"] == {"family": "packets", "codec": "h265"}
-    assert ports["voice"]["family"] == {"family": "packets", "codec": "opus"}
-    assert ports["either"]["family"] == {"family": "packets"}
 
 
 def test_the_type_a_pin_type_choice_chooses_takes_the_same_narrowing():

@@ -37,8 +37,22 @@ fn register_test_type(short: &str) -> NodeClassImportPath {
         import_path.clone(),
         "graph readiness signal test",
     )
-    .with_input(PortDescriptor::new("bags_from_upstream", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
-    .with_output(PortDescriptor::new("bags_to_downstream", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+    .with_input(PortDescriptor::new(
+        "bags_from_upstream",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ))
+    .with_output(PortDescriptor::new(
+        "bags_to_downstream",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

@@ -17,7 +17,10 @@ use super::connect_on_a_test_thread::{
     connect_a_link_of_a_saved_graph_on_this_thread, connect_on_this_thread,
 };
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor};
+use crate::core::descriptors::{
+    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration,
+    PinGroupDescriptor, PinType, PortDescriptor,
+};
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, PortDirection};
@@ -32,14 +35,24 @@ fn class_path(class_name: &str) -> NodeClassImportPath {
 }
 
 fn a_records_port(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
-    PortDescriptor::new(name, name, true, PinDeclaration {
-        pin_type,
-        ..PinDeclaration::exactly(PinType::Float { exact_size: None })
-    })
+    PortDescriptor::new(
+        name,
+        name,
+        true,
+        PinDeclaration {
+            pin_type,
+            ..PinDeclaration::exactly(PinType::Float { exact_size: None })
+        },
+    )
 }
 
 fn a_float_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(name, name, true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
+    PortDescriptor::new(
+        name,
+        name,
+        true,
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    )
 }
 
 fn a_node_type(class_name: &str) -> NodeDescriptor {

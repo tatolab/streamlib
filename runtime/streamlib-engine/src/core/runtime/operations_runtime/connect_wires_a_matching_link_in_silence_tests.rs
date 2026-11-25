@@ -72,7 +72,14 @@ fn register_producer_and_consumer_descriptors() {
             producer_class_path(),
             "producer",
         );
-        producer.outputs.push(PortDescriptor::new("out", "output", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+        producer.outputs.push(PortDescriptor::new(
+            "out",
+            "output",
+            true,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        ));
         NODE_REGISTRY
             .register_descriptor_only(producer)
             .expect("register producer descriptor");
@@ -83,7 +90,14 @@ fn register_producer_and_consumer_descriptors() {
             "consumer",
         );
         consumer.inputs.push(
-            PortDescriptor::new("in", "input", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))
+            PortDescriptor::new(
+                "in",
+                "input",
+                true,
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
+            )
             .with_delivery_profile("newest"),
         );
         NODE_REGISTRY

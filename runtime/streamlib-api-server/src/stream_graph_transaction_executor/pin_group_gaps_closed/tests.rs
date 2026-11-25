@@ -7,7 +7,12 @@ use streamlib::sdk::descriptors::{PinDeclaration, PinGroupDescriptor, PinType, P
 use super::*;
 
 fn a_float_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(name, name, true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
+    PortDescriptor::new(
+        name,
+        name,
+        true,
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    )
 }
 
 fn the_layers_group() -> PinGroupDescriptor {

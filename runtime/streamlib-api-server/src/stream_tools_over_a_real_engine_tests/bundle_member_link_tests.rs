@@ -6,7 +6,9 @@
 //! what `check_link` answers for it, a member the bundle does not hold is refused naming the
 //! members it has, and a saved link from a member loads from that member.
 
-use streamlib::sdk::descriptors::{BundleMember, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType, PortDescriptor};
+use streamlib::sdk::descriptors::{
+    BundleMember, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType, PortDescriptor,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 use super::*;
@@ -48,7 +50,7 @@ fn a_node_type_with_one_port(
     let node_type = NodeClassImportPath::new(node_type).expect("a node type");
     let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
     let port = PortDescriptor::new(port, "", true, PinDeclaration::exactly(pin_type))
-    .with_delivery_profile("newest");
+        .with_delivery_profile("newest");
     let descriptor = NodeDescriptor::new(
         NodeClassShortName::new(short_name).expect("a short name"),
         node_type,

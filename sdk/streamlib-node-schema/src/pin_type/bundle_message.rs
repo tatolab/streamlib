@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The one message a whole bundle travels as on a link, which the runtime's packing of a bundle
-//! and every reader of a port's family both follow.
+//! and every reader of a bundle's port both follow.
 
 use super::{BundleMember, PinType};
 

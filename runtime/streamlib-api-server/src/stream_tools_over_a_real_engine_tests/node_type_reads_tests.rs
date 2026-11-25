@@ -13,7 +13,10 @@ use super::input_value_set_tests::{
 use super::project_node_type_listing_tests::STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING;
 use super::*;
 
-use streamlib::sdk::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor};
+use streamlib::sdk::descriptors::{
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
+    PortDescriptor,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 /// A native conversion from Audio to a Tensor, a pair no other test links.
@@ -160,7 +163,7 @@ async fn a_conversion_no_node_can_be_built_for_is_not_listed() {
     REGISTERED.call_once(|| {
         let port = |name: &str, pin_type: PinType| {
             PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type))
-            .with_delivery_profile("newest")
+                .with_delivery_profile("newest")
         };
         let descriptor = NodeDescriptor {
             conversion: true,

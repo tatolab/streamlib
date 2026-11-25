@@ -212,7 +212,9 @@ const THE_TYPES_A_PORT_OF_EACH_OLDER_FAMILY_CARRIED: &[(&str, &[&str])] = &[
 /// as an Image port's Texture; else the types it may become, none picked, since a guessed type
 /// can refuse a link that works today.
 fn the_words_of_a_port_declared_by_family(name: &str, family: &Value) -> String {
-    let family_name = family.as_str().map_or_else(|| family.to_string(), str::to_owned);
+    let family_name = family
+        .as_str()
+        .map_or_else(|| family.to_string(), str::to_owned);
     let to_write = format!(
         "in place of `\"family\": {family}`, with `\"contract\": \
          \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"

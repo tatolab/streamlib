@@ -4,13 +4,18 @@
 use serde_json::json;
 
 use super::*;
-use crate::core::descriptors::{NodeInputMode, PinDeclaration, PinType, PortDescriptor, SettingReadTime};
+use crate::core::descriptors::{
+    NodeInputMode, PinDeclaration, PinType, PortDescriptor, SettingReadTime,
+};
 
 fn a_setting_read_at_setup(name: &str, default: Value) -> PortInfo {
     PortInfo::from(
-        &PortDescriptor::new(name, name, false, PinDeclaration::exactly(PinType::Integer {
-            exact_size: None,
-        }))
+        &PortDescriptor::new(
+            name,
+            name,
+            false,
+            PinDeclaration::exactly(PinType::Integer { exact_size: None }),
+        )
         .with_input_mode(NodeInputMode::SettingOnly {
             read: SettingReadTime::AtSetup,
         })

@@ -33,7 +33,7 @@ def Compare(a: float = 0.0, b: float = 0.0, tolerance: float = 0.0) -> Compariso
 )
 @node
 def Gate[PinValue](value: PinValue, open: bool = True) -> PinValue | None:  # noqa: N802, A002
-    """`value` handed on unread while `open`, else nothing, of any family."""
+    """`value` handed on unread while `open`, else nothing, of any type."""
     return value if open else None
 
 

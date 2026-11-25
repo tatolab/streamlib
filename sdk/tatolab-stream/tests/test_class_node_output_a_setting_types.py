@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """A module's class node types an output by a `PinTypeChoice` field: the output's union is what
-the field may choose, and the output travels on the family of the type it chooses."""
+the field may choose, and the output carries the type it chooses."""
 
 from __future__ import annotations
 
@@ -68,15 +68,10 @@ def the_port(ports_stamp: str, port_name: str) -> "dict[str, Any]":
     return port
 
 
-def test_the_output_travels_on_the_family_of_the_type_its_setting_chooses_by_default():
+def test_the_output_carries_the_type_its_setting_chooses():
     assert the_port(NODE_DECLARATION_OUTPUT_PORTS_STAMP, "content") == {
         "name": "content",
         "description": "What arrives",
-        "family": {
-            "family": "records",
-            "family_from_config_key": "content_type",
-            "codec_from_config_key": "content_type",
-        },
         "pin_declaration": {
             "pin_type": {"kind": "set_by_input", "input_name": "content_type"},
             "flow": "stream",
@@ -107,7 +102,6 @@ def test_an_input_of_several_types_takes_a_named_type():
         "kind": "one_of",
         "pin_types": [{"type": "texture"}, {"type": "named", "named_pin_type": NOTE}],
     }
-    assert port["family"] == {"family": "image", "also_takes_families": ["records"]}
 
 
 def _a_default_none_of_the_union_chooses() -> None:

@@ -45,7 +45,6 @@ from ._pin_declaration import (
     read_pin_declaration,
 )
 from ._former_name_check import refuse_former_names_that_find_no_one_pin
-from ._pin_family import family_a_pin_type_travels_on, family_declaration_of_a_typed_output
 from ._pin_types import PIN_VALUE_CLASSES, PinValueOfParts
 
 __all__ = [
@@ -75,16 +74,12 @@ PYTHON_FUNCTION_NODE_LANGUAGE = "python"
 NODE_DECLARATION_LANGUAGE_STAMP = "__tatolab_node_language__"
 NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP = "__tatolab_node_function_signature__"
 NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP = "__tatolab_node_function_state_fields__"
+# The stamp a Rust function node's config schema rides on, read beside the stamps every node
+# carries; a Python node takes no config and stamps none.
+NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 
 # The value type of a message a function node hands on unread.
 UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
-
-# The family an input that hands on what its link brings is declared with, beside every other
-# family it also takes.
-UNREAD_MESSAGE_INPUT_FAMILY = {
-    "family": "image",
-    "also_takes_families": ["array", "channels", "packets", "records"],
-}
 
 _FUNCTION_LOCAL_MARKER = "<locals>"
 
@@ -405,7 +400,6 @@ class _FunctionNodeSignatureReading:
                 "name": port_name,
                 "description": port_description,
                 "delivery_profile": "newest",
-                "family": {"family": "image"},
             }
         )
 
@@ -441,7 +435,6 @@ class _FunctionNodeSignatureReading:
         input_port: "dict[str, Any]" = {
             "name": port_name,
             "description": port_description,
-            "family": family_an_input_travels_on(declared),
             "pin_declaration": declared.declaration,
         }
         if declared.default_value is not NO_DEFAULT:
@@ -530,7 +523,7 @@ class _FunctionNodeSignatureReading:
         """A shader's returned `Texture`, the picture it computes, as its one Image output."""
         port_name = self._cast_port_name(_SINGLE_OUTPUT_NAME)
         return (
-            [{"name": port_name, "description": port_description, "family": {"family": "image"}}],
+            [{"name": port_name, "description": port_description}],
             [
                 {
                     "port": port_name,
@@ -611,7 +604,6 @@ class _FunctionNodeSignatureReading:
         output_port = {
             "name": port_name,
             "description": port_description or "",
-            "family": self._family_an_output_travels_on(declared, port_name),
             "pin_declaration": declared.declaration,
         }
         signature_output: "dict[str, Any]" = {
@@ -624,15 +616,6 @@ class _FunctionNodeSignatureReading:
             self._state_the_dataclass_of_a_bundle(signature_output, output_name, output_annotation)
         signature_output["may_hand_out_nothing"] = declared.optional
         return output_port, signature_output
-
-    def _family_an_output_travels_on(self, declared: DeclaredPin, port_name: str) -> "dict[str, Any]":
-        declared_pin_type = declared.declaration["pin_type"]
-        if declared_pin_type["kind"] == "same_as_input":
-            return {
-                "family": UNREAD_MESSAGE_INPUT_FAMILY["family"],
-                "family_follows_input_port": declared_pin_type["input_port_name"],
-            }
-        return family_declaration_of_a_typed_output(port_name, declared.declaration)
 
     def _cast_port_name(self, spelling: str) -> str:
         try:
@@ -672,26 +655,6 @@ def _the_pin_type_a_pin_declares(declaration: PinDeclarationOnTheWire) -> "dict[
     declared_pin_type = declaration["pin_type"]
     assert declared_pin_type["kind"] == "is", "the pin declares exactly one type"
     return dict(declared_pin_type["pin_type"])
-
-
-def family_an_input_travels_on(declared: DeclaredPin) -> "dict[str, Any]":
-    """The family a typed input reads: its one type's, the one all its types share, or every family.
-
-    An input that takes more than one family reads every family, as one that hands on what its
-    link brings does.
-    """
-    declared_pin_type = declared.declaration["pin_type"]
-    if declared_pin_type["kind"] == "is":
-        pin_types = [declared_pin_type["pin_type"]]
-    elif declared_pin_type["kind"] == "one_of":
-        pin_types = declared_pin_type["pin_types"]
-    else:
-        pin_types = []
-    families = {family_a_pin_type_travels_on(pin_type) for pin_type in pin_types}
-    if len(families) == 1:
-        (family,) = families
-        return {"family": family}
-    return dict(UNREAD_MESSAGE_INPUT_FAMILY)
 
 
 # The pin types whose value travels as one f64, which a pin of several of them is handed as.

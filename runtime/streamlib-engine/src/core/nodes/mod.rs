@@ -50,8 +50,7 @@ pub use constant_node_type::{
 };
 pub use empty_config::EmptyConfig;
 pub(crate) use graph_interface_node_types::{
-    the_node_type_of_a_graph_input,
-    the_settings_of_a_graph_input,
+    the_node_type_of_a_graph_input, the_settings_of_a_graph_input,
 };
 pub(crate) use graph_variable_node_types::{
     the_settings_of_a_get_variable_offering, the_value_port_of_a_graph_variable_node,

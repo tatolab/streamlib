@@ -41,7 +41,7 @@ const MANUAL_READER: &str = "reactive_reader_rule::ManualMeter";
 
 fn a_records_port(name: &str) -> PortDescriptor {
     PortDescriptor::new(name, "", true, PinDeclaration::exactly(PinType::String {}))
-    .with_delivery_profile("newest")
+        .with_delivery_profile("newest")
 }
 
 fn a_described_node_type(

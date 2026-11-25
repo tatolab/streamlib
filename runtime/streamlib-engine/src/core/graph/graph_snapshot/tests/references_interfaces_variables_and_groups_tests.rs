@@ -3,8 +3,8 @@
 
 //! Node references under config keys, links to other streams, wide integers, interface and variable nodes, labelled groups and config-field inputs.
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 const GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Gateway";
 
@@ -18,12 +18,17 @@ fn an_input_holding_a_node_reference(
     referenced_node_type: &str,
     one_referrer_per_referenced_node: bool,
 ) -> crate::core::descriptors::PortDescriptor {
+    use crate::core::descriptors::PortDescriptor;
     use crate::core::descriptors::{PinDeclaration, PinType};
-    use crate::core::descriptors::{PortDescriptor};
-    PortDescriptor::new(name, "", false, PinDeclaration::exactly(PinType::NodeReference {
-        referenced_node_type: Some(NodeClassImportPath::new(referenced_node_type).unwrap()),
-        one_referrer_per_referenced_node,
-    }))
+    PortDescriptor::new(
+        name,
+        "",
+        false,
+        PinDeclaration::exactly(PinType::NodeReference {
+            referenced_node_type: Some(NodeClassImportPath::new(referenced_node_type).unwrap()),
+            one_referrer_per_referenced_node,
+        }),
+    )
 }
 
 /// A stream that described a gateway type, a track type whose input `gateway` takes a reference
@@ -382,13 +387,20 @@ const IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:I
 const PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:PacketsSink";
 
 fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamResolves {
-    use crate::core::descriptors::{PortDescriptor};
+    use crate::core::descriptors::PortDescriptor;
     let node_types = NodeTypesOneStreamResolves::new();
     for (short_name, import_path, port) in [
         (
             "ImageSource",
             IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS,
-            PortDescriptor::new("video", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })),
+            PortDescriptor::new(
+                "video",
+                "",
+                false,
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
+            ),
         ),
         (
             "PacketsSink",
@@ -456,10 +468,11 @@ fn interface_ports_of_the_pin_type_their_linked_ports_carry_validate() {
 #[test]
 fn an_interface_port_of_another_pin_type_than_its_linked_port_is_refused_naming_both() {
     let node_types = node_types_with_an_image_source_and_a_packets_sink();
-    let output_refusal = a_graph_offering_the_source_and_feeding_the_sink("tensor", "encoded_video")
-        .validate(&node_types)
-        .unwrap_err()
-        .to_string();
+    let output_refusal =
+        a_graph_offering_the_source_and_feeding_the_sink("tensor", "encoded_video")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
     assert!(
         output_refusal.contains("`GraphOutput` node `video`")
             && output_refusal.contains("Tensor")

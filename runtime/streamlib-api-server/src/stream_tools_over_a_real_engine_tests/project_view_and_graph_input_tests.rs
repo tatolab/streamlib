@@ -342,11 +342,7 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers() {
     let live_graph = engine.the_live_graph_of(&stream_id);
     let cue = the_node_named(&live_graph, "cue");
     assert_eq!(cue["id"], CUE_GRAPH_INPUT_NODE_UUID, "{cue}");
-    assert_eq!(
-        cue["input_values"]["value"],
-        json!("intro"),
-        "{cue}"
-    );
+    assert_eq!(cue["input_values"]["value"], json!("intro"), "{cue}");
     assert_eq!(
         cue["components"]["graph_interface"],
         json!({
@@ -419,11 +415,7 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
         "{saved_cue}"
     );
     let cue = the_node_named(&engine.the_live_graph_of(&stream_id), "cue");
-    assert_eq!(
-        cue["input_values"]["value"],
-        json!("drop"),
-        "{cue}"
-    );
+    assert_eq!(cue["input_values"]["value"], json!("drop"), "{cue}");
     let document_before = project.the_graph_document_of("main");
 
     let refusal = engine
@@ -492,9 +484,7 @@ async fn a_graph_input_default_its_pin_type_does_not_take_is_refused_at_load() {
         .to_string();
 
     assert!(
-        refusal.contains("`cue`")
-            && refusal.contains("`default`")
-            && refusal.contains("String"),
+        refusal.contains("`cue`") && refusal.contains("`default`") && refusal.contains("String"),
         "{refusal}"
     );
 }

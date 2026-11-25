@@ -14,7 +14,6 @@ from collections.abc import Callable
 from typing import Any
 
 from ._description import description_and_annotation_without_it
-from ._function_node_declaration import family_an_input_travels_on
 from ._input_declaration_annotations import SettingOnly
 from ._node_declaration_refusal import NodeDeclarationRefusal
 from ._pin_declaration import NO_DEFAULT, read_pin_declaration
@@ -59,7 +58,6 @@ def the_settings_a_graph_generator_promotes(
         setting: dict[str, Any] = {
             "name": parameter.name,
             "description": description or "",
-            "family": family_an_input_travels_on(declared),
             "pin_declaration": declared.declaration,
             "input_mode": SettingOnly().input_mode(),
         }

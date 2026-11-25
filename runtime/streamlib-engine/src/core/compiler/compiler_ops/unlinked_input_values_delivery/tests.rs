@@ -111,7 +111,10 @@ pub(crate) mod a_shader_node_in_this_process {
     };
     use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
     use crate::core::compiler::compiler_ops::shader_node_native_evaluator::ShaderNodeNativeEvaluator;
-    use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PinDeclaration, PinType, PortDescriptor};
+    use crate::core::descriptors::{
+        NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PinDeclaration, PinType,
+        PortDescriptor,
+    };
     use crate::core::error::Error;
     use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
 
@@ -125,14 +128,33 @@ pub(crate) mod a_shader_node_in_this_process {
         );
         tint.node_kind = NodeKind::Shader;
         tint.with_input(
-            PortDescriptor::new("image", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))
+            PortDescriptor::new(
+                "image",
+                "",
+                true,
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
+            )
             .with_delivery_profile("newest"),
         )
         .with_input(
-            PortDescriptor::new("amount", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
+            PortDescriptor::new(
+                "amount",
+                "",
+                true,
+                PinDeclaration::exactly(PinType::Float { exact_size: None }),
+            )
             .with_delivery_profile("newest"),
         )
-        .with_output(PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
+        .with_output(PortDescriptor::new(
+            "result",
+            "",
+            true,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        ))
     }
 
     fn the_tint_program()

@@ -101,7 +101,6 @@ def test_a_function_taking_and_returning_a_dataclass_has_one_bundle_input_and_on
     assert list(outputs) == ["result"], "the returned dataclass is one output"
     assert the_one_pin_type(inputs["tone"]) == {"type": "bundle", "name": "Tone", "members": TONE_MEMBERS}
     assert the_one_pin_type(outputs["result"]) == {"type": "bundle", "name": "Tone", "members": TONE_MEMBERS}
-    assert inputs["tone"]["family"] == {"family": "records"}
     assert inputs["tone"]["pin_default"] == {
         "frequency": 440.0,
         "gain": 1.0,

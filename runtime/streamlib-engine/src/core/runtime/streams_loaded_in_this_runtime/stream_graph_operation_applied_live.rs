@@ -837,7 +837,10 @@ fn how_a_node_types_port_is_judged(
         }
     };
     if node_type.as_str() == STREAM_FRAGMENT_NODE_TYPE
-        || is_a_graph_interface_node_choosing_no_pin_type(node_type.as_str(), &serde_json::Map::new())
+        || is_a_graph_interface_node_choosing_no_pin_type(
+            node_type.as_str(),
+            &serde_json::Map::new(),
+        )
     {
         return HowANodeTypesPortIsJudged::Answered(Ok(
             WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade,

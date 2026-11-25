@@ -111,7 +111,7 @@ def test_its_ports_config_and_state_are_stamped_as_a_function_nodes():
             "name": "rate",
             "description": "",
             "delivery_profile": "newest",
-            "family": {"family": "channels"},
+            "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
             "pin_default": 0.5,
         }
     ]

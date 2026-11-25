@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
 use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
+use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::runtime::a_project_on_disk_for_a_test::{
@@ -85,7 +85,14 @@ fn a_rust_type_registered_as(short_name: &str) -> NodeClassImportPath {
             rust_type.clone(),
             "a launch-record test double",
         )
-        .with_output(PortDescriptor::new("video", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))),
+        .with_output(PortDescriptor::new(
+            "video",
+            "",
+            false,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        )),
     );
     rust_type
 }
@@ -548,7 +555,14 @@ fn a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_r
             display_type.clone(),
             "a launch-record test double",
         )
-        .with_input(PortDescriptor::new("video_in", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))),
+        .with_input(PortDescriptor::new(
+            "video_in",
+            "",
+            false,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        )),
     );
 
     let project_directory = tempfile::tempdir().expect("a project directory");

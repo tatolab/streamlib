@@ -156,7 +156,11 @@ fn a_link_its_pin_types_refuse_is_refused_before_any_link_exists() {
     let refusal = refusal.to_string();
     assert!(refusal.contains("String"), "{refusal}");
     assert!(refusal.contains("Tensor"), "{refusal}");
-    assert_eq!(the_links_in(&compiler), 0, "the refused link is never added");
+    assert_eq!(
+        the_links_in(&compiler),
+        0,
+        "the refused link is never added"
+    );
 }
 
 #[test]

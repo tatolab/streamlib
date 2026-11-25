@@ -4,7 +4,10 @@
 use serde_json::{Map, Value, json};
 
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinDeclaration, PinType, PortDescriptor};
+use crate::core::descriptors::{
+    NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
+    PinDeclaration, PinType, PortDescriptor,
+};
 use crate::core::graph::input_values::the_unlinked_input_values;
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 
@@ -24,13 +27,18 @@ fn the_spoke_type_registered() {
             "a fixture",
         );
         descriptor.inputs = vec![
-            PortDescriptor::new("hub", "hub", false, PinDeclaration::exactly(PinType::Connection {
-                connection_type: NamedPinTypeImportPath::new(
-                    "connection_input_tests:HubConnection",
-                )
-                .unwrap(),
-                one_referrer_per_referenced_node: false,
-            }))
+            PortDescriptor::new(
+                "hub",
+                "hub",
+                false,
+                PinDeclaration::exactly(PinType::Connection {
+                    connection_type: NamedPinTypeImportPath::new(
+                        "connection_input_tests:HubConnection",
+                    )
+                    .unwrap(),
+                    one_referrer_per_referenced_node: false,
+                }),
+            )
             .with_input_mode(NodeInputMode::WireOrValue),
         ];
         NODE_REGISTRY

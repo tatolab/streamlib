@@ -6,7 +6,10 @@
 //! `PreviousValue` node is added; one it takes is closed through that node, and a retry under
 //! its key names the node as inserted to close the loop.
 
-use streamlib::sdk::descriptors::{FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PinDeclaration, PinType, PortDescriptor};
+use streamlib::sdk::descriptors::{
+    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
+    PinDeclaration, PinType, PortDescriptor,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 use super::link_checked_before_it_is_made_tests::register_the_link_check_node_types_once;

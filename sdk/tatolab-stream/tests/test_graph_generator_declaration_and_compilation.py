@@ -471,7 +471,6 @@ def test_the_builder_modules_import_nothing_native() -> None:
                 (1, "_node_declaration"),
                 (1, "_function_node_declaration"),
                 (1, "_stream_clock_spec"),
-                (1, "_port_family_declaration"),
                 (1, "_stream_builder"),
                 (1, "_graph_generator_detection"),
                 (1, "_typed_node_pins"),
@@ -585,21 +584,21 @@ def test_a_node_reference_in_the_deepest_container_input_values_nest_is_refused_
         )
 
 
-def test_interface_nodes_compile_with_their_family_written_by_its_wire_name() -> None:
-    from tatolab.stream import GraphInput, GraphOutput
+def test_interface_nodes_compile_with_the_pin_type_they_choose() -> None:
+    from tatolab.stream import GraphInput, GraphOutput, PinTypeChoice, Texture
 
     stream_builder = StreamBuilder("rig")
-    entering = stream_builder.add(GraphInput, input_values={"port": "camera", "family": "image"})
+    entering = stream_builder.add(GraphInput, input_values={"port": "camera", "pin_type": PinTypeChoice(Texture)})
     inverter = stream_builder.add(FrameInverter)
-    leaving = stream_builder.add(GraphOutput, input_values={"port": "inverted", "family": "image"})
+    leaving = stream_builder.add(GraphOutput, input_values={"port": "inverted", "pin_type": PinTypeChoice(Texture)})
     stream_builder.connect(entering.output("value"), inverter.input("video_from_upstream"))
     stream_builder.connect(inverter.output("video_to_downstream"), leaving.input("value"))
 
     graph = stream_builder._compiled_graph()
     assert [(node["name"], node["type"], node["input_values"]) for node in graph["nodes"]] == [
-        ("graphinput", "tatolab.stream:GraphInput", {"port": "camera", "family": "image"}),
+        ("graphinput", "tatolab.stream:GraphInput", {"port": "camera", "pin_type": {"type": "texture"}}),
         ("frameinverter", FrameInverter.__module__ + ":FrameInverter", {}),
-        ("graphoutput", "tatolab.stream:GraphOutput", {"port": "inverted", "family": "image"}),
+        ("graphoutput", "tatolab.stream:GraphOutput", {"port": "inverted", "pin_type": {"type": "texture"}}),
     ]
     assert graph["links"] == [
         {

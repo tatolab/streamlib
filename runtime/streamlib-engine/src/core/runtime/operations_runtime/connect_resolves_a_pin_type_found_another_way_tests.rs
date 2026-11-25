@@ -14,7 +14,11 @@ use serde_json::{Value, json};
 use super::connect_on_a_test_thread::connect_on_this_thread_waiting_for;
 use super::{InputValueChangesAConnectWaitsFor, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType, PortDescriptor, SettingReadTime};
+use crate::core::descriptors::{
+    DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
+    NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType,
+    PortDescriptor, SettingReadTime,
+};
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
@@ -69,10 +73,15 @@ fn a_port(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
         DeclaredPinType::Is { pin_type } => PinDeclaration::exactly(pin_type.clone()),
         _ => PinDeclaration::exactly(PinType::String {}),
     };
-    PortDescriptor::new(name, name, true, PinDeclaration {
-        pin_type,
-        ..exactly
-    })
+    PortDescriptor::new(
+        name,
+        name,
+        true,
+        PinDeclaration {
+            pin_type,
+            ..exactly
+        },
+    )
 }
 
 fn is(pin_type: PinType) -> DeclaredPinType {
@@ -169,9 +178,12 @@ fn register_the_fixture_node_types() {
             ),
             a_node_type(
                 CHANNELS_FLOAT_SINK,
-                vec![
-                    PortDescriptor::new("value", "value", true, PinDeclaration::exactly(float())),
-                ],
+                vec![PortDescriptor::new(
+                    "value",
+                    "value",
+                    true,
+                    PinDeclaration::exactly(float()),
+                )],
                 Vec::new(),
             ),
             a_node_type(
@@ -195,21 +207,27 @@ fn register_the_fixture_node_types() {
                     })
                     .with_pin_default(json!(a_note())),
                 ],
-                vec![
-                    PortDescriptor::new("value", "value", true, PinDeclaration {
+                vec![PortDescriptor::new(
+                    "value",
+                    "value",
+                    true,
+                    PinDeclaration {
                         pin_type: DeclaredPinType::SetByInput {
                             input_name: "kind".to_owned(),
                         },
                         flow: PinFlow::Stream,
                         ..PinDeclaration::exactly(PinType::String {})
-                    }),
-                ],
+                    },
+                )],
             ),
             a_node_type(
                 H264_SINK,
-                vec![
-                    PortDescriptor::new("value", "value", true, PinDeclaration::exactly(encoded_video("h264"))),
-                ],
+                vec![PortDescriptor::new(
+                    "value",
+                    "value",
+                    true,
+                    PinDeclaration::exactly(encoded_video("h264")),
+                )],
                 Vec::new(),
             ),
         ] {
@@ -252,9 +270,11 @@ fn choosing(pin_type: PinType) -> serde_json::Map<String, Value> {
 /// `value`.
 fn the_output_of(compiler: &Compiler, node: &NodeRunId) -> &'static str {
     let is_a_pass_on = compiler.scope(|graph, _tx| {
-        graph.traversal().v(node).first().is_some_and(|node| {
-            node.node_type == class_path(PASS_ON)
-        })
+        graph
+            .traversal()
+            .v(node)
+            .first()
+            .is_some_and(|node| node.node_type == class_path(PASS_ON))
     });
     if is_a_pass_on { PASSED_ON } else { "value" }
 }

@@ -11,7 +11,9 @@ use serde_json::json;
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
-use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor};
+use crate::core::descriptors::{
+    NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor,
+};
 use crate::core::error::Error;
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 
@@ -35,7 +37,12 @@ fn register_a_function_and_a_shader_node_type(node_types: &NodeTypesOneStreamRes
         ..PinDeclaration::exactly(PinType::Float { exact_size: None })
     });
     scale = scale.with_input(
-        PortDescriptor::new("x", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
+        PortDescriptor::new(
+            "x",
+            "",
+            true,
+            PinDeclaration::exactly(PinType::Float { exact_size: None }),
+        )
         .with_delivery_profile("newest"),
     );
     node_types
@@ -65,14 +72,25 @@ fn register_a_function_and_a_shader_node_type(node_types: &NodeTypesOneStreamRes
     });
     tint = tint
         .with_input(
-            PortDescriptor::new("image", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))
+            PortDescriptor::new(
+                "image",
+                "",
+                true,
+                PinDeclaration::exactly(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
+            )
             .with_delivery_profile("newest"),
         )
-        .with_input(
-            PortDescriptor::new("amount", "", true, amount)
-            .with_delivery_profile("newest"),
-        )
-        .with_output(PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+        .with_input(PortDescriptor::new("amount", "", true, amount).with_delivery_profile("newest"))
+        .with_output(PortDescriptor::new(
+            "result",
+            "",
+            true,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        ));
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
             tint,

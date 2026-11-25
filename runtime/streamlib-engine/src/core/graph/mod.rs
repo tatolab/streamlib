@@ -49,15 +49,14 @@ pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
     ALinkConnected, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
-    refuse_a_link_its_pin_types_refuse,
-    refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
+    refuse_a_link_its_pin_types_refuse, refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
     refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse,
     the_bundle_frame_type_an_output_may_carry, the_ends_a_link_is_judged_by,
     the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use pin_type_resolution::{
     the_input_an_output_takes_the_type_of, the_outputs_a_link_carries_on,
-    the_pin_a_port_resolves_to, the_pin_a_link_out_of_an_output_carries,
+    the_pin_a_link_out_of_an_output_carries, the_pin_a_port_resolves_to,
 };
 pub(crate) use streamlib_node_schema::is_in_exposed_name_cast_form;
 pub use streamlib_node_schema::{

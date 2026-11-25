@@ -57,8 +57,11 @@ impl GraphInterfacePort {
             return Ok(());
         };
         let linked = linked.typed_by_its_setting_in(&inputs, linked_node_input_values);
-        match self.refusal_of_a_linked_port_by_its_type(&linked, &linked_node.node_type, linked_port)
-        {
+        match self.refusal_of_a_linked_port_by_its_type(
+            &linked,
+            &linked_node.node_type,
+            linked_port,
+        ) {
             Some((carried, refusal)) => Err(Error::GraphError(format!(
                 "`{}` node `{}` carries {carried} for `{}`, and the link rules refuse it: \
                  {refusal}",

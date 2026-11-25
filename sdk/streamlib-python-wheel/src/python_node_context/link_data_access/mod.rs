@@ -8,11 +8,11 @@ use pyo3::types::{PyBytes, PyDict};
 use streamlib::sdk::iceoryx2::{DataChannelPayloadDescriptor, PacketsUnitDescriptorBody};
 
 use crate::python_bag_conversion::records_message_payload_of;
-use crate::python_node_link_data_access::{
-    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, MessageKindsOfTheRead,
-    MessageKindOfTheRead, PortPayloadReadShape, PythonNodeLinkDataAccess,
-};
 use crate::python_message_kind_read_types::channels_sample_type_of_wire_name;
+use crate::python_node_link_data_access::{
+    ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape, MessageKindOfTheRead,
+    MessageKindsOfTheRead, PortPayloadReadShape, PythonNodeLinkDataAccess,
+};
 use crate::python_port_payload::PythonPortPayloadLoan;
 
 use super::gpu_context::PythonGpuContextLimitedAccess;

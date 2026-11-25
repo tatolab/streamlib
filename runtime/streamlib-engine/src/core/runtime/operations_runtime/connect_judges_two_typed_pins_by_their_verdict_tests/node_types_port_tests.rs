@@ -11,7 +11,9 @@ use super::super::{
 };
 use super::*;
 use crate::core::PortDirection;
-use crate::core::descriptors::{DeclaredPinType, PinAnnotations, PinFlow, PinLinkVerdict, PinLinkWarning};
+use crate::core::descriptors::{
+    DeclaredPinType, PinAnnotations, PinFlow, PinLinkVerdict, PinLinkWarning,
+};
 use crate::core::graph::Graph;
 
 const ONE_OF_SINK: &str = "VerdictCheckOneOfSink";
@@ -52,10 +54,7 @@ fn register_the_node_types_port_fixtures() {
         ));
         register(a_node_type(
             class_path(ANY_SINK),
-            vec![a_port_declaring(
-                "anything",
-                DeclaredPinType::Any,
-            )],
+            vec![a_port_declaring("anything", DeclaredPinType::Any)],
             Vec::new(),
         ));
         register(a_node_type(

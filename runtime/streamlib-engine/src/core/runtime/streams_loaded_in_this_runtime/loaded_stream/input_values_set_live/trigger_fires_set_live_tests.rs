@@ -8,7 +8,10 @@ use serde_json::json;
 
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::link;
-use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor};
+use crate::core::descriptors::{
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
+    PortDescriptor,
+};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     GraphNodeWithComponents, NodeInstanceComponent, OutOfProcessLinkWiringComponent,
@@ -30,13 +33,14 @@ fn a_graph_resolving_a_node_type_with_a_trigger_input() -> Graph {
         NodeClassImportPath::new(BUTTON_NODE_TYPE).unwrap(),
         "a process node type with a Trigger input, for a test",
     )
-    .with_input(
-        PortDescriptor::new("go", "", true, trigger()),
-    )
-    .with_input(PortDescriptor::new("level", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None })))
-    .with_output(
-        PortDescriptor::new("fired", "", true, trigger()),
-    );
+    .with_input(PortDescriptor::new("go", "", true, trigger()))
+    .with_input(PortDescriptor::new(
+        "level",
+        "",
+        true,
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    ))
+    .with_output(PortDescriptor::new("fired", "", true, trigger()));
     let node_types = NodeTypesOneStreamResolves::new();
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(

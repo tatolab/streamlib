@@ -871,7 +871,6 @@ fn a_described_picture_input_stating_no_delivery_reads_by_its_pin() {
         registered.inputs[0].delivery_profile.as_deref(),
         Some("newest")
     );
-
 }
 
 #[test]

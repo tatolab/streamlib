@@ -279,12 +279,8 @@ mod tests {
         /// by, so wiring it is an error naming the port.
         #[test]
         fn an_untyped_input_declaring_none_is_a_wiring_error_naming_the_port() {
-            let descriptor = a_node_type_with_one_input_port(
-                "SampleSink",
-                "records_in",
-                None,
-                None,
-            );
+            let descriptor =
+                a_node_type_with_one_input_port("SampleSink", "records_in", None, None);
             let ident = descriptor.node_class_import_path.clone();
             NODE_REGISTRY
                 .register_descriptor_only(descriptor)

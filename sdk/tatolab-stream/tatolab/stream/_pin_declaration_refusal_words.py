@@ -94,7 +94,7 @@ PIN_TYPES_A_PIN_OF_SEVERAL_TYPES_TAKES: Final = frozenset(
     {"texture", "audio", "tensor", "encoded_video", "encoded_audio", "named"}
 )
 """The types a class node's `InputPin` of several types, or an `OutputPin` its setting types,
-takes: each a stream its own family carries, or a module's named type, carried as its bytes."""
+takes: each a stream its own kind of message carries, or a module's named type, carried as its bytes."""
 
 
 def words_refusing_a_pin_of_several_types_taking(

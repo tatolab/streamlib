@@ -20,8 +20,7 @@ use streamlib_project_repository::{
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinDeclaration, PinFlow, PinType, PortDescriptor,
-    SettingReadTime,
+    NodeValueLifetime, PinDeclaration, PinFlow, PinType, PortDescriptor, SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -357,12 +356,14 @@ impl ValueSourceNode {
         } = pack_pin_value(pin_type, value, next_start_sample).map_err(|why| {
             the_refusal_of_a_value_an_output_does_not_carry(&self.node_name, port, pin_type, &why)
         })?;
-        let channels_start_sample_after = (crate::core::pin_value_packing::message_kind_of(pin_type)
-            == Some(streamlib_ipc_types::DataChannelPayloadDescriptorKind::ChannelsBlock))
-        .then(|| {
-            let body = ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
-            next_start_sample + u64::from(body.samples_per_channel)
-        });
+        let channels_start_sample_after =
+            (crate::core::pin_value_packing::message_kind_of(pin_type)
+                == Some(streamlib_ipc_types::DataChannelPayloadDescriptorKind::ChannelsBlock))
+            .then(|| {
+                let body =
+                    ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
+                next_start_sample + u64::from(body.samples_per_channel)
+            });
         Ok(MessageToPublish {
             port,
             value,

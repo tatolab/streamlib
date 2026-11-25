@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
     GraphSnapshot::from_graph_document(graph)
@@ -443,7 +443,12 @@ fn node_types_describing_a_display_with_an_input_named_source() -> NodeTypesOneS
         NodeClassImportPath::new("rig:Display").unwrap(),
         "variable resolution test",
     )
-    .with_input(PortDescriptor::new("source", "what the display shows", false, PinDeclaration::exactly(PinType::String {})));
+    .with_input(PortDescriptor::new(
+        "source",
+        "what the display shows",
+        false,
+        PinDeclaration::exactly(PinType::String {}),
+    ));
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
             descriptor,
@@ -854,7 +859,12 @@ fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_
         ]
     });
     let resolution = resolved(graph).unwrap();
-    let amount = PortDescriptor::new("amount", "How loud it is.", false, PinDeclaration::exactly(PinType::Float { exact_size: None }));
+    let amount = PortDescriptor::new(
+        "amount",
+        "How loud it is.",
+        false,
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    );
     let mut level = a_rendered_node("level");
     level.ports.outputs = vec![GraphNodePortOnTheWire::from(&PortInfo::from(&amount))];
     let mut graph_response = GraphResponse {

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The descriptor bodies of the port families: an Image frame, an Array
+//! The descriptor bodies of each kind of message: an Image frame, an Array
 //! frame and its attribute table, a Channels block and a Packets unit; a
 //! Records message has none. Each packs
 //! little-endian into a [`crate::DataChannelPayloadDescriptor`] body at its

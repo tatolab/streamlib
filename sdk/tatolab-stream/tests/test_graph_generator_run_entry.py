@@ -29,8 +29,8 @@ from tatolab.stream import Description, GraphInput, GraphOutput, StreamBuilder, 
 @graph_generator
 def look(stream_builder: StreamBuilder, port: str = "video") -> None:
     """A pass-through: one Input wired to one Output."""
-    source = stream_builder.add(GraphInput, input_values={"port": port, "family": "packets"})
-    sink = stream_builder.add(GraphOutput, input_values={"port": port, "family": "packets"})
+    source = stream_builder.add(GraphInput, input_values={"port": port})
+    sink = stream_builder.add(GraphOutput, input_values={"port": port})
     stream_builder.connect(source.output("value"), sink.input("value"))
 
 
@@ -40,12 +40,12 @@ def tuned(
     passes: Annotated[int, Description("How many times the picture is blurred.")] = 3,
     label="glow",
 ) -> None:
-    stream_builder.add(GraphInput, input_values={"port": label, "family": "packets"})
+    stream_builder.add(GraphInput, input_values={"port": label})
 
 
 @graph_generator
 def clashing(stream_builder: StreamBuilder, video: int = 1) -> None:
-    stream_builder.add(GraphInput, input_values={"port": "video", "family": "packets"})
+    stream_builder.add(GraphInput, input_values={"port": "video"})
 
 
 @graph_generator
@@ -106,16 +106,16 @@ def test_a_generator_run_answers_the_fragment_node_it_is_stored_as(
             "fragment": {
                 "nodes": [
                     {"name": "graphinput", "type": "tatolab.stream:GraphInput",
-                     "input_values": {"port": "camera", "family": "packets"}},
+                     "input_values": {"port": "camera"}},
                     {"name": "graphoutput", "type": "tatolab.stream:GraphOutput",
-                     "input_values": {"port": "camera", "family": "packets"}},
+                     "input_values": {"port": "camera"}},
                 ],
                 "links": [
                     {"source": {"node": "graphinput", "port": "value"},
                      "target": {"node": "graphoutput", "port": "value"}},
                 ],
                 "settings": [
-                    {"name": "port", "description": "", "family": {"family": "records"},
+                    {"name": "port", "description": "",
                      "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}},
                                          "flow": "value"},
                      "input_mode": {"mode": "setting_only", "read": "at_setup"},
@@ -134,7 +134,6 @@ def test_each_typed_setting_a_generator_promotes_is_declared_with_its_descriptio
     assert document["placed"]["input_values"] == {}
     assert document["placed"]["fragment"]["settings"] == [
         {"name": "passes", "description": "How many times the picture is blurred.",
-         "family": {"family": "channels"},
          "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}},
                              "flow": "value"},
          "input_mode": {"mode": "setting_only", "read": "at_setup"},

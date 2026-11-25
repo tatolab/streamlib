@@ -34,8 +34,22 @@ fn register_test_type(short: &str) -> NodeClassImportPath {
         import_path.clone(),
         "control-plane rendering test",
     )
-    .with_input(PortDescriptor::new("_unused_in", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
-    .with_output(PortDescriptor::new("_unused_out", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+    .with_input(PortDescriptor::new(
+        "_unused_in",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ))
+    .with_output(PortDescriptor::new(
+        "_unused_out",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

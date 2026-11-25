@@ -105,14 +105,16 @@ fn stream_annotation_tokens(annotations: &PinAnnotations) -> Option<TokenStream>
             quote! { #descriptors::ChannelsOutputPortSampleRate::FromSetting { #setting } }
         }
     });
-    let sample_type = annotations.sample_type.map(|sample_type| match sample_type {
-        ChannelsOutputPortSampleType::F32 => {
-            quote! { #descriptors::ChannelsOutputPortSampleType::F32 }
-        }
-        ChannelsOutputPortSampleType::F64 => {
-            quote! { #descriptors::ChannelsOutputPortSampleType::F64 }
-        }
-    });
+    let sample_type = annotations
+        .sample_type
+        .map(|sample_type| match sample_type {
+            ChannelsOutputPortSampleType::F32 => {
+                quote! { #descriptors::ChannelsOutputPortSampleType::F32 }
+            }
+            ChannelsOutputPortSampleType::F64 => {
+                quote! { #descriptors::ChannelsOutputPortSampleType::F64 }
+            }
+        });
     let residency = annotations.residency.map(|residency| match residency {
         ArrayOutputPortResidency::Gpu => quote! { #descriptors::ArrayOutputPortResidency::Gpu },
         ArrayOutputPortResidency::Cpu => quote! { #descriptors::ArrayOutputPortResidency::Cpu },

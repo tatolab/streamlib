@@ -13,6 +13,7 @@ use std::time::Duration;
 use streamlib_node_schema::pin_type::PinType;
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
 
+use crate::core::PortDirection;
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
@@ -26,7 +27,6 @@ use crate::core::graph::{
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
-use crate::core::PortDirection;
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);

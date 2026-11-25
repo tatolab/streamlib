@@ -10,18 +10,17 @@ use super::graph_input_annotations::{
 };
 use super::{
     GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_VALUE_FORMER_NAME,
-    GRAPH_INTERFACE_PIN_TYPE_SETTING,
-    GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
-    GraphInterfaceLevel, a_top_level_graph_input_runs,
-    an_interface_node_states_what_its_value_port_carries,
+    GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, GraphInterfaceLevel,
+    a_top_level_graph_input_runs, an_interface_node_states_what_its_value_port_carries,
     the_value_lifetime_a_graph_input_config_declares,
     what_the_value_port_of_an_interface_node_carries,
 };
 use crate::core::descriptors::PinType;
-use crate::core::pin_value_packing::{message_kind_of, pack_pin_value};
-use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 use crate::core::graph::graph_snapshot::GraphSnapshotNode;
+use crate::core::pin_value_packing::{message_kind_of, pack_pin_value};
 use crate::core::{Error, Result};
+use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 
 fn interface_node_kind(node: &GraphSnapshotNode) -> &'static str {
     if node.node_type.as_str() == GRAPH_OUTPUT_NODE_TYPE {

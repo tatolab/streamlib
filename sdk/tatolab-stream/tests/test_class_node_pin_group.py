@@ -185,7 +185,6 @@ def test_a_slots_output_follows_the_input_of_its_own_slot() -> None:
         "kind": "same_as_input",
         "input_port_name": "value",
     }
-    assert delayed["family"] == {"family": "channels", "family_follows_input_port": "value"}
 
 
 def test_a_group_holding_an_input_follows_its_wires_and_one_holding_only_outputs_has_its_count_set() -> None:

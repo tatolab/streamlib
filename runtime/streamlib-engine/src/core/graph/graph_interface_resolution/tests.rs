@@ -227,7 +227,9 @@ fn an_interface_node_choosing_no_pin_type_takes_the_type_of_the_first_port_linke
             linked_port.node.as_str(),
             direction,
         ) {
-            ("left", GraphInterfacePortDirection::Input) => Some(PinType::Float { exact_size: None }),
+            ("left", GraphInterfacePortDirection::Input) => {
+                Some(PinType::Float { exact_size: None })
+            }
             ("camera", GraphInterfacePortDirection::Output) => Some(PinType::Texture {
                 pixel_formats: Vec::new(),
             }),
@@ -294,8 +296,11 @@ fn an_interface_node_choosing_no_pin_type_takes_the_type_of_the_first_port_linke
 }
 
 #[test]
-fn an_output_following_an_input_fed_by_a_graph_input_choosing_no_pin_type_carries_that_inputs_type() {
-    use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor};
+fn an_output_following_an_input_fed_by_a_graph_input_choosing_no_pin_type_carries_that_inputs_type()
+{
+    use crate::core::descriptors::{
+        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
+    };
     use crate::core::nodes::NODE_REGISTRY;
 
     const PASSER_TYPE: &str = "interface_resolution_fixtures.follows_its_input:Passer";
@@ -341,7 +346,12 @@ fn an_output_following_an_input_fed_by_a_graph_input_choosing_no_pin_type_carrie
     );
     register(
         READER_TYPE,
-        vec![PortDescriptor::new("signals", "input", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))],
+        vec![PortDescriptor::new(
+            "signals",
+            "input",
+            true,
+            PinDeclaration::exactly(PinType::Float { exact_size: None }),
+        )],
         Vec::new(),
     );
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
@@ -373,10 +383,7 @@ fn an_output_following_an_input_fed_by_a_graph_input_choosing_no_pin_type_carrie
         GraphInterfacePortDirection::Output,
     );
 
-    assert_eq!(
-        pin_type_into_out,
-        Some(PinType::Float { exact_size: None })
-    );
+    assert_eq!(pin_type_into_out, Some(PinType::Float { exact_size: None }));
 }
 
 #[test]
@@ -496,11 +503,18 @@ fn an_interface_node_naming_no_port_an_unknown_pin_type_or_another_key_is_refuse
             "links": [],
         }))
     };
-    assert!(declaring(serde_json::json!({"pin_type": {"type": "texture"}})).contains("names no port"));
-    let unknown_pin_type = declaring(serde_json::json!({"port": "overlay", "pin_type": {"type": "video"}}));
-    assert!(unknown_pin_type.contains("`pin_type`"), "got {unknown_pin_type}");
-    let another_key =
-        declaring(serde_json::json!({"port": "overlay", "pin_type": {"type": "texture"}, "name": "overlay"}));
+    assert!(
+        declaring(serde_json::json!({"pin_type": {"type": "texture"}})).contains("names no port")
+    );
+    let unknown_pin_type =
+        declaring(serde_json::json!({"port": "overlay", "pin_type": {"type": "video"}}));
+    assert!(
+        unknown_pin_type.contains("`pin_type`"),
+        "got {unknown_pin_type}"
+    );
+    let another_key = declaring(
+        serde_json::json!({"port": "overlay", "pin_type": {"type": "texture"}, "name": "overlay"}),
+    );
     assert!(another_key.contains("`name`"), "got {another_key}");
 }
 
@@ -601,9 +615,8 @@ fn a_graph_inputs_value_takes_its_declared_type_back_once_a_config_names_none() 
             .expect("a GraphInput has a `value` input")
             .clone()
     };
-    let pin_type_of = |node: &crate::core::graph::GraphNode| {
-        value_input(node).pin.map(|pin| pin.pin_type)
-    };
+    let pin_type_of =
+        |node: &crate::core::graph::GraphNode| value_input(node).pin.map(|pin| pin.pin_type);
     assert_eq!(pin_type_of(&node), Some(PinType::Tensor {}));
     assert!(value_input(&node).range().is_some());
 
@@ -622,7 +635,10 @@ fn a_graph_inputs_value_takes_its_declared_type_back_once_a_config_names_none() 
             .cloned()
             .unwrap_or_default(),
     );
-    assert_eq!(pin_type_of(&node), Some(PinType::Float { exact_size: None }));
+    assert_eq!(
+        pin_type_of(&node),
+        Some(PinType::Float { exact_size: None })
+    );
 }
 
 /// A top-level `GraphInput` whose `pin_type` chooses a Float runs as a source node and states the
@@ -765,13 +781,15 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
     }))
     .expect("the interface resolves");
     let declared: Vec<&GraphInterfacePort> = resolved.interface_as_drawn.declared_ports().collect();
-    let camera_video = crate::core::graph::PortInfo::from(
-        &crate::core::descriptors::PortDescriptor::new("video", "", false, crate::core::descriptors::PinDeclaration::exactly(
-            PinType::Texture {
+    let camera_video =
+        crate::core::graph::PortInfo::from(&crate::core::descriptors::PortDescriptor::new(
+            "video",
+            "",
+            false,
+            crate::core::descriptors::PinDeclaration::exactly(PinType::Texture {
                 pixel_formats: Vec::new(),
-            },
-        )),
-    );
+            }),
+        ));
     let the_cameras_type =
         crate::core::descriptors::NodeClassImportPath::new("nodes.camera:Camera")
             .expect("an import path");
@@ -785,11 +803,13 @@ fn a_graph_output_choosing_a_type_refuses_a_source_its_type_does_not_connect_to(
     assert_eq!(chosen, &PinType::Float { exact_size: None });
     assert!(refusal.contains("camera"), "{refusal}");
 
-    let float_source = crate::core::graph::PortInfo::from(
-        &crate::core::descriptors::PortDescriptor::new("video", "", false, crate::core::descriptors::PinDeclaration::exactly(
-            PinType::Boolean {},
-        )),
-    );
+    let float_source =
+        crate::core::graph::PortInfo::from(&crate::core::descriptors::PortDescriptor::new(
+            "video",
+            "",
+            false,
+            crate::core::descriptors::PinDeclaration::exactly(PinType::Boolean {}),
+        ));
     assert_eq!(
         declared[0].refusal_of_a_linked_port_by_its_type(
             &float_source,

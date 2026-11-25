@@ -28,7 +28,9 @@ pub(super) fn the_family_of_an_interface_node_chosen(node: &mut Map<String, Valu
     let is_an_interface_node = node
         .get("type")
         .and_then(Value::as_str)
-        .is_some_and(|node_type| [GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE].contains(&node_type));
+        .is_some_and(|node_type| {
+            [GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE].contains(&node_type)
+        });
     if !is_an_interface_node {
         return false;
     }

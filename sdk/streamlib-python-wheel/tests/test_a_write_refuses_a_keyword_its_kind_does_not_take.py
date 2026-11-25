@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A write by port name refuses a keyword the family it names does not take, and a write naming
-no family refuses all of them, before it reaches the port."""
+"""A write by port name refuses a keyword the kind of message it names does not take, and a
+write naming no kind refuses all of them, before it reaches the port."""
 
 import pytest
 
@@ -27,22 +27,22 @@ def outputs():
 
 
 @pytest.mark.parametrize(
-    ("family", "keyword", "value"),
+    ("kind", "keyword", "value"),
     [
         (None, "codec", "avc1"),
         (None, "start_sample", 0),
-        ("image", "sample_rate", 48_000),
-        ("records", "sample_type", "f32"),
-        ("packets", "names", ["level"]),
-        ("array", "formats", ["rgba8_unorm"]),
-        ("channels", "residency", "gpu"),
+        ("image_frame", "sample_rate", 48_000),
+        ("records_message", "sample_type", "f32"),
+        ("packets_unit", "names", ["level"]),
+        ("array_frame", "formats", ["rgba8_unorm"]),
+        ("channels_block", "residency", "gpu"),
     ],
 )
-def test_a_keyword_the_family_does_not_take_is_refused_by_name(outputs, family, keyword, value):
+def test_a_keyword_the_kind_does_not_take_is_refused_by_name(outputs, kind, keyword, value):
     with pytest.raises(TypeError, match=f"takes no {keyword}="):
-        outputs.write("out", b"\x00", family=family, **{keyword: value})
+        outputs.write("out", b"\x00", kind=kind, **{keyword: value})
 
 
-def test_a_family_with_no_wire_name_is_refused(outputs):
-    with pytest.raises(ValueError, match="none of image, array, channels, packets, records"):
-        outputs.write("out", b"\x00", family="video")
+def test_a_kind_with_no_wire_name_is_refused(outputs):
+    with pytest.raises(ValueError, match="none of image_frame, array_frame, channels_block, packets_unit, records_message"):
+        outputs.write("out", b"\x00", kind="video")

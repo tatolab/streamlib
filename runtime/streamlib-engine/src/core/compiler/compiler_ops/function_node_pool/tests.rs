@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::{
     a_class_node_feeding, a_function_node_type, a_graph_resolving_these_function_node_types,
@@ -13,6 +12,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::shader_node_island::the_host_input_port_a_fused_shader_node_input_is_read_at;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
+use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 use crate::core::test_support::{MockInputOnlyNode, make_in1_a_setting_read_at_setup};
 
@@ -224,7 +224,12 @@ fn register_a_tint_shader_node_type(graph: &Graph) {
     );
     descriptor.node_kind = NodeKind::Shader;
     for (port, pin_type) in [
-        ("image", PinType::Texture { pixel_formats: Vec::new() }),
+        (
+            "image",
+            PinType::Texture {
+                pixel_formats: Vec::new(),
+            },
+        ),
         ("amount", PinType::Float { exact_size: None }),
     ] {
         descriptor = descriptor.with_input(
@@ -232,7 +237,14 @@ fn register_a_tint_shader_node_type(graph: &Graph) {
                 .with_delivery_profile("newest"),
         );
     }
-    descriptor = descriptor.with_output(PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+    descriptor = descriptor.with_output(PortDescriptor::new(
+        "result",
+        "",
+        true,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ));
     graph
         .node_types_this_stream_resolves()
         .register_a_type_described_in_this_streams_node_interpreter(
@@ -366,7 +378,12 @@ fn a_graph_resolving_a_manual_class_and_a_function_node_run_as_python() -> Graph
         "a class driven manually for a test",
     );
     for input_port in ["from_python", "from_compiled"] {
-        manual_class = manual_class.with_input(PortDescriptor::new(input_port, "", true, PinDeclaration::exactly(PinType::Float { exact_size: None })));
+        manual_class = manual_class.with_input(PortDescriptor::new(
+            input_port,
+            "",
+            true,
+            PinDeclaration::exactly(PinType::Float { exact_size: None }),
+        ));
     }
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(manual_class, builds_nothing())
@@ -480,7 +497,10 @@ fn a_class_node_read_through_a_gate_by_the_app_process_is_read_at_the_pool_and_h
         })
     );
     assert_eq!(
-        pool_node.ports.outputs[0].pin.as_ref().map(|pin| &pin.pin_type),
+        pool_node.ports.outputs[0]
+            .pin
+            .as_ref()
+            .map(|pin| &pin.pin_type),
         class_node_pin.as_ref().map(|pin| &pin.pin_type),
         "the pool hands the message on as the pin type it arrived as"
     );

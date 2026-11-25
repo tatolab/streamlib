@@ -5,7 +5,10 @@
 //! whole refusal for each link `connect` refuses, and the outcome of each link it makes, while
 //! the graph, its document and the project's history are left as they were.
 
-use streamlib::sdk::descriptors::{AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor};
+use streamlib::sdk::descriptors::{
+    AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
+    NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor,
+};
 use streamlib_node_schema::pin_type::{PinLinkWarning, VectorComponentCount};
 
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
@@ -282,9 +285,8 @@ fn a_function_node_type(
             Some(_) => PinType::Audio {},
             None => PinType::Float { exact_size: None },
         };
-        let mut port =
-            PortDescriptor::new(*input, "", true, PinDeclaration::exactly(pin_type))
-                .with_delivery_profile("newest");
+        let mut port = PortDescriptor::new(*input, "", true, PinDeclaration::exactly(pin_type))
+            .with_delivery_profile("newest");
         port.audio_window = audio_window.clone();
         descriptor = descriptor.with_input(port);
     }
@@ -321,12 +323,12 @@ fn a_previous_value_node_type() -> NodeDescriptor {
         "",
         true,
         PinDeclaration {
-        pin_type: DeclaredPinType::SameAsInput {
-            input_port_name: streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT
-                .to_owned(),
+            pin_type: DeclaredPinType::SameAsInput {
+                input_port_name: streamlib_project_repository::PREVIOUS_VALUE_NODE_INPUT_PORT
+                    .to_owned(),
+            },
+            ..any_flow
         },
-        ..any_flow
-    },
     );
     a_function_node_type(
         streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE,
@@ -369,8 +371,7 @@ fn a_node_type_with_a_port_meaning(
     let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
     let mut pin = PinDeclaration::exactly(pin_type.clone());
     pin.annotations.meaning = Some(meaning.to_owned());
-    let port = PortDescriptor::new(port, "", true, pin)
-    .with_delivery_profile("newest");
+    let port = PortDescriptor::new(port, "", true, pin).with_delivery_profile("newest");
     let descriptor = NodeDescriptor::new(
         NodeClassShortName::new(short_name).expect("a short name"),
         node_type,
@@ -390,7 +391,11 @@ pub(super) fn register_the_link_check_node_types_once() {
     REGISTERED.call_once(|| {
         for descriptor in [
             a_previous_value_node_type(),
-            a_function_node_type(LFO_TYPE, &[], &[("result", PinType::Float { exact_size: None })]),
+            a_function_node_type(
+                LFO_TYPE,
+                &[],
+                &[("result", PinType::Float { exact_size: None })],
+            ),
             a_function_node_type(WAVE_TYPE, &[], &[("result", PinType::Audio {})]),
             a_function_node_type(
                 MIX_TYPE,

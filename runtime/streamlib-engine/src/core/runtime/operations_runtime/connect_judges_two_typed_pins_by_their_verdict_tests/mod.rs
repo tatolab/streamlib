@@ -14,7 +14,12 @@ use super::connect_on_a_test_thread::{
 };
 use super::{ALinkConnected, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{FreePinConversion, FunctionNodeLanguage, DeclaredPinType, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, PinDeclaration, PinFlow, PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor, SettingReadTime, TexturePixelFormat};
+use crate::core::descriptors::{
+    DeclaredPinType, FreePinConversion, FunctionNodeLanguage, NamedPinTypeImportPath,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind,
+    PinDeclaration, PinFlow, PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor,
+    SettingReadTime, TexturePixelFormat,
+};
 use crate::core::graph::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};
@@ -700,4 +705,3 @@ fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing
     .expect_err("connect itself never places a convert node");
     assert_eq!(the_links_in(&compiler), 0);
 }
-

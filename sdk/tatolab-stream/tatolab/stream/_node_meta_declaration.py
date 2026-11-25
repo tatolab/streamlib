@@ -155,7 +155,7 @@ def _refuse_an_end_stating_no_one_pin_type(
 
     The engine reads a conversion's two ends as exactly one pin type each, and refuses any
     other end when the stream describes the node type; this names it at decoration instead.
-    A shader's port states no declaration, and its Image family is that one type.
+    A shader's port states no declaration, and the texture it carries is that one type.
     """
     if "pin_declaration" not in port:
         return

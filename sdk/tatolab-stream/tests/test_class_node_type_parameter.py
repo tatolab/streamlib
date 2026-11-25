@@ -49,7 +49,6 @@ def test_an_input_pin_typed_by_the_parameter_streams_the_type_it_is_bound_to() -
     assert picture_in == {
         "name": "picture_in",
         "description": "The pictures.",
-        "family": {"family": "image"},
         "pin_declaration": {
             "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
             "flow": "stream",
@@ -64,7 +63,6 @@ def test_an_output_pin_typed_by_the_parameter_follows_the_input_it_types_declare
     assert picture_out == {
         "name": "picture_out",
         "description": "Each picture read, handed on.",
-        "family": {"family": "image", "family_follows_input_port": "picture_in"},
         "pin_declaration": {
             "pin_type": {"kind": "same_as_input", "input_port_name": "picture_in"},
             "flow": "stream",

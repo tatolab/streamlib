@@ -37,7 +37,9 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
             .iter()
             .map(|port| (
                 port.name.as_str(),
-                port.pin_declaration.as_ref().map(|pin| pin.pin_type.clone())
+                port.pin_declaration
+                    .as_ref()
+                    .map(|pin| pin.pin_type.clone())
             ))
             .collect::<Vec<_>>(),
         [

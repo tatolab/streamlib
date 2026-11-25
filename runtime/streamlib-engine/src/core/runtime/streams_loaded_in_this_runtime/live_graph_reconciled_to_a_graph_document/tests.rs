@@ -121,12 +121,20 @@ fn a_saved_link_fixture_type(class_name: &str) -> NodeClassImportPath {
 /// source whose output carries the name of the sinks' input, each with a constructor no test
 /// reaches.
 fn register_the_saved_link_fixture_node_types() {
-    use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor, TexturePixelFormat};
+    use crate::core::descriptors::{
+        NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor,
+        TexturePixelFormat,
+    };
     use crate::core::nodes::NODE_REGISTRY;
     static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
     REGISTERED_ONCE_PER_PROCESS.call_once(|| {
         let picture = |pin_type: PinType| {
-            PortDescriptor::new("picture", "picture", true, PinDeclaration::exactly(pin_type))
+            PortDescriptor::new(
+                "picture",
+                "picture",
+                true,
+                PinDeclaration::exactly(pin_type),
+            )
         };
         let texture = |pixel_formats: &[TexturePixelFormat]| PinType::Texture {
             pixel_formats: pixel_formats.to_vec(),
@@ -685,7 +693,9 @@ const NODE_C: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 /// A function node type of this stream, `switch`, whose `result` carries Records, beside the
 /// natively compiled mocks, which run in the app process.
 fn a_function_node_type_of_records_registered_in(stream: &LoadedStreamInThisRuntime) -> String {
-    use crate::core::descriptors::{FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor};
+    use crate::core::descriptors::{
+        FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor,
+    };
     let switch_type = format!("{}::Switch", module_path!());
     let mut switch = NodeDescriptor::new(
         NodeClassShortName::new("Switch").unwrap(),
@@ -693,7 +703,12 @@ fn a_function_node_type_of_records_registered_in(stream: &LoadedStreamInThisRunt
         "a fixture",
     )
     .with_output(
-        PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::String {}))
+        PortDescriptor::new(
+            "result",
+            "",
+            true,
+            PinDeclaration::exactly(PinType::String {}),
+        )
         .with_delivery_profile("newest"),
     );
     switch.node_kind = NodeKind::Function {

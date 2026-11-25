@@ -1,13 +1,15 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::super::function_node_island::tests::{a_function_node_type, add_a_node, link};
 use super::super::function_node_island::{HowALinkIsWired, how_a_link_is_wired};
 use super::super::shader_node_island_program::tests::shader_program;
 use super::*;
 use crate::core::compiler::compiler_ops::running_node_restart::forget_the_build_of_each_node_restarted;
-use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor};
+use crate::core::descriptors::{
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
+};
+use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::graph::NodeMetrics;
 use crate::core::nodes::NodeState;
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves};
@@ -33,7 +35,14 @@ fn a_descriptor(
         );
     }
     for port in outputs {
-        descriptor = descriptor.with_output(PortDescriptor::new(*port, "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+        descriptor = descriptor.with_output(PortDescriptor::new(
+            *port,
+            "",
+            true,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        ));
     }
     descriptor
 }
@@ -57,7 +66,12 @@ fn a_graph_resolving_shader_and_process_types() -> Graph {
         a_descriptor(
             "test_streams:sink",
             NodeKind::Process,
-            &[("video", PinType::Texture { pixel_formats: Vec::new() })],
+            &[(
+                "video",
+                PinType::Texture {
+                    pixel_formats: Vec::new(),
+                },
+            )],
             &[],
         ),
     ] {
@@ -92,7 +106,14 @@ fn a_graph_resolving_shader_and_process_types() -> Graph {
     ] {
         let inputs: Vec<(&str, PinType)> = image_ports
             .iter()
-            .map(|port| (*port, PinType::Texture { pixel_formats: Vec::new() }))
+            .map(|port| {
+                (
+                    *port,
+                    PinType::Texture {
+                        pixel_formats: Vec::new(),
+                    },
+                )
+            })
             .chain(
                 float_ports
                     .iter()

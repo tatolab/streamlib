@@ -148,7 +148,11 @@ mod tests {
     fn the_first_graph_input_and_output_of_a_level_take_input1_and_output1() {
         let level = a_level_holding(json!([]));
         assert_eq!(
-            the_default_named(GRAPH_INPUT_NODE_TYPE, json!({"pin_type": {"type": "float"}}), &level),
+            the_default_named(
+                GRAPH_INPUT_NODE_TYPE,
+                json!({"pin_type": {"type": "float"}}),
+                &level
+            ),
             json!({"port": "input1", "pin_type": {"type": "float"}})
         );
         assert_eq!(

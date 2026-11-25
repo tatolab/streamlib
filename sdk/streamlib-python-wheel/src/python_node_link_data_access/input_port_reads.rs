@@ -21,12 +21,12 @@ use streamlib::sdk::rhi::TextureFormat;
 
 use super::{PythonNodeLinkDataAccess, declared_port_name_the_spelling_names, unwired_port_error};
 use crate::python_bag_conversion::{
-    type_of_its_kind_built_offering_gpu_access, records_message_dict_of,
+    records_message_dict_of, type_of_its_kind_built_offering_gpu_access,
 };
-use crate::python_node_context::{PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess};
 use crate::python_message_kind_read_types::{
     PythonAudio, PythonEncodedMedia, PythonTensorCpuAttribute,
 };
+use crate::python_node_context::{PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess};
 use crate::python_port_payload::PythonPortPayloadBorrow;
 
 impl PythonNodeLinkDataAccess {

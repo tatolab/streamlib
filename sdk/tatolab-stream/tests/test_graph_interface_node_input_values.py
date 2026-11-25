@@ -83,16 +83,13 @@ def test_a_control_that_is_not_its_name_is_refused_naming_the_input() -> None:
         )
 
 
-def test_a_graph_input_records_its_family_by_name_and_its_default_as_its_value() -> None:
+def test_a_graph_input_records_its_default_as_its_value() -> None:
     recorded = the_values_recorded_for(
-        GraphInput, {"port": "cue", "family": "records", "default": {"scene": 1}}
+        GraphInput, {"port": "level", "pin_type": PinTypeChoice(float), "default": 0.5}
     )
 
-    assert recorded == {"port": "cue", "family": "records", "value": {"scene": 1}}
-    assert the_values_recorded_for(GraphOutput, {"port": "video", "family": "image"}) == {
-        "port": "video",
-        "family": "image",
-    }
+    assert recorded == {"port": "level", "pin_type": {"type": "float"}, "value": 0.5}
+    assert the_values_recorded_for(GraphOutput, {"port": "video"}) == {"port": "video"}
 
 
 def test_a_value_the_chosen_type_does_not_take_is_refused_naming_the_input() -> None:
@@ -115,7 +112,7 @@ def test_a_pin_type_that_is_not_a_choice_is_refused() -> None:
         )
 
 
-def test_a_chosen_type_no_family_carries_is_refused_as_the_runtime_refuses_it() -> None:
+def test_a_chosen_type_no_message_carries_is_refused_as_the_runtime_refuses_it() -> None:
     with pytest.raises(
         TypeError,
         match=(
@@ -128,8 +125,12 @@ def test_a_chosen_type_no_family_carries_is_refused_as_the_runtime_refuses_it() 
 
 def test_the_value_ports_are_the_names_a_link_takes() -> None:
     stream_builder = StreamBuilder("rig")
-    source = stream_builder.add(GraphInput, input_values={"port": "video", "family": "image"})
-    sink = stream_builder.add(GraphOutput, input_values={"port": "video", "family": "image"})
+    source = stream_builder.add(
+        GraphInput, input_values={"port": "video", "pin_type": PinTypeChoice(EncodedVideo)}
+    )
+    sink = stream_builder.add(
+        GraphOutput, input_values={"port": "video", "pin_type": PinTypeChoice(EncodedVideo)}
+    )
 
     stream_builder.connect(source.output("value"), sink.input("value"))
     with pytest.raises(ValueError, match=r"declares no output `video`"):
@@ -154,7 +155,6 @@ def test_a_graph_inputs_fields_declare_the_settings_and_the_value_the_runtime_de
     assert list(inputs) == [
         "port",
         "pin_type",
-        "family",
         "range",
         "step",
         "unit",

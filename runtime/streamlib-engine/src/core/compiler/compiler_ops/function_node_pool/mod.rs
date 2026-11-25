@@ -17,8 +17,6 @@ pub(crate) use carries_handed_to_the_running_pool::{
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::NodeRunId;
-use crate::core::pin_value_packing::message_kind_of;
-use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
     PinAnnotations, PinDeclaration, PortDescriptor, ResolvedPin,
@@ -32,6 +30,8 @@ use crate::core::graph::{
     the_pin_a_link_out_of_an_output_carries,
 };
 use crate::core::nodes::NodeSpec;
+use crate::core::pin_value_packing::message_kind_of;
+use streamlib_ipc_types::DataChannelPayloadDescriptorKind;
 
 pub(crate) const FUNCTION_NODE_POOL_NODE_TYPE: &str =
     "tatolab.runtime._function_node_pool:FunctionNodePool";

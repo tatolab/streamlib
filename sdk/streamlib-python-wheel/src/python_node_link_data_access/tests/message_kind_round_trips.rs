@@ -66,7 +66,8 @@ fn a_channels_block_written_from_a_planar_array_reads_back_as_audio() {
                 .unwrap();
         }
 
-        let received = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ChannelsBlock);
+        let received =
+            read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ChannelsBlock);
         assert!(received.cast::<PythonAudio>().is_ok());
         let attribute = |name: &str| received.getattr(name).unwrap();
         assert_eq!(attribute("channel_count").extract::<u32>().unwrap(), 2);
@@ -138,7 +139,11 @@ fn a_records_message_round_trips_a_dict_and_refuses_a_missing_declared_key() {
             )
             .unwrap();
 
-        let received = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::RecordsMessage);
+        let received = read_as_the_type_of_its_kind(
+            python,
+            &destination,
+            MessageKindOfTheRead::RecordsMessage,
+        );
         assert!(received.eq(&record).unwrap(), "got {received}");
 
         let missing_at = python.eval(c"{'kind': 'tap'}", None, None).unwrap();
@@ -196,9 +201,11 @@ fn a_read_through_an_input_taking_several_kinds_builds_the_arriving_kinds_type()
         assert!(received.eq(&record).unwrap(), "got {received}");
 
         write_the_record();
-        let refusal = read_through(MessageKindsOfTheRead::of_one(MessageKindOfTheRead::PacketsUnit))
-            .map(|_| ())
-            .expect_err("a Packets input alone does not take a Records message");
+        let refusal = read_through(MessageKindsOfTheRead::of_one(
+            MessageKindOfTheRead::PacketsUnit,
+        ))
+        .map(|_| ())
+        .expect_err("a Packets input alone does not take a Records message");
         assert!(refusal.is_instance_of::<PyTypeError>(python), "{refusal}");
     });
 }
@@ -322,7 +329,11 @@ fn a_packets_unit_reads_back_with_its_stamp_group_flag_and_codec() {
                 .unwrap();
         }
         for (codec, starts_group) in [("h264", false), ("", true)] {
-            let unit = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::PacketsUnit);
+            let unit = read_as_the_type_of_its_kind(
+                python,
+                &destination,
+                MessageKindOfTheRead::PacketsUnit,
+            );
             assert!(unit.cast::<PythonEncodedMedia>().is_ok());
             assert_eq!(
                 unit.getattr("codec").unwrap().extract::<String>().unwrap(),

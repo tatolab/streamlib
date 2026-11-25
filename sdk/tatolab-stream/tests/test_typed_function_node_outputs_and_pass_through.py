@@ -76,9 +76,7 @@ def test_a_named_tuple_of_two_fields_is_two_typed_outputs() -> None:
         "flow": "value",
         "annotations": {"meaning": "level"},
     }
-    assert low["family"] == {"family": "channels", "names": {"stated": ["low"]}, "dtype": "f64"}
     assert high["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "color"}}
-    assert high["family"]["names"] == {"stated": ["red", "green", "blue", "alpha"]}
     fields_of = f"{__name__}:Bounds"
     assert signature(Spread)["outputs"] == [
         {
@@ -133,16 +131,11 @@ def test_a_type_parameter_types_an_input_of_any_type_and_an_output_of_the_type_l
     value = inputs(Gate)["value"]
     assert value["pin_declaration"] == {"pin_type": {"kind": "any"}, "flow": "value"}
     assert "pin_default" not in value, "a wire only input holds no value"
-    assert value["family"] == {
-        "family": "image",
-        "also_takes_families": ["array", "channels", "packets", "records"],
-    }
     (result,) = outputs(Gate).values()
     assert result["pin_declaration"] == {
         "pin_type": {"kind": "same_as_input", "input_port_name": "value"},
         "flow": "value",
     }
-    assert result["family"] == {"family": "image", "family_follows_input_port": "value"}
     assert signature(Gate)["inputs"][0] == {
         "parameter": "value",
         "port": "value",
@@ -171,7 +164,6 @@ def test_a_bound_narrows_the_input_a_type_parameter_types() -> None:
         "flow": "value",
         "former_names": ["colour"],
     }
-    assert tint["family"] == {"family": "channels"}
     assert signature(Hold)["inputs"][0]["value_type"] == "unread_message", "its value is handed on unread"
     level = inputs(Pick)["level"]
     assert level["pin_declaration"] == {
@@ -194,13 +186,11 @@ def test_a_type_parameter_bound_to_texture_takes_texture_links_and_hands_on_the_
         "flow": "value",
         "may_be_unset": True,
     }
-    assert frame["family"] == {"family": "image"}
     (result,) = outputs(Freeze).values()
     assert result["pin_declaration"] == {
         "pin_type": {"kind": "same_as_input", "input_port_name": "frame"},
         "flow": "value",
     }
-    assert result["family"] == {"family": "image", "family_follows_input_port": "frame"}
     assert signature(Freeze)["inputs"][0] == {
         "parameter": "frame",
         "port": "frame",
@@ -227,13 +217,8 @@ def test_a_type_parameter_constrained_to_types_only_a_pin_carries_takes_each_as_
         "pin_type": {"kind": "one_of", "pin_types": [{"type": "texture"}, {"type": "tensor"}]},
         "flow": "value",
     }
-    assert value["family"] == {
-        "family": "image",
-        "also_takes_families": ["array", "channels", "packets", "records"],
-    }, "an input of two families reads every family"
     array = inputs(HoldArray)["array"]
     assert array["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "tensor"}}
-    assert array["family"] == {"family": "array"}
 
 
 def HoldsAPictureDirectly(frame: Texture | None = None) -> float:
@@ -337,7 +322,6 @@ def test_a_union_takes_each_of_its_types_and_object_takes_any_both_wire_only() -
         "pin_type": {"kind": "one_of", "pin_types": [{"type": "float"}, {"type": "integer"}]},
         "flow": "value",
     }
-    assert x["family"] == {"family": "channels"}
     assert tint["pin_declaration"]["pin_type"] == {
         "kind": "one_of",
         "pin_types": [{"type": "color"}, {"type": "float"}],

@@ -22,7 +22,7 @@ from ._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
     NODE_DECLARATION_LANGUAGE_STAMP,
-    UNREAD_MESSAGE_INPUT_FAMILY,
+    NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP,
     UNREAD_MESSAGE_VALUE_TYPE,
     FunctionNode,
 )
@@ -31,13 +31,17 @@ __all__ = ["RustFunctionNode", "RustFunctionNodeDeclaration"]
 
 RUST_FUNCTION_NODE_LANGUAGE = "rust"
 
-# The stamp a Rust function node's config schema rides on, read beside the stamps every node
-# carries; a Python node takes no config and stamps none.
-NODE_DECLARATION_RUST_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 
 # The value types an evaluate entry carries, each as one f64, and the JSON
 # Schema type a config field of each is.
 _JSON_SCHEMA_TYPE_BY_VALUE_TYPE = {"float": "number", "int": "integer", "bool": "boolean"}
+
+# The pin type of each value type an evaluate entry carries as one f64.
+_PIN_TYPE_OF_EACH_NUMBER_VALUE_TYPE: "dict[str, dict[str, Any]]" = {
+    "float": {"type": "float"},
+    "int": {"type": "integer"},
+    "bool": {"type": "boolean"},
+}
 
 # The value types a pin or an output port carries: the scalars, and a message handed on unread as a token.
 _PORT_VALUE_TYPES = (*_JSON_SCHEMA_TYPE_BY_VALUE_TYPE, UNREAD_MESSAGE_VALUE_TYPE)
@@ -254,9 +258,7 @@ def declare_rust_function_node(
             "name": input_pin.port,
             "description": "",
             "delivery_profile": "newest",
-            "family": dict(UNREAD_MESSAGE_INPUT_FAMILY)
-            if input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE
-            else {"family": "channels"},
+            "pin_declaration": _the_pin_declaration_of_an_input(input_pin.value_type),
         }
         signature_input: "dict[str, Any]" = {
             "parameter": input_pin.port,
@@ -287,7 +289,7 @@ def declare_rust_function_node(
             {
                 "name": output_port.name,
                 "description": "",
-                "family": _output_port_family(declaration, output_port),
+                "pin_declaration": _the_pin_declaration_of_an_output(declaration, output_port),
             }
             for output_port in declaration.output_ports
         ],
@@ -359,7 +361,7 @@ def read_rust_function_node_declaration(native_declaration: Mapping[str, Any]) -
         if output_port.value_type == UNREAD_MESSAGE_VALUE_TYPE and unread_message_input_count != 1:
             raise ValueError(
                 f"{short_name}'s output `{output_port.name}` is an `UnreadMessage`, which takes the "
-                f"family of the `UnreadMessage` input it hands on, and {short_name} takes "
+                f"pin type of the `UnreadMessage` input it hands on, and {short_name} takes "
                 f"{unread_message_input_count} of them"
             )
     return RustFunctionNodeDeclaration(
@@ -473,17 +475,27 @@ def _an_input_pin(short_name: str, input_pin: RustFunctionNodeInputPin) -> RustF
     return input_pin
 
 
-def _output_port_family(
+def _the_pin_declaration_of_an_input(value_type: str) -> "dict[str, Any]":
+    """The pin an input carrying `value_type` declares: any type for an `UnreadMessage`, which
+    hands on what its link brings, else the one number it reads."""
+    if value_type == UNREAD_MESSAGE_VALUE_TYPE:
+        return {"pin_type": {"kind": "any"}, "flow": "value"}
+    return {"pin_type": {"kind": "is", "pin_type": _PIN_TYPE_OF_EACH_NUMBER_VALUE_TYPE[value_type]}, "flow": "value"}
+
+
+def _the_pin_declaration_of_an_output(
     declaration: RustFunctionNodeDeclaration, output_port: RustFunctionNodeOutputPort
 ) -> "dict[str, Any]":
+    """The pin an output declares: the number it writes, or the type of the one `UnreadMessage`
+    input whose message it hands on."""
     if output_port.value_type != UNREAD_MESSAGE_VALUE_TYPE:
-        return {"family": "channels", "names": {"stated": [output_port.name]}, "dtype": "f64"}
+        return _the_pin_declaration_of_an_input(output_port.value_type)
     (followed_input_port,) = [
         input_pin.port
         for input_pin in declaration.input_pins
         if input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE
     ]
-    return {"family": "image", "family_follows_input_port": followed_input_port}
+    return {"pin_type": {"kind": "same_as_input", "input_port_name": followed_input_port}, "flow": "value"}
 
 
 def _handed_out_flag_slot_by_output_index(

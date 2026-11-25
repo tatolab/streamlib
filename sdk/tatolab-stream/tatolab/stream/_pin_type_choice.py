@@ -17,8 +17,8 @@ _WHAT_A_CHOICE_IS_READ_AS: Final = "PinTypeChoice"
 _TYPES_NO_FAMILY_CARRIES: Final[frozenset[str]] = frozenset(
     {"list_of", "node_reference", "pin_type_choice"}
 )
-"""The types whose values no family's message carries, as the runtime's
-`PortFamily::a_chosen_pin_type_travels_on` reads them: a List and the types that take no wire. A bundle travels as one message of its own,
+"""The types whose values no kind of message carries, as the runtime's
+`message_kind_of` reads them: a List and the types that take no wire. A bundle travels as one message of its own,
 so `MakeBundle` and `BreakBundle` choose one, and a named type as the bytes its class packs, so a
 `GraphInput` or a module's output its setting types chooses one."""
 

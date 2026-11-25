@@ -512,7 +512,7 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
 ):
     """`<Python class> -> Gate -> FloatToInteger -> <Python class>`: the
     converter runs no node code, so the stream's pool reads the source's
-    channel, evaluates `Gate` and hands each level on unread, in its family.
+    channel, evaluates `Gate` and hands each level on unread, as it arrived.
     """
     tatolabd = start_tatolabd_running_stream(
         python_level_source_through_a_gate_into_a_native_converter
@@ -524,7 +524,7 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
     tatolabd.await_clean_exit()
 
     (carry,) = graph["function_node_pool"]["input_values"]["carries"]
-    assert carry["family"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
+    assert carry["written_as"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
     levels = levels_read["levels"]
     assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1, (
         f"the pool hands the source's levels on in order, and the sink read {levels}"
@@ -757,7 +757,7 @@ def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool
     )
     pool = graph["function_node_pool"]
     assert pool["input_values"]["carries"] == [
-        {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
+        {"input_port": "island_0", "output_port": "island_0_output", "written_as": "record"}
     ], pool
 
 

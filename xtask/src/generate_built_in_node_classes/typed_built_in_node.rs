@@ -20,6 +20,17 @@ const TYPING: &str = "typing";
 const CLASS_NODE_PINS: &str = "._class_node_pins";
 const DESCRIPTION: &str = "._description";
 const INPUT_DECLARATION_ANNOTATIONS: &str = "._input_declaration_annotations";
+/// The annotation of a Texture output's frame rate, which the docstring renders under the port.
+pub(super) const THE_FRAME_RATE_A_DOCSTRING_RENDERS: &str = "frame_rate";
+
+/// The annotations a port may state besides its type that no field or pin renders: what an
+/// output states of the stream it carries, which the runtime reads off the built-in itself.
+const ANNOTATIONS_OF_THE_STREAM_AN_OUTPUT_CARRIES: [&str; 4] = [
+    THE_FRAME_RATE_A_DOCSTRING_RENDERS,
+    "sample_rate",
+    "sample_type",
+    "residency",
+];
 const PIN_TYPES: &str = "._pin_types";
 const PIN_TYPE_CHOICE: &str = "._pin_type_choice";
 
@@ -72,9 +83,11 @@ pub(super) fn render_fields_and_pins(
         .iter()
         .chain(&descriptor.outputs)
         .find(|port| {
-            port.annotations
-                .as_ref()
-                .is_some_and(|annotations| !annotations.is_empty())
+            port.annotations.as_ref().is_some_and(|annotations| {
+                annotations
+                    .keys()
+                    .any(|key| !ANNOTATIONS_OF_THE_STREAM_AN_OUTPUT_CARRIES.contains(&key.as_str()))
+            })
         })
     {
         bail!(

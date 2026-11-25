@@ -3,9 +3,6 @@
     {
       "name": "frequency",
       "description": "",
-      "family": {
-        "family": "channels"
-      },
       "pin_declaration": {
         "pin_type": {
           "kind": "is",
@@ -27,9 +24,6 @@
     {
       "name": "detune",
       "description": "",
-      "family": {
-        "family": "channels"
-      },
       "pin_declaration": {
         "pin_type": {
           "kind": "is",
@@ -47,15 +41,6 @@
     {
       "name": "result",
       "description": "",
-      "family": {
-        "family": "channels",
-        "names": {
-          "stated": [
-            "result"
-          ]
-        },
-        "dtype": "f64"
-      },
       "pin_declaration": {
         "pin_type": {
           "kind": "is",

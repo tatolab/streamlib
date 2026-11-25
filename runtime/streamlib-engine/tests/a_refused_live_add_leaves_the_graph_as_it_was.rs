@@ -105,8 +105,7 @@ fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
     .to_string();
 
     assert!(
-        refusal.contains("`GraphInput` node `leak_probe`")
-            && refusal.contains("`pin_type`"),
+        refusal.contains("`GraphInput` node `leak_probe`") && refusal.contains("`pin_type`"),
         "{refusal}"
     );
     assert_eq!(the_node_names_the_graph_answers(&stream), before);

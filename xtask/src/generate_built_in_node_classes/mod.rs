@@ -44,8 +44,6 @@ struct BuiltInNodePortDescriptor {
     description: String,
     #[serde(default)]
     delivery_profile: Option<String>,
-    #[serde(default)]
-    family: Option<BuiltInNodePortFamilyDeclaration>,
     /// How the input takes its value, tagged by `mode`; present on a setting, which a field
     /// renders, so the docstring's inputs leave it out.
     #[serde(default)]
@@ -91,6 +89,24 @@ impl BuiltInNodePortDescriptor {
             .flatten()
     }
 
+    /// The frame rate a Texture output states among its annotations; `None` when it states none.
+    fn stated_frame_rate(&self) -> Result<Option<BuiltInNodeImageOutputFrameRate>> {
+        self.annotations
+            .as_ref()
+            .and_then(|annotations| {
+                annotations.get(typed_built_in_node::THE_FRAME_RATE_A_DOCSTRING_RENDERS)
+            })
+            .map(|frame_rate| {
+                serde_json::from_value(frame_rate.clone()).with_context(|| {
+                    format!(
+                        "port `{}` states a frame rate {frame_rate} that does not read",
+                        self.name
+                    )
+                })
+            })
+            .transpose()
+    }
+
     /// The setting whose chosen type the port carries; `None` when it is typed another way.
     fn the_setting_choosing_its_type(&self) -> Option<&str> {
         let declared = self.pin_type.as_ref()?;
@@ -98,13 +114,6 @@ impl BuiltInNodePortDescriptor {
             .then(|| declared.get("input_name").and_then(Value::as_str))
             .flatten()
     }
-}
-
-/// The part of a port's family declaration a built-in's docstring renders.
-#[derive(Debug, Deserialize)]
-struct BuiltInNodePortFamilyDeclaration {
-    #[serde(default)]
-    frame_rate: Option<BuiltInNodeImageOutputFrameRate>,
 }
 
 /// An Image output's declared frame rate, in the descriptor's wire form.
@@ -365,15 +374,11 @@ fn render_port_paragraph(
             paragraph,
             "\n    `{port_name}`{delivery_profile}: {description}"
         )?;
-        if let Some(frame_rate) = port
-            .family
-            .as_ref()
-            .and_then(|family| family.frame_rate.as_ref())
-        {
+        if let Some(frame_rate) = port.stated_frame_rate()? {
             write!(
                 paragraph,
                 "\n        Frame rate: {}.",
-                python_spelling_of_a_frame_rate(frame_rate)
+                python_spelling_of_a_frame_rate(&frame_rate)
             )?;
         }
     }

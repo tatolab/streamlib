@@ -34,7 +34,7 @@ pub struct LinkCheckResult {
 
 impl LinkCheckResult {
     /// The answer for a link `connect` would make as `verdict` judges it, or, with no verdict,
-    /// as the families of two ends not both typed take it: as it is, warning of nothing.
+    /// as a link between two ends not both typed is taken: as it is, warning of nothing.
     pub fn of_a_link_connect_makes(verdict: Option<&PinLinkVerdict>) -> Self {
         let Some(verdict) = verdict else {
             return Self {

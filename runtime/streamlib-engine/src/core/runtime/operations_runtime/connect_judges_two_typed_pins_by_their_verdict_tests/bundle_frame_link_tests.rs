@@ -81,10 +81,15 @@ fn register_the_bundle_frame_fixture_node_types() {
             )],
         ));
         let records_port = |name: &str, pin_type: DeclaredPinType| {
-            PortDescriptor::new(name, name, true, PinDeclaration {
-                pin_type,
-                ..PinDeclaration::exactly(PinType::String {})
-            })
+            PortDescriptor::new(
+                name,
+                name,
+                true,
+                PinDeclaration {
+                    pin_type,
+                    ..PinDeclaration::exactly(PinType::String {})
+                },
+            )
         };
         register(a_node_type(
             class_path(ANY_TYPE_PASS_THROUGH),

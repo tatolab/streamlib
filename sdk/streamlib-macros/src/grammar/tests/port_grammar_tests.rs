@@ -637,7 +637,8 @@ fn a_stream_fact_its_pin_type_does_not_take_is_refused_naming_the_port() {
         output("level", pin_type = Float, formats = ["rgba8_unorm"]),
     });
     assert!(
-        msg.contains("\"level\"") && msg.contains("states `formats=`, which an output of Float does not take"),
+        msg.contains("\"level\"")
+            && msg.contains("states `formats=`, which an output of Float does not take"),
         "got {msg}"
     );
     let msg = parse_err(quote! {

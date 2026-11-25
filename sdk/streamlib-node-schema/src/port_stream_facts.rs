@@ -146,7 +146,9 @@ impl From<PacketsStreamFacts> for PortStreamFacts {
 
 /// Why stream facts were refused for an output port.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("output port `{port_name}` carries {pin_type} and cannot carry {facts_describe} stream facts")]
+#[error(
+    "output port `{port_name}` carries {pin_type} and cannot carry {facts_describe} stream facts"
+)]
 pub struct StreamFactsOfAnotherPinType {
     pub port_name: String,
     pub pin_type: PinType,

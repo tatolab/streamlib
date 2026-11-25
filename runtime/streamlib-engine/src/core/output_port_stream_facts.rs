@@ -12,7 +12,10 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::core::descriptors::{DeclaredPinType, ImageStreamFacts, ImageStreamFrameRate, PinType, PortStreamFacts, output_port_frame_rate_resolved_against_config};
+use crate::core::descriptors::{
+    DeclaredPinType, ImageStreamFacts, ImageStreamFrameRate, PinType, PortStreamFacts,
+    output_port_frame_rate_resolved_against_config,
+};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
 use crate::iceoryx2::InboundLinkName;
@@ -283,7 +286,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::descriptors::{ImageOutputPortFrameRate, ImageStreamFrameRate, PacketsStreamFacts};
+    use crate::core::descriptors::{
+        ImageOutputPortFrameRate, ImageStreamFrameRate, PacketsStreamFacts,
+    };
 
     fn output_port(name: &str, pin_type: PinType) -> PortInfo {
         PortInfo::declared_by_no_node_type(
@@ -418,7 +423,8 @@ mod tests {
             Some(&json!({"fps": 24})),
         );
 
-        facts.take_the_pin_types_declared_by(std::slice::from_ref(&port), Some(&json!({"fps": 60})));
+        facts
+            .take_the_pin_types_declared_by(std::slice::from_ref(&port), Some(&json!({"fps": 60})));
         assert_eq!(
             frame_rate_of(&facts),
             Some(ImageStreamFrameRate {
@@ -449,8 +455,10 @@ mod tests {
     }
 
     #[test]
-    fn replaced_facts_are_the_ones_read_and_those_of_another_pin_type_are_refused_leaving_the_last() {
-        let facts = StreamFactsOfOutputPorts::as_declared_by(&[encoded_audio_port("encoded")], None);
+    fn replaced_facts_are_the_ones_read_and_those_of_another_pin_type_are_refused_leaving_the_last()
+    {
+        let facts =
+            StreamFactsOfOutputPorts::as_declared_by(&[encoded_audio_port("encoded")], None);
         facts
             .replace_facts_of("encoded", opus_facts())
             .expect("an encoded port carries encoded facts");
@@ -489,7 +497,8 @@ mod tests {
 
     #[test]
     fn facts_for_a_port_the_node_does_not_declare_are_refused_naming_the_ports_it_does() {
-        let facts = StreamFactsOfOutputPorts::as_declared_by(&[encoded_audio_port("encoded")], None);
+        let facts =
+            StreamFactsOfOutputPorts::as_declared_by(&[encoded_audio_port("encoded")], None);
         let refusal = facts
             .replace_facts_of("audio", opus_facts())
             .expect_err("a port the node does not declare carries no facts")

@@ -496,7 +496,9 @@ impl GraphSnapshot {
             let runs_as_a_source_node = running_graph_input_casts.contains(&node_cast);
             if runs_as_a_source_node {
                 runtime_nodes.push(match (states_what_it_carries, &pin_type) {
-                    (false, Some(resolved)) => node_with_the_pin_type_a_link_resolved(node, resolved),
+                    (false, Some(resolved)) => {
+                        node_with_the_pin_type_a_link_resolved(node, resolved)
+                    }
                     _ => node.clone(),
                 });
             }

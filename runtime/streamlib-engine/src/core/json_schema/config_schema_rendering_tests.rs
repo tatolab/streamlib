@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
 use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor};
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 fn descriptor_carrying(config_schema: Option<serde_json::Value>) -> NodeDescriptor {
     let descriptor = NodeDescriptor::new(
@@ -88,7 +88,14 @@ fn each_config_field_is_an_input_taking_no_wire_with_its_default_and_an_exact_ty
             "label": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
         },
     })));
-    descriptor.inputs = vec![crate::core::descriptors::PortDescriptor::new("video", "the picture", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))];
+    descriptor.inputs = vec![crate::core::descriptors::PortDescriptor::new(
+        "video",
+        "the picture",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    )];
     let rendered = serde_json::to_value(NodeDescriptorOutput::from(&descriptor)).unwrap();
     let names: Vec<&str> = rendered["inputs"]
         .as_array()

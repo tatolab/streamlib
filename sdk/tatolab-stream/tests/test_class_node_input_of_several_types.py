@@ -50,7 +50,6 @@ def test_each_type_is_taken_narrowed_as_it_is_written_and_streams():
     assert the_port("tracks") == {
         "name": "tracks",
         "description": "Video or audio, one track per link",
-        "family": {"family": "packets", "requires_codec": ["h264", "opus"]},
         "pin_declaration": {
             "pin_type": {
                 "kind": "one_of",
@@ -65,9 +64,8 @@ def test_each_type_is_taken_narrowed_as_it_is_written_and_streams():
     }
 
 
-def test_types_travelling_on_several_families_read_each_and_may_be_unset():
+def test_types_travelling_as_several_kinds_of_message_are_each_taken_and_may_be_unset():
     port = the_port("pictures_or_sound")
-    assert port["family"] == {"family": "image", "also_takes_families": ["channels"]}
     assert port["pin_declaration"] == {
         "pin_type": {"kind": "one_of", "pin_types": [{"type": "texture"}, {"type": "audio"}]},
         "flow": "stream",

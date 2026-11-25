@@ -637,18 +637,10 @@ impl NodeTypesOneStreamResolves {
                     !fields_its_config_schema_lists.contains(*input)
                         && !node.exposed_config_fields.contains(*input)
                 }) {
-                    add_once(
-                        ports,
-                        PortDirection::Input,
-                        a_port(input, None, true),
-                    );
+                    add_once(ports, PortDirection::Input, a_port(input, None, true));
                 }
                 for exposed in &node.exposed_config_fields {
-                    add_once(
-                        ports,
-                        PortDirection::Input,
-                        a_port(exposed, None, true),
-                    );
+                    add_once(ports, PortDirection::Input, a_port(exposed, None, true));
                     if !placeholder.config_fields_its_nodes_expose.contains(exposed) {
                         placeholder
                             .config_fields_its_nodes_expose

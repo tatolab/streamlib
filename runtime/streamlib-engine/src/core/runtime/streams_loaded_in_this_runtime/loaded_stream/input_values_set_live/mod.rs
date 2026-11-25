@@ -21,7 +21,6 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime};
-use crate::core::pin_value_packing::channel_count_of;
 use crate::core::error::WhyANodeOfAStreamIsNotRunning;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
@@ -33,6 +32,7 @@ use crate::core::graph::input_values::{
 };
 use crate::core::graph::{Graph, GraphNode, NodeRunId, PortInfo};
 use crate::core::nodes::{NodeTypesOneStreamResolves, is_the_input_of_an_output_a_panel_writes};
+use crate::core::pin_value_packing::channel_count_of;
 use crate::core::pubsub::RuntimeEvent;
 
 mod trigger_fires_set_live;

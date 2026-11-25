@@ -73,8 +73,7 @@ fn an_image_variable_read_by_two_readers(
 #[serial]
 fn an_image_variable_read_twice_runs_as_two_links_and_renders_as_drawn() {
     let camera = register_a_typed_type("VariableCamera", &[], &[("video", texture())]);
-    let display =
-        register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
+    let display = register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
     let graph = an_image_variable_read_by_two_readers(&camera, &display);
 
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -210,8 +209,7 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
 #[serial]
 fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
     let camera = register_a_typed_type("VariableCamera", &[], &[("video", texture())]);
-    let display =
-        register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
+    let display = register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
     let mut graph = an_image_variable_read_by_two_readers(&camera, &display);
     graph["nodes"][5]["name"] = serde_json::json!("Back Display");
     graph["links"][2]["target"]["node"] = serde_json::json!("Back Display");
@@ -239,8 +237,7 @@ fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
 #[serial]
 fn a_streams_interface_renders_as_drawn_loads_back_and_a_type_that_does_not_connect_is_refused() {
     let camera = register_a_typed_type("InterfaceCamera", &[], &[("video", texture())]);
-    let display =
-        register_a_typed_type("InterfaceDisplay", &[("video_in", texture())], &[]);
+    let display = register_a_typed_type("InterfaceDisplay", &[("video_in", texture())], &[]);
     let graph_offering = |output_pin_type: serde_json::Value| {
         serde_json::json!({
             "stream": "interface",

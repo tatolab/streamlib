@@ -6,7 +6,7 @@ use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
     NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, NodeRuntime, NodeScheduling,
-    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PortDescriptor, PinType,
+    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -676,8 +676,7 @@ fn refuse_a_pin_default_its_pin_type_does_not_take(
             .iter()
             .flat_map(|group| group.inputs.iter()),
     ) {
-        let (Some(pin_default), Some(pin_declaration)) =
-            (&port.pin_default, &port.pin_declaration)
+        let (Some(pin_default), Some(pin_declaration)) = (&port.pin_default, &port.pin_declaration)
         else {
             continue;
         };

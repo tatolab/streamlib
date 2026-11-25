@@ -92,7 +92,6 @@ def test_a_field_is_a_value_input_with_its_type_annotations_and_default() -> Non
     assert radius == {
         "name": "radius",
         "description": "",
-        "family": {"family": "channels"},
         "pin_declaration": {
             "pin_type": {"kind": "is", "pin_type": {"type": "float"}},
             "flow": "value",
@@ -108,7 +107,6 @@ def test_a_setting_only_field_takes_no_wire_and_is_read_at_setup() -> None:
 
     assert quality["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
     assert quality["pin_default"] == "fast"
-    assert quality["family"] == {"family": "records"}
 
 
 def test_a_field_states_wire_only_and_its_lifetime() -> None:
@@ -126,7 +124,6 @@ def test_an_input_pin_streams_its_type_and_states_no_default() -> None:
     assert video == {
         "name": "video",
         "description": "The pictures to blur.",
-        "family": {"family": "image"},
         "pin_declaration": {
             "pin_type": {"kind": "is", "pin_type": {"type": "texture"}},
             "flow": "stream",
@@ -137,7 +134,6 @@ def test_an_input_pin_streams_its_type_and_states_no_default() -> None:
 def test_a_stream_delivery_reaches_the_port_as_its_delivery_and_borrow_quota() -> None:
     voice = input_port(Blur, "voice")
 
-    assert voice["family"] == {"family": "channels"}
     assert voice["delivery_profile"] == "ordered"
     assert voice["borrow_quota"] == 2
 
@@ -146,16 +142,13 @@ def test_an_input_pin_of_a_trigger_fires() -> None:
     reset = input_port(Blur, "reset")
 
     assert reset["pin_declaration"]["flow"] == "trigger"
-    assert reset["family"] == {"family": "records"}
     assert "delivery_profile" not in reset
 
 
-def test_an_output_pin_declares_its_type_and_family() -> None:
-    assert output_port(Blur, "result")["family"] == {"family": "image"}
+def test_an_output_pin_declares_its_type() -> None:
     assert output_port(Blur, "level") == {
         "name": "level",
         "description": "",
-        "family": {"family": "channels", "names": {"stated": ["level"]}, "dtype": "f64"},
         "pin_declaration": {
             "pin_type": {"kind": "is", "pin_type": {"type": "float"}},
             "flow": "value",

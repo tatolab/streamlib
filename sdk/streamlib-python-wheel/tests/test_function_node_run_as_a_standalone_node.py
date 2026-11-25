@@ -316,7 +316,7 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     assert destination.read_from_input_port("read") is None, "a closed gate hands out nothing"
 
 
-def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_family():
+def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived():
     from tatolab.runtime._function_node_pool import the_node_class_the_function_node_pool_runs_as
 
     data_plane = _engine.open_node_link_data_access_for_helper_process()
@@ -326,8 +326,7 @@ def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_famil
                 {
                     "input_port": "island_0",
                     "output_port": "island_0_output",
-                    "family": "message",
-                    "message_family": "image",
+                    "written_as": "message",
                 }
             ]
         },
@@ -366,7 +365,7 @@ def test_the_pool_hands_on_every_part_of_a_control_message_its_island_answers():
 
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     pool_class = the_node_class_the_function_node_pool_runs_as(
-        {"carries": [{"input_port": "island_0", "output_port": "island_0_output", "family": "channels"}]},
+        {"carries": [{"input_port": "island_0", "output_port": "island_0_output", "written_as": "message"}]},
         data_plane,
     )
     pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
@@ -408,10 +407,10 @@ def test_the_pool_writes_an_island_carried_into_a_setting_as_it_sets_up_and_no_o
                 {
                     "input_port": "island_0",
                     "output_port": "island_0_output",
-                    "family": "channels",
+                    "written_as": "message",
                     "written_at_setup": True,
                 },
-                {"input_port": "island_1", "output_port": "island_1_output", "family": "channels"},
+                {"input_port": "island_1", "output_port": "island_1_output", "written_as": "message"},
             ]
         },
         data_plane,
@@ -471,7 +470,7 @@ def _a_carry(carry_number: int, *, written_at_setup: bool) -> "dict[str, Any]":
     carry: "dict[str, Any]" = {
         "input_port": f"island_{carry_number}",
         "output_port": f"island_{carry_number}_output",
-        "family": "channels",
+        "written_as": "message",
     }
     if written_at_setup:
         carry["written_at_setup"] = True
@@ -583,8 +582,8 @@ def test_a_running_pool_takes_a_new_carry_and_hands_its_island_on_without_a_rest
         the_node_class_the_function_node_pool_runs_as,
     )
 
-    first_carry = {"input_port": "island_0", "output_port": "island_0_output", "family": "channels"}
-    late_carry = {"input_port": "island_1", "output_port": "island_1_output", "family": "channels"}
+    first_carry = {"input_port": "island_0", "output_port": "island_0_output", "written_as": "message"}
+    late_carry = {"input_port": "island_1", "output_port": "island_1_output", "written_as": "message"}
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     pool_class = the_node_class_the_function_node_pool_runs_as({"carries": [first_carry]}, data_plane)
     pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)

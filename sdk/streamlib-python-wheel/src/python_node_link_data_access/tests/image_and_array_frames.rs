@@ -34,7 +34,8 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
             )
             .unwrap();
 
-        let received = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ArrayFrame);
+        let received =
+            read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ArrayFrame);
         assert_eq!(received.len().unwrap(), 2);
         assert_eq!(
             received
@@ -78,7 +79,8 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
                 true,
             )
             .expect("a read Array frame relays unchanged");
-        let relayed = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ArrayFrame);
+        let relayed =
+            read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ArrayFrame);
         let relayed_boxes = relayed.get_item("boxes").unwrap();
         let relayed_boxes = relayed_boxes.cast::<PythonTensorCpuAttribute>().unwrap();
         assert_eq!(relayed_boxes.get().shape(), vec![2u64, 3]);

@@ -20,16 +20,16 @@ use streamlib::sdk::rhi::TextureFormat;
 
 use super::*;
 use crate::python_bag_conversion::records_message_payload_of;
-use crate::python_node_context::PythonGpuContextLimitedAccess;
 use crate::python_message_kind_read_types::{
     PythonAudio, PythonEncodedMedia, PythonTensorCpuAttribute,
 };
+use crate::python_node_context::PythonGpuContextLimitedAccess;
 use crate::python_port_payload::PythonPortPayloadBorrow;
 
 mod borrows_and_loans;
-mod message_kind_round_trips;
 mod helper_wiring_boards_and_losses;
 mod image_and_array_frames;
+mod message_kind_round_trips;
 
 /// Unique per test: every test in this process shares one iceoryx2 domain,
 /// so a fixed name would let one test's channel meet the next one's.

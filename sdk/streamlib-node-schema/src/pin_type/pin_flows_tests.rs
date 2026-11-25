@@ -243,8 +243,7 @@ fn a_typed_input_that_states_no_delivery_reads_by_its_pins_default_and_a_stated_
     let descriptor = a_node_type_with(
         vec![
             a_port("picture", texture()),
-            a_port("level", float())
-                .with_pin_declaration(PinDeclaration::exactly(float())),
+            a_port("level", float()).with_pin_declaration(PinDeclaration::exactly(float())),
             a_port("levels", float())
                 .with_pin_declaration(declared_with_flow(float(), PinFlow::Stream)),
             a_port("every_picture", texture()).with_delivery_profile("ordered"),
@@ -290,10 +289,9 @@ fn a_node_type_is_refused_a_flow_its_type_does_not_take_and_keeps_an_untyped_inp
          not allow; it flows as `stream`"
     );
 
-    let untyped_with_no_delivery =
-        a_node_type_with(vec![an_untyped_port("records")], vec![])
-            .with_input_deliveries_defaulted_by_pin()
-            .unwrap();
+    let untyped_with_no_delivery = a_node_type_with(vec![an_untyped_port("records")], vec![])
+        .with_input_deliveries_defaulted_by_pin()
+        .unwrap();
     assert_eq!(untyped_with_no_delivery.inputs[0].delivery_profile, None);
 }
 

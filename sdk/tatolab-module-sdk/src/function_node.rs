@@ -16,7 +16,7 @@
 //! or a `bool`; a record is a struct of them deriving `FunctionNodeRecord`,
 //! whose `Default` is its first state or its config's defaults.
 //!
-//! A pin typed [`UnreadMessage`] takes a message of any family, which the body
+//! A pin typed [`UnreadMessage`] takes a message of any type, which the body
 //! can only hand on, to an `UnreadMessage` output; `Option<UnreadMessage>` takes
 //! `None` when it holds none. An output typed `Option<T>` hands out nothing on
 //! `None`, and a record of outputs types each such field `Option<T>`.
@@ -134,7 +134,7 @@ pub trait FunctionNodeRecord: Default + Copy {
     fn from_function_node_values(values: &[f64]) -> Self;
 }
 
-/// A message of any family a function node was handed, which its body can only hand on unread.
+/// A message of any type a function node was handed, which its body can only hand on unread.
 ///
 /// ABI contract with the read seam: it travels through the evaluate entry as
 /// the index of the input holding it plus one, and `0.0` stands for none.
@@ -352,7 +352,7 @@ pub fn write_one_function_node_output_value<OutputValue: FunctionNodeOutputPortV
 
 /// Refuse at compile time an `UnreadMessage` output with no one `UnreadMessage` input to follow.
 ///
-/// Such an output takes the family linked into the input it hands on, so a
+/// Such an output takes the type linked into the input it hands on, so a
 /// function handing one out takes exactly one.
 pub const fn refuse_an_unread_message_output_following_no_one_input(
     input_value_types: &[FunctionNodeValueType],
@@ -377,7 +377,7 @@ pub const fn refuse_an_unread_message_output_following_no_one_input(
         ) && unread_message_inputs != 1
         {
             panic!(
-                "a function node's `UnreadMessage` output takes the family of the one \
+                "a function node's `UnreadMessage` output takes the type of the one \
                  `UnreadMessage` input it hands on; take exactly one `UnreadMessage` input"
             );
         }

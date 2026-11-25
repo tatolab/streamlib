@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 #[test]
 #[serial]
@@ -618,7 +618,9 @@ fn a_stream_whose_load_is_refused_is_held_from_its_document_reading_none_of_its_
 /// A natively registered function node type, `Switch`, whose `result` carries Records, so a
 /// project's document names it without a node interpreter describing it.
 fn a_native_function_node_type_of_records() -> NodeClassImportPath {
-    use crate::core::descriptors::{FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor};
+    use crate::core::descriptors::{
+        FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor,
+    };
     let switch_type = NodeClassImportPath::new(format!("{}::Switch", module_path!())).unwrap();
     static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
     REGISTERED_ONCE_PER_PROCESS.call_once(|| {
@@ -628,7 +630,12 @@ fn a_native_function_node_type_of_records() -> NodeClassImportPath {
             "a fixture",
         )
         .with_output(
-            PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::String {}))
+            PortDescriptor::new(
+                "result",
+                "",
+                true,
+                PinDeclaration::exactly(PinType::String {}),
+            )
             .with_delivery_profile("newest"),
         );
         switch.node_kind = NodeKind::Function {
@@ -756,10 +763,24 @@ fn shader_nodes_in_a_cycle_fail_on_their_nodes_and_the_stream_plays() {
         "a shader node type for a test",
     )
     .with_input(
-        PortDescriptor::new("image", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))
+        PortDescriptor::new(
+            "image",
+            "",
+            true,
+            PinDeclaration::exactly(PinType::Texture {
+                pixel_formats: Vec::new(),
+            }),
+        )
         .with_delivery_profile("newest"),
     )
-    .with_output(PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+    .with_output(PortDescriptor::new(
+        "result",
+        "",
+        true,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ));
     blur.node_kind = NodeKind::Shader;
     held.node_types_this_stream_resolves()
         .register_a_type_described_in_this_streams_node_interpreter(

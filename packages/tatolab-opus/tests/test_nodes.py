@@ -99,7 +99,6 @@ def test_the_encoder_publishes_opus_packets():
     [encoded_audio] = describe_one_node_class("tatolab.opus:OpusEncoder")["output_ports"]
 
     assert the_pin_type_of(encoded_audio) == {"type": "encoded_audio", "codecs": ["opus"]}
-    assert encoded_audio["family"] == {"family": "packets", "codec": "opus"}
 
 
 def test_the_encoders_settings_are_read_at_setup_and_name_what_libopus_takes():
@@ -284,7 +283,7 @@ class OpusRoundTripOnWiredLinks:
     def decoded_blocks(self) -> "list[DecodedBlock]":
         blocks = []
         while (
-            block := link_input_data_reader_of(self.sink_context).read("audio", families=["channels"])
+            block := link_input_data_reader_of(self.sink_context).read("audio", kinds=["channels_block"])
         ) is not None:
             blocks.append(decoded_block_of(block))
         return blocks

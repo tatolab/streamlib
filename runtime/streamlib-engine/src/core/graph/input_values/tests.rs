@@ -285,7 +285,9 @@ fn a_live_set_replaces_an_earlier_one_only_on_the_member_or_the_whole_input_it_s
 /// set on it, as MakeBundle's `members` was on the rig.
 #[test]
 fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
-    use crate::core::descriptors::{BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType};
+    use crate::core::descriptors::{
+        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType,
+    };
     use crate::core::graph::PinTypeAsDeclared;
     let members = PortInfo {
         name: "members".to_owned(),
@@ -352,7 +354,9 @@ fn an_input_whose_setting_chooses_a_bundle_takes_a_value_of_that_bundle() {
 /// `{"level": 0.5}` as taking no value.
 #[test]
 fn an_input_reading_a_bundle_holding_a_texture_takes_a_value_of_its_small_members() {
-    use crate::core::descriptors::{BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, TexturePixelFormat};
+    use crate::core::descriptors::{
+        BundleMember, DeclaredPinType, NodeInputMode, PinFlow, PinType, TexturePixelFormat,
+    };
     use crate::core::graph::PinTypeAsDeclared;
     let members = PortInfo {
         name: "members".to_owned(),

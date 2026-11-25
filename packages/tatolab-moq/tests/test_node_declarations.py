@@ -129,10 +129,9 @@ def test_a_receive_writes_the_type_its_choice_holds_a_moq_record_by_default():
         {"type": "encoded_audio", "codecs": ["opus"]},
         MOQ_RECORD,
     ]
-    assert content_out["family"] == {
-        "family": "records",
-        "family_from_config_key": "content_type",
-        "codec_from_config_key": "content_type",
+    assert content_out["pin_declaration"]["pin_type"] == {
+        "kind": "set_by_input",
+        "input_name": "content_type",
     }
 
 

@@ -438,7 +438,11 @@ fn a_value_a_graph_input_does_not_carry_is_refused_naming_why() {
     load_the_graph_inputs(
         &stream,
         vec![
-            a_graph_input_in_a_document(cue, "cue", json!({ "port": "cue", "pin_type": { "type": "string" } })),
+            a_graph_input_in_a_document(
+                cue,
+                "cue",
+                json!({ "port": "cue", "pin_type": { "type": "string" } }),
+            ),
             a_graph_input_in_a_document(
                 fader,
                 "fader",
@@ -894,7 +898,11 @@ fn a_link_into_the_value_of_a_graph_input_is_refused() {
     load_the_graph_inputs(
         &stream,
         vec![
-            a_graph_input_in_a_document(cue, "cue", json!({ "port": "cue", "pin_type": { "type": "string" } })),
+            a_graph_input_in_a_document(
+                cue,
+                "cue",
+                json!({ "port": "cue", "pin_type": { "type": "string" } }),
+            ),
             a_graph_input_in_a_document(
                 echo,
                 "echo",

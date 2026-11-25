@@ -22,6 +22,7 @@ mod python_helper_scheduling_loop;
 mod python_helper_stream_clock;
 mod python_input_port_pin_values;
 mod python_logging;
+mod python_message_kind_read_types;
 #[cfg(target_os = "macos")]
 mod python_metal_framework_queue_synchronization;
 mod python_module_host_table;
@@ -29,7 +30,6 @@ mod python_monotonic_timer;
 mod python_node_context;
 mod python_node_declaration;
 mod python_node_link_data_access;
-mod python_message_kind_read_types;
 mod python_port_payload;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;

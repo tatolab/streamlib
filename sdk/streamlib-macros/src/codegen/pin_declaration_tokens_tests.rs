@@ -99,10 +99,17 @@ fn the_names_a_port_had_and_that_it_may_be_unset_are_emitted_beside_its_flow() {
 
 #[test]
 fn a_port_typed_by_a_setting_carries_the_type_it_chooses_as_a_value() {
-    let emitted: String = pin_declaration_tokens(None, Some("bundle_type"), None, &[], false, &Default::default())
-        .to_string()
-        .split_whitespace()
-        .collect();
+    let emitted: String = pin_declaration_tokens(
+        None,
+        Some("bundle_type"),
+        None,
+        &[],
+        false,
+        &Default::default(),
+    )
+    .to_string()
+    .split_whitespace()
+    .collect();
     assert_eq!(
         emitted,
         "::std::option::Option::Some(__streamlib_sdk::descriptors::PinDeclaration{\

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::graph_variable_node_types::the_settings_of_a_graph_variable_node;
-use crate::core::descriptors::{DeclaredPinType, NodeClassImportPath, NodeInputMode, PinDeclaration, PinType, PortDescriptor, SettingReadTime};
+use crate::core::descriptors::{
+    DeclaredPinType, NodeClassImportPath, NodeInputMode, PinDeclaration, PinType, PortDescriptor,
+    SettingReadTime,
+};
 use crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference;
 use crate::core::graph::graph_variable_resolution::{
     GET_VARIABLE_NODE_TYPE, SET_VARIABLE_NODE_TYPE,

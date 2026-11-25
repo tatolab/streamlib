@@ -106,7 +106,9 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
             (
                 "crossfader".to_string(),
                 "Left to right.".to_string(),
-                Some(DeclaredPinType::Is { pin_type: PinType::Tensor {} }),
+                Some(DeclaredPinType::Is {
+                    pin_type: PinType::Tensor {}
+                }),
                 false
             )
         ]
@@ -151,7 +153,9 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
     );
     assert_eq!(
         setting.pin_declaration.as_ref().map(|pin| &pin.pin_type),
-        Some(&DeclaredPinType::Is { pin_type: PinType::Tensor {} })
+        Some(&DeclaredPinType::Is {
+            pin_type: PinType::Tensor {}
+        })
     );
     assert_eq!(
         setting.input_mode,
@@ -237,20 +241,21 @@ fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
         the_monitor_manifest(),
     ))
     .expect("a node view that opens is a node type");
-    let pins = |ports: &[PortDescriptor]| -> Vec<(String, Option<DeclaredPinType>, Option<PinFlow>)> {
-        ports
-            .iter()
-            .map(|port| {
-                (
-                    port.name.clone(),
-                    port.pin_declaration
-                        .as_ref()
-                        .map(|pin| pin.pin_type.clone()),
-                    port.pin_declaration.as_ref().map(|pin| pin.flow),
-                )
-            })
-            .collect()
-    };
+    let pins =
+        |ports: &[PortDescriptor]| -> Vec<(String, Option<DeclaredPinType>, Option<PinFlow>)> {
+            ports
+                .iter()
+                .map(|port| {
+                    (
+                        port.name.clone(),
+                        port.pin_declaration
+                            .as_ref()
+                            .map(|pin| pin.pin_type.clone()),
+                        port.pin_declaration.as_ref().map(|pin| pin.flow),
+                    )
+                })
+                .collect()
+        };
     let string = || DeclaredPinType::Is {
         pin_type: PinType::String {},
     };
@@ -273,20 +278,12 @@ fn a_port_of_a_view_is_exactly_the_pin_type_it_names() {
                 }),
                 Some(PinFlow::Value),
             ),
-            (
-                "caption".to_string(),
-                Some(string()),
-                Some(PinFlow::Value)
-            ),
+            ("caption".to_string(), Some(string()), Some(PinFlow::Value)),
         ]
     );
     assert_eq!(
         pins(&descriptor.outputs),
-        [(
-            "caption".to_string(),
-            Some(string()),
-            Some(PinFlow::Value)
-        )]
+        [("caption".to_string(), Some(string()), Some(PinFlow::Value))]
     );
 }
 

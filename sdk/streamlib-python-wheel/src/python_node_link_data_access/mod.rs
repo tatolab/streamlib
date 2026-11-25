@@ -44,7 +44,7 @@ mod input_port_reads;
 mod output_port_writes_and_loans;
 
 pub(crate) use input_port_reads::{
-    MessageKindsOfTheRead, MessageKindOfTheRead, PortPayloadReadShape, image_frame_of_the_read,
+    MessageKindOfTheRead, MessageKindsOfTheRead, PortPayloadReadShape, image_frame_of_the_read,
 };
 pub(crate) use output_port_writes_and_loans::{
     ArrayOutputPortDeclaredResidency, ChannelsOutputPortDeclaredShape,

@@ -10,11 +10,11 @@
 //! and the graph JSON — the payload `tatolab graph` and the `graph` operation
 //! serve — carries the assigned names, not the requested ones.
 
-use streamlib::sdk::descriptors::{PinDeclaration, PinType};
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
 };
+use streamlib::sdk::descriptors::{PinDeclaration, PinType};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::Runner;
@@ -46,8 +46,22 @@ fn register_test_type_named(path_tail: &str, short_name: &str) -> NodeClassImpor
         import_path.clone(),
         "node name test",
     )
-    .with_input(PortDescriptor::new("_unused_in", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
-    .with_output(PortDescriptor::new("_unused_out", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
+    .with_input(PortDescriptor::new(
+        "_unused_in",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ))
+    .with_output(PortDescriptor::new(
+        "_unused_out",
+        "",
+        false,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    ));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

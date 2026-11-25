@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
+use crate::core::descriptors::{PinDeclaration, PinType};
 
 /// Every key a rendered port with no pin type carries, its values unchecked. A port that grows
 /// another field fails here, whatever the field is named.
@@ -171,9 +171,14 @@ fn a_node_whose_one_setting_is_read(
     read: crate::core::descriptors::SettingReadTime,
 ) -> crate::core::graph::GraphNode {
     let setting = crate::core::graph::PortInfo::from(
-        &crate::core::descriptors::PortDescriptor::new("port", "", false, crate::core::descriptors::PinDeclaration::exactly(
-            crate::core::descriptors::PinType::String {},
-        ))
+        &crate::core::descriptors::PortDescriptor::new(
+            "port",
+            "",
+            false,
+            crate::core::descriptors::PinDeclaration::exactly(
+                crate::core::descriptors::PinType::String {},
+            ),
+        )
         .with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly { read }),
     );
     crate::core::graph::GraphNode::new(
@@ -330,7 +335,8 @@ fn a_port_of_no_pin_type_renders_its_values_unchecked_in_the_graph_and_the_regis
         serde_json::json!(false)
     );
 
-    let declared = crate::core::PortDescriptor::a_setting_of_no_pin_type("detections", "Detections");
+    let declared =
+        crate::core::PortDescriptor::a_setting_of_no_pin_type("detections", "Detections");
     let json = serde_json::to_value(PortDescriptorOutput::from(&declared)).unwrap();
     assert_eq!(json["values_checked"], serde_json::json!(false));
     assert_renders_exactly(
@@ -370,7 +376,14 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
 
 #[test]
 fn a_picture_ports_descriptor_renders_its_pin_type_and_flow_and_no_retired_type_key() {
-    let pd = crate::core::PortDescriptor::new("video", "Video output", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))
+    let pd = crate::core::PortDescriptor::new(
+        "video",
+        "Video output",
+        true,
+        PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: Vec::new(),
+        }),
+    )
     .with_delivery_profile("ordered");
     let json = serde_json::to_value(PortDescriptorOutput::from(&pd)).unwrap();
 
@@ -640,7 +653,12 @@ fn the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own(
 /// carrier the macro and the wheel's declaration bridge both fill.
 #[test]
 fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
-    let descriptor = crate::core::PortDescriptor::new("audio", "Samples to frame", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
+    let descriptor = crate::core::PortDescriptor::new(
+        "audio",
+        "Samples to frame",
+        true,
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    )
     .with_delivery_profile("ordered")
     .with_audio_window_contract(declared_window_contract());
 
@@ -651,7 +669,12 @@ fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
 
 #[test]
 fn a_contract_bearing_descriptor_renders_its_contract_too() {
-    let descriptor = crate::core::PortDescriptor::new("audio", "Samples to frame", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
+    let descriptor = crate::core::PortDescriptor::new(
+        "audio",
+        "Samples to frame",
+        true,
+        PinDeclaration::exactly(PinType::Float { exact_size: None }),
+    )
     .with_delivery_profile("ordered")
     .with_audio_window_contract(crate::core::descriptors::AudioWindowContract::MatchDevice {});
     let json = serde_json::to_value(PortDescriptorOutput::from(&descriptor)).unwrap();

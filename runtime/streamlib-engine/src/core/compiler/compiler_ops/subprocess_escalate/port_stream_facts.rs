@@ -214,8 +214,7 @@ mod tests {
         };
         assert_eq!(refusal.request_id, "set-2");
         assert!(
-            refusal.message.contains("encoded")
-                && refusal.message.contains("Texture"),
+            refusal.message.contains("encoded") && refusal.message.contains("Texture"),
             "got {}",
             refusal.message
         );

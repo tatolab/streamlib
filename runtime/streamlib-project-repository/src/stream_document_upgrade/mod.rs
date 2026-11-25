@@ -376,7 +376,8 @@ fn the_node_reshaped(node: &mut Value, merged_inputs: &[MergedInput]) -> bool {
         node,
         PIN_TYPES_CHOSEN_FROM_A_FAMILY_AND_CODEC,
     );
-    any_changed |= interface_pin_type_named_by_its_family::the_family_of_an_interface_node_chosen(node);
+    any_changed |=
+        interface_pin_type_named_by_its_family::the_family_of_an_interface_node_chosen(node);
     if let Some(fragment) = node.get_mut("fragment") {
         any_changed |= upgrade_the_document_with(fragment, merged_inputs);
     }

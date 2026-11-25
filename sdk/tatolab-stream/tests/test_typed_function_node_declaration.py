@@ -139,7 +139,7 @@ def test_a_typed_function_node_is_a_function_node_the_runtime_calls_as_today() -
     assert Tone(frequency=100.0, gain=2.0) == 200.0
 
 
-def test_time_and_state_are_read_as_under_the_family_grammar_and_a_stateful_output_is_typed() -> None:
+def test_time_and_state_are_read_by_their_parameter_names_and_a_stateful_output_is_typed() -> None:
     signature = getattr(Smooth, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
     assert signature["time_parameter"] == "now"
     assert signature["state_parameter"] == "previous"
@@ -180,7 +180,6 @@ def test_a_value_class_is_handed_to_the_body_by_its_value_type_and_its_output_na
     ]
     assert signature["outputs"][0]["value_type"] == "color"
     (result,) = getattr(Place, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
-    assert result["family"]["names"] == {"stated": ["red", "green", "blue", "alpha"]}
     assert result["pin_declaration"]["annotations"] == {"meaning": "tint"}
     assert Place() == Color(1.0, 0.5, 0.2)
 
@@ -428,20 +427,8 @@ def test_a_string_menu_asset_and_list_are_declared_with_their_stored_defaults() 
     ]
 
 
-def test_each_typed_pin_travels_on_the_family_of_its_message_and_states_its_pin_type() -> None:
-    families = {
-        port["name"]: port["family"]["family"]
-        for port in getattr(Caption, NODE_DECLARATION_INPUT_PORTS_STAMP)
-    }
-    assert families == {
-        "text": "records",
-        "shape": "records",
-        "picture": "records",
-        "levels": "array",
-        "tints": "array",
-    }
+def test_each_typed_pin_states_its_pin_type() -> None:
     (result,) = getattr(Caption, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
-    assert result["family"] == {"family": "records"}
     signature = getattr(Caption, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
     assert [entry["value_type"] for entry in signature["inputs"]] == [
         "string",

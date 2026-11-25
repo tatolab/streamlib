@@ -4,7 +4,7 @@
 """The sample that declares each kind of pin, on `tatolabd`: listed among the samples, created
 from the copy the runtime unit carries, played, saved and opened again.
 
-`examples/every-pin-kind` holds typed function and shader nodes, a Graph Input of a family, one
+`examples/every-pin-kind` holds typed function and shader nodes, Graph Inputs
 whose `pin_type` setting chooses Float, one choosing Integer that names a dial, as an input
 promoted from `Caption`'s `lines` does, a class node that holds a setting, a node type
 whose inputs each name the control the Studio draws, and two nodes whose Texture pins state

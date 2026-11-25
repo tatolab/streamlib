@@ -389,7 +389,9 @@
       "id": "f594735f-060a-55fb-8896-4a9af33fe3ad",
       "input_values": {
         "default": 1.0,
-        "family": "channels",
+        "pin_type": {
+          "type": "float"
+        },
         "port": "speed",
         "range": [
           0.0,
@@ -411,7 +413,9 @@
       "id": "e9655b02-2a64-514e-ae45-16302409591d",
       "input_values": {
         "default": 6.0,
-        "family": "channels",
+        "pin_type": {
+          "type": "float"
+        },
         "port": "segments",
         "range": [
           2.0,
@@ -555,7 +559,9 @@
           {
             "id": "b5d446e4-d0cc-5943-9b12-a544a46b38c9",
             "input_values": {
-              "family": "image",
+              "pin_type": {
+                "type": "texture"
+              },
               "port": "video_in"
             },
             "name": "video_in",
@@ -596,7 +602,9 @@
           {
             "id": "70c8bd39-b81d-5c6e-8a12-24e4508e64e5",
             "input_values": {
-              "family": "image",
+              "pin_type": {
+                "type": "texture"
+              },
               "port": "video_out"
             },
             "name": "video_out",
@@ -607,9 +615,6 @@
           {
             "name": "passes",
             "description": "How many times the picture is blurred.",
-            "family": {
-              "family": "channels"
-            },
             "pin_declaration": {
               "pin_type": {
                 "kind": "is",
@@ -628,9 +633,6 @@
           {
             "name": "strength",
             "description": "How much of the blur is added back.",
-            "family": {
-              "family": "channels"
-            },
             "pin_declaration": {
               "pin_type": {
                 "kind": "is",
