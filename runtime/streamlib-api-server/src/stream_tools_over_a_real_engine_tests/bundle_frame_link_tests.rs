@@ -6,10 +6,7 @@
 //! Texture member named, and `check_link` answers that same refusal; a bundle of small members
 //! links there as before.
 
-use streamlib::sdk::descriptors::{
-    BundleMember, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType, PortDescriptor,
-    PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{BundleMember, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType, PortDescriptor};
 use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 use super::*;
@@ -40,14 +37,8 @@ fn a_source_of(node_type: &str, port: &str, pin_type: PinType) -> NodeDescriptor
         "a node type of one typed output",
     )
     .with_output(
-        PortDescriptor::new(
-            port,
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Records),
-        )
-        .with_delivery_profile("newest")
-        .with_pin_declaration(PinDeclaration::exactly(pin_type)),
+        PortDescriptor::new(port, "", true, PinDeclaration::exactly(pin_type))
+        .with_delivery_profile("newest"),
     )
 }
 

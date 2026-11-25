@@ -14,12 +14,7 @@ const ANY_RECORDS_SINK: &str = "VerdictCheckAnyRecordsSink";
 const ANY_RECORDS_RELAY: &str = "VerdictCheckAnyRecordsRelay";
 
 fn an_untyped_records_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        name,
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(PinType::String {}))
 }
 
 fn register_the_named_type_fixture_node_types() {

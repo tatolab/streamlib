@@ -35,11 +35,24 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
     assert_eq!(
         deck.outputs
             .iter()
-            .map(|port| (port.name.as_str(), port.family.families_an_input_takes()))
+            .map(|port| (
+                port.name.as_str(),
+                port.pin_declaration.as_ref().map(|pin| pin.pin_type.clone())
+            ))
             .collect::<Vec<_>>(),
         [
-            ("cue", vec![PortFamily::Records]),
-            ("fader", vec![PortFamily::Array])
+            (
+                "cue",
+                Some(crate::core::descriptors::DeclaredPinType::Is {
+                    pin_type: crate::core::descriptors::PinType::String {}
+                })
+            ),
+            (
+                "fader",
+                Some(crate::core::descriptors::DeclaredPinType::Is {
+                    pin_type: crate::core::descriptors::PinType::Tensor {}
+                })
+            )
         ]
     );
     assert!(

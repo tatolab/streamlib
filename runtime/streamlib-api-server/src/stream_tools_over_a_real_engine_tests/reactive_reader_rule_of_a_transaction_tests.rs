@@ -6,10 +6,7 @@
 //! never refuses a transaction whose end leaves no reader stranded; and a transaction whose end
 //! strands one leaves the stream and the project's documents as they were.
 
-use streamlib::sdk::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor};
 use streamlib::sdk::execution::ProcessExecution;
 
 use super::*;
@@ -21,12 +18,7 @@ const SWITCH_TYPE: &str = "transaction_reader_rule::Switch";
 const READER_TYPE: &str = "transaction_reader_rule::Meter";
 
 fn a_records_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(PinType::String {}))
     .with_delivery_profile("newest")
 }
 

@@ -178,6 +178,30 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
 }
 
 impl PortInfo {
+    /// A port named `name` that no node type declares, carrying `pin` when one is known, such as
+    /// a port of a node whose node code did not describe it, held by the links and values its
+    /// nodes have.
+    pub(crate) fn declared_by_no_node_type(
+        name: &str,
+        pin: Option<crate::core::descriptors::ResolvedPin>,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            description: String::new(),
+            delivery_profile: None,
+            borrow_quota: None,
+            audio_window: None,
+            pin_default: None,
+            pin,
+            declared_pin_type: None,
+            lifetime: Default::default(),
+            former_names: Vec::new(),
+            may_be_unset: false,
+            input_mode: None,
+            annotations: PortAnnotations::default(),
+        }
+    }
+
     /// The lowest and highest number this input takes, as its pin states them; `None` when it
     /// states no range.
     pub fn range(&self) -> Option<crate::core::descriptors::PinNumberRange> {

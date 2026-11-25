@@ -10,9 +10,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::stream_graph_operation_under_the_current_port_names::the_operation_under_the_current_port_names;
-use crate::core::descriptors::{
-    PinFlow, PinType, PortFamily, PortFamilyDeclaration, ProjectAssetMedia, ResolvedPin,
-};
+use crate::core::descriptors::{PinFlow, PinType, ProjectAssetMedia, ResolvedPin};
 use crate::core::graph::{GraphNodePorts, PortInfo};
 use streamlib_project_repository::StreamGraphOperation;
 
@@ -22,15 +20,13 @@ const ASSET: &str = "0f0e0d0c-0b0a-4909-8807-060504030201";
 /// The ports of a picture node: its Asset input `asset`, once a config key holding a UUID
 /// string, and its String input `caption`.
 fn ports_of_a_picture_node() -> GraphNodePorts {
-    let typed = |name: &str, pin_type: PinType| PortInfo {
-        pin: Some(ResolvedPin {
-            pin_type,
-            flow: PinFlow::Value,
-        }),
-        ..PortInfo::declaring_only_a_family(
+    let typed = |name: &str, pin_type: PinType| {
+        PortInfo::declared_by_no_node_type(
             name,
-            "",
-            PortFamilyDeclaration::of_family(PortFamily::Records),
+            Some(ResolvedPin {
+                pin_type,
+                flow: PinFlow::Value,
+            }),
         )
     };
     GraphNodePorts {

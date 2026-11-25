@@ -6,7 +6,7 @@
 
 use uuid::Uuid;
 
-use crate::core::descriptors::PortFamily;
+use crate::core::descriptors::PinType;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME,
@@ -22,8 +22,9 @@ use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_r
 pub struct TopLevelGraphInputDeclaringAStreamInput {
     /// The `GraphInput` node, by UUID.
     pub node: Uuid,
-    /// The family its `value` carries.
-    pub family: PortFamily,
+    /// The pin type its `value` carries; `None` while neither its `pin_type` setting nor a link
+    /// settles one.
+    pub pin_type: Option<PinType>,
     /// Why its node does not run while its stream's playback is not stopped, naming the input;
     /// `None` when it runs, or the playback is stopped.
     pub refusal_while_its_node_does_not_run: Option<Error>,
@@ -62,7 +63,7 @@ impl LoadedStreamInThisRuntime {
                         });
                     Ok(TopLevelGraphInputDeclaringAStreamInput {
                         node: node.node_uuid,
-                        family: the_family_a_graph_input_carries(node)?,
+                        pin_type: the_pin_type_a_graph_input_carries(node)?,
                         refusal_while_its_node_does_not_run,
                     })
                 })
@@ -110,11 +111,11 @@ fn the_graph_input_declaring_the_input<'graph>(
     })
 }
 
-/// The family the top-level `GraphInput` `node` carries, as its `value` input resolved it from
-/// its settings.
-fn the_family_a_graph_input_carries(node: &GraphNode) -> Result<PortFamily> {
+/// The pin type the top-level `GraphInput` `node` carries, as its `value` input resolved it from
+/// its settings and its links.
+fn the_pin_type_a_graph_input_carries(node: &GraphNode) -> Result<Option<PinType>> {
     node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)
-        .map(|value| value.family.family)
+        .map(|value| value.pin.as_ref().map(|pin| pin.pin_type.clone()))
         .ok_or_else(|| {
             Error::Configuration(format!(
                 "`GraphInput` node `{}` has no `{GRAPH_INTERFACE_VALUE_PORT_NAME}` input",

@@ -12,8 +12,7 @@ use super::*;
 fn a_described_class_node_with_typed_fields() -> serde_json::Value {
     described_node_type_with_input_ports(serde_json::json!([
         {
-            "name": "quality", "description": "", "family": {"family": "records"},
-            "pin_declaration": {
+            "name": "quality", "description": "", "pin_declaration": {
                 "pin_type": {"kind": "is", "pin_type": {"type": "menu", "option_names": ["fast", "fine"]}},
                 "flow": "value",
             },
@@ -22,8 +21,7 @@ fn a_described_class_node_with_typed_fields() -> serde_json::Value {
             "lifetime": "reset",
         },
         {
-            "name": "wet", "description": "", "family": {"family": "channels"},
-            "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
+            "name": "wet", "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
             "pin_default": 1.0,
             "input_mode": {"mode": "wire_only"},
         },

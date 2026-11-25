@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib_node_schema::PortFamily;
 use streamlib_node_schema::pin_type::PinType;
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
 
@@ -22,12 +21,12 @@ use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{
     Graph, GraphNode, OutputLinkPortRef, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal, the_bundle_frame_type_an_output_may_carry,
-    the_family_a_link_out_of_an_output_carries, the_pin_a_port_resolves_to,
+    the_pin_a_port_resolves_to,
 };
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
-use crate::core::{NodeRunId, PortDirection};
+use crate::core::PortDirection;
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);
@@ -222,12 +221,7 @@ impl LoadedStreamInThisRuntime {
                         )?;
                         let node_name = node.display_name.clone();
                         let pin_type = the_pin_type_of_an_output(graph, node, &port_name);
-                        let viewer_reads = what_a_viewer_of_the_port_reads(
-                            graph,
-                            &node.id,
-                            &port_name,
-                            pin_type.as_ref(),
-                        );
+                        let viewer_reads = what_a_viewer_of_the_port_reads(pin_type.as_ref());
                         let source = OutputLinkPortRef::new(node.id.clone(), port_name.as_str());
                         let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
                             graph,
@@ -392,24 +386,12 @@ fn the_pin_type_of_an_output(graph: &Graph, node: &GraphNode, port_name: &str) -
     the_pin_a_port_resolves_to(graph, node, port, PortDirection::Output).map(|pin| pin.pin_type)
 }
 
-/// What a viewer of output `port_name` of `node_id`, which carries `pin_type`, reads: every
-/// message for an Audio port, the latest for a port of any other type; for a port with none,
-/// every message when it carries Channels, the latest for any other family or one not settled.
-fn what_a_viewer_of_the_port_reads(
-    graph: &Graph,
-    node_id: &NodeRunId,
-    port_name: &str,
-    pin_type: Option<&PinType>,
-) -> OutputPortViewerReads {
+/// What a viewer of an output port carrying `pin_type` reads: every message for an Audio port,
+/// the latest for a port of any other type, or of one its graph has not settled.
+fn what_a_viewer_of_the_port_reads(pin_type: Option<&PinType>) -> OutputPortViewerReads {
     match pin_type {
         Some(PinType::Audio {}) => OutputPortViewerReads::EveryMessage,
-        Some(_) => OutputPortViewerReads::LatestMessage,
-        None if the_family_a_link_out_of_an_output_carries(graph, node_id, port_name)
-            .is_some_and(|declaration| declaration.family == PortFamily::Channels) =>
-        {
-            OutputPortViewerReads::EveryMessage
-        }
-        None => OutputPortViewerReads::LatestMessage,
+        _ => OutputPortViewerReads::LatestMessage,
     }
 }
 

@@ -20,7 +20,8 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     runs_inside_the_read_of_each_node_it_feeds,
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
-use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
+use crate::core::descriptors::{NodeKind, NodeValueLifetime};
+use crate::core::pin_value_packing::channel_count_of;
 use crate::core::error::WhyANodeOfAStreamIsNotRunning;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
@@ -440,7 +441,7 @@ pub(super) fn is_held_on_the_graph(set_on: &GraphNode, input: &str) -> bool {
 }
 
 /// Refuse `value`, set live on input `input` of `set_on`, a function node run in a helper of its
-/// own, when the input is a Channels input and the value is no number or bool: the pin values
+/// own, when the input carries a control value and the value is no number or bool: the pin values
 /// that helper is handed carry only those, so the value would reach no run and hide the saved
 /// one.
 fn refuse_a_value_its_own_helper_does_not_read(
@@ -455,7 +456,10 @@ fn refuse_a_value_its_own_helper_does_not_read(
     let runs_in_a_helper_of_its_own = matches!(set_on.node_kind(), Some(NodeKind::Function { .. }))
         && !runs_inside_the_read_of_each_node_it_feeds(graph, &set_on.id);
     if !runs_in_a_helper_of_its_own
-        || port.family.family != PortFamily::Channels
+        || !port
+            .pin
+            .as_ref()
+            .is_some_and(|pin| channel_count_of(&pin.pin_type).is_some())
         || the_control_value_of_a_pin(value).is_some()
     {
         return Ok(());
@@ -464,7 +468,7 @@ fn refuse_a_value_its_own_helper_does_not_read(
         code: InputValueRefusalCode::InputValueNotValid,
         words: format!(
             "the value of input `{input}` of `{}` is {value}, and `{}` runs in a helper of its \
-             own, whose Channels input reads a number or a bool. To fix: send a number or a bool",
+             own, whose input of a control value reads a number or a bool. To fix: send a number or a bool",
             set_on.display_name, set_on.display_name
         ),
     })

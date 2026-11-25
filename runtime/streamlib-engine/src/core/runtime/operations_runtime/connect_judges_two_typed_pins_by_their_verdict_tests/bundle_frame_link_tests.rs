@@ -81,13 +81,7 @@ fn register_the_bundle_frame_fixture_node_types() {
             )],
         ));
         let records_port = |name: &str, pin_type: DeclaredPinType| {
-            PortDescriptor::new(
-                name,
-                name,
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Records),
-            )
-            .with_pin_declaration(PinDeclaration {
+            PortDescriptor::new(name, name, true, PinDeclaration {
                 pin_type,
                 ..PinDeclaration::exactly(PinType::String {})
             })
@@ -114,26 +108,22 @@ fn register_the_bundle_frame_fixture_node_types() {
         ));
         register(a_node_type(
             class_path(UNTYPED_SEND_CONTENT_SINK),
-            vec![PortDescriptor::new(
-                "content",
-                "content",
-                true,
-                PortFamilyDeclaration {
-                    also_takes_families: vec![
-                        PortFamily::Records,
-                        PortFamily::Channels,
-                        PortFamily::Array,
-                    ],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                },
-            )],
+            vec![PortDescriptor {
+                pin_declaration: None,
+                ..PortDescriptor::new(
+                    "content",
+                    "content",
+                    true,
+                    PinDeclaration::exactly(PinType::String {}),
+                )
+            }],
             Vec::new(),
         ));
     });
 }
 
-/// Mental-revert: without the check, the link is judged by its families alone, and the
-/// bundle's Records family is one the input also takes, so it connects.
+/// Mental-revert: without the check, a link into an input of no pin type is not judged yet, so
+/// it connects.
 #[test]
 fn a_bundle_holding_a_texture_into_an_untyped_input_is_refused_naming_the_texture() {
     register_the_bundle_frame_fixture_node_types();

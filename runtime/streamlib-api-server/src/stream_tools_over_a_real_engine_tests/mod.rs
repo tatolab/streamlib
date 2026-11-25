@@ -23,10 +23,7 @@ use rmcp::RoleClient;
 use rmcp::service::RunningService;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PinDeclaration, PinType, PortDescriptor};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
@@ -749,16 +746,8 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
 
 /// The port `name`, typed `pin_type`, on the family that carries it.
 fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(
-            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-        ),
-    )
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type))
     .with_delivery_profile("newest")
-    .with_pin_declaration(PinDeclaration::exactly(pin_type))
 }
 
 /// The Python function node type `node_type` taking `inputs` and giving `outputs`.

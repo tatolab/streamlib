@@ -4,18 +4,6 @@
 use super::*;
 use crate::core::descriptors::{FloatSize, PinType, TexturePixelFormat};
 
-#[test]
-fn image_formats_spell_every_engine_texture_format() {
-    let mut engine_texture_formats: Vec<&str> = (0..=u32::from(u8::MAX))
-        .filter_map(crate::core::rhi::TextureFormat::from_repr_value)
-        .map(|texture_format| texture_format.wire_name())
-        .collect();
-    engine_texture_formats.sort_unstable();
-    let mut image_formats = crate::core::descriptors::IMAGE_TEXTURE_FORMAT_WIRE_NAMES.to_vec();
-    image_formats.sort_unstable();
-    assert_eq!(engine_texture_formats, image_formats);
-}
-
 fn requested(import_path: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(import_path).expect("the test path names a class")
 }
@@ -35,7 +23,7 @@ pub(super) fn described_node_type_with_input_ports(
         "paced_by_real_time": false,
         "config_schema": {"type": "object"},
         "input_ports": input_ports,
-        "output_ports": [{"name": "levels", "family": {"family": "channels"}, "description": "the levels it measured"}],
+        "output_ports": [{"name": "levels", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"}, "description": "the levels it measured"}],
     })
 }
 
@@ -64,7 +52,7 @@ pub(super) fn refusal_of(described_node_type: &serde_json::Value) -> String {
 /// An audio window marker with `fields`, on a port declared `ordered`.
 fn described_with_audio_window(fields: serde_json::Value) -> serde_json::Value {
     described_node_type_with_input_ports(serde_json::json!([{
-        "name": "audio", "family": {"family": "channels"},
+        "name": "audio", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"},
         "description": "",
         "delivery_profile": "ordered",
         "audio_window": fields,
@@ -211,11 +199,10 @@ fn a_described_shader_reads_as_a_shader_node_on_its_native_evaluator() {
 /// A described `@node.shader` taking an Image `image` and a float `amount`, returning `result`.
 fn a_described_tint_shader() -> serde_json::Value {
     let mut described = described_node_type_with_input_ports(serde_json::json!([
-        {"name": "image", "family": {"family": "image"}, "description": "", "delivery_profile": "newest"},
-        {"name": "amount", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
+        {"name": "image", "description": "", "delivery_profile": "newest"},
+        {"name": "amount", "description": "", "delivery_profile": "newest"},
     ]));
-    described["output_ports"] =
-        serde_json::json!([{"name": "result", "family": {"family": "image"}, "description": ""}]);
+    described["output_ports"] = serde_json::json!([{"name": "result", "description": ""}]);
     described["kind"] = serde_json::json!("shader");
     described["shader_source"] = serde_json::json!(
         "float4 tint(ImageInput image, float amount) { return image.pixel * amount; }"
@@ -277,15 +264,18 @@ fn a_shaders_float_input_is_a_float_its_pictures_are_textures_and_its_output_sta
 #[test]
 fn a_function_nodes_number_and_bool_values_are_typed_an_optional_one_may_be_unset() {
     let mut described = described_node_type_with_input_ports(serde_json::json!([
-        {"name": "level", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
-        {"name": "count", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
-        {"name": "threshold", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest", "pin_default": null},
-        {"name": "fields", "family": {"family": "records"}, "description": "", "delivery_profile": "newest"},
-        {"name": "anything", "family": {"family": "image", "also_takes_families": ["records"]}, "description": "", "delivery_profile": "newest"},
+        {"name": "level", "description": "", "delivery_profile": "newest"},
+        {"name": "count", "description": "", "delivery_profile": "newest"},
+        {"name": "threshold", "description": "", "delivery_profile": "newest", "pin_default": null},
+        {"name": "fields", "description": "", "delivery_profile": "newest",
+         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}},
+        {"name": "anything", "description": "", "delivery_profile": "newest",
+         "pin_declaration": {"pin_type": {"kind": "any"}, "flow": "stream"}},
     ]));
     described["output_ports"] = serde_json::json!([
-        {"name": "open", "family": {"family": "channels", "names": {"stated": ["open"]}, "dtype": "f64"}, "description": ""},
-        {"name": "same", "family": {"family": "image", "family_follows_input_port": "anything"}, "description": ""},
+        {"name": "open", "description": ""},
+        {"name": "same", "description": "",
+         "pin_declaration": {"pin_type": {"kind": "same_as_input", "input_port_name": "anything"}, "flow": "stream"}},
     ]);
     described["kind"] = serde_json::json!("function");
     described["language"] = serde_json::json!("python");
@@ -326,9 +316,16 @@ fn a_function_nodes_number_and_bool_values_are_typed_an_optional_one_may_be_unse
             ..crate::core::descriptors::PinDeclaration::exactly(PinType::Float { exact_size: None })
         })
     );
-    for untyped in ["fields", "anything", "same"] {
-        assert_eq!(declared_pin_of(&function, untyped), None, "{untyped}");
-    }
+    assert_eq!(
+        declared_pin_of(&function, "anything").map(|pin| pin.pin_type),
+        Some(crate::core::descriptors::DeclaredPinType::Any)
+    );
+    assert_eq!(
+        declared_pin_of(&function, "same").map(|pin| pin.pin_type),
+        Some(crate::core::descriptors::DeclaredPinType::SameAsInput {
+            input_port_name: "anything".to_string()
+        })
+    );
 
     described["function_signature"]["outputs"][0]["port"] = serde_json::json!("closed");
     assert!(refusal_of(&described).contains("\"closed\", which the node does not declare"));
@@ -340,7 +337,6 @@ fn a_described_typed_function_node() -> serde_json::Value {
     let mut described = described_node_type_with_input_ports(serde_json::json!([
         {
             "name": "frequency",
-            "family": {"family": "channels"},
             "description": "",
             "pin_default": 440.0,
             "pin_declaration": {
@@ -357,7 +353,6 @@ fn a_described_typed_function_node() -> serde_json::Value {
     described["output_ports"] = serde_json::json!([
         {
             "name": "result",
-            "family": {"family": "channels", "names": {"stated": ["result"]}, "dtype": "f64"},
             "description": "",
             "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"},
         },
@@ -420,10 +415,10 @@ fn a_stated_pin_declaration_the_engine_does_not_read_is_refused_naming_the_port(
 }
 
 #[test]
-fn a_process_nodes_picture_port_is_a_texture_and_its_other_ports_are_untyped() {
+fn a_process_nodes_ports_are_the_pin_types_they_declare() {
     let process = read(&described_node_type_with_output_ports(serde_json::json!([
-        {"name": "frames", "family": {"family": "image", "formats": ["rgba8_unorm"]}, "description": ""},
-        {"name": "levels", "family": {"family": "channels"}, "description": ""},
+        {"name": "frames", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "texture", "pixel_formats": ["rgba8_unorm"]}}, "flow": "stream"}, "description": ""},
+        {"name": "levels", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"}, "description": ""},
     ])))
     .expect("reads");
 
@@ -433,7 +428,13 @@ fn a_process_nodes_picture_port_is_a_texture_and_its_other_ports_are_untyped() {
             pixel_formats: vec![crate::core::descriptors::TexturePixelFormat::Rgba8Unorm]
         })
     );
-    assert_eq!(declared_pin_of(&process, "levels"), None);
+    assert_eq!(
+        declared_pin_of(&process, "levels"),
+        Some(crate::core::descriptors::PinDeclaration {
+            flow: crate::core::descriptors::PinFlow::Stream,
+            ..crate::core::descriptors::PinDeclaration::exactly(PinType::Float { exact_size: None })
+        })
+    );
 }
 
 #[test]
@@ -471,54 +472,11 @@ fn a_node_paced_by_real_time_reads_into_its_descriptor() {
 }
 
 #[test]
-fn a_ports_family_reads_into_its_descriptor_and_a_key_its_family_does_not_take_is_refused() {
-    let declaration = read(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "signals",
-        "description": "",
-        "delivery_profile": "ordered",
-        "family": {"family": "channels", "requires": ["rpm"]},
-    }])))
-    .unwrap_or_else(|refusal| panic!("a Channels input requiring a name reads: {refusal}"));
-    let family = &declaration.descriptor.inputs[0].family;
-    assert_eq!(
-        family.family,
-        crate::core::descriptors::PortFamily::Channels
-    );
-    assert_eq!(family.requires, vec!["rpm".to_string()]);
-
-    let camera = read(&described_node_type_with_output_ports(serde_json::json!([{
-            "name": "video",
-            "description": "",
-            "family": {"family": "image", "frame_rate": {"from_config": {"config_key": "frames_per_second"}}},
-        }])))
-        .unwrap_or_else(|refusal| panic!("an Image output declaring its frame rate reads: {refusal}"));
-    assert_eq!(
-        camera.descriptor.outputs[0].family.frame_rate,
-        Some(
-            crate::core::descriptors::ImageOutputPortFrameRate::FromSetting {
-                setting: "frames_per_second".into()
-            }
-        )
-    );
-
-    let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "video",
-        "description": "",
-        "delivery_profile": "newest",
-        "family": {"family": "image", "requires": ["luma"]},
-    }])));
-    assert!(
-        refusal.contains("\"video\"") && refusal.contains("`requires=`"),
-        "got {refusal}"
-    );
-}
-
-#[test]
 fn an_output_following_an_input_the_node_does_not_declare_is_refused_naming_both() {
     let refusal = refusal_of(&described_node_type_with_output_ports(serde_json::json!([{
         "name": "result",
         "description": "",
-        "family": {"family": "image", "family_follows_input_port": "value"},
+        "pin_declaration": {"pin_type": {"kind": "same_as_input", "input_port_name": "value"}, "flow": "stream"},
     }])));
     assert!(
         refusal.contains("\"result\"") && refusal.contains("input port \"value\""),
@@ -527,14 +485,14 @@ fn an_output_following_an_input_the_node_does_not_declare_is_refused_naming_both
 }
 
 #[test]
-fn a_port_declaring_no_family_is_refused_naming_the_port() {
+fn a_port_declaring_no_pin_type_is_refused_naming_the_port() {
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
         "name": "frames",
         "description": "",
         "delivery_profile": "ordered",
     }])));
     assert!(
-        refusal.contains("\"frames\" declares no family"),
+        refusal.contains("\"frames\" declares no pin type"),
         "got {refusal}"
     );
 }
@@ -542,7 +500,7 @@ fn a_port_declaring_no_family_is_refused_naming_the_port() {
 #[test]
 fn a_declared_borrow_quota_reaches_the_descriptor_and_one_past_the_most_is_refused() {
     let declaration = read(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "frames", "family": {"family": "records"},
+        "name": "frames", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"},
         "description": "",
         "delivery_profile": "ordered",
         "borrow_quota": 5,
@@ -551,7 +509,7 @@ fn a_declared_borrow_quota_reaches_the_descriptor_and_one_past_the_most_is_refus
     assert_eq!(declaration.descriptor.inputs[0].borrow_quota, Some(5));
 
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "frames", "family": {"family": "records"},
+        "name": "frames", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"},
         "description": "",
         "delivery_profile": "ordered",
         "borrow_quota": MAX_INPUT_PORT_BORROW_QUOTA + 1,
@@ -565,9 +523,9 @@ fn a_declared_borrow_quota_reaches_the_descriptor_and_one_past_the_most_is_refus
 #[test]
 fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is_refused() {
     let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
-        {"name": "level", "family": {"family": "channels"}, "description": "",
+        {"name": "level", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"}, "description": "",
          "delivery_profile": "newest", "pin_default": 0.5},
-        {"name": "maybe", "family": {"family": "records"}, "description": "",
+        {"name": "maybe", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "description": "",
          "delivery_profile": "newest", "pin_default": null},
     ])))
     .unwrap_or_else(|refusal| panic!("a number and a null default read: {refusal}"));
@@ -581,7 +539,7 @@ fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is
     );
 
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "frames", "family": {"family": "records"}, "description": "",
+        "name": "frames", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "description": "",
         "delivery_profile": "newest", "pin_default": 1,
     }])));
     assert!(
@@ -589,7 +547,7 @@ fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is
         "got {refusal}"
     );
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "level", "family": {"family": "channels"}, "description": "",
+        "name": "level", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"}, "description": "",
         "delivery_profile": "newest", "pin_default": "loud",
     }])));
     assert!(
@@ -627,7 +585,7 @@ fn a_declared_category_reaches_the_catalog_and_one_that_is_no_string_is_refused(
 #[test]
 fn a_described_node_type_reads_into_a_python_descriptor_and_its_execution() {
     let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
-            {"name": "audio", "family": {"family": "channels"}, "description": "what it hears", "delivery_profile": "ordered"}
+            {"name": "audio", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"}, "description": "what it hears", "delivery_profile": "ordered"}
         ])))
         .unwrap_or_else(|refusal| panic!("the described node type reads: {refusal}"));
 
@@ -745,7 +703,7 @@ fn a_hand_built_marker_smuggling_an_unhonourable_contract_is_refused_naming_both
 #[test]
 fn a_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
     let described = described_node_type_with_input_ports(serde_json::json!([{
-        "name": "audio", "family": {"family": "channels"},
+        "name": "audio", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"},
         "description": "",
         "delivery_profile": "newest",
         "audio_window": serde_json::Value::Object(whole_declared_audio_window()),
@@ -863,7 +821,7 @@ fn a_marker_missing_any_required_contract_field_is_refused_naming_the_port_and_t
 fn an_output_port_declaring_a_contract_is_refused() {
     let mut described = described_node_type_with_input_ports(serde_json::json!([]));
     described["output_ports"] = serde_json::json!([{
-        "name": "windows", "family": {"family": "channels"},
+        "name": "windows", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "stream"},
         "description": "",
         "audio_window": {"resolved_from": "match_device"},
     }]);
@@ -899,9 +857,9 @@ fn a_channel_count_refusal_says_whether_the_value_was_the_wrong_kind_or_unusable
 }
 
 #[test]
-fn a_described_picture_input_stating_no_delivery_reads_by_its_pin_and_an_untyped_one_is_refused() {
+fn a_described_picture_input_stating_no_delivery_reads_by_its_pin() {
     let described = described_node_type_with_input_ports(serde_json::json!([
-        {"name": "frames", "family": {"family": "image"}, "description": ""},
+        {"name": "frames", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "texture"}}, "flow": "stream"}, "description": ""},
     ]));
     let declaration = read(&described).expect("a picture input may state no delivery");
     assert_eq!(declaration.descriptor.inputs[0].delivery_profile, None);
@@ -914,14 +872,6 @@ fn a_described_picture_input_stating_no_delivery_reads_by_its_pin_and_an_untyped
         Some("newest")
     );
 
-    let untyped = described_node_type_with_input_ports(serde_json::json!([
-        {"name": "levels", "family": {"family": "channels"}, "description": ""},
-    ]));
-    assert_eq!(
-        refusal_of(&untyped),
-        "input port \"levels\" of family Channels states no delivery — a port with no pin type \
-         states `delivery=`, one of \"newest\", \"ordered\""
-    );
 }
 
 #[test]
@@ -944,7 +894,7 @@ fn a_stated_conversion_reaches_the_descriptor_and_one_that_is_no_bool_is_refused
 fn a_typed_pins_default_is_a_stored_value_of_the_type_it_declares() {
     let colour = serde_json::json!({"red": 1.0, "green": 0.5, "blue": 0.25, "alpha": 1.0});
     let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
-        {"name": "tint", "family": {"family": "channels"}, "description": "",
+        {"name": "tint",  "description": "",
          "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "color"}}, "flow": "value"},
          "pin_default": colour},
     ])))
@@ -952,7 +902,7 @@ fn a_typed_pins_default_is_a_stored_value_of_the_type_it_declares() {
     assert_eq!(declaration.descriptor.inputs[0].pin_default, Some(colour));
 
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "tint", "family": {"family": "channels"}, "description": "",
+        "name": "tint",  "description": "",
         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "color"}}, "flow": "value"},
         "pin_default": 0.5,
     }])));
@@ -965,7 +915,7 @@ fn a_typed_pins_default_is_a_stored_value_of_the_type_it_declares() {
 #[test]
 fn a_pin_type_no_port_may_declare_is_refused_naming_the_port() {
     let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
-        "name": "frames", "family": {"family": "records"}, "description": "",
+        "name": "frames",  "description": "",
         "pin_declaration": {
             "pin_type": {"kind": "is", "pin_type": {
                 "type": "list_of", "element_type": {"type": "list_of", "element_type": {"type": "float"}},

@@ -3,10 +3,7 @@
 
 use serde_json::json;
 
-use crate::core::descriptors::{
-    NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
-    PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use crate::core::descriptors::{NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor};
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotWithGraphOnlyNodesResolved, NodeChangeADrawnLinkBlocks,
 };
@@ -21,13 +18,7 @@ const RELAY_CONNECTION: &str = "connection_wire_tests.types:RelayConnection";
 const TRACK_CONNECTION: &str = "connection_wire_tests.types:TrackConnection";
 
 fn a_connection_port(name: &str, connection_type: &str, sole_referrer: bool) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        name,
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Connection {
+    PortDescriptor::new(name, name, false, PinDeclaration::exactly(PinType::Connection {
         connection_type: NamedPinTypeImportPath::new(connection_type).unwrap(),
         one_referrer_per_referenced_node: sole_referrer,
     }))

@@ -35,7 +35,7 @@ fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin
     let descriptor = the_node_type_of_a_graph_input().expect("the GraphInput type builds");
     assert_eq!(
         the_setting_names(&descriptor, SettingReadTime::AtSetup),
-        ["port", "pin_type", "family", "lifetime"]
+        ["port", "pin_type", "lifetime"]
     );
     assert_eq!(
         the_setting_names(&descriptor, SettingReadTime::EachRun),
@@ -100,7 +100,7 @@ fn a_graph_output_declares_its_settings_and_a_value_that_takes_a_wire() {
     let descriptor = the_node_type_of_a_graph_output().expect("the GraphOutput type builds");
     assert_eq!(
         the_setting_names(&descriptor, SettingReadTime::AtSetup),
-        ["port", "pin_type", "family"]
+        ["port", "pin_type"]
     );
     let value = descriptor
         .inputs

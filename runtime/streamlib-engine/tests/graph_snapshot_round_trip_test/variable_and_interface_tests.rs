@@ -2,41 +2,46 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A stream's variables and interface: rendered as drawn, loaded back, and
-//! refused when a family does not match.
+//! refused when a pin type does not connect.
 
 use super::*;
 
-/// Register a descriptor-only type whose ports declare `family`.
-fn register_a_family_type(
+/// Register a descriptor-only type whose ports declare each pin type.
+fn register_a_typed_type(
     short: &str,
-    inputs: &[(&str, streamlib::sdk::descriptors::PortFamily)],
-    outputs: &[(&str, streamlib::sdk::descriptors::PortFamily)],
+    inputs: &[(&str, PinType)],
+    outputs: &[(&str, PinType)],
 ) -> NodeClassImportPath {
-    use streamlib::sdk::descriptors::PortFamilyDeclaration;
     let import_path = NodeClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let mut descriptor = NodeDescriptor::new(
         NodeClassShortName::new(short).unwrap(),
         import_path.clone(),
         "graph variable test",
     );
-    for (name, family) in inputs {
+    for (name, pin_type) in inputs {
         descriptor = descriptor.with_input(PortDescriptor::new(
             *name,
             "",
             false,
-            PortFamilyDeclaration::of_family(*family),
+            PinDeclaration::exactly(pin_type.clone()),
         ));
     }
-    for (name, family) in outputs {
+    for (name, pin_type) in outputs {
         descriptor = descriptor.with_output(PortDescriptor::new(
             *name,
             "",
             false,
-            PortFamilyDeclaration::of_family(*family),
+            PinDeclaration::exactly(pin_type.clone()),
         ));
     }
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
+}
+
+fn texture() -> PinType {
+    PinType::Texture {
+        pixel_formats: Vec::new(),
+    }
 }
 
 fn an_image_variable_read_by_two_readers(
@@ -67,10 +72,9 @@ fn an_image_variable_read_by_two_readers(
 #[test]
 #[serial]
 fn an_image_variable_read_twice_runs_as_two_links_and_renders_as_drawn() {
-    use streamlib::sdk::descriptors::PortFamily;
-    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
+    let camera = register_a_typed_type("VariableCamera", &[], &[("video", texture())]);
     let display =
-        register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
+        register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
     let graph = an_image_variable_read_by_two_readers(&camera, &display);
 
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -123,13 +127,12 @@ fn an_image_variable_read_twice_runs_as_two_links_and_renders_as_drawn() {
 
 #[test]
 #[serial]
-fn a_get_read_as_the_wrong_family_is_refused_at_load_naming_the_get_and_its_variable() {
-    use streamlib::sdk::descriptors::PortFamily;
-    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
-    register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
-    let records_reader = register_a_family_type(
-        "VariableRecordsReader",
-        &[("video_in", PortFamily::Records)],
+fn a_get_read_as_a_type_that_does_not_connect_is_refused_at_load_naming_the_get_and_its_variable() {
+    let camera = register_a_typed_type("VariableCamera", &[], &[("video", texture())]);
+    register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
+    let string_reader = register_a_typed_type(
+        "VariableStringReader",
+        &[("video_in", PinType::String {})],
         &[],
     );
 
@@ -139,9 +142,9 @@ fn a_get_read_as_the_wrong_family_is_refused_at_load_naming_the_get_and_its_vari
         load(
             &runner,
             project_directory.path(),
-            an_image_variable_read_by_two_readers(&camera, &records_reader),
+            an_image_variable_read_by_two_readers(&camera, &string_reader),
         ),
-        "a get read as Records from an Image variable must be refused",
+        "a get read as a String from a Texture variable must be refused",
     )
     .to_string();
     assert!(
@@ -206,10 +209,9 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
 #[test]
 #[serial]
 fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
-    use streamlib::sdk::descriptors::PortFamily;
-    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
+    let camera = register_a_typed_type("VariableCamera", &[], &[("video", texture())]);
     let display =
-        register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
+        register_a_typed_type("VariableDisplay", &[("video_in", texture())], &[]);
     let mut graph = an_image_variable_read_by_two_readers(&camera, &display);
     graph["nodes"][5]["name"] = serde_json::json!("Back Display");
     graph["links"][2]["target"]["node"] = serde_json::json!("Back Display");
@@ -235,20 +237,19 @@ fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
 
 #[test]
 #[serial]
-fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refused() {
-    use streamlib::sdk::descriptors::PortFamily;
-    let camera = register_a_family_type("InterfaceCamera", &[], &[("video", PortFamily::Image)]);
+fn a_streams_interface_renders_as_drawn_loads_back_and_a_type_that_does_not_connect_is_refused() {
+    let camera = register_a_typed_type("InterfaceCamera", &[], &[("video", texture())]);
     let display =
-        register_a_family_type("InterfaceDisplay", &[("video_in", PortFamily::Image)], &[]);
-    let graph_offering = |output_family: &str| {
+        register_a_typed_type("InterfaceDisplay", &[("video_in", texture())], &[]);
+    let graph_offering = |output_pin_type: serde_json::Value| {
         serde_json::json!({
             "stream": "interface",
             "nodes": [
                 {"name": "camera", "type": camera.as_str()},
                 {"name": "camera-out", "type": "tatolab.stream:GraphOutput",
-                 "input_values": {"port": "Camera", "family": output_family}},
+                 "input_values": {"port": "Camera", "pin_type": output_pin_type}},
                 {"name": "overlay-in", "type": "tatolab.stream:GraphInput",
-                 "input_values": {"port": "overlay", "family": "image"}},
+                 "input_values": {"port": "overlay", "pin_type": {"type": "texture"}}},
                 {"name": "display", "type": display.as_str()}
             ],
             "links": [
@@ -259,7 +260,7 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
             ]
         })
     };
-    let graph = graph_offering("image");
+    let graph = graph_offering(serde_json::json!({"type": "texture"}));
 
     let project_directory = tempfile::tempdir().expect("a project directory");
     let first_runner = Runner::new().unwrap();
@@ -325,99 +326,14 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
         load(
             &refusal_runner,
             tempfile::tempdir().expect("a project directory").path(),
-            graph_offering("packets"),
+            graph_offering(serde_json::json!({"type": "string"})),
         ),
-        "an Output declared as another family than its port writes is refused",
+        "an Output declared as a type its port's does not connect to is refused",
     )
     .to_string();
     assert!(
-        refusal.contains("`GraphOutput` node `camera-out` declares `Camera` as Packets")
-            && refusal.contains("camera.video (Image)"),
-        "{refusal}"
-    );
-}
-
-#[test]
-#[serial]
-fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port_is_refused() {
-    use streamlib::sdk::descriptors::{
-        NodeInputMode, PinDeclaration, PinType, PortFamily, PortFamilyDeclaration, SettingReadTime,
-    };
-    let import_path =
-        NodeClassImportPath::new(format!("{}::InterfaceTrackReceive", module_path!())).unwrap();
-    let _ = NODE_REGISTRY.register_descriptor_only(
-        NodeDescriptor::new(
-            NodeClassShortName::new("InterfaceTrackReceive").unwrap(),
-            import_path.clone(),
-            "graph interface test",
-        )
-        .with_output(PortDescriptor::new(
-            "content",
-            "",
-            false,
-            PortFamilyDeclaration {
-                family_from_config_key: Some("family".into()),
-                ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-            },
-        ))
-        .with_input(
-            PortDescriptor::new(
-                "family",
-                "",
-                false,
-                PortFamilyDeclaration::of_family(PortFamily::Records),
-            )
-            .with_pin_declaration(PinDeclaration::exactly(PinType::String {}))
-            .with_input_mode(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup,
-            }),
-        ),
-    );
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let stream = load(
-        &runner,
-        project_directory.path(),
-        serde_json::json!({
-            "stream": "interface-live-update",
-            "nodes": [
-                {"name": "receive", "type": import_path.as_str(),
-                 "input_values": {"family": "packets"}},
-                {"name": "received", "type": "tatolab.stream:GraphOutput",
-                 "input_values": {"port": "received", "family": "packets"}}
-            ],
-            "links": [
-                {"source": {"node": "receive", "port": "content"},
-                 "target": {"node": "received", "port": "value"}}
-            ]
-        }),
-    )
-    .expect("an Output fed by a port whose family its config names loads");
-    let receive_id = stream
-        .the_node_named("receive")
-        .expect("the receive node is in the graph")
-        .node_run_id;
-
-    stream
-        .set_pin_value(
-            &receive_id,
-            "family",
-            None,
-            Some(serde_json::json!("packets")),
-        )
-        .expect("an update keeping the family is taken");
-    let refusal = stream
-        .set_pin_value(
-            &receive_id,
-            "family",
-            None,
-            Some(serde_json::json!("records")),
-        )
-        .expect_err("an update changing the family under the declared Output is refused")
-        .to_string();
-    assert!(
-        refusal.contains("`GraphOutput` node `received` declares `received` as Packets")
-            && refusal.contains("receive.content (Records)"),
+        refusal.contains("`GraphOutput` node `camera-out` carries String")
+            && refusal.contains("Texture"),
         "{refusal}"
     );
 }

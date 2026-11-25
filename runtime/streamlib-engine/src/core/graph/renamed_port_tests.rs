@@ -253,11 +253,11 @@ fn a_fragment_linking_its_interface_to_ports_under_names_they_had_loads_under_th
               "fragment": {
                   "nodes": [
                       { "name": "in", "type": "tatolab.stream:GraphInput",
-                        "input_values": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
                       { "name": "mixer", "type": renamed.as_str(),
                         "input_values": { "level": 0.5 } },
                       { "name": "out", "type": "tatolab.stream:GraphOutput",
-                        "input_values": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
                   ],
                   "links": [
                       { "source": { "node": "in", "port": "value" },
@@ -353,13 +353,7 @@ fn ports_of_an_input_renamed_twice() -> GraphNodePorts {
     GraphNodePorts {
         inputs: vec![PortInfo {
             former_names: vec!["level".to_owned(), "volume".to_owned()],
-            ..PortInfo::declaring_only_a_family(
-                "gain",
-                "",
-                crate::core::descriptors::PortFamilyDeclaration::of_family(
-                    crate::core::descriptors::PortFamily::Records,
-                ),
-            )
+            ..PortInfo::declared_by_no_node_type("gain", None)
         }],
         outputs: Vec::new(),
     }

@@ -4,14 +4,13 @@
 //! A `graph` document is a loadable graph: what a running stream renders loads
 //! into a fresh one as the same graph, by name.
 
+use streamlib::sdk::descriptors::{PinDeclaration, PinType};
 use std::path::Path;
 use std::sync::Arc;
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
-use streamlib::sdk::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
-};
+use streamlib::sdk::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
@@ -33,22 +32,8 @@ fn register_test_type(short: &str, input: &str, output: &str) -> NodeClassImport
         import_path.clone(),
         "graph round-trip test",
     )
-    .with_input(PortDescriptor::new(
-        input,
-        "",
-        false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
-    ))
-    .with_output(PortDescriptor::new(
-        output,
-        "",
-        false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
-    ));
+    .with_input(PortDescriptor::new(input, "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
+    .with_output(PortDescriptor::new(output, "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
@@ -124,16 +109,8 @@ fn an_input_holding_a_reference_to(
     name: &str,
     referenced_node_type: &NodeClassImportPath,
 ) -> PortDescriptor {
-    use streamlib::sdk::descriptors::{
-        NodeInputMode, PinDeclaration, PinType, PortFamily, PortFamilyDeclaration, SettingReadTime,
-    };
-    PortDescriptor::new(
-        name,
-        "",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::NodeReference {
+    use streamlib::sdk::descriptors::{NodeInputMode, PinDeclaration, PinType, SettingReadTime};
+    PortDescriptor::new(name, "", false, PinDeclaration::exactly(PinType::NodeReference {
         referenced_node_type: Some(referenced_node_type.clone()),
         one_referrer_per_referenced_node: false,
     }))

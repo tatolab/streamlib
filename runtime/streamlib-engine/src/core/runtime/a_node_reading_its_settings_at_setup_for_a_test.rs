@@ -15,11 +15,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinDeclaration,
-    PinGroupDescriptor, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    SettingReadTime,
-};
+use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor, SettingReadTime};
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::GraphNode;
@@ -66,13 +62,7 @@ fn the_fixture_node_type() -> NodeClassImportPath {
 }
 
 fn a_setting_read_at_setup(name: &str, pin_type: PinType) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        name,
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(pin_type))
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(pin_type))
     .with_input_mode(NodeInputMode::SettingOnly {
         read: SettingReadTime::AtSetup,
     })
@@ -301,15 +291,7 @@ fn register_the_source_node_type_once() {
             "a node whose Integer output a test writes",
         );
         descriptor.outputs = vec![
-            PortDescriptor::new(
-                THE_SOURCES_OUTPUT,
-                THE_SOURCES_OUTPUT,
-                false,
-                PortFamilyDeclaration::of_family(
-                    PortFamily::carrying(&integer).unwrap_or(PortFamily::Records),
-                ),
-            )
-            .with_pin_declaration(PinDeclaration::exactly(integer.clone())),
+            PortDescriptor::new(THE_SOURCES_OUTPUT, THE_SOURCES_OUTPUT, false, PinDeclaration::exactly(integer.clone())),
         ];
         descriptor.inputs = vec![a_setting_read_at_setup(THE_SOURCES_SETTING, integer)];
         let described = descriptor.clone();
@@ -449,15 +431,7 @@ fn register_the_layered_node_type_once() {
             THE_LAYERED_NODES_PIN_GROUP,
             "each layer",
             vec![
-                PortDescriptor::new(
-                    "layer",
-                    "layer",
-                    false,
-                    PortFamilyDeclaration::of_family(
-                        PortFamily::carrying(&integer).unwrap_or(PortFamily::Records),
-                    ),
-                )
-                .with_pin_declaration(PinDeclaration::exactly(integer.clone()))
+                PortDescriptor::new("layer", "layer", false, PinDeclaration::exactly(integer.clone()))
                 .with_input_mode(NodeInputMode::WireOrValue),
             ],
             Vec::new(),

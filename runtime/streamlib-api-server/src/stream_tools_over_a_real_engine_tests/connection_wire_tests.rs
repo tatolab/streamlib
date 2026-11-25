@@ -6,10 +6,7 @@
 //! the reference beside it, and a live disconnect and connect of it take the reference out and
 //! put it back.
 
-use streamlib::sdk::descriptors::{
-    NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, PinDeclaration, PinType, PortDescriptor};
 
 use super::*;
 
@@ -20,13 +17,7 @@ const TRACK_UUID: &str = "6c6c6c6c-6c6c-4c6c-8c6c-6c6c6c6c6c61";
 const THE_WIRE: &str = "cloudflare/connection -> camera-track/relay";
 
 fn a_relay_connection_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Connection {
+    PortDescriptor::new(name, "", false, PinDeclaration::exactly(PinType::Connection {
         connection_type: NamedPinTypeImportPath::new("connection_wire_test:RelayConnection")
             .expect("a connection type"),
         one_referrer_per_referenced_node: false,

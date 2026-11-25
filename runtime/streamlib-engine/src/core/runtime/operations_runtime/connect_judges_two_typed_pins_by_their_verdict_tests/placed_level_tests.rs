@@ -15,17 +15,12 @@ use uuid::Uuid;
 
 use super::super::what_a_connect_makes_of_each_link_at_a_placed_level;
 use super::{
-    CELSIUS_SOURCE, FAHRENHEIT_SINK, FLOAT_SOURCE, FLOAT_STREAM_SOURCE, NAMED_RECORDS_SOURCE,
-    NUMBER_SINK, RECORDS_NEEDING_X, RECORDS_NEEDING_Z, RECORDS_PASSTHROUGH,
-    UNTYPED_RGBA_PICTURE_SINK, a_node_of, a_node_type, class_path, connect_on_this_thread,
-    register, register_the_verdict_fixture_node_types,
+    CELSIUS_SOURCE, FAHRENHEIT_SINK, FLOAT_SOURCE, FLOAT_STREAM_SOURCE, NUMBER_SINK, PASSTHROUGH,
+    a_node_of, class_path, connect_on_this_thread, register_the_verdict_fixture_node_types,
 };
 use crate::core::Error;
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{
-    FreePinConversion, PinLinkOutcome, PinLinkRefusal, PortDescriptor, PortFamily,
-    PortFamilyDeclaration,
-};
+use crate::core::descriptors::{FreePinConversion, PinLinkOutcome, PinLinkRefusal};
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::WhatALiveConnectMakesOfALink;
@@ -189,106 +184,69 @@ fn a_placed_levels_own_links_and_fragments_are_read_as_its_document_holds_them()
     );
 }
 
-/// A node type whose one output, `samples`, is an untyped Channels port.
-const UNTYPED_CHANNELS_SOURCE: &str = "PlacedLevelUntypedChannelsSource";
+const PASSTHROUGH_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0012);
 
-const NAMED_RECORDS_SOURCE_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0011);
-const RECORDS_PASSTHROUGH_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0012);
-const RECORDS_NEEDING_X_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0013);
-const RECORDS_NEEDING_Z_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0014);
-const UNTYPED_CHANNELS_SOURCE_NODE: Uuid =
-    Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0015);
-const UNTYPED_PICTURE_SINK_NODE: Uuid = Uuid::from_u128(0x5151_0000_0000_4000_8000_0000_0000_0016);
-
-fn register_the_untyped_channels_source_once() {
-    static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
-    REGISTERED_ONCE_PER_PROCESS.call_once(|| {
-        register(a_node_type(
-            class_path(UNTYPED_CHANNELS_SOURCE),
-            Vec::new(),
-            vec![PortDescriptor::new(
-                "samples",
-                "samples",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )],
-        ));
-    });
-}
-
-/// A placed stream's level holding a records source naming `x` and `y` that feeds a passthrough
-/// whose output follows its input, a sink requiring `x`, a sink requiring `z`, an untyped
-/// Channels source and an untyped Image sink.
-fn a_placed_level_of_untyped_and_following_ports() -> StreamGraphDocument {
-    register_the_untyped_channels_source_once();
+/// A placed stream's level holding a Float source feeding a passthrough whose output follows its
+/// input, and a number sink.
+fn a_placed_level_of_a_following_port() -> StreamGraphDocument {
     let node = |id: Uuid, name: &str, class_name: &str| {
         let node_type = class_path(class_name);
         json!({ "id": id, "name": name, "type": node_type.as_str() })
     };
     StreamGraphDocument::from_value(json!({
         "nodes": [
-            node(NAMED_RECORDS_SOURCE_NODE, "named-records", NAMED_RECORDS_SOURCE),
-            node(RECORDS_PASSTHROUGH_NODE, "passthrough", RECORDS_PASSTHROUGH),
-            node(RECORDS_NEEDING_X_NODE, "needing-x", RECORDS_NEEDING_X),
-            node(RECORDS_NEEDING_Z_NODE, "needing-z", RECORDS_NEEDING_Z),
-            node(UNTYPED_CHANNELS_SOURCE_NODE, "samples-source", UNTYPED_CHANNELS_SOURCE),
-            node(UNTYPED_PICTURE_SINK_NODE, "picture-sink", UNTYPED_RGBA_PICTURE_SINK),
+            node(FLOAT_SOURCE_NODE, "level-source", FLOAT_SOURCE),
+            node(PASSTHROUGH_NODE, "passthrough", PASSTHROUGH),
+            node(NUMBER_SINK_NODE, "numbers", NUMBER_SINK),
         ],
         "links": [
-            { "source": { "node": NAMED_RECORDS_SOURCE_NODE, "port": "records" },
-              "target": { "node": RECORDS_PASSTHROUGH_NODE, "port": "in" } },
+            { "source": { "node": FLOAT_SOURCE_NODE, "port": "value" },
+              "target": { "node": PASSTHROUGH_NODE, "port": "in" } },
         ],
     }))
     .expect("a placed level")
 }
 
-/// An output following its input, at a placed level, carries on the names the link the level
-/// holds into that input brings: `x` and `y` reach a sink requiring `x`, and a sink requiring
-/// `z` is refused naming `z`, in the words connect refuses the same link with in a stream's own
-/// graph.
+/// An output following its input, at a placed level, carries on the type the link the level
+/// holds into that input brings: a Float reaches an Integer input, and a String input is refused,
+/// in the words connect refuses the same link with in a stream's own graph.
 ///
 /// Mental-revert: building the level without the links it holds leaves the passthrough
-/// carrying on nothing known, and the link into the sink requiring `z` is made.
+/// carrying on nothing typed, and the link into the String input is made.
 #[test]
 fn a_link_at_a_placed_level_is_judged_by_what_the_links_it_holds_carry_on() {
     register_the_verdict_fixture_node_types();
-    let level = a_placed_level_of_untyped_and_following_ports();
+    let level = a_placed_level_of_a_following_port();
 
     what_a_connect_makes_of(
         &level,
-        a_link(
-            (RECORDS_PASSTHROUGH_NODE, "out"),
-            (RECORDS_NEEDING_X_NODE, "records"),
-        ),
+        a_link((PASSTHROUGH_NODE, "out"), (NUMBER_SINK_NODE, "count")),
     )
-    .expect("`x` arrives through the passthrough");
+    .expect("a Float arrives through the passthrough and is read as an Integer");
     let refused_inside = what_a_connect_makes_of(
         &level,
-        a_link(
-            (RECORDS_PASSTHROUGH_NODE, "out"),
-            (RECORDS_NEEDING_Z_NODE, "records"),
-        ),
+        a_link((PASSTHROUGH_NODE, "out"), (NUMBER_SINK_NODE, "label")),
     )
-    .expect_err("`z` never arrives through the passthrough");
+    .expect_err("a Float through the passthrough is no String");
 
     let compiler = Arc::new(Compiler::new());
-    let source = a_node_of(&compiler, class_path(NAMED_RECORDS_SOURCE));
-    let passthrough = a_node_of(&compiler, class_path(RECORDS_PASSTHROUGH));
-    let sink = a_node_of(&compiler, class_path(RECORDS_NEEDING_Z));
+    let source = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let passthrough = a_node_of(&compiler, class_path(PASSTHROUGH));
+    let sink = a_node_of(&compiler, class_path(NUMBER_SINK));
     connect_on_this_thread(
         &compiler,
-        OutputLinkPortRef::new(source, "records"),
+        OutputLinkPortRef::new(source, "value"),
         InputLinkPortRef::new(passthrough.clone(), "in"),
     )
     .expect("the source feeds the passthrough");
     let refused_at_the_top = connect_on_this_thread(
         &compiler,
         OutputLinkPortRef::new(passthrough, "out"),
-        InputLinkPortRef::new(sink, "records"),
+        InputLinkPortRef::new(sink, "label"),
     )
-    .expect_err("`z` never arrives through the passthrough");
+    .expect_err("a Float through the passthrough is no String");
     assert!(
-        matches!(&refused_inside, Error::InvalidLink(words) if words.contains("\"z\"")),
+        matches!(&refused_inside, Error::InvalidLink(words) if words.contains("String")),
         "{refused_inside:?}"
     );
     let each_node_by_its_role = |words: String, names: [&str; 3]| {
@@ -300,63 +258,16 @@ fn a_link_at_a_placed_level_is_judged_by_what_the_links_it_holds_carry_on() {
     assert_eq!(
         each_node_by_its_role(
             refused_inside.to_string(),
-            ["named-records", "passthrough", "needing-z"]
+            ["level-source", "passthrough", "numbers"]
         ),
         each_node_by_its_role(
             refused_at_the_top.to_string(),
             [
-                &NAMED_RECORDS_SOURCE.to_lowercase(),
-                &RECORDS_PASSTHROUGH.to_lowercase(),
-                &RECORDS_NEEDING_Z.to_lowercase(),
+                &FLOAT_SOURCE.to_lowercase(),
+                &PASSTHROUGH.to_lowercase(),
+                &NUMBER_SINK.to_lowercase(),
             ]
         ),
-        "the refusal inside is the refusal at the top level, each node by its own name"
-    );
-}
-
-/// Two untyped ends whose families differ, at a placed level, are refused as connect refuses
-/// them in a stream's own graph: an untyped Channels output into an untyped Image input taking
-/// Records too.
-///
-/// Mental-revert: judging only typed ends at a placed level makes the link.
-#[test]
-fn two_untyped_ends_whose_families_differ_are_refused_at_a_placed_level() {
-    register_the_verdict_fixture_node_types();
-    let level = a_placed_level_of_untyped_and_following_ports();
-
-    let refused_inside = what_a_connect_makes_of(
-        &level,
-        a_link(
-            (UNTYPED_CHANNELS_SOURCE_NODE, "samples"),
-            (UNTYPED_PICTURE_SINK_NODE, "video"),
-        ),
-    )
-    .expect_err("Channels are not an Image");
-
-    register_the_untyped_channels_source_once();
-    let compiler = Arc::new(Compiler::new());
-    let source = a_node_of(&compiler, class_path(UNTYPED_CHANNELS_SOURCE));
-    let sink = a_node_of(&compiler, class_path(UNTYPED_RGBA_PICTURE_SINK));
-    let refused_at_the_top = connect_on_this_thread(
-        &compiler,
-        OutputLinkPortRef::new(source, "samples"),
-        InputLinkPortRef::new(sink, "video"),
-    )
-    .expect_err("Channels are not an Image");
-    assert_eq!(
-        std::mem::discriminant(&refused_inside),
-        std::mem::discriminant(&refused_at_the_top),
-        "{refused_inside:?} / {refused_at_the_top:?}"
-    );
-    assert_eq!(
-        refused_inside
-            .to_string()
-            .replace("samples-source", "{source}")
-            .replace("picture-sink", "{sink}"),
-        refused_at_the_top
-            .to_string()
-            .replace(&UNTYPED_CHANNELS_SOURCE.to_lowercase(), "{source}")
-            .replace(&UNTYPED_RGBA_PICTURE_SINK.to_lowercase(), "{sink}"),
         "the refusal inside is the refusal at the top level, each node by its own name"
     );
 }

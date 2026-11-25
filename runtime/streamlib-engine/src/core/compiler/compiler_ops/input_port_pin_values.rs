@@ -80,8 +80,8 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::core::descriptors::{
-        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
-        PortFamilyDeclaration,
+        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
+        PortDescriptor,
     };
     use crate::core::execution::ProcessExecution;
     use crate::core::graph::{GraphNodeWithComponents, OutOfProcessLinkWiringComponent};
@@ -89,13 +89,13 @@ pub(crate) mod tests {
         HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves,
         OutOfProcessLinkWiringEnvelope,
     };
-    use crate::core::{NodeRunId, descriptors::PortFamily};
+    use crate::core::NodeRunId;
 
     const LEVEL_METER_NODE_TYPE: &str = "test_nodes:LevelMeter";
 
     /// A graph resolving a process node type reading `level`, which declares
     /// a default of 0.5, `gain`, which declares none and whose live value is
-    /// reset at Stop, and `frames`, Records.
+    /// reset at Stop, and `frames`, a String.
     pub(crate) fn a_graph_resolving_a_process_node_type_with_channels_inputs() -> Graph {
         let import_path = NodeClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap();
         let descriptor = NodeDescriptor::new(
@@ -104,29 +104,14 @@ pub(crate) mod tests {
             "a process node type for a test",
         )
         .with_input(
-            PortDescriptor::new(
-                "level",
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )
+            PortDescriptor::new("level", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
             .with_pin_default(serde_json::json!(0.5)),
         )
         .with_input(
-            PortDescriptor::new(
-                "gain",
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )
+            PortDescriptor::new("gain", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
             .with_lifetime(crate::core::descriptors::NodeValueLifetime::Reset),
         )
-        .with_input(PortDescriptor::new(
-            "frames",
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Records),
-        ));
+        .with_input(PortDescriptor::new("frames", "", true, PinDeclaration::exactly(PinType::String {})));
         let node_types = NodeTypesOneStreamResolves::new();
         node_types
             .register_a_type_described_in_this_streams_node_interpreter(
@@ -208,7 +193,7 @@ pub(crate) mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            refusal.contains("`frames`") && refusal.contains("Channels"),
+            refusal.contains("`frames`"),
             "got {refusal}"
         );
         let refusal = refuse_a_pin_value_a_process_node_cannot_read(
@@ -241,12 +226,7 @@ pub(crate) mod tests {
         };
         let mut mix = a_function_node_type("test_ops:mix", &["a"], &["result"]);
         mix = mix.with_input(
-            PortDescriptor::new(
-                "b",
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )
+            PortDescriptor::new("b", "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
             .with_pin_default(serde_json::json!(0.5)),
         );
         let mut graph = a_graph_resolving_these_function_node_types([
@@ -295,13 +275,7 @@ pub(crate) mod tests {
         };
         use crate::core::descriptors::{PinDeclaration, PinType};
         let a_float_input = |name: &str, may_be_unset: bool| {
-            PortDescriptor::new(
-                name,
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )
-            .with_pin_declaration(PinDeclaration {
+            PortDescriptor::new(name, "", true, PinDeclaration {
                 may_be_unset,
                 ..PinDeclaration::exactly(PinType::Float { exact_size: None })
             })

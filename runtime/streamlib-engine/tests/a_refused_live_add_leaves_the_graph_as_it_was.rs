@@ -98,7 +98,7 @@ fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
             "id": Uuid::new_v4(),
             "name": "leak_probe",
             "type": "tatolab.stream:GraphInput",
-            "input_values": {"port": "leak_probe", "family": "Channels"},
+            "input_values": {"port": "leak_probe", "pin_type": {"type": "float"}},
         }),
     )
     .expect_err("a GraphInput naming no family is refused")

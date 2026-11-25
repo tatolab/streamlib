@@ -3,6 +3,7 @@
 
 //! Fixtures shared by the graph snapshot's tests.
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
 use std::collections::HashSet;
 
@@ -30,22 +31,8 @@ fn a_registered_camera_class() -> &'static str {
             NodeClassImportPath::new(REGISTERED_CAMERA_CLASS).unwrap(),
             "graph snapshot test",
         )
-        .with_input(crate::core::descriptors::PortDescriptor::new(
-            "frames_in",
-            "",
-            false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
-        ))
-        .with_output(crate::core::descriptors::PortDescriptor::new(
-            "video",
-            "",
-            false,
-            crate::core::descriptors::PortFamilyDeclaration::of_family(
-                crate::core::descriptors::PortFamily::Image,
-            ),
-        )),
+        .with_input(crate::core::descriptors::PortDescriptor::new("frames_in", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
+        .with_output(crate::core::descriptors::PortDescriptor::new("video", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() }))),
     );
     REGISTERED_CAMERA_CLASS
 }

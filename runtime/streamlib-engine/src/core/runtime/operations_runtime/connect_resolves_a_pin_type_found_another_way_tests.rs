@@ -14,11 +14,7 @@ use serde_json::{Value, json};
 use super::connect_on_a_test_thread::connect_on_this_thread_waiting_for;
 use super::{InputValueChangesAConnectWaitsFor, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{
-    DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
-    NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
-};
+use crate::core::descriptors::{DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType, PortDescriptor, SettingReadTime};
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
     refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
@@ -77,13 +73,7 @@ fn a_port(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
         DeclaredPinType::Is { pin_type } => PinDeclaration::exactly(pin_type.clone()),
         _ => PinDeclaration::exactly(PinType::String {}),
     };
-    PortDescriptor::new(
-        name,
-        name,
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration {
+    PortDescriptor::new(name, name, true, PinDeclaration {
         pin_type,
         ..exactly
     })
@@ -169,12 +159,7 @@ fn register_the_fixture_node_types() {
             ),
             a_node_type(
                 UNTYPED_PASS_ON,
-                vec![PortDescriptor::new(
-                    "value",
-                    "value",
-                    true,
-                    PortFamilyDeclaration::of_family(PortFamily::Records),
-                )],
+                vec![PortDescriptor::new("value", "value", true, PinDeclaration::exactly(PinType::String {}))],
                 vec![a_port(
                     PASSED_ON,
                     DeclaredPinType::SameAsInput {
@@ -185,13 +170,7 @@ fn register_the_fixture_node_types() {
             a_node_type(
                 IMAGE_STRING_SINK,
                 vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration::of_family(PortFamily::Image),
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                    PortDescriptor::new("value", "value", true, PinDeclaration::exactly(PinType::String {})),
                 ],
                 Vec::new(),
             ),
@@ -212,13 +191,7 @@ fn register_the_fixture_node_types() {
             a_node_type(
                 CHANNELS_FLOAT_SINK,
                 vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration::of_family(PortFamily::Channels),
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(float())),
+                    PortDescriptor::new("value", "value", true, PinDeclaration::exactly(float())),
                 ],
                 Vec::new(),
             ),
@@ -244,17 +217,7 @@ fn register_the_fixture_node_types() {
                     .with_pin_default(json!(a_note())),
                 ],
                 vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration {
-                            family_from_config_key: Some("kind".to_owned()),
-                            codec_from_config_key: Some("kind".to_owned()),
-                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                        },
-                    )
-                    .with_pin_declaration(PinDeclaration {
+                    PortDescriptor::new("value", "value", true, PinDeclaration {
                         pin_type: DeclaredPinType::SetByInput {
                             input_name: "kind".to_owned(),
                         },
@@ -266,16 +229,7 @@ fn register_the_fixture_node_types() {
             a_node_type(
                 H264_SINK,
                 vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration {
-                            requires_codec: vec!["h264".to_owned()],
-                            ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                        },
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(encoded_video("h264"))),
+                    PortDescriptor::new("value", "value", true, PinDeclaration::exactly(encoded_video("h264"))),
                 ],
                 Vec::new(),
             ),
@@ -283,16 +237,7 @@ fn register_the_fixture_node_types() {
                 FAMILY_SET_IN_CONFIG_SOURCE,
                 Vec::new(),
                 vec![
-                    PortDescriptor::new(
-                        "value",
-                        "value",
-                        true,
-                        PortFamilyDeclaration {
-                            family_from_config_key: Some("family".to_owned()),
-                            ..PortFamilyDeclaration::of_family(PortFamily::Records)
-                        },
-                    )
-                    .with_pin_declaration(PinDeclaration::exactly(PinType::String {})),
+                    PortDescriptor::new("value", "value", true, PinDeclaration::exactly(PinType::String {})),
                 ],
             ),
         ] {

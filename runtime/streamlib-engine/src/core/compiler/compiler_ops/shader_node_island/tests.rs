@@ -1,15 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use super::super::function_node_island::tests::{a_function_node_type, add_a_node, link};
 use super::super::function_node_island::{HowALinkIsWired, how_a_link_is_wired};
 use super::super::shader_node_island_program::tests::shader_program;
 use super::*;
 use crate::core::compiler::compiler_ops::running_node_restart::forget_the_build_of_each_node_restarted;
-use crate::core::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
-    PortFamilyDeclaration,
-};
+use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor};
 use crate::core::graph::NodeMetrics;
 use crate::core::nodes::NodeState;
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves};
@@ -17,7 +15,7 @@ use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolve
 fn a_descriptor(
     import_path: &str,
     node_kind: NodeKind,
-    inputs: &[(&str, PortFamily)],
+    inputs: &[(&str, PinType)],
     outputs: &[&str],
 ) -> NodeDescriptor {
     let import_path = NodeClassImportPath::new(import_path).unwrap();
@@ -28,19 +26,14 @@ fn a_descriptor(
         "a node type for a test",
     );
     descriptor.node_kind = node_kind;
-    for (port, family) in inputs {
+    for (port, pin_type) in inputs {
         descriptor = descriptor.with_input(
-            PortDescriptor::new(*port, "", true, PortFamilyDeclaration::of_family(*family))
+            PortDescriptor::new(*port, "", true, PinDeclaration::exactly(pin_type.clone()))
                 .with_delivery_profile("newest"),
         );
     }
     for port in outputs {
-        descriptor = descriptor.with_output(PortDescriptor::new(
-            *port,
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Image),
-        ));
+        descriptor = descriptor.with_output(PortDescriptor::new(*port, "", true, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
     }
     descriptor
 }
@@ -64,7 +57,7 @@ fn a_graph_resolving_shader_and_process_types() -> Graph {
         a_descriptor(
             "test_streams:sink",
             NodeKind::Process,
-            &[("video", PortFamily::Image)],
+            &[("video", PinType::Texture { pixel_formats: Vec::new() })],
             &[],
         ),
     ] {
@@ -97,10 +90,14 @@ fn a_graph_resolving_shader_and_process_types() -> Graph {
             "return lerp(a.pixel, b.pixel, 0.5);",
         ),
     ] {
-        let inputs: Vec<(&str, PortFamily)> = image_ports
+        let inputs: Vec<(&str, PinType)> = image_ports
             .iter()
-            .map(|port| (*port, PortFamily::Image))
-            .chain(float_ports.iter().map(|port| (*port, PortFamily::Channels)))
+            .map(|port| (*port, PinType::Texture { pixel_formats: Vec::new() }))
+            .chain(
+                float_ports
+                    .iter()
+                    .map(|port| (*port, PinType::Float { exact_size: None })),
+            )
             .collect();
         node_types
             .register_a_type_described_in_this_streams_node_interpreter(

@@ -7,7 +7,7 @@ use super::super::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME, GraphInterfaceLevel,
     GraphInterfacePortDirection,
 };
-use crate::core::descriptors::{PinAnnotations, PinNumberRange, PortFamily};
+use crate::core::descriptors::{PinAnnotations, PinNumberRange, PinType};
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::graph::{GraphNode, PortInfo};
 use crate::core::json_schema::{GraphNodePortOnTheWire, LinkPortRefOutput};
@@ -76,7 +76,7 @@ fn a_graph_input_carries_the_annotations_its_settings_state_on_its_value_input()
     );
 }
 
-/// A `GraphInput` saved before its value had annotations, with a family and a value alone,
+/// A `GraphInput` saved before its value had annotations, with a pin type and a value alone,
 /// renders its `value` input with none.
 ///
 /// Mental-revert: rendering the annotations whether or not any is stated serves an empty
@@ -84,7 +84,7 @@ fn a_graph_input_carries_the_annotations_its_settings_state_on_its_value_input()
 #[test]
 fn a_graph_input_saved_before_annotations_renders_its_value_input_with_none() {
     let node = a_graph_input_saved_with(json!({
-        "port": "lines", "family": "channels", "value": 2,
+        "port": "lines", "pin_type": {"type": "float"}, "value": 2,
     }));
 
     let rendered = the_value_input_rendered(&node);
@@ -95,10 +95,10 @@ fn a_graph_input_saved_before_annotations_renders_its_value_input_with_none() {
     );
 }
 
-fn the_family_no_linked_port_states(
+fn the_pin_type_no_linked_port_states(
     _linked_port: &LinkPortRefOutput,
     _direction: GraphInterfacePortDirection,
-) -> Option<PortFamily> {
+) -> Option<PinType> {
     None
 }
 
@@ -112,7 +112,7 @@ fn the_refusal_of_a_top_level_graph_input_saved_with(settings: serde_json::Value
     .and_then(|graph| {
         graph.with_graph_interface_resolved(
             GraphInterfaceLevel::TheStreamsTopLevel,
-            &the_family_no_linked_port_states,
+            &the_pin_type_no_linked_port_states,
         )
     })
     .expect_err("the Graph Input is refused")
@@ -151,7 +151,7 @@ fn an_annotation_the_chosen_type_does_not_take_is_refused_naming_it() {
         "{step_on_a_string}"
     );
     let control_with_no_type = the_refusal_of_a_top_level_graph_input_saved_with(json!({
-        "port": "lines", "family": "channels", "control": "dial",
+        "port": "lines", "pin_type": {"type": "float"}, "control": "dial",
     }));
     assert!(
         control_with_no_type.contains("states `control`")

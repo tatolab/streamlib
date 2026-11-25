@@ -103,8 +103,8 @@ fn a_described_good_type() -> serde_json::Value {
         "scheduling_priority": null,
         "paced_by_real_time": false,
         "config_schema": {"type": "object"},
-        "input_ports": [{"name": "video", "family": {"family": "records"}, "description": "", "delivery_profile": "newest"}],
-        "output_ports": [{"name": "blurred", "family": {"family": "records"}, "description": ""}],
+        "input_ports": [{"name": "video", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "description": "", "delivery_profile": "newest"}],
+        "output_ports": [{"name": "blurred", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "description": ""}],
     })
 }
 

@@ -223,9 +223,7 @@ fn a_number_reads_the_first_sample_of_an_f32_block_as_an_audio_block_carries_it(
         unpack_pin_value(&PinType::Float { exact_size: None }, audio.as_ref()).unwrap(),
         json!(0.5)
     );
-    let records =
-        the_message_a_value_written_onto_an_output_is(PortFamily::Records, &json!({"level": 1}), 0)
-            .unwrap();
+    let records = pack_pin_value(&PinType::String {}, &json!("level"), 0).unwrap();
     assert!(
         the_channel_values_a_control_message_carries(records.as_ref())
             .unwrap_err()
@@ -275,35 +273,12 @@ fn each_type_names_the_kind_of_message_it_travels_as() {
 }
 
 #[test]
-fn a_record_written_onto_a_records_output_is_its_msgpack_map() {
+fn a_number_or_nested_list_written_onto_a_tensor_output_is_its_values_attribute() {
     let PackedPinValue {
         payload_descriptor: descriptor,
         payload,
-    } = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Records,
-        &json!({ "cue": "drop", "beat": 33 }),
-        0,
-    )
-    .unwrap();
-    assert_eq!(
-        descriptor.known_kind().ok(),
-        Some(DataChannelPayloadDescriptorKind::RecordsMessage)
-    );
-    let read_back: Value = rmp_serde::from_slice(&payload).unwrap();
-    assert_eq!(read_back, json!({ "cue": "drop", "beat": 33 }));
-
-    let refusal = the_message_a_value_written_onto_an_output_is(PortFamily::Records, &json!(3), 0)
-        .unwrap_err();
-    assert!(refusal.contains("JSON object"), "{refusal}");
-}
-
-#[test]
-fn a_number_or_nested_list_written_onto_an_array_output_is_its_values_attribute() {
-    let PackedPinValue {
-        payload_descriptor: descriptor,
-        payload,
-    } = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Array,
+    } = pack_pin_value(
+        &PinType::Tensor {},
         &json!([[0.5, -1.0], [0.25, 1.0], [0.0, 0.0]]),
         0,
     )
@@ -336,7 +311,7 @@ fn a_number_or_nested_list_written_onto_an_array_output_is_its_values_attribute(
     let PackedPinValue {
         payload_descriptor: descriptor,
         payload,
-    } = the_message_a_value_written_onto_an_output_is(PortFamily::Array, &json!(0.75), 0).unwrap();
+    } = pack_pin_value(&PinType::Tensor {}, &json!(0.75), 0).unwrap();
     let rows = array_frame_attribute_table_of(
         ArrayFrameDescriptorBody::from_descriptor_body(&descriptor.body),
         &payload,
@@ -344,40 +319,16 @@ fn a_number_or_nested_list_written_onto_an_array_output_is_its_values_attribute(
     .unwrap();
     assert_eq!(rows[0].shape, vec![1]);
 
-    let PackedPinValue {
-        payload_descriptor: descriptor,
-        payload,
-    } = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Array,
-        &json!({ "left": [1, 2], "right": 3 }),
-        0,
-    )
-    .unwrap();
-    let rows = array_frame_attribute_table_of(
-        ArrayFrameDescriptorBody::from_descriptor_body(&descriptor.body),
-        &payload,
-    )
-    .unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row.name.as_str(), row.shape.clone()))
-            .collect::<Vec<_>>(),
-        [("left", vec![2]), ("right", vec![1])]
-    );
-
-    let refusal =
-        the_message_a_value_written_onto_an_output_is(PortFamily::Array, &json!([[1, 2], [3]]), 0)
-            .unwrap_err();
+    let refusal = pack_pin_value(&PinType::Tensor {}, &json!([[1, 2], [3]]), 0).unwrap_err();
     assert!(refusal.contains("differ in length"), "{refusal}");
 }
 
 #[test]
-fn a_number_written_onto_a_channels_output_is_a_control_message_and_a_block_runs_on() {
+fn a_number_is_a_control_message_and_an_audio_block_runs_on() {
     let PackedPinValue {
         payload_descriptor: descriptor,
         payload,
-    } = the_message_a_value_written_onto_an_output_is(PortFamily::Channels, &json!(0.5), 96)
-        .unwrap();
+    } = pack_pin_value(&PinType::Float { exact_size: None }, &json!(0.5), 96).unwrap();
     assert_eq!(
         ChannelsBlockDescriptorBody::from_descriptor_body(&descriptor.body),
         ChannelsBlockDescriptorBody {
@@ -393,8 +344,8 @@ fn a_number_written_onto_a_channels_output_is_a_control_message_and_a_block_runs
     let PackedPinValue {
         payload_descriptor: descriptor,
         payload,
-    } = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Channels,
+    } = pack_pin_value(
+        &PinType::Audio {},
         &json!({ "samples": [[0.0, 0.5], [1.0, -1.0]], "sample_rate": 48000 }),
         0,
     )
@@ -410,8 +361,8 @@ fn a_number_written_onto_a_channels_output_is_a_control_message_and_a_block_runs
     );
     assert_eq!(body.planar_payload_byte_len(), Some(payload.len()));
 
-    let refusal = the_message_a_value_written_onto_an_output_is(
-        PortFamily::Channels,
+    let refusal = pack_pin_value(
+        &PinType::Audio {},
         &json!({ "samples": [[0.0], [1.0, 2.0]] }),
         0,
     )
@@ -420,20 +371,15 @@ fn a_number_written_onto_a_channels_output_is_a_control_message_and_a_block_runs
 }
 
 #[test]
-fn an_image_or_packets_value_is_never_written_from_a_panel() {
-    for family in [PortFamily::Image, PortFamily::Packets] {
-        let refusal =
-            the_message_a_value_written_onto_an_output_is(family, &json!({}), 0).unwrap_err();
-        assert!(refusal.contains("never"), "{refusal}");
+fn a_texture_or_encoded_value_packs_as_no_message() {
+    for pin_type in [
+        PinType::Texture {
+            pixel_formats: Vec::new(),
+        },
+        PinType::EncodedVideo { codecs: Vec::new() },
+    ] {
+        pack_pin_value(&pin_type, &json!({}), 0).expect_err("it holds no JSON value");
     }
-}
-
-#[test]
-fn a_client_writes_array_channels_and_records_values_alone() {
-    assert_eq!(
-        why_a_client_never_writes(PortFamily::Packets),
-        "a client writes Array, Channels and Records values, never Packets"
-    );
 }
 
 fn a_list_of(element_type: PinType) -> PinType {
@@ -815,16 +761,10 @@ fn a_bundle_or_list_holding_a_heavy_member_travels_as_one_bundle_frame() {
     );
 }
 
-/// The family a view's port of a bundle is read on is the family of the message the runtime
-/// packs that bundle as, for a bundle of numbers, one of no members, one with a List member, one
-/// of Tensors and one holding a Texture, which packs as no JSON value and travels as a Bundle
-/// frame on no family.
-///
-/// Mental-revert: a second rule for which family carries a whole bundle, one that asks that each
-/// member be a small type, names no family for the bundle with a List member that packs here as
-/// one Records message.
+/// A whole bundle packs as the message kind its pin type names: a Records map, an Array frame
+/// of Tensors, or, for one holding a Texture, no JSON value, since it travels as a Bundle frame.
 #[test]
-fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as() {
+fn a_whole_bundle_packs_as_the_message_kind_of_its_pin_type() {
     let floats = PinType::ListOf {
         element_type: Box::new(PinType::Float { exact_size: None }),
     };
@@ -873,16 +813,9 @@ fn the_family_carrying_a_whole_bundle_is_the_family_of_the_message_it_packs_as()
             json!({ "label": "frame" }),
         ),
     ];
-    let family_of_the_kind = |kind| match kind {
-        DataChannelPayloadDescriptorKind::RecordsMessage => Some(PortFamily::Records),
-        DataChannelPayloadDescriptorKind::ArrayFrame => Some(PortFamily::Array),
-        _ => None,
-    };
     for (bundle, value) in bundles {
         bundle.validate().expect("a bundle pin type");
         let kind = message_kind_of(&bundle).expect("a bundle takes a link");
-        let family = PortFamily::carrying_a_whole_value_of(&bundle);
-        assert_eq!(family, family_of_the_kind(kind), "{bundle}");
         match pack_pin_value(&bundle, &value, 0) {
             Ok(packed) => assert_eq!(
                 DataChannelPayloadDescriptorKind::from_wire(packed.payload_descriptor.kind),

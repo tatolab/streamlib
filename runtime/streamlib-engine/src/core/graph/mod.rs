@@ -57,7 +57,7 @@ pub(crate) use pin_type_link_checks::{
 };
 pub(crate) use pin_type_resolution::{
     the_input_an_output_takes_the_type_of, the_outputs_a_link_carries_on,
-    the_pin_a_port_resolves_to, the_pin_type_a_link_out_of_an_output_carries,
+    the_pin_a_port_resolves_to, the_pin_a_link_out_of_an_output_carries,
 };
 pub(crate) use streamlib_node_schema::is_in_exposed_name_cast_form;
 pub use streamlib_node_schema::{

@@ -59,7 +59,7 @@ fn graph_serves_a_rust_ports_declared_pin_type_resolved() {
 }
 
 #[test]
-fn the_catalog_serves_a_rust_ports_declared_pin_type_beside_its_family() {
+fn the_catalog_serves_a_rust_ports_declared_pin_type_and_no_family() {
     let ports = catalog_ports_of_type(MockPinTypedNode::node_class_import_path());
 
     assert_eq!(
@@ -67,16 +67,13 @@ fn the_catalog_serves_a_rust_ports_declared_pin_type_beside_its_family() {
         json!({"kind": "is", "pin_type": {"type": "float"}})
     );
     assert_eq!(ports[0]["flow"], "value");
-    assert_eq!(ports[0]["family"], json!({"family": "channels"}));
+    assert!(ports[0].get("family").is_none(), "{}", ports[0]);
     assert_eq!(
         ports[1]["pin_type"],
         json!({"kind": "is", "pin_type": {"type": "texture", "pixel_formats": ["rgba8_unorm"]}})
     );
     assert_eq!(ports[1]["flow"], "stream");
-    assert_eq!(
-        ports[1]["family"],
-        json!({"family": "image", "formats": ["rgba8_unorm"]})
-    );
+    assert!(ports[1].get("family").is_none(), "{}", ports[1]);
 }
 
 /// Mock node whose typed inputs state no delivery profile, except one, and
@@ -149,17 +146,14 @@ fn graph_and_the_catalog_serve_the_flow_a_port_states_and_the_delivery_its_pin_d
     assert_eq!(flows_and_deliveries(&catalog_ports), expected);
 }
 
-/// The type of a node whose one output, `port`, declares only `family`, and so no exact pin type,
-/// as a Python node's may; registered once under `short_name`.
-fn a_node_type_whose_one_output_declares_only_its_family(
+/// The type of a node whose one output, `port`, declares no pin type; registered once under
+/// `short_name`.
+fn a_node_type_whose_one_output_declares_no_pin_type(
     registered: &'static std::sync::Once,
     short_name: &str,
     port: &str,
-    family: crate::core::descriptors::PortFamily,
 ) -> streamlib_node_schema::NodeClassImportPath {
-    use crate::core::descriptors::{
-        NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamilyDeclaration,
-    };
+    use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
     let node_type = streamlib_node_schema::NodeClassImportPath::new(format!(
         "{}::{short_name}",
         module_path!()
@@ -171,14 +165,19 @@ fn a_node_type_whose_one_output_declares_only_its_family(
                 NodeDescriptor::new(
                     NodeClassShortName::new(short_name).expect("a valid short name"),
                     node_type.clone(),
-                    "A node whose one output declares only its family",
+                    "A node whose one output declares no pin type",
                 )
-                .with_output(PortDescriptor::new(
-                    port,
-                    "",
-                    false,
-                    PortFamilyDeclaration::of_family(family),
-                )),
+                .with_output(PortDescriptor {
+                    pin_declaration: None,
+                    ..PortDescriptor::new(
+                        port,
+                        "",
+                        false,
+                        crate::core::descriptors::PinDeclaration::exactly(
+                            crate::core::descriptors::PinType::Float { exact_size: None },
+                        ),
+                    )
+                }),
             )
             .expect("the node type registers");
     });
@@ -188,11 +187,10 @@ fn a_node_type_whose_one_output_declares_only_its_family(
 #[test]
 fn a_port_with_no_exact_pin_type_serves_neither_field_in_graph_or_the_catalog() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    let node_type = a_node_type_whose_one_output_declares_only_its_family(
+    let node_type = a_node_type_whose_one_output_declares_no_pin_type(
         &REGISTERED,
         "MockUntypedChannelsSourceNode",
         "audio",
-        crate::core::descriptors::PortFamily::Channels,
     );
     let node = rendered_node_of_type(node_type.clone());
     let audio = &node["ports"]["outputs"][0];
@@ -206,16 +204,15 @@ fn a_port_with_no_exact_pin_type_serves_neither_field_in_graph_or_the_catalog() 
 }
 
 #[test]
-fn a_graph_interface_port_of_the_image_family_is_a_texture_and_of_another_family_untyped() {
+fn a_graph_interface_port_renders_the_pin_type_it_carries_and_none_while_untyped() {
     use crate::core::graph::graph_interface_resolution::{
         GraphInterfacePort, GraphInterfacePortDirection,
     };
-    let rendered = |family| {
+    let rendered = |pin_type| {
         let declared = GraphInterfacePort {
             interface_node: "camera".to_string(),
             port: "frames".to_string(),
-            family,
-            pin_type: None,
+            pin_type,
             direction: GraphInterfacePortDirection::Input,
             linked_ports: Vec::new(),
             runs_as_a_source_node: false,
@@ -223,12 +220,12 @@ fn a_graph_interface_port_of_the_image_family_is_a_texture_and_of_another_family
         serde_json::to_value(declared.rendered_as_a_port_named("value")).expect("renders")
     };
 
-    let image = rendered(Some(crate::core::descriptors::PortFamily::Image));
+    let image = rendered(Some(crate::core::descriptors::PinType::Texture {
+        pixel_formats: Vec::new(),
+    }));
     assert_eq!(image["pin_type"], json!({"type": "texture"}));
     assert_eq!(image["flow"], "stream");
 
-    let channels = rendered(Some(crate::core::descriptors::PortFamily::Channels));
-    assert!(channels.get("pin_type").is_none(), "{channels}");
     let unknown = rendered(None);
     assert!(unknown.get("pin_type").is_none(), "{unknown}");
 }
@@ -318,11 +315,10 @@ fn graph_names_encoded_stream_facts_by_the_ports_encoded_type_and_an_untyped_por
     use crate::core::descriptors::{PacketsStreamFacts, PinFlow, PinType, ResolvedPin};
 
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    let node_type = a_node_type_whose_one_output_declares_only_its_family(
+    let node_type = a_node_type_whose_one_output_declares_no_pin_type(
         &REGISTERED,
         "MockNodeWritingEncodedUnits",
         "encoded",
-        crate::core::descriptors::PortFamily::Packets,
     );
     let mut graph = Graph::new();
     let added = graph

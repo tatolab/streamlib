@@ -5,6 +5,7 @@
 //! island feeds it, judged on a stream by the graph its load, its reconcile, a removal or a
 //! batch of edits leaves, never by the order the links are made in.
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -13,10 +14,7 @@ use streamlib_project_repository::{
 };
 use uuid::Uuid;
 
-use crate::core::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use crate::core::descriptors::{FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor};
 use crate::core::error::Error;
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::LinkUniqueId;
@@ -42,12 +40,7 @@ const SOURCE: &str = "reactive_reader_rule::Source";
 const MANUAL_READER: &str = "reactive_reader_rule::ManualMeter";
 
 fn a_records_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(PinType::String {}))
     .with_delivery_profile("newest")
 }
 

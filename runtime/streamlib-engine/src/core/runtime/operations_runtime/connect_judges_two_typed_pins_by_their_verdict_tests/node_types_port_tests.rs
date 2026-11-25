@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A link between a placed end and a port of a node type no node has yet is judged as `connect`
-//! judges it once a node of the type is placed: by the port's family as placed, then by what the
-//! port declares, logging nothing a commit reads and leaving no node in the graph.
+//! judges it once a node of the type is placed: by what the port declares, logging nothing a
+//! commit reads and leaving no node in the graph.
 
 use super::super::{
     ALinkEndTheGraphHolds, ANodeTypesPortToJudge,
@@ -11,27 +11,27 @@ use super::super::{
 };
 use super::*;
 use crate::core::PortDirection;
-use crate::core::descriptors::{
-    DeclaredPinType, PinAnnotations, PinFlow, PinLinkVerdict, PinLinkWarning,
-};
+use crate::core::descriptors::{DeclaredPinType, PinAnnotations, PinFlow, PinLinkVerdict, PinLinkWarning};
 use crate::core::graph::Graph;
 
 const ONE_OF_SINK: &str = "VerdictCheckOneOfSink";
 const ANY_SINK: &str = "VerdictCheckAnySink";
-const ANY_IMAGE_SINK: &str = "VerdictCheckAnyImageSink";
-const ONE_OF_IMAGE_SINK: &str = "VerdictCheckOneOfImageSink";
 const CHOSEN_TYPE_SINK: &str = "VerdictCheckChosenTypeSink";
 
-/// A port declaring `pin_type`, read as a value, of `family`.
-fn a_port_declaring(name: &str, pin_type: DeclaredPinType, family: PortFamily) -> PortDescriptor {
-    PortDescriptor::new(name, name, true, PortFamilyDeclaration::of_family(family))
-        .with_pin_declaration(PinDeclaration {
+/// A port declaring `pin_type`, read as a value.
+fn a_port_declaring(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
+    PortDescriptor::new(
+        name,
+        name,
+        true,
+        PinDeclaration {
             pin_type,
             flow: PinFlow::Value,
             annotations: PinAnnotations::default(),
             former_names: Vec::new(),
             may_be_unset: false,
-        })
+        },
+    )
 }
 
 /// Register the verdict's fixture node types and the ones whose ports declare more than one
@@ -47,7 +47,6 @@ fn register_the_node_types_port_fixtures() {
                 DeclaredPinType::OneOf {
                     pin_types: vec![PinType::String {}, float()],
                 },
-                PortFamily::Channels,
             )],
             Vec::new(),
         ));
@@ -56,27 +55,6 @@ fn register_the_node_types_port_fixtures() {
             vec![a_port_declaring(
                 "anything",
                 DeclaredPinType::Any,
-                PortFamily::Channels,
-            )],
-            Vec::new(),
-        ));
-        register(a_node_type(
-            class_path(ANY_IMAGE_SINK),
-            vec![a_port_declaring(
-                "anything",
-                DeclaredPinType::Any,
-                PortFamily::Image,
-            )],
-            Vec::new(),
-        ));
-        register(a_node_type(
-            class_path(ONE_OF_IMAGE_SINK),
-            vec![a_port_declaring(
-                "anything",
-                DeclaredPinType::OneOf {
-                    pin_types: vec![PinType::String {}, float()],
-                },
-                PortFamily::Image,
             )],
             Vec::new(),
         ));
@@ -87,7 +65,6 @@ fn register_the_node_types_port_fixtures() {
                 DeclaredPinType::SetByInput {
                     input_name: "kind".to_owned(),
                 },
-                PortFamily::Channels,
             )],
             Vec::new(),
         ));
@@ -168,8 +145,7 @@ fn the_verdict_into_a_node_types_input(
 /// setting, it is refused in connect's very words, and the graph holds no more nodes and links after each check than
 /// before.
 ///
-/// Mental-revert: judging the node type's port by its family alone would answer `None` for the
-/// Integer input and refuse no String; leaving the held node in the graph would count it.
+/// Mental-revert: leaving the held node in the graph would count it.
 #[test]
 fn a_node_types_typed_port_is_judged_as_a_placed_node_of_the_type_is() {
     register_the_node_types_port_fixtures();
@@ -240,8 +216,6 @@ fn a_node_types_port_of_one_of_several_types_answers_the_one_that_connects_best(
 /// A port taking any type connects as the other end's type, and one whose type a setting
 /// chooses connects the same way, warning that its type is found only once a node is placed.
 ///
-/// Mental-revert: judging either by its family alone would answer no verdict, and so no
-/// warning.
 #[test]
 fn a_node_types_port_of_any_type_or_one_found_once_placed_connects_as_the_other_ends_type() {
     register_the_node_types_port_fixtures();
@@ -274,40 +248,6 @@ fn a_node_types_port_of_any_type_or_one_found_once_placed_connects_as_the_other_
         chosen.warnings,
         vec![PinLinkWarning::TypeFoundOnlyOncePlaced]
     );
-}
-
-/// A port taking any type, or one of several, is first judged by its family, as `connect`
-/// judges an untyped port of a placed node: a Float, of the Channels family, into one of the
-/// Image family is refused as connect refuses it into a placed node of the type, though the
-/// port's types alone take a Float.
-///
-/// Mental-revert: typing the port as the Float before any judgement skips the family check, so
-/// the link would answer a clean `connects`.
-#[test]
-fn a_node_types_port_of_any_or_one_of_several_types_is_refused_by_a_family_that_refuses_it() {
-    register_the_node_types_port_fixtures();
-    for sink in [ANY_IMAGE_SINK, ONE_OF_IMAGE_SINK] {
-        let compiler = Arc::new(Compiler::new());
-        let float_source = a_node_of(&compiler, class_path(FLOAT_SOURCE));
-
-        let judged = the_verdict_into_a_node_types_input(
-            &compiler,
-            &float_source,
-            "value",
-            sink,
-            "anything",
-        )
-        .expect_err("an Image port's family refuses a Float");
-        let placed_sink = a_node_of(&compiler, class_path(sink));
-        let placed = the_verdict_connect_takes_on_a_link(
-            &compiler,
-            OutputLinkPortRef::new(float_source, "value"),
-            InputLinkPortRef::new(placed_sink, "anything"),
-        )
-        .expect_err("connect refuses the link into a placed node");
-
-        assert_eq!(judged.to_string(), placed.to_string(), "{sink}");
-    }
 }
 
 /// Judged from a placed input, a node type's output is the link's source: a Float output of a

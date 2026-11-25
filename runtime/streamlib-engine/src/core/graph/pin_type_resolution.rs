@@ -286,17 +286,14 @@ pub(crate) fn the_input_an_output_takes_the_type_of(output: &PortInfo) -> Option
     }
 }
 
-/// The one type a link out of output `port_name` of `node_id` carries in `graph`; `None` while
+/// The one pin a link out of output `port_name` of `node_id` carries in `graph`; `None` while
 /// its graph does not settle one type there.
-pub(crate) fn the_pin_type_a_link_out_of_an_output_carries(
+pub(crate) fn the_pin_a_link_out_of_an_output_carries(
     graph: &Graph,
     node_id: &NodeRunId,
     port_name: &str,
-) -> Option<PinType> {
+) -> Option<ResolvedPin> {
     let node = graph.traversal().v(node_id).first()?;
     let output = node.output_port(port_name)?;
-    match the_pin_type_of_a_port_in_its_graph(graph, node, output, PortDirection::Output) {
-        PinTypeInItsGraph::Is(pin_type) => Some(pin_type),
-        _ => None,
-    }
+    the_pin_a_port_resolves_to(graph, node, output, PortDirection::Output)
 }

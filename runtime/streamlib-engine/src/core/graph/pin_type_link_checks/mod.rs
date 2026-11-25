@@ -9,7 +9,7 @@ use super::bundle_member_link_ends::{
     refuse_a_whole_link_beside_a_member_link, what_a_link_end_at_a_port_carries,
 };
 use super::pin_type_resolution::{
-    PinTypeInItsGraph, states_one_type_exactly, the_conversion_whose_output_follows_a_setting,
+    PinTypeInItsGraph, the_conversion_whose_output_follows_a_setting,
     the_pin_type_it_states, the_pin_type_of_a_port_in_its_graph,
     the_type_a_convert_node_gives_under,
 };
@@ -18,7 +18,7 @@ use super::{
     PendingDeletionComponent, PortInfo,
 };
 use crate::core::descriptors::{
-    BundleMember, ConvertNodeToInsert, DeclaredPinType, NodeClassImportPath, PinConversion,
+    BundleMember, DeclaredPinType, NodeClassImportPath, PinConversion,
     PinLinkEnd, PinLinkInputEnd, PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinType,
     pin_link_verdict,
 };
@@ -30,7 +30,6 @@ mod named_type_at_an_untyped_end;
 mod wired_links_past_an_input;
 
 use bundle_frames_into_an_untyped_input::refuse_bundle_frames_into_an_untyped_input;
-pub(crate) use named_type_at_an_untyped_end::the_named_type_among;
 use named_type_at_an_untyped_end::refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other;
 pub(crate) use bundle_frames_into_an_untyped_input::the_bundle_frame_type_an_output_may_carry;
 use wired_links_past_an_input::{

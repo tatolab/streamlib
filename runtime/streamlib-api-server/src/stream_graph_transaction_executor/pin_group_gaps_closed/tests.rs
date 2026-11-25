@@ -2,20 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use serde_json::json;
-use streamlib::sdk::descriptors::{
-    PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor};
 
 use super::*;
 
 fn a_float_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        name,
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }))
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
 }
 
 fn the_layers_group() -> PinGroupDescriptor {

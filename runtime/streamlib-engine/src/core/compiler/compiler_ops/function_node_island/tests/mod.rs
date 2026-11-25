@@ -3,13 +3,11 @@
 
 //! Fixtures shared by the evaluation island's tests.
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use std::sync::Arc;
 
 use super::*;
-use crate::core::descriptors::{
-    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
-    PortFamily, PortFamilyDeclaration,
-};
+use crate::core::descriptors::{FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
 use crate::core::nodes::{
@@ -37,22 +35,12 @@ pub(crate) fn a_function_node_type(
     };
     for input_port in input_ports {
         descriptor = descriptor.with_input(
-            PortDescriptor::new(
-                *input_port,
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            )
+            PortDescriptor::new(*input_port, "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
             .with_delivery_profile("newest"),
         );
     }
     for output_port in output_ports {
-        descriptor = descriptor.with_output(PortDescriptor::new(
-            *output_port,
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Channels),
-        ));
+        descriptor = descriptor.with_output(PortDescriptor::new(*output_port, "", true, PinDeclaration::exactly(PinType::Float { exact_size: None })));
     }
     descriptor
 }

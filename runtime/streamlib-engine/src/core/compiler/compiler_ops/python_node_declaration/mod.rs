@@ -6,8 +6,8 @@ use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
     NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, NodeRuntime, NodeScheduling,
-    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PortDescriptor, PortFamilyDeclaration,
-    PortFamilyDeclarationDirection, refuse_audio_window_beside_a_skipping_delivery_profile,
+    NodeValueLifetime, PinDeclaration, PinGroupDescriptor, PortDescriptor, PinType,
+    refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::core::nodes::EmptyConfig;
@@ -17,7 +17,7 @@ use ports_typed_by_a_signature::{
     ports_a_shader_node_program_types,
 };
 use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
-use streamlib_node_schema::{DELIVERY_PROFILE_DECLARATION_VALUES, NodeConfigJsonSchema};
+use streamlib_node_schema::NodeConfigJsonSchema;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
@@ -140,19 +140,17 @@ impl PythonNodeDeclaration {
         {
             return Err(refusal);
         }
-        for output in &descriptor.outputs {
-            if let Some(followed_input_port) = output.family.family_follows_input_port.as_deref()
-                && !descriptor
-                    .inputs
-                    .iter()
-                    .any(|input| input.name == followed_input_port)
-            {
-                return Err(format!(
-                    "output port {:?} follows the family of input port {followed_input_port:?}, \
-                     which the node does not declare",
-                    output.name
-                ));
-            }
+        if let Some(untyped) = descriptor
+            .inputs
+            .iter()
+            .chain(&descriptor.outputs)
+            .find(|port| port.pin_declaration.is_none())
+        {
+            return Err(format!(
+                "port {:?} declares no pin type, and every port of a node type declares the type \
+                 it carries",
+                untyped.name
+            ));
         }
 
         Ok(Self {
@@ -451,22 +449,23 @@ fn read_port_descriptors_listed(
         }
 
         let port_name = read_string(declaration, "name")?;
-        let family = declaration
-            .get("family")
-            .filter(|declared| !declared.is_null())
-            .ok_or_else(|| format!("port {port_name:?} declares no family"))?;
-        let family = read_port_family_declaration(family, &port_name, direction)?;
-        let mut port = PortDescriptor::new(
-            port_name,
-            read_string(declaration, "description")?,
-            true,
-            family,
-        );
-        if let Some(pin_declaration) = declaration
+        let pin_declaration = declaration
             .get(DESCRIBED_PIN_DECLARATION_KEY)
             .filter(|declared| !declared.is_null())
-        {
-            let pin_declaration = read_pin_declaration(pin_declaration, &port.name, direction)?;
+            .map(|declared| read_pin_declaration(declared, &port_name, direction))
+            .transpose()?;
+        let description = read_string(declaration, "description")?;
+        // A port of a shader node is typed by its program once every port is read.
+        let mut port = PortDescriptor {
+            pin_declaration: None,
+            ..PortDescriptor::new(
+                port_name,
+                description,
+                true,
+                PinDeclaration::exactly(PinType::String {}),
+            )
+        };
+        if let Some(pin_declaration) = pin_declaration {
             port = port.with_pin_declaration(pin_declaration);
         }
         if let Some(delivery_profile) = declaration
@@ -540,22 +539,6 @@ fn read_port_descriptors_listed(
         {
             let lifetime = read_value_lifetime(lifetime, &port, direction)?;
             port = port.with_lifetime(lifetime);
-        }
-        if matches!(direction, PortDirection::Input)
-            && port.delivery_profile.is_none()
-            && port.declared_pin().is_none()
-        {
-            return Err(format!(
-                "input port {:?} of family {} states no delivery — a port with no pin type \
-                 states `delivery=`, one of {}",
-                port.name,
-                port.family.family,
-                DELIVERY_PROFILE_DECLARATION_VALUES
-                    .iter()
-                    .map(|value| format!("{value:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
         }
         ports.push(port);
     }
@@ -672,44 +655,11 @@ fn read_pin_default(
                 )
             });
     }
-    if !pin_default.is_null()
-        && port.family.family != crate::core::descriptors::PortFamily::Channels
-    {
-        return Err(format!(
-            "input port {:?} of family {} declares a pin default, and only a Channels input \
-             carries a control value",
-            port.name, port.family.family
-        ));
-    }
-    match pin_default {
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
-            Ok(pin_default.clone())
-        }
-        other => Err(format!(
-            "input port {:?}: pin_default must be a number or a bool, got {}",
-            port.name,
-            json_kind_name(other)
-        )),
-    }
-}
-
-/// Read one `family` declaration off a described port, refusing a key its
-/// family or its direction does not take.
-fn read_port_family_declaration(
-    family: &serde_json::Value,
-    port_name: &str,
-    direction: PortDirection,
-) -> std::result::Result<PortFamilyDeclaration, String> {
-    let declaration = serde_json::from_value::<PortFamilyDeclaration>(family.clone())
-        .map_err(|refusal| format!("port {port_name:?}: family {refusal}"))?;
-    let declaration_direction = match direction {
-        PortDirection::Input => PortFamilyDeclarationDirection::Input,
-        PortDirection::Output => PortFamilyDeclarationDirection::Output,
-    };
-    match declaration.refusal_of_its_keys(port_name, declaration_direction) {
-        Some(refusal) => Err(refusal),
-        None => Ok(declaration),
-    }
+    Err(format!(
+        "input port {:?} declares a pin default, and it declares no pin type the default is a \
+         value of",
+        port.name
+    ))
 }
 
 fn read_audio_window_contract(

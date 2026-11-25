@@ -3,6 +3,7 @@
 
 //! Node references under config keys, links to other streams, wide integers, interface and variable nodes, labelled groups and config-field inputs.
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
 
 const GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Gateway";
@@ -18,14 +19,8 @@ fn an_input_holding_a_node_reference(
     one_referrer_per_referenced_node: bool,
 ) -> crate::core::descriptors::PortDescriptor {
     use crate::core::descriptors::{PinDeclaration, PinType};
-    use crate::core::descriptors::{PortDescriptor, PortFamily, PortFamilyDeclaration};
-    PortDescriptor::new(
-        name,
-        "",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::NodeReference {
+    use crate::core::descriptors::{PortDescriptor};
+    PortDescriptor::new(name, "", false, PinDeclaration::exactly(PinType::NodeReference {
         referenced_node_type: Some(NodeClassImportPath::new(referenced_node_type).unwrap()),
         one_referrer_per_referenced_node,
     }))
@@ -387,18 +382,13 @@ const IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:I
 const PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:PacketsSink";
 
 fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamResolves {
-    use crate::core::descriptors::{PortDescriptor, PortFamily, PortFamilyDeclaration};
+    use crate::core::descriptors::{PortDescriptor};
     let node_types = NodeTypesOneStreamResolves::new();
     for (short_name, import_path, port) in [
         (
             "ImageSource",
             IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS,
-            PortDescriptor::new(
-                "video",
-                "",
-                false,
-                PortFamilyDeclaration::of_family(PortFamily::Image),
-            ),
+            PortDescriptor::new("video", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })),
         ),
         (
             "PacketsSink",
@@ -407,10 +397,7 @@ fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamRes
                 "encoded",
                 "",
                 false,
-                PortFamilyDeclaration {
-                    requires_codec: vec!["h264".into()],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                },
+                PinDeclaration::exactly(PinType::EncodedVideo { codecs: Vec::new() }),
             ),
         ),
     ] {
@@ -437,16 +424,16 @@ fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamRes
 }
 
 fn a_graph_offering_the_source_and_feeding_the_sink(
-    output_family: &str,
-    input_family: &str,
+    output_pin_type: &str,
+    input_pin_type: &str,
 ) -> GraphSnapshot {
     GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [
             {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
             {"name": "video", "type": "tatolab.stream:GraphOutput",
-             "input_values": {"port": "video", "family": output_family}},
+             "input_values": {"port": "video", "pin_type": {"type": output_pin_type}}},
             {"name": "encoded", "type": "tatolab.stream:GraphInput",
-             "input_values": {"port": "encoded", "family": input_family}},
+             "input_values": {"port": "encoded", "pin_type": {"type": input_pin_type}}},
             {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
         ],
         "links": [
@@ -460,31 +447,33 @@ fn a_graph_offering_the_source_and_feeding_the_sink(
 }
 
 #[test]
-fn interface_ports_of_the_family_their_linked_ports_carry_validate() {
-    a_graph_offering_the_source_and_feeding_the_sink("image", "packets")
+fn interface_ports_of_the_pin_type_their_linked_ports_carry_validate() {
+    a_graph_offering_the_source_and_feeding_the_sink("texture", "encoded_video")
         .validate(&node_types_with_an_image_source_and_a_packets_sink())
-        .expect("an Image Output, and a Packets Input into a sink requiring a codec, validate");
+        .expect("a Texture Output, and an EncodedVideo Input into an EncodedVideo sink, validate");
 }
 
 #[test]
-fn an_interface_port_of_another_family_than_its_linked_port_is_refused_naming_both() {
+fn an_interface_port_of_another_pin_type_than_its_linked_port_is_refused_naming_both() {
     let node_types = node_types_with_an_image_source_and_a_packets_sink();
-    let output_refusal = a_graph_offering_the_source_and_feeding_the_sink("array", "packets")
+    let output_refusal = a_graph_offering_the_source_and_feeding_the_sink("tensor", "encoded_video")
         .validate(&node_types)
         .unwrap_err()
         .to_string();
     assert!(
-        output_refusal.contains("`GraphOutput` node `video` declares `video` as Array")
-            && output_refusal.contains("source.video (Image)"),
+        output_refusal.contains("`GraphOutput` node `video`")
+            && output_refusal.contains("Tensor")
+            && output_refusal.contains("Texture"),
         "{output_refusal}"
     );
-    let input_refusal = a_graph_offering_the_source_and_feeding_the_sink("image", "records")
+    let input_refusal = a_graph_offering_the_source_and_feeding_the_sink("texture", "string")
         .validate(&node_types)
         .unwrap_err()
         .to_string();
     assert!(
-        input_refusal.contains("`GraphInput` node `encoded` declares `encoded` as Records")
-            && input_refusal.contains("sink.encoded (Packets)"),
+        input_refusal.contains("`GraphInput` node `encoded`")
+            && input_refusal.contains("String")
+            && input_refusal.contains("EncodedVideo"),
         "{input_refusal}"
     );
 }
@@ -492,7 +481,8 @@ fn an_interface_port_of_another_family_than_its_linked_port_is_refused_naming_bo
 #[test]
 fn an_interface_node_linked_to_a_port_its_node_does_not_have_is_refused_naming_the_ports() {
     let mut graph = serde_json::to_value(a_graph_offering_the_source_and_feeding_the_sink(
-        "image", "packets",
+        "texture",
+        "encoded_video",
     ))
     .unwrap();
     graph["links"][0]["source"]["port"] = serde_json::json!("vidoe");
@@ -512,7 +502,7 @@ fn a_variable_set_from_a_graph_input_validates() {
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [
             {"name": "encoded", "type": "tatolab.stream:GraphInput",
-             "input_values": {"port": "encoded", "family": "packets"}},
+             "input_values": {"port": "encoded", "pin_type": {"type": "encoded_video"}}},
             {"name": "set-encoded", "type": "tatolab.stream:SetVariable",
              "input_values": {"variable": "encoded"}},
             {"name": "get-encoded", "type": "tatolab.stream:GetVariable",
@@ -537,9 +527,9 @@ fn a_variable_set_from(held_node: &str, held_port: &str) -> GraphSnapshot {
         "nodes": [
             {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
             {"name": "video", "type": "tatolab.stream:GraphOutput",
-             "input_values": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
             {"name": "encoded", "type": "tatolab.stream:GraphInput",
-             "input_values": {"port": "encoded", "family": "packets"}},
+             "input_values": {"port": "encoded", "pin_type": {"type": "encoded_video"}}},
             {"name": "set-unread", "type": "tatolab.stream:SetVariable",
              "input_values": {"variable": "unread"}},
         ],
@@ -721,7 +711,7 @@ fn a_graph_whose_graph_input_drives_the_glows_strength(
              "type": GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS,
              "exposed_config_fields": exposed_config_fields},
             {"id": Uuid::new_v4(), "name": "glow_strength", "type": "tatolab.stream:GraphInput",
-             "input_values": {"port": "glow_strength", "family": "channels", "range": [0, 1]}},
+             "input_values": {"port": "glow_strength", "pin_type": {"type": "float"}, "range": [0, 1]}},
         ],
         "links": [
             {"source": {"node": "glow_strength", "port": "value"},
@@ -763,7 +753,7 @@ fn a_node_of_a_type_taking_no_config_opens_exposing_none_of_the_fields_it_was_sa
             {"id": Uuid::new_v4(), "name": "mixer", "type": typed.as_str(),
              "exposed_config_fields": ["gain", "alpha"]},
             {"id": Uuid::new_v4(), "name": "level", "type": "tatolab.stream:GraphInput",
-             "input_values": {"port": "level", "family": "channels", "range": [0, 1]}},
+             "input_values": {"port": "level", "pin_type": {"type": "float"}, "range": [0, 1]}},
         ],
         "links": [
             {"source": {"node": "level", "port": "value"},

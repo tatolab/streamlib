@@ -5,11 +5,7 @@
 //! whole refusal for each link `connect` refuses, and the outcome of each link it makes, while
 //! the graph, its document and the project's history are left as they were.
 
-use streamlib::sdk::descriptors::{
-    AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath,
-    NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{AudioWindowContract, DeclaredPinType, FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeKind, PinDeclaration, PinType, PortDescriptor};
 use streamlib_node_schema::pin_type::{PinLinkWarning, VectorComponentCount};
 
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
@@ -381,16 +377,8 @@ fn a_node_type_with_a_port_meaning(
     let short_name = node_type.as_str().rsplit(':').next().expect("a short name");
     let mut pin = PinDeclaration::exactly(pin_type.clone());
     pin.annotations.meaning = Some(meaning.to_owned());
-    let port = PortDescriptor::new(
-        port,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(
-            PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records),
-        ),
-    )
-    .with_delivery_profile("newest")
-    .with_pin_declaration(pin);
+    let port = PortDescriptor::new(port, "", true, pin)
+    .with_delivery_profile("newest");
     let descriptor = NodeDescriptor::new(
         NodeClassShortName::new(short_name).expect("a short name"),
         node_type,

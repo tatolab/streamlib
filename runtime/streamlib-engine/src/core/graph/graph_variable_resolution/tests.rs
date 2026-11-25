@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use super::*;
 
 fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
@@ -127,12 +128,12 @@ fn a_fragment_whose_tint_reads_the_variable_shade(
 ) -> serde_json::Value {
     let mut nodes = vec![
         serde_json::json!({"name": "source", "type": "tatolab.stream:GraphInput",
-                               "input_values": {"port": "video", "family": "image"}}),
+                               "input_values": {"port": "video", "pin_type": {"type": "texture"}}}),
         serde_json::json!({"name": "get-shade", "type": "tatolab.stream:GetVariable",
                                "input_values": {"variable": "shade"}}),
         serde_json::json!({"name": "tint", "type": "rig:Tint"}),
         serde_json::json!({"name": "out", "type": "tatolab.stream:GraphOutput",
-                               "input_values": {"port": "video", "family": "image"}}),
+                               "input_values": {"port": "video", "pin_type": {"type": "texture"}}}),
     ];
     nodes.extend(nodes_beside_the_tint.as_array().unwrap().iter().cloned());
     let mut links = vec![
@@ -295,7 +296,7 @@ fn a_variable_set_inside_a_fragment_leaves_it_through_a_graph_output() {
             {"name": "get-shade-out", "type": "tatolab.stream:GetVariable",
              "input_values": {"variable": "shade"}},
             {"name": "shade-out", "type": "tatolab.stream:GraphOutput",
-             "input_values": {"port": "shade", "family": "image"}},
+             "input_values": {"port": "shade", "pin_type": {"type": "texture"}}},
         ]),
         serde_json::json!([
             {"source": {"node": "palette", "port": "colour"},
@@ -435,21 +436,14 @@ fn a_get_read_as_the_kind_of_value_its_variable_does_not_hold_is_refused() {
 
 /// A stream that described `rig:Display`, which has an input `source`.
 fn node_types_describing_a_display_with_an_input_named_source() -> NodeTypesOneStreamResolves {
-    use crate::core::descriptors::{
-        NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    };
+    use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
     let node_types = NodeTypesOneStreamResolves::new();
     let descriptor = NodeDescriptor::new(
         NodeClassShortName::new("Display").unwrap(),
         NodeClassImportPath::new("rig:Display").unwrap(),
         "variable resolution test",
     )
-    .with_input(PortDescriptor::new(
-        "source",
-        "what the display shows",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    ));
+    .with_input(PortDescriptor::new("source", "what the display shows", false, PinDeclaration::exactly(PinType::String {})));
     node_types
         .register_a_type_described_in_this_streams_node_interpreter(
             descriptor,
@@ -841,9 +835,7 @@ fn a_drawn_link_read_through_a_variable_says_what_its_running_link_converts_and_
 #[test]
 fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_of_its_setters_type()
  {
-    use crate::core::descriptors::{
-        PinDeclaration, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    };
+    use crate::core::descriptors::{PinDeclaration, PinType, PortDescriptor};
     let graph = serde_json::json!({
         "nodes": [
             {"name": "level", "type": "rig:Meter"},
@@ -862,13 +854,7 @@ fn a_gets_variable_renders_as_a_menu_of_the_variables_it_may_read_and_its_value_
         ]
     });
     let resolution = resolved(graph).unwrap();
-    let amount = PortDescriptor::new(
-        "amount",
-        "How loud it is.",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Channels),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }));
+    let amount = PortDescriptor::new("amount", "How loud it is.", false, PinDeclaration::exactly(PinType::Float { exact_size: None }));
     let mut level = a_rendered_node("level");
     level.ports.outputs = vec![GraphNodePortOnTheWire::from(&PortInfo::from(&amount))];
     let mut graph_response = GraphResponse {

@@ -14,16 +14,8 @@ use super::connect_on_a_test_thread::{
 };
 use super::{ALinkConnected, the_verdict_connect_takes_on_a_link};
 use crate::core::compiler::Compiler;
-use crate::core::descriptors::{
-    FreePinConversion, FunctionNodeLanguage, NamedPinTypeImportPath, NodeClassImportPath,
-    NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, OutputPortDeclaredNames,
-    PinDeclaration, PinFlow, PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime, TexturePixelFormat,
-};
-use crate::core::graph::{
-    InputLinkPortRef, NodeRunId, OutputLinkPortRef,
-    refuse_input_values_a_wired_link_out_of_the_node_would_refuse,
-};
+use crate::core::descriptors::{FreePinConversion, FunctionNodeLanguage, DeclaredPinType, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind, PinDeclaration, PinFlow, PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor, SettingReadTime, TexturePixelFormat};
+use crate::core::graph::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};
 
@@ -48,21 +40,11 @@ const KELVIN_SINK: &str = "VerdictCheckKelvinSink";
 const CELSIUS_TO_FAHRENHEIT: &str = "VerdictCheckCelsiusToFahrenheit";
 const KELVIN_TO_RANKINE: &str = "VerdictCheckKelvinToRankine";
 const DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS: &str = "VerdictCheckDescribedOnlyFahrenheitToCelsius";
-const ENCODER_CODEC_FROM_CONFIG: &str = "VerdictCheckEncoderCodecFromConfig";
-const H264_SINK: &str = "VerdictCheckH264Sink";
-const NAMED_RECORDS_SOURCE: &str = "VerdictCheckNamedRecordsSource";
-const RECORDS_PASSTHROUGH: &str = "VerdictCheckRecordsPassthrough";
-const RECORDS_NEEDING_X: &str = "VerdictCheckRecordsNeedingX";
-const RECORDS_NEEDING_Z: &str = "VerdictCheckRecordsNeedingZ";
+const PASSTHROUGH: &str = "VerdictCheckPassthrough";
 const RGBA_OR_NV12_TEXTURE_SOURCE: &str = "VerdictCheckRgbaOrNv12TextureSource";
 const TEXTURE_PASSTHROUGH: &str = "VerdictCheckTexturePassthrough";
 const RGBA_TEXTURE_SINK: &str = "VerdictCheckRgbaTextureSink";
 const ANY_TEXTURE_SINK: &str = "VerdictCheckAnyTextureSink";
-const UNTYPED_RGBA_PICTURE_SINK: &str = "VerdictCheckUntypedRgbaPictureSink";
-const DELISLE_SOURCE: &str = "VerdictCheckDelisleSource";
-const DELISLE_TO_NEWTON_NAMING_IMAGE: &str = "VerdictCheckDelisleToNewtonNamingImage";
-const NEWTON_SINK_NEEDING_IMAGE: &str = "VerdictCheckNewtonSinkNeedingImage";
-const NEWTON_SINK_NEEDING_DEPTH: &str = "VerdictCheckNewtonSinkNeedingDepth";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -80,9 +62,7 @@ fn float() -> PinType {
 }
 
 fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
-    let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
-    PortDescriptor::new(name, name, true, PortFamilyDeclaration::of_family(family))
-        .with_pin_declaration(PinDeclaration::exactly(pin_type))
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(pin_type))
 }
 
 /// A port carrying `pin_type` that flows as a stream of values, never as a held value.
@@ -94,24 +74,27 @@ fn a_streamed_port(name: &str, pin_type: PinType) -> PortDescriptor {
     port
 }
 
-/// A Texture port stating `pixel_formats`, by its pin type and by its family as a declaration of
-/// an Image port states both.
-fn a_texture_port(name: &str, pixel_formats: &[TexturePixelFormat]) -> PortDescriptor {
-    PortDescriptor {
-        family: PortFamilyDeclaration {
-            formats: pixel_formats
-                .iter()
-                .map(|format| format.wire_name().to_owned())
-                .collect(),
-            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+/// A port declaring `pin_type`: any type, or the type linked into one of its node's inputs.
+fn a_port_declaring(name: &str, pin_type: DeclaredPinType) -> PortDescriptor {
+    PortDescriptor::new(
+        name,
+        name,
+        true,
+        PinDeclaration {
+            pin_type,
+            ..PinDeclaration::exactly(PinType::String {})
         },
-        ..a_typed_port(
-            name,
-            PinType::Texture {
-                pixel_formats: pixel_formats.to_vec(),
-            },
-        )
-    }
+    )
+}
+
+/// A Texture port stating `pixel_formats`.
+fn a_texture_port(name: &str, pixel_formats: &[TexturePixelFormat]) -> PortDescriptor {
+    a_typed_port(
+        name,
+        PinType::Texture {
+            pixel_formats: pixel_formats.to_vec(),
+        },
+    )
 }
 
 fn register(descriptor: NodeDescriptor) {
@@ -233,72 +216,16 @@ fn register_the_verdict_fixture_node_types() {
             )
             .stating_a_conversion(),
         );
-        let encoded_video = || PinType::EncodedVideo { codecs: Vec::new() };
         register(a_node_type(
-            class_path(ENCODER_CODEC_FROM_CONFIG),
-            Vec::new(),
-            vec![PortDescriptor {
-                family: PortFamilyDeclaration {
-                    codec_from_config_key: Some("codec".to_owned()),
-                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                },
-                ..a_typed_port("packets", encoded_video())
-            }],
-        ));
-        register(a_node_type(
-            class_path(H264_SINK),
-            vec![PortDescriptor {
-                family: PortFamilyDeclaration {
-                    requires_codec: vec!["h264".to_owned()],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
-                },
-                ..a_typed_port("packets", encoded_video())
-            }],
-            Vec::new(),
-        ));
-        let records = |name: &str, family: PortFamilyDeclaration| PortDescriptor {
-            family,
-            ..a_typed_port(name, PinType::String {})
-        };
-        let of_records = || PortFamilyDeclaration::of_family(PortFamily::Records);
-        register(a_node_type(
-            class_path(NAMED_RECORDS_SOURCE),
-            Vec::new(),
-            vec![records(
-                "records",
-                PortFamilyDeclaration {
-                    names: Some(OutputPortDeclaredNames::Stated(vec![
-                        "x".to_owned(),
-                        "y".to_owned(),
-                    ])),
-                    ..of_records()
-                },
-            )],
-        ));
-        register(a_node_type(
-            class_path(RECORDS_PASSTHROUGH),
-            vec![records("in", of_records())],
-            vec![records(
+            class_path(PASSTHROUGH),
+            vec![a_port_declaring("in", DeclaredPinType::Any)],
+            vec![a_port_declaring(
                 "out",
-                PortFamilyDeclaration {
-                    family_follows_input_port: Some("in".to_owned()),
-                    ..of_records()
+                DeclaredPinType::SameAsInput {
+                    input_port_name: "in".to_owned(),
                 },
             )],
         ));
-        for (sink, required) in [(RECORDS_NEEDING_X, "x"), (RECORDS_NEEDING_Z, "z")] {
-            register(a_node_type(
-                class_path(sink),
-                vec![records(
-                    "records",
-                    PortFamilyDeclaration {
-                        requires: vec![required.to_owned()],
-                        ..of_records()
-                    },
-                )],
-                Vec::new(),
-            ));
-        }
         use TexturePixelFormat::{Nv12, Rgba8Unorm};
         register(a_node_type(
             class_path(RGBA_OR_NV12_TEXTURE_SOURCE),
@@ -308,13 +235,12 @@ fn register_the_verdict_fixture_node_types() {
         register(a_node_type(
             class_path(TEXTURE_PASSTHROUGH),
             vec![a_texture_port("in", &[])],
-            vec![PortDescriptor {
-                family: PortFamilyDeclaration {
-                    family_follows_input_port: Some("in".to_owned()),
-                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+            vec![a_port_declaring(
+                "out",
+                DeclaredPinType::SameAsInput {
+                    input_port_name: "in".to_owned(),
                 },
-                ..a_texture_port("out", &[])
-            }],
+            )],
         ));
         register(a_node_type(
             class_path(RGBA_TEXTURE_SINK),
@@ -322,59 +248,10 @@ fn register_the_verdict_fixture_node_types() {
             Vec::new(),
         ));
         register(a_node_type(
-            class_path(UNTYPED_RGBA_PICTURE_SINK),
-            vec![PortDescriptor::new(
-                "video",
-                "video",
-                true,
-                PortFamilyDeclaration {
-                    formats: vec![Rgba8Unorm.wire_name().to_owned()],
-                    also_takes_families: vec![PortFamily::Records],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
-                },
-            )],
-            Vec::new(),
-        ));
-        register(a_node_type(
             class_path(ANY_TEXTURE_SINK),
             vec![a_texture_port("video", &[])],
             Vec::new(),
         ));
-        register(a_node_type(
-            class_path(DELISLE_SOURCE),
-            Vec::new(),
-            vec![a_typed_port("temperature", temperature("Delisle"))],
-        ));
-        register_with_a_constructor(
-            a_node_type(
-                NodeClassImportPath::of_built_in_node(DELISLE_TO_NEWTON_NAMING_IMAGE),
-                vec![a_typed_port("delisle", temperature("Delisle"))],
-                vec![PortDescriptor {
-                    family: PortFamilyDeclaration {
-                        names: Some(OutputPortDeclaredNames::Stated(vec!["image".to_owned()])),
-                        ..of_records()
-                    },
-                    ..a_typed_port("newton", temperature("Newton"))
-                }],
-            )
-            .stating_a_conversion(),
-        );
-        for (sink, required) in [
-            (NEWTON_SINK_NEEDING_IMAGE, "image"),
-            (NEWTON_SINK_NEEDING_DEPTH, "depth"),
-        ] {
-            register(a_node_type(
-                class_path(sink),
-                vec![PortDescriptor {
-                    family: PortFamilyDeclaration {
-                        requires: vec![required.to_owned()],
-                        ..of_records()
-                    },
-                    ..a_typed_port("temperature", temperature("Newton"))
-                }],
-                Vec::new(),
-            ));
-        }
         register(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
@@ -431,8 +308,6 @@ fn a_float_into_an_integer_connects_with_a_free_conversion() {
     assert_eq!(the_links_in(&compiler), 1);
 }
 
-/// Mental-revert: judging the pair by its families alone refuses it as Channels into Records
-/// with the family check's words, never as a refusal by pin types naming Float and String.
 #[test]
 fn two_typed_pins_no_rule_connects_are_refused_naming_both_types() {
     register_the_verdict_fixture_node_types();
@@ -658,77 +533,12 @@ fn a_conversion_no_node_of_which_can_be_created_is_never_offered() {
     );
 }
 
-/// An output whose codec its node's config names is judged by that codec, typed or not: into an
-/// input requiring h264, an h264 encoder connects and an h265 one is refused.
-///
-/// Mental-revert: judging the two typed ends by the verdict alone connects both.
-#[test]
-fn a_typed_output_whose_config_names_its_codec_is_judged_by_that_codec() {
-    register_the_verdict_fixture_node_types();
-    for (codec, connects) in [("h264", true), ("h265", false)] {
-        let compiler = Arc::new(Compiler::new());
-        let source = a_node_configured(
-            &compiler,
-            class_path(ENCODER_CODEC_FROM_CONFIG),
-            serde_json::json!({ "codec": codec }),
-        );
-        let sink = a_node_of(&compiler, class_path(H264_SINK));
-        let connected = connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::new(source, "packets"),
-            InputLinkPortRef::new(sink, "packets"),
-        );
-        match (connected, connects) {
-            (Ok(_), true) => {}
-            (Err(Error::InvalidLink(words)), false) => {
-                assert!(words.contains("requires a codec in"), "{words}");
-            }
-            (outcome, _) => panic!("an {codec} encoder into an h264 input: {outcome:?}"),
-        }
-    }
-}
-
-/// A typed output whose family follows an input carries the names of what arrives there, so it
-/// is judged on the family check: the upstream names `x` and `y` reach an input requiring `x`,
-/// and not one requiring `z`.
-///
-/// Mental-revert: reading the following output's own declaration refuses both, as stating no
-/// names.
-#[test]
-fn a_typed_output_whose_family_follows_an_input_is_judged_by_what_it_carries_on() {
-    register_the_verdict_fixture_node_types();
-    for (sink_type, connects) in [(RECORDS_NEEDING_X, true), (RECORDS_NEEDING_Z, false)] {
-        let compiler = Arc::new(Compiler::new());
-        let source = a_node_of(&compiler, class_path(NAMED_RECORDS_SOURCE));
-        let passthrough = a_node_of(&compiler, class_path(RECORDS_PASSTHROUGH));
-        let sink = a_node_of(&compiler, class_path(sink_type));
-        connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::new(source, "records"),
-            InputLinkPortRef::new(passthrough.clone(), "in"),
-        )
-        .expect("the source feeds the passthrough");
-        let connected = connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::new(passthrough, "out"),
-            InputLinkPortRef::new(sink, "records"),
-        );
-        match (connected, connects) {
-            (Ok(_), true) => {}
-            (Err(Error::InvalidLink(words)), false) => {
-                assert!(words.contains("\"z\""), "{words}");
-            }
-            (outcome, _) => panic!("the passthrough into {sink_type}: {outcome:?}"),
-        }
-    }
-}
-
-/// A link a saved graph holds whose pin types alone refuse it is kept when its ports' families
-/// take it, its names, codec and formats with them; a stream into a setting is refused still.
+/// A link a saved graph holds whose pin types alone refuse it is kept when both its ends travel as
+/// one kind of message; a stream into a setting is refused still.
 ///
 /// Mental-revert: judging a saved graph's link as one made now refuses the temperatures.
 #[test]
-fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take_it() {
+fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_both_ends_travel_as_one_message() {
     register_the_verdict_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let source = a_node_of(&compiler, class_path(KELVIN_SOURCE));
@@ -740,7 +550,7 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
         InputLinkPortRef::new(sink, "temperature"),
         ALinkConnected::OfASavedGraph,
     )
-    .expect("a saved link both ends' families take is kept");
+    .expect("a saved link whose ends travel as one kind of message is kept");
     assert_eq!(the_links_in(&compiler), 1);
 
     let level = a_node_of(&compiler, class_path(FLOAT_STREAM_SOURCE));
@@ -891,46 +701,3 @@ fn the_verdict_connect_takes_on_a_link_is_what_connect_acts_on_and_makes_nothing
     assert_eq!(the_links_in(&compiler), 0);
 }
 
-/// A link a built-in conversion bridges answers its convert node only when each of the two
-/// links through it carries the names the end it feeds requires, as connect judges each once
-/// the node is made: the conversion's output states `image`, so an input requiring `image` is
-/// fed through it, and one requiring `depth` is refused naming the missing name.
-///
-/// Mental-revert: judging the two links through the convert node by their islands alone answers
-/// the node for the input requiring `depth`, which the transaction's own connect then refuses.
-#[test]
-fn a_convert_node_is_answered_only_when_both_its_links_carry_the_names_required() {
-    register_the_verdict_fixture_node_types();
-    let compiler = Arc::new(Compiler::new());
-    let delisle_source = a_node_of(&compiler, class_path(DELISLE_SOURCE));
-    let needing_image = a_node_of(&compiler, class_path(NEWTON_SINK_NEEDING_IMAGE));
-    let needing_depth = a_node_of(&compiler, class_path(NEWTON_SINK_NEEDING_DEPTH));
-
-    let verdict = the_verdict_connect_takes_on_a_link(
-        &compiler,
-        OutputLinkPortRef::new(delisle_source.clone(), "temperature"),
-        InputLinkPortRef::new(needing_image, "temperature"),
-    )
-    .expect("the conversion's output states the `image` the input requires")
-    .expect("two typed ends have a verdict");
-    let PinLinkOutcome::ConnectsThroughConvertNode(convert_node) = &verdict.outcome else {
-        panic!("a built-in conversion bridges the ends: {verdict:?}");
-    };
-    assert_eq!(
-        convert_node.conversion.node_type,
-        NodeClassImportPath::of_built_in_node(DELISLE_TO_NEWTON_NAMING_IMAGE)
-    );
-
-    match the_verdict_connect_takes_on_a_link(
-        &compiler,
-        OutputLinkPortRef::new(delisle_source, "temperature"),
-        InputLinkPortRef::new(needing_depth, "temperature"),
-    ) {
-        Err(Error::InvalidLink(words)) => {
-            assert!(words.contains("requires [\"depth\"]"), "{words}");
-            assert!(words.contains(DELISLE_TO_NEWTON_NAMING_IMAGE), "{words}");
-        }
-        other => panic!("the link out of the convert node lacks `depth`: {other:?}"),
-    }
-    assert_eq!(the_links_in(&compiler), 0);
-}

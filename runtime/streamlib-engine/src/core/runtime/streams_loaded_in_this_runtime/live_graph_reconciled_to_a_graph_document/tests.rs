@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::runtime::a_project_on_disk_for_a_test::{
     THE_NAME_OF_A_PROJECT_ON_DISK_FOR_A_TEST, options_loading_a_stream_of_the_test_project_at,
     options_loading_a_stream_of_the_test_project_in,
@@ -110,10 +111,6 @@ const PICTURE_SOURCE_OF_ONE_FORMAT: &str = "SavedLinkCheckPictureSourceOfOneForm
 const PICTURE_SINK_OF_ANOTHER_FORMAT: &str = "SavedLinkCheckPictureSinkOfAnotherFormat";
 const PICTURE_SINK_OF_THE_SECOND_FORMAT: &str = "SavedLinkCheckPictureSinkOfTheSecondFormat";
 const LEVEL_SOURCE: &str = "SavedLinkCheckLevelSource";
-const FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS: &str = "SavedLinkCheckFamilyPictureSourceOfTwoFormats";
-const UNTYPED_PICTURE_SINK_OF_ONE_FORMAT: &str = "SavedLinkCheckUntypedPictureSinkOfOneFormat";
-const ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT: &str =
-    "SavedLinkCheckAnotherUntypedPictureSinkOfOneFormat";
 
 fn a_saved_link_fixture_type(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -124,31 +121,12 @@ fn a_saved_link_fixture_type(class_name: &str) -> NodeClassImportPath {
 /// source whose output carries the name of the sinks' input, each with a constructor no test
 /// reaches.
 fn register_the_saved_link_fixture_node_types() {
-    use crate::core::descriptors::{
-        NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor, PortFamily,
-        PortFamilyDeclaration, TexturePixelFormat,
-    };
+    use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor, TexturePixelFormat};
     use crate::core::nodes::NODE_REGISTRY;
     static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
     REGISTERED_ONCE_PER_PROCESS.call_once(|| {
         let picture = |pin_type: PinType| {
-            let family = PortFamily::carrying(&pin_type).expect("a typed port has a family");
-            PortDescriptor::new(
-                "picture",
-                "picture",
-                true,
-                PortFamilyDeclaration::of_family(family),
-            )
-            .with_pin_declaration(PinDeclaration::exactly(pin_type))
-        };
-        let picture_of_family =
-            |family: PortFamilyDeclaration| PortDescriptor::new("picture", "picture", true, family);
-        // An input that takes Records besides Images states no exact pin type, so a link into
-        // it is judged by the family check alone.
-        let untyped_picture_of_one_format = || PortFamilyDeclaration {
-            formats: vec!["bgra8_unorm".to_owned()],
-            also_takes_families: vec![PortFamily::Records],
-            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+            PortDescriptor::new("picture", "picture", true, PinDeclaration::exactly(pin_type))
         };
         let texture = |pixel_formats: &[TexturePixelFormat]| PinType::Texture {
             pixel_formats: pixel_formats.to_vec(),
@@ -176,16 +154,6 @@ fn register_the_saved_link_fixture_node_types() {
             node_type(PICTURE_SINK_OF_THE_SECOND_FORMAT)
                 .with_input(picture(texture(&[TexturePixelFormat::Rgba8Unorm]))),
             node_type(LEVEL_SOURCE).with_output(picture(PinType::Float { exact_size: None })),
-            node_type(FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS).with_output(picture_of_family(
-                PortFamilyDeclaration {
-                    formats: vec!["bgra8_unorm".to_owned(), "rgba8_unorm".to_owned()],
-                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
-                },
-            )),
-            node_type(UNTYPED_PICTURE_SINK_OF_ONE_FORMAT)
-                .with_input(picture_of_family(untyped_picture_of_one_format())),
-            node_type(ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT)
-                .with_input(picture_of_family(untyped_picture_of_one_format())),
         ] {
             NODE_REGISTRY
                 .register_with_a_constructor_for_a_test(
@@ -239,7 +207,7 @@ fn reconcile_making(
         ))
 }
 
-/// A saved link its pin types refuse and its families take, a picture of two formats into an
+/// A saved link its pin types refuse whose ends travel as one message, a picture of two formats into an
 /// input taking one, is kept by a load and by a reconcile of a saved document, and by an edit
 /// that remakes it into a node it replaces; an edit making it anew is refused as `connect` is.
 ///
@@ -333,87 +301,10 @@ fn a_saved_link_its_pin_types_refuse_is_kept_and_an_edit_making_it_anew_is_refus
     assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
 }
 
-/// A saved link into an untyped picture input that does not read every format the output
-/// states, judged by the family check alone, is kept by a load, by an edit that remakes it into
-/// a node it replaces whose ports are judged as the first's were, and by a reconcile of a saved
-/// document; an edit making it anew is refused as `connect` is.
-///
-/// Mental-revert: recording at the start of a reconcile only the links whose pin types refuse
-/// them refuses the edit replacing the sink.
+/// A saved link whose ends travel as two kinds of message is refused by a load.
 #[test]
 #[serial]
-fn a_saved_link_its_formats_alone_refuse_on_the_family_check_is_kept_by_a_reconcile() {
-    ensure_test_mocks_registered();
-    register_the_saved_link_fixture_node_types();
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().expect("Runner::new");
-    let the_picture_link = vec![format!("{NODE_A}/picture -> {NODE_B}/picture")];
-    let stream = a_stream_loaded_from(
-        &runner,
-        &project_directory,
-        a_document_of_a_picture_link(
-            FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
-            UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
-            true,
-        ),
-    );
-    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
-
-    reconcile_making(
-        &stream,
-        a_document_of_a_picture_link(
-            FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
-            ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
-            true,
-        ),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-    )
-    .expect("an edit replacing the sink remakes the link the live graph held");
-    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
-
-    reconcile_making(
-        &stream,
-        a_document_of_a_picture_link(
-            FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
-            ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
-            false,
-        ),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-    )
-    .expect("taking the link out is an edit");
-    assert!(the_live_graph_by_node_uuid(&stream).1.is_empty());
-
-    let linked = a_document_of_a_picture_link(
-        FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
-        ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
-        true,
-    );
-    let refusal = reconcile_making(
-        &stream,
-        linked.clone(),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-    )
-    .expect_err("an edit making the link anew is judged as connect judges it");
-    assert!(
-        refusal
-            .to_string()
-            .contains("may write [\"rgba8_unorm\"], which"),
-        "{refusal}"
-    );
-
-    reconcile_making(
-        &stream,
-        linked,
-        LinksAReconcileMakes::EachAsASavedGraphsLink,
-    )
-    .expect("a reconcile of a saved document keeps the link");
-    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
-}
-
-/// A saved link whose ports' families do not match is refused by a load.
-#[test]
-#[serial]
-fn a_saved_link_whose_families_do_not_match_is_refused_by_a_load() {
+fn a_saved_link_whose_ends_travel_as_two_kinds_of_message_is_refused_by_a_load() {
     ensure_test_mocks_registered();
     register_the_saved_link_fixture_node_types();
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -429,7 +320,7 @@ fn a_saved_link_whose_families_do_not_match_is_refused_by_a_load() {
             options_loading_a_stream_of_the_test_project_at(project_directory.path(), "main"),
         )
         .err()
-        .expect("a Float into a Texture is refused by its families too");
+        .expect("a Float into a Texture is refused");
     assert!(
         refusal
             .to_string()
@@ -439,7 +330,7 @@ fn a_saved_link_whose_families_do_not_match_is_refused_by_a_load() {
 }
 
 /// An edit that replaces the sink of a link its pin types connect with one whose pin types
-/// refuse it, though its families take it, is refused as `connect` refuses the link.
+/// refuse it is refused as `connect` refuses the link.
 ///
 /// Mental-revert: keeping each link the live graph held when an edit remakes it keeps this one.
 #[test]
@@ -474,8 +365,7 @@ fn an_edit_replacing_a_sink_with_one_the_pin_types_refuse_is_refused() {
 }
 
 /// A saved link its pin types refuse, kept by a load, is refused when an edit remakes it into a
-/// sink whose pin types differ from the one it replaces, though they refuse it as well and the
-/// families still take it: the verdict's question is a new one.
+/// sink whose pin types differ from the one it replaces, though they refuse it as well: the verdict's question is a new one.
 ///
 /// Mental-revert: keeping each link the live graph held so when an edit remakes it, whatever
 /// its ends' pin types now, keeps this one.
@@ -515,7 +405,7 @@ fn an_edit_remaking_a_kept_saved_link_into_a_sink_of_other_pin_types_is_refused(
         into_the_second_format,
         LinksAReconcileMakes::EachAsASavedGraphsLink,
     )
-    .expect("the families take the link a saved document holds");
+    .expect("a reconcile of a saved document keeps the link");
     assert_eq!(the_live_graph_by_node_uuid(&stream).1.len(), 1);
 }
 
@@ -699,7 +589,7 @@ fn a_describe_answer_of(described_node_types: &[(&NodeClassImportPath, &str)]) -
                 "scheduling_priority": null,
                 "paced_by_real_time": false,
                 "config_schema": {"type": "object"},
-                "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}, "delivery_profile": "newest"}],
+                "input_ports": [{"name": input_port, "description": "", "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}}, "flow": "stream"}, "delivery_profile": "newest"}],
                 "output_ports": [],
             }))
             .collect::<Vec<_>>(),
@@ -795,10 +685,7 @@ const NODE_C: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 /// A function node type of this stream, `switch`, whose `result` carries Records, beside the
 /// natively compiled mocks, which run in the app process.
 fn a_function_node_type_of_records_registered_in(stream: &LoadedStreamInThisRuntime) -> String {
-    use crate::core::descriptors::{
-        FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor,
-        PortFamily, PortFamilyDeclaration,
-    };
+    use crate::core::descriptors::{FunctionNodeLanguage, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor};
     let switch_type = format!("{}::Switch", module_path!());
     let mut switch = NodeDescriptor::new(
         NodeClassShortName::new("Switch").unwrap(),
@@ -806,12 +693,7 @@ fn a_function_node_type_of_records_registered_in(stream: &LoadedStreamInThisRunt
         "a fixture",
     )
     .with_output(
-        PortDescriptor::new(
-            "result",
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Records),
-        )
+        PortDescriptor::new("result", "", true, PinDeclaration::exactly(PinType::String {}))
         .with_delivery_profile("newest"),
     );
     switch.node_kind = NodeKind::Function {

@@ -6,10 +6,7 @@
 //! in the stream's graph, the node keeps one empty slot after it, and one undo puts every link
 //! back in its slot.
 
-use streamlib::sdk::descriptors::{
-    NodeClassImportPath, NodeClassShortName, PinDeclaration, PinGroupDescriptor, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{NodeClassImportPath, NodeClassShortName, PinDeclaration, PinGroupDescriptor, PinType, PortDescriptor};
 
 use super::*;
 
@@ -23,14 +20,8 @@ const SOURCE_UUIDS: [&str; 3] = [
 ];
 
 fn a_float_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
+    PortDescriptor::new(name, "", true, PinDeclaration::exactly(PinType::Float { exact_size: None }))
     .with_delivery_profile("newest")
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }))
 }
 
 fn a_node_type(node_type: &str) -> NodeDescriptor {

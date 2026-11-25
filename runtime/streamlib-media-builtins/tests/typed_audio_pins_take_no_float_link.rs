@@ -8,10 +8,7 @@
 
 use std::sync::Arc;
 
-use streamlib::sdk::descriptors::{
-    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
-    PortDescriptor, PortFamily, PortFamilyDeclaration,
-};
+use streamlib::sdk::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
@@ -20,13 +17,7 @@ use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner};
 use streamlib_media_builtins::{AudioToTensor, TensorToAudio, register_media_builtin_node_types};
 
 fn a_float_port(name: &str) -> PortDescriptor {
-    PortDescriptor::new(
-        name,
-        "a Float",
-        false,
-        PortFamilyDeclaration::of_family(PortFamily::Channels),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::Float { exact_size: None }))
+    PortDescriptor::new(name, "a Float", false, PinDeclaration::exactly(PinType::Float { exact_size: None }))
 }
 
 fn a_fixture_node_type(class_name: &str) -> NodeDescriptor {

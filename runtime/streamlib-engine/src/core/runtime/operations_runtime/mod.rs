@@ -881,7 +881,7 @@ mod inline_commit_thread_guard_tests;
 mod connect_wires_a_matching_link_in_silence_tests;
 
 #[cfg(test)]
-mod connect_refuses_ports_whose_families_do_not_match_tests;
+mod connect_refuses_a_link_its_pin_types_refuse_through_passers_tests;
 
 #[cfg(test)]
 mod connect_on_a_test_thread;

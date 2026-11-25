@@ -164,22 +164,8 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> NodeClassImpo
         import_path.clone(),
         "app-sugar connect test",
     )
-    .with_input(PortDescriptor::new(
-        input,
-        "",
-        false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
-    ))
-    .with_output(PortDescriptor::new(
-        output,
-        "",
-        false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
-    ));
+    .with_input(PortDescriptor::new(input, "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })))
+    .with_output(PortDescriptor::new(output, "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
     let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

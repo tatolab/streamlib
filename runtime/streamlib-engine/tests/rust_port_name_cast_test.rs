@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #![deny(non_camel_case_types)]
+use streamlib::sdk::descriptors::{PinDeclaration, PinType};
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
@@ -53,14 +54,7 @@ fn video_sink_registered() -> NodeClassImportPath {
         import_path.clone(),
         "rust port name cast test",
     )
-    .with_input(PortDescriptor::new(
-        "video_in",
-        "",
-        false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
-    ));
+    .with_input(PortDescriptor::new("video_in", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
     match NODE_REGISTRY.register_descriptor_only(descriptor) {
         // Registered by an earlier test in this binary.
         Ok(()) | Err(Error::Configuration(_)) => {}
@@ -131,14 +125,7 @@ fn a_hand_built_descriptor_with_a_port_name_not_cast_is_refused_by_name() {
         import_path.clone(),
         "rust port name cast test",
     )
-    .with_output(PortDescriptor::new(
-        "videoOut",
-        "",
-        false,
-        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
-            streamlib::sdk::descriptors::PortFamily::Image,
-        ),
-    ));
+    .with_output(PortDescriptor::new("videoOut", "", false, PinDeclaration::exactly(PinType::Texture { pixel_formats: Vec::new() })));
 
     match NODE_REGISTRY.register_descriptor_only(descriptor) {
         Err(Error::DescriptorPortNameNotCast {

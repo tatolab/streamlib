@@ -46,7 +46,7 @@ fn blur_then_tint_fragment() -> serde_json::Value {
     serde_json::json!({
         "nodes": [
             {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
-             "input_values": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
             {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur",
              "input_values": {"radius": 8}},
             {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE,
@@ -55,7 +55,7 @@ fn blur_then_tint_fragment() -> serde_json::Value {
                  "label_shaped_like_a_reference": {"node": "blur"},
              }},
             {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE,
-             "input_values": {"port": "video", "family": "image"}},
+             "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
         ],
         "links": [
             {"source": {"node": "source", "port": "value"},
@@ -77,13 +77,13 @@ fn a_camera_through_look_holding_soft_into_a_display() -> serde_json::Value {
              "fragment": {
                  "nodes": [
                      {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
-                      "input_values": {"port": "video", "family": "image"}},
+                      "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
                      {"id": SOFT_UUID, "name": "soft",
                       "type": "looks.generators:blur_then_tint",
                       "input_values": {"radius": 8},
                       "fragment": blur_then_tint_fragment()},
                      {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE,
-                      "input_values": {"port": "video", "family": "image"}},
+                      "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
                  ],
                  "links": [
                      {"source": {"node": "source", "port": "value"},
@@ -565,7 +565,7 @@ fn a_camera_into_look_feeding_blur_and_tint() -> serde_json::Value {
              "fragment": {
                  "nodes": [
                      {"name": "source", "type": GRAPH_INPUT_NODE_TYPE,
-                      "input_values": {"port": "video", "family": "image"}},
+                      "input_values": {"port": "video", "pin_type": {"type": "texture"}}},
                      {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur"},
                      {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE},
                  ],

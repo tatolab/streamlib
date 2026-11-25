@@ -176,8 +176,8 @@ mod tests {
 
         use super::super::{DeliveryProfile, delivery_profile_for_input_port};
         use crate::core::descriptors::{
-            NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
-            PortFamilyDeclaration,
+            NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration, PinType,
+            PortDescriptor,
         };
         use crate::core::error::Error;
         use crate::core::nodes::{NODE_REGISTRY, NodeTypesOneStreamResolves};
@@ -189,15 +189,13 @@ mod tests {
         fn a_node_type_with_one_input_port(
             type_name: &str,
             port_name: &str,
-            family: PortFamily,
+            pin_type: Option<PinType>,
             declared_profile: Option<&str>,
         ) -> NodeDescriptor {
-            let mut port = PortDescriptor::new(
-                port_name,
-                "input",
-                true,
-                PortFamilyDeclaration::of_family(family),
-            );
+            let mut port = PortDescriptor {
+                pin_declaration: pin_type.map(PinDeclaration::exactly),
+                ..PortDescriptor::a_setting_of_no_pin_type(port_name, "input")
+            };
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }
@@ -218,7 +216,9 @@ mod tests {
             let descriptor = a_node_type_with_one_input_port(
                 type_name,
                 port_name,
-                PortFamily::Image,
+                Some(PinType::Texture {
+                    pixel_formats: Vec::new(),
+                }),
                 declared_profile,
             );
             let import_path = descriptor.node_class_import_path.clone();
@@ -282,7 +282,7 @@ mod tests {
             let descriptor = a_node_type_with_one_input_port(
                 "SampleSink",
                 "records_in",
-                PortFamily::Records,
+                None,
                 None,
             );
             let ident = descriptor.node_class_import_path.clone();

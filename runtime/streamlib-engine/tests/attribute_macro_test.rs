@@ -380,18 +380,12 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
 
 #[streamlib::sdk::node(
     execution = manual,
-    input("signals", delivery_profile = "ordered", pin_type = Audio, requires = ["rpm"]),
-    output(
-        "telemetry",
-        pin_type = Audio,
-        names = from_setting("channel_names"),
-        rate = 48000,
-        dtype = "f64"
-    ),
+    input("signals", delivery_profile = "ordered", pin_type = Audio),
+    output("telemetry", pin_type = Audio, rate = 48000, dtype = "f64"),
 )]
-pub struct PortFamilyTestNode;
+pub struct StreamFactsTestNode;
 
-impl streamlib_engine::ManualNode for PortFamilyTestNode::Node {
+impl streamlib_engine::ManualNode for StreamFactsTestNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -406,28 +400,24 @@ impl streamlib_engine::ManualNode for PortFamilyTestNode::Node {
 }
 
 #[test]
-fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
+fn a_ports_stream_facts_reach_the_descriptor_the_macro_emits_as_its_pins_annotations() {
     use streamlib_engine::core::descriptors::{
-        ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType, OutputPortDeclaredNames,
-        PortFamily,
+        ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     };
 
-    let descriptor = PortFamilyTestNode::Node::descriptor().expect("a descriptor");
-    let signals = &descriptor.inputs[0].family;
-    assert_eq!(signals.family, PortFamily::Channels);
-    assert_eq!(signals.requires, vec!["rpm".to_string()]);
-    let telemetry = &descriptor.outputs[0].family;
+    let descriptor = StreamFactsTestNode::Node::descriptor().expect("a descriptor");
+    let telemetry = descriptor.outputs[0]
+        .declared_pin()
+        .expect("a typed output")
+        .annotations;
     assert_eq!(
-        telemetry.names,
-        Some(OutputPortDeclaredNames::FromConfig {
-            config_key: "channel_names".into()
-        })
-    );
-    assert_eq!(
-        telemetry.rate,
+        telemetry.sample_rate,
         Some(ChannelsOutputPortSampleRate::Stated(48_000))
     );
-    assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F64));
+    assert_eq!(
+        telemetry.sample_type,
+        Some(ChannelsOutputPortSampleType::F64)
+    );
 }
 
 #[test]
