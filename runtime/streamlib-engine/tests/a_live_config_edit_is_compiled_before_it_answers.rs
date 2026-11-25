@@ -94,7 +94,7 @@ fn the_config_the_graph_answers_for(
                 .iter()
                 .find(|rendered| rendered["id"] == node.to_string())
         })
-        .map(|rendered| rendered["config"].clone())
+        .map(|rendered| rendered["input_values"].clone())
         .expect("the graph holds the node")
 }
 

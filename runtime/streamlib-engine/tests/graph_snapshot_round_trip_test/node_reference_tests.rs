@@ -32,7 +32,7 @@ fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_
     assert_eq!(
         the_graph_document_of(&stream)["references"],
         serde_json::json!([
-            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare-gateway"}
+            {"node": "camera-track", "referenced_node": "cloudflare-gateway"}
         ])
     );
     let refusal = stream
@@ -94,7 +94,7 @@ fn a_load_listing_a_referrer_before_the_node_it_names_loads() {
     assert_eq!(
         the_graph_document_of(&stream)["references"],
         serde_json::json!([
-            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+            {"node": "camera-track", "referenced_node": "cloudflare"}
         ])
     );
 }
@@ -122,7 +122,7 @@ fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
     assert_eq!(
         rendered["references"],
         serde_json::json!([
-            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+            {"node": "camera-track", "referenced_node": "cloudflare"}
         ])
     );
     assert!(

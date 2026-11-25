@@ -190,7 +190,7 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
     assert_eq!(
         rendered["references"],
         serde_json::json!([
-            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+            {"node": "camera-track", "referenced_node": "cloudflare"}
         ])
     );
     assert_eq!(
@@ -275,7 +275,7 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
     assert_eq!(
         camera_out["components"]["graph_interface"],
         serde_json::json!({
-            "direction": "output", "port": "camera", "family": "image",
+            "direction": "output", "port": "camera",
             "pin_type": {"type": "texture"},
         }),
         "a GraphOutput renders the type its link carries"

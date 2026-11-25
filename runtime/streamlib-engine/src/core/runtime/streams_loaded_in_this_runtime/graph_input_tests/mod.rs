@@ -316,11 +316,6 @@ fn a_value_set_live_on_a_graph_input_reaches_each_reader_and_leaves_the_saved_va
         "{rendered}"
     );
     assert_eq!(
-        rendered["config"]["default"],
-        json!({ "track": "intro" }),
-        "{rendered}"
-    );
-    assert_eq!(
         the_saved_value_of(&stream, cue),
         Some(json!({ "track": "intro" }))
     );
@@ -376,11 +371,6 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         rendered["input_values"][VALUE],
         json!({ "level": 0.75 }),
         "a saved edit renders on the `value` input: {rendered}"
-    );
-    assert_eq!(
-        rendered["config"]["default"],
-        json!({ "level": 0.75 }),
-        "{rendered}"
     );
     let value_input = rendered["ports"]["inputs"]
         .as_array()
