@@ -70,12 +70,12 @@ fn look() -> StreamGraphDocument {
         "asset": LOOK_STREAM,
         "nodes": [
             { "id": LOOK_INPUT, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-              "input_values": { "port": "video", "family": "image" } },
+              "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
             a_node(BLUR, "blur"),
             a_node(TINT, "tint"),
             a_placement_of(GRAIN_PLACED_IN_LOOK, "grain", GRAIN_STREAM),
             { "id": LOOK_OUTPUT, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-              "input_values": { "port": "graded", "family": "image" } },
+              "input_values": { "port": "graded", "pin_type": { "type": "texture" } } },
         ],
         "links": [
             a_link(LOOK_INPUT, "value", BLUR, "video"),
@@ -416,8 +416,8 @@ fn renaming_a_placed_streams_port_carries_the_links_in_every_placement_to_the_ne
         &level,
         StreamGraphOperation::SetNodeConfig {
             node: drawn_inside(LOOK, LOOK_OUTPUT),
-            from: json!({ "port": "graded", "family": "image" }),
-            to: json!({ "port": "toned", "family": "image" }),
+            from: json!({ "port": "graded", "pin_type": { "type": "texture" } }),
+            to: json!({ "port": "toned", "pin_type": { "type": "texture" } }),
         },
     );
 
