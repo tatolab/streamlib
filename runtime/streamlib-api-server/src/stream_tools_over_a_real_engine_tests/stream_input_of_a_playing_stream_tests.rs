@@ -21,7 +21,8 @@ static RECORDS_READ: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 /// How long a value set on a playing stream may take to reach a node reading it.
 const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
 
-/// A native reader of Records on its input `cue`, which records each one it reads.
+/// A native reader of Strings on its input `cue`, which records the Records message each one
+/// travels as.
 #[streamlib::sdk::node(
     execution = reactive,
     input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
@@ -45,7 +46,7 @@ const CUE_NODE_UUID: &str = "c1ec1ec1-ec1e-4c1e-8c1e-c1ec1ec1ec1e";
 /// The UUID the graph document gives its `recorder`.
 const RECORDER_NODE_UUID: &str = "c2ec2ec2-ec2e-4c2e-8c2e-c2ec2ec2ec2e";
 
-/// A project whose stream `main` holds a top-level Records `GraphInput` declaring `cue`, of
+/// A project whose stream `main` holds a top-level String `GraphInput` declaring `cue`, of
 /// `lifetime`, read by a [`StreamToolsTestRecordsRecorder`] `recorder`.
 fn a_project_whose_cue_input_a_recorder_reads(lifetime: &str) -> ProjectWithGraphDocuments {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -54,7 +55,7 @@ fn a_project_whose_cue_input_a_recorder_reads(lifetime: &str) -> ProjectWithGrap
         "stream": "main",
         "nodes": [
             { "id": CUE_NODE_UUID, "name": "cue", "type": "tatolab.stream:GraphInput",
-              "input_values": { "port": "cue", "family": "records", "default": { "track": "intro" },
+              "input_values": { "port": "cue", "pin_type": { "type": "string" }, "default": "intro",
                           "lifetime": lifetime } },
             { "id": RECORDER_NODE_UUID, "name": "recorder",
               "type": StreamToolsTestRecordsRecorder::node_class_import_path().as_str() },
@@ -144,17 +145,18 @@ async fn a_stream_input_set_on_a_playing_stream_reaches_the_node_reading_it() {
     let project = a_project_whose_cue_input_a_recorder_reads("kept");
     engine.playing(&project).await;
     let document_before = project.the_graph_document_of("main");
-    let set_live = json!({ "track": format!("outro-{}", Uuid::new_v4()) });
+    let set_live = json!(format!("outro-{}", Uuid::new_v4()));
+    let record_read = json!({ "value": set_live });
     engine
         .set_the_cue_live(&project, set_live.clone())
         .await
         .expect("a playing stream's input is set live naming no node");
-    a_recorder_reads(&set_live).await;
+    a_recorder_reads(&record_read).await;
     engine
         .set_the_cue_live(&project, set_live.clone())
         .await
         .expect("the same value is set live again");
-    a_recorder_reads_times(&set_live, 2).await;
+    a_recorder_reads_times(&record_read, 2).await;
     assert_eq!(project.the_graph_document_of("main"), document_before);
     engine
         .the_project_action_done("stop_playback", &project)
@@ -176,7 +178,7 @@ async fn a_reset_stream_input_set_while_stopped_is_refused_naming_the_stopped_pl
         .await;
 
     let refusal = engine
-        .set_the_cue_live(&project, json!({ "track": "drop" }))
+        .set_the_cue_live(&project, json!("drop"))
         .await
         .expect_err("a stopped stream's reset input is refused a live set");
     assert_eq!(
@@ -215,8 +217,8 @@ async fn a_live_transaction_setting_an_input_under_its_name_and_a_former_one_is_
             json!({ "mode": "live", "author": an_agent_named("alice"), "operations": [
                 { "operation": "set_studio_fields", "stream": stream_asset,
                   "node": RECORDER_NODE_UUID, "studio": {} },
-                set_cue("value", json!({ "track": "drop" })),
-                set_cue("default", json!({ "track": "outro" })),
+                set_cue("value", json!("drop")),
+                set_cue("default", json!("outro")),
             ] }),
         )
         .await

@@ -18,7 +18,7 @@ mod conversion_node_config_refusals_tests;
 pub mod number_conversions;
 #[cfg(test)]
 mod number_conversions_tests;
-mod port_family_messages_read_by_a_conversion;
+mod messages_read_by_a_conversion;
 pub mod tensor_to_audio;
 #[cfg(test)]
 mod tensor_to_audio_tests;

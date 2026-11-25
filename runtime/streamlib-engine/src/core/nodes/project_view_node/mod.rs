@@ -20,7 +20,7 @@ use streamlib_project_repository::{
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PinType, PortDescriptor,
+    NodeValueLifetime, PinDeclaration, PinFlow, PinType, PortDescriptor,
     SettingReadTime,
 };
 use crate::core::error::{Error, Result};
@@ -104,14 +104,15 @@ pub(crate) fn the_node_type_of_a_project_view(
 
 /// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
 /// output's name and description, a setting read each run that takes no wire and holds no saved
-/// value, and returned to no value at Stop, since what a panel writes is live data. It takes a
-/// value of the output's pin type where that type holds one; an Audio block or a Tensor, which
-/// holds none, it takes as any value, which the output's type packs when it is published.
+/// value, and returned to no value at Stop, since what a panel writes is live data. It is of the
+/// output's pin type, read as a value where that type holds one; an Audio block or a Tensor,
+/// which holds none, flows as its type does and takes what that type packs into the message the
+/// output publishes.
 fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     let pin_declaration = if port.pin_type.holds_a_stored_value() {
         exactly_as_a_value(&port.pin_type)
     } else {
-        carried_as_a_value(Vec::new())
+        PinDeclaration::exactly(port.pin_type.clone())
     };
     the_port_a_view_declares(port)
         .with_pin_declaration(pin_declaration)
@@ -145,17 +146,6 @@ fn is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(
             .inputs
             .iter()
             .any(|port| port.name == input && port.is_a_setting())
-}
-
-/// An input carried as a value of any type, which the output it is published on packs.
-fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
-    PinDeclaration {
-        pin_type: DeclaredPinType::Any,
-        flow: PinFlow::Value,
-        annotations: PinAnnotations::default(),
-        former_names,
-        may_be_unset: false,
-    }
 }
 
 /// A port of exactly `pin_type`, read as a value; an output so declared keeps its last message

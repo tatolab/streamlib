@@ -106,7 +106,7 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
             (
                 "crossfader".to_string(),
                 "Left to right.".to_string(),
-                Some(DeclaredPinType::Any),
+                Some(DeclaredPinType::Is { pin_type: PinType::Tensor {} }),
                 false
             )
         ]
@@ -151,7 +151,7 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
     );
     assert_eq!(
         setting.pin_declaration.as_ref().map(|pin| &pin.pin_type),
-        Some(&DeclaredPinType::Any)
+        Some(&DeclaredPinType::Is { pin_type: PinType::Tensor {} })
     );
     assert_eq!(
         setting.input_mode,

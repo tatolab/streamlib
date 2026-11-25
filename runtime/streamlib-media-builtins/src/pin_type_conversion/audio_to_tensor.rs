@@ -12,7 +12,7 @@ use streamlib::sdk::iceoryx2::{
 };
 use streamlib::sdk::nodes::ReactiveNode;
 
-use super::port_family_messages_read_by_a_conversion::channels_block_read_by_a_conversion;
+use super::messages_read_by_a_conversion::channels_block_read_by_a_conversion;
 
 const CHANNELS_INPUT_PORT: &str = "channels";
 const ARRAY_OUTPUT_PORT: &str = "array";

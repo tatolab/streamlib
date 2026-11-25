@@ -344,7 +344,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
     project.next_look_run_places(json!({
         "nodes": [
             { "name": "graphinput", "type": "tatolab.stream:GraphInput",
-              "input_values": { "port": "video", "family": "image" } },
+              "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
             { "name": "pass-sink", "type": sink_type.as_str() },
         ],
         "links": [{
@@ -398,7 +398,6 @@ fn the_passes_setting_a_run_declares() -> Value {
     json!({
         "name": "passes",
         "description": "How many times the picture is blurred.",
-        "family": { "family": "channels" },
         "pin_declaration": {
             "pin_type": { "kind": "is", "pin_type": { "type": "integer" } },
             "flow": "value",

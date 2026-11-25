@@ -744,7 +744,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     }
 }
 
-/// The port `name`, typed `pin_type`, on the family that carries it.
+/// The port `name`, typed `pin_type`.
 fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
     PortDescriptor::new(name, "", true, PinDeclaration::exactly(pin_type))
     .with_delivery_profile("newest")
@@ -839,7 +839,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             .as_str()
             .expect("the placing node")
             .to_owned();
-        let set_on_volume = |input: &str, value: &str| {
+        let set_on_volume = |input: &str, value: Value| {
             json!({ "operation": "set_node_input_value", "stream": stream_asset,
                     "level": [subgraph], "node": "volume", "input": input, "value": value })
         };
@@ -849,8 +849,8 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
                 { "operation": "add_node", "stream": stream_asset, "level": [subgraph],
                   "type": streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
                   "name": "volume", "as": "volume" },
-                set_on_volume("port", "volume"),
-                set_on_volume("family", "channels"),
+                set_on_volume("port", json!("volume")),
+                set_on_volume("pin_type", json!({ "type": "float" })),
             ], "author": an_agent_named("alice") }),
         )
         .await

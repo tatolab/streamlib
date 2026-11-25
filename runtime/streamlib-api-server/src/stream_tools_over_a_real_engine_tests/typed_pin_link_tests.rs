@@ -24,8 +24,8 @@ fn a_link_from_the_mixer_into_itself(stream_asset: Uuid, output: &str, input: &s
 /// A Float output linked into a Texture input is refused, naming both types, and the saved
 /// graph is left as it was.
 ///
-/// Mental-revert: judging the two typed pins by their families answers `refused` with the
-/// family check's words.
+/// Mental-revert: judging the two pins by the kind of message each travels as answers
+/// `refused` without naming the two types.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_link_between_typed_pins_that_do_not_connect_is_refused_with_its_code() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -70,7 +70,7 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
     let mut graph = project.the_graph_document_of("main");
     graph["nodes"].as_array_mut().expect("nodes").push(json!({
         "id": VOLUME_GRAPH_INPUT_NODE_UUID, "name": "volume", "type": "tatolab.stream:GraphInput",
-        "input_values": { "port": "volume", "family": "channels" },
+        "input_values": { "port": "volume", "pin_type": { "type": "float" } },
     }));
     project.write_the_graph_document(graph);
     engine.a_stream_loaded_from_its_graph_document(&project, "main");
@@ -272,7 +272,7 @@ async fn a_link_inside_a_placed_stream_is_judged_by_its_pin_types() {
     );
 }
 
-/// A link inside a placed stream reaching a `GraphOutput` that names no family, which runs as
+/// A link inside a placed stream reaching a `GraphOutput` that chooses no pin type, which runs as
 /// no node of its own, is saved without being judged, and its entry under `connected_links`
 /// says why; the same `connect` sent again under its key says why again.
 ///
@@ -296,7 +296,7 @@ async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
                     "author": an_agent_named("alice") }),
         )
         .await
-        .expect("a `GraphOutput` naming no family is added inside `sub`");
+        .expect("a `GraphOutput` choosing no pin type is added inside `sub`");
     let output = added["added_nodes"][0]["node"]
         .as_str()
         .expect("the output's UUID")
@@ -311,7 +311,7 @@ async fn a_link_inside_a_placed_stream_saved_unjudged_says_why() {
     let connected = engine
         .the_answer_or_the_refusal_of("connect", connect.clone())
         .await
-        .expect("a link into a `GraphOutput` naming no family is saved");
+        .expect("a link into a `GraphOutput` choosing no pin type is saved");
 
     let why = connected["connected_links"][0]["not_judged_because"]
         .as_str()

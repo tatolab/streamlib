@@ -148,8 +148,8 @@ mod tests {
     fn the_first_graph_input_and_output_of_a_level_take_input1_and_output1() {
         let level = a_level_holding(json!([]));
         assert_eq!(
-            the_default_named(GRAPH_INPUT_NODE_TYPE, json!({"family": "channels"}), &level),
-            json!({"port": "input1", "family": "channels"})
+            the_default_named(GRAPH_INPUT_NODE_TYPE, json!({"pin_type": {"type": "float"}}), &level),
+            json!({"port": "input1", "pin_type": {"type": "float"}})
         );
         assert_eq!(
             the_default_named(GRAPH_OUTPUT_NODE_TYPE, json!({}), &level),
@@ -161,11 +161,11 @@ mod tests {
     fn a_default_name_takes_the_first_number_no_node_of_its_kind_holds() {
         let level = a_level_holding(json!([
             {"id": "00000000-0000-0000-0000-000000000001", "name": "graphinput",
-             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1", "pin_type": {"type": "texture"}}},
             {"id": "00000000-0000-0000-0000-000000000002", "name": "graphinput-2",
-             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "Input3", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "Input3", "pin_type": {"type": "texture"}}},
             {"id": "00000000-0000-0000-0000-000000000003", "name": "graphoutput",
-             "type": GRAPH_OUTPUT_NODE_TYPE, "input_values": {"port": "input2", "family": "image"}},
+             "type": GRAPH_OUTPUT_NODE_TYPE, "input_values": {"port": "input2", "pin_type": {"type": "texture"}}},
         ]));
         assert_eq!(
             the_default_named(GRAPH_INPUT_NODE_TYPE, json!({}), &level),
@@ -173,9 +173,9 @@ mod tests {
         );
         let level = a_level_holding(json!([
             {"id": "00000000-0000-0000-0000-000000000001", "name": "graphinput",
-             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input1", "pin_type": {"type": "texture"}}},
             {"id": "00000000-0000-0000-0000-000000000002", "name": "graphinput-2",
-             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input2", "family": "image"}},
+             "type": GRAPH_INPUT_NODE_TYPE, "input_values": {"port": "input2", "pin_type": {"type": "texture"}}},
         ]));
         assert_eq!(
             the_default_named(GRAPH_INPUT_NODE_TYPE, json!({"port": ""}), &level),

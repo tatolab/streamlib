@@ -233,7 +233,7 @@ impl crate::core::ReactiveNode for MockBorrowingConsumerNode::Node {
     }
 }
 
-/// Mock node whose ports are declared by pin type rather than by family.
+/// Mock node whose ports are declared by pin type.
 #[crate::node(
     execution = reactive,
     input("gain", delivery_profile = "newest", pin_type = Float),
