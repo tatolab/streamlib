@@ -3,12 +3,10 @@
 
 use super::*;
 use crate::descriptors::{NodeDescriptor, PortDescriptor};
-use crate::{NodeClassImportPath, NodeClassShortName, PortFamily, PortFamilyDeclaration};
+use crate::{NodeClassImportPath, NodeClassShortName};
 
 fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
-    let family = PortFamily::carrying(&pin_type).expect("a type a family carries");
-    PortDescriptor::new(name, name, true, PortFamilyDeclaration::of_family(family))
-        .with_pin_declaration(PinDeclaration::exactly(pin_type))
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(pin_type))
 }
 
 fn a_setting(name: &str) -> PortDescriptor {
@@ -89,12 +87,10 @@ fn a_conversion_of_any_other_shape_is_refused_naming_the_node_type() {
         vec![a_typed_port("texture", texture())],
     );
     let an_untyped_input = a_node_type(
-        vec![PortDescriptor::new(
-            "tensor",
-            "tensor",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Array),
-        )],
+        vec![PortDescriptor {
+            pin_declaration: None,
+            ..a_typed_port("tensor", tensor())
+        }],
         vec![a_typed_port("texture", texture())],
     );
     for (descriptor, why) in [
@@ -141,16 +137,13 @@ fn only_a_built_in_conversion_may_be_inserted() {
 
 #[test]
 fn a_conversion_whose_wired_pin_takes_no_wire_is_refused() {
-    let node_reference = PortDescriptor::new(
+    let node_reference = a_typed_port(
         "node",
-        "node",
-        true,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
-    )
-    .with_pin_declaration(PinDeclaration::exactly(PinType::NodeReference {
-        referenced_node_type: None,
-        one_referrer_per_referenced_node: false,
-    }));
+        PinType::NodeReference {
+            referenced_node_type: None,
+            one_referrer_per_referenced_node: false,
+        },
+    );
     let refusal = a_node_type(vec![a_typed_port("tensor", tensor())], vec![node_reference])
         .stating_a_conversion()
         .pin_conversion()

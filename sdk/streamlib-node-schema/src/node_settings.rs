@@ -12,7 +12,6 @@ use serde_json::{Map, Value};
 
 use crate::descriptors::PortDescriptor;
 use crate::pin_type::{IntegerSize, NodeInputMode, PinDeclaration, PinType, SettingReadTime};
-use crate::{PortFamily, PortFamilyDeclaration};
 
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is a node `settings =` type but is not declared with `#[node_settings]`",
@@ -164,18 +163,16 @@ pub fn the_input_of_a_setting(
     pin_type: PinType,
     default: Value,
 ) -> PortDescriptor {
-    let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
     let may_be_unset = default.is_null();
     let setting = PortDescriptor::new(
         name,
         description,
         false,
-        PortFamilyDeclaration::of_family(family),
+        PinDeclaration {
+            may_be_unset,
+            ..PinDeclaration::exactly(pin_type)
+        },
     )
-    .with_pin_declaration(PinDeclaration {
-        may_be_unset,
-        ..PinDeclaration::exactly(pin_type)
-    })
     .with_input_mode(NodeInputMode::SettingOnly {
         read: SettingReadTime::AtSetup,
     });

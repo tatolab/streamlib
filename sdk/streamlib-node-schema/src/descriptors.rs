@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::pin_type::{DeclaredPinType, NodeInputMode, PinDeclaration, PinFlow, PinType};
 use crate::{
     AudioWindowContract, ImageOutputPortFrameRate, NodeClassImportPath, NodeClassShortName,
-    NodeKind, NodeScheduling, NodeValueLifetime, PortFamilyDeclaration,
+    NodeKind, NodeScheduling, NodeValueLifetime,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,8 +41,6 @@ pub struct PortDescriptor {
     /// output port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<AudioWindowContract>,
-    /// The port family the port declares and its family's keys.
-    pub family: PortFamilyDeclaration,
     /// The value an *input* port reads while nothing is linked into it and no
     /// pin value is set on its node; `None` when it declares none, and on
     /// every output port. A JSON `null` is a default of no value, which an
@@ -53,8 +51,8 @@ pub struct PortDescriptor {
         skip_serializing_if = "Option::is_none"
     )]
     pub pin_default: Option<serde_json::Value>,
-    /// The pin type and flow the port's author states; `None` when the code states none
-    /// exactly. [`PortDescriptor::declared_pin`] is what the port declares.
+    /// The pin type and flow the port's author states. [`PortDescriptor::declared_pin`] is what
+    /// the port declares.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_declaration: Option<PinDeclaration>,
     /// Whether a value set live on this *input* is kept across Stop and a restart of the
@@ -81,7 +79,7 @@ impl PortDescriptor {
         name: impl Into<String>,
         description: impl Into<String>,
         required: bool,
-        family: PortFamilyDeclaration,
+        pin_declaration: PinDeclaration,
     ) -> Self {
         Self {
             name: name.into(),
@@ -90,21 +88,16 @@ impl PortDescriptor {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
-            family,
             pin_default: None,
-            pin_declaration: None,
+            pin_declaration: Some(pin_declaration),
             lifetime: NodeValueLifetime::Kept,
             input_mode: None,
         }
     }
 
-    /// The pin type and flow the port declares: the ones its author states, else a Texture for
-    /// a picture port. `None` for a port whose type the code does not state exactly; it links
-    /// by its family alone.
+    /// The pin type and flow the port declares, as its author states them.
     pub fn declared_pin(&self) -> Option<PinDeclaration> {
-        self.pin_declaration
-            .clone()
-            .or_else(|| self.family.exact_pin_type().map(PinDeclaration::exactly))
+        self.pin_declaration.clone()
     }
 
     /// Whether this input is a setting, read at setup or each run.

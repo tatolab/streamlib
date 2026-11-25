@@ -405,15 +405,13 @@ pub struct NodePortSchema {
     /// consumer states what it needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::AudioWindowContract>,
-    /// The port family this port declares and its family's keys.
-    pub family: crate::PortFamilyDeclaration,
-    /// The pin type this port declares; `None` when it declares only a family. Its schema is
+    /// The pin type this port declares; `None` when a setting chooses it. Its schema is
     /// open JSON: only the control contract's schemars renders pin types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
     pub pin_type: Option<crate::pin_type::PinType>,
     /// The setting whose chosen pin type this port carries, as `pin_type = from_setting("…")`
-    /// states it; `None` when the port states its type itself or declares only a family.
+    /// states it; `None` when the port states its type itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type_from_setting: Option<String>,
     /// Whether a value set live on this input is kept across Stop and a restart of the runtime,

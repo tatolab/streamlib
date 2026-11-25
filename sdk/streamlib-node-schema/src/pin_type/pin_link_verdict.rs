@@ -7,7 +7,7 @@ use super::{
     BundleMember, NodeInputMode, PinConversion, PinConversionOutputPicked, PinFlow, PinType,
     an_input_takes_a_wire,
 };
-use crate::port_family::{CodecDirection, EncodedMedia, codec_nodes_placed_between};
+use crate::output_port_annotations::{CodecDirection, EncodedMedia, codec_nodes_placed_between};
 use crate::stated_lists::{the_ones_not_held, the_ones_not_taken};
 
 /// One end of a link: the port, or one member of a bundle port, with its resolved type.
