@@ -31,7 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 # The engine-free types a `graph` answer embeds: a port's pin type and stream facts, a
 # node's type.
-streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82" }
+streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.70.5" }
 thiserror.workspace = true
 tracing.workspace = true
 uuid = { version = "1.11", features = ["serde"] }
