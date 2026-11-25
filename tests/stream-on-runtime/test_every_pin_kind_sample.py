@@ -177,8 +177,8 @@ def assert_the_stream_runs_cleanly_through_its_links(graph: dict[str, Any]) -> N
 
 
 def values_the_node_holds(node: dict[str, Any]) -> dict[str, Any]:
-    """A node's saved values: its config's settings and the values saved on its inputs."""
-    return {**(node.get("config") or {}), **node["pins"]}
+    """A node's saved values: the values its graph document holds for its inputs."""
+    return node["input_values"]
 
 
 def pictures_glow_wrote(graph: dict[str, Any]) -> int:

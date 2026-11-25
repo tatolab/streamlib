@@ -55,9 +55,6 @@ McpAnswer = TypeVar("McpAnswer")
 #: The JSON-RPC route every control operation is a method of.
 CONTROL_JSON_RPC_ROUTE = "/control"
 
-#: The MCP resource holding every node type each loaded stream can add, with its descriptor.
-NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
-
 #: The MCP tool that runs any operation the runtime serves to agents, by name.
 CALL_OPERATION_TOOL_NAME = "call_operation"
 
@@ -191,25 +188,6 @@ class LocalApiClient:
                 f"the stream action {action} did not end within {timeout}s: {described}"
             )
             time.sleep(STREAM_ACTION_FOLLOW_POLL_SECONDS)
-
-    def node_catalog(self, stream: str) -> "dict[str, Any]":
-        """MCP `streamlib://node-catalog`: the node types the loaded stream can add, each with
-        its descriptor, as `{"nodes": [...]}` — the native ones, then those described in its own
-        interpreter, then those its installed modules declare."""
-
-        async def read(client: Client) -> Any:
-            return (await client.read_resource(NODE_CATALOG_RESOURCE_URI)).contents
-
-        (contents,) = self.answer_over_mcp(read)
-        catalog = json.loads(contents.text)
-        (of_the_stream,) = [each for each in catalog["streams"] if each["stream"] == stream]
-        return {
-            "nodes": [
-                *catalog["nodes"],
-                *of_the_stream["nodes"],
-                *(installed["node"] for installed in of_the_stream["installed"]),
-            ]
-        }
 
     def answer_over_mcp(
         self,

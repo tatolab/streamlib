@@ -150,10 +150,39 @@ def link_end(node_uuid: str, port: str) -> "dict[str, str]":
     return {"node": node_uuid, "port": port}
 
 
-def add_node_live(local_api: LocalApiClient, stream_id: str, arguments: dict) -> "dict[str, str]":
-    """Add a node to the running stream alone, and answer its `node` UUID and `name`."""
+def add_node_live(
+    local_api: LocalApiClient,
+    stream_id: str,
+    node_type: str,
+    name: str,
+    input_values: "dict[str, Any] | None" = None,
+) -> "dict[str, str]":
+    """Add a node to the running stream alone, holding `input_values`, in one live
+    transaction, and answer its `node` UUID and `name`."""
     answered = local_api.call_tool(
-        "add_node", {**arguments, "stream": stream_id, "mode": "live"}
+        "transact",
+        {
+            "mode": "live",
+            "operations": [
+                {
+                    "operation": "add_node",
+                    "stream": stream_id,
+                    "type": node_type,
+                    "name": name,
+                    "as": "added",
+                },
+                *(
+                    {
+                        "operation": "set_node_input_value",
+                        "stream": stream_id,
+                        "node": "added",
+                        "input": input_name,
+                        "value": value,
+                    }
+                    for input_name, value in (input_values or {}).items()
+                ),
+            ],
+        },
     )
     (added,) = answered["added_nodes"]
     return added
@@ -294,11 +323,9 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     added = add_node_live(
         local_api,
         stream_id,
-        {
-            "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
-            "pins": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
-            "name": "effect",
-        },
+        f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
+        "effect",
+        {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
     )
     assert added["name"] == "effect"
 
@@ -306,7 +333,8 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     effect = node_named(graph_after_add, "effect")
     assert effect["id"] == added["node"], "the node keeps the UUID `add_node` answered"
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
-    assert effect["pins"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
+    (marker,) = [port for port in effect["ports"]["inputs"] if port["name"] == "marker"]
+    assert marker.get("value") == "FIRST_EFFECT_SAW_A_FRAME", marker
     assert [port["name"] for port in effect["ports"]["inputs"]] == ["video_from_upstream", "marker"]
     assert [port["name"] for port in effect["ports"]["outputs"]] == ["video_to_downstream"]
 
@@ -339,11 +367,9 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     second = add_node_live(
         local_api,
         stream_id,
-        {
-            "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
-            "pins": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
-            "name": "second-effect",
-        },
+        f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
+        "second-effect",
+        {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
     )
     connect_live(
         local_api,
@@ -359,11 +385,9 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     downstream = add_node_live(
         local_api,
         stream_id,
-        {
-            "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
-            "pins": {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
-            "name": "downstream-effect",
-        },
+        f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
+        "downstream-effect",
+        {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
     )
     connect_live(
         local_api,
@@ -377,10 +401,8 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     live_added_float_to_integer = add_node_live(
         local_api,
         stream_id,
-        {
-            "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
-            "name": "live-added-float-to-integer",
-        },
+        LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
+        "live-added-float-to-integer",
     )
     assert (
         await_node_state(local_api, stream_id, live_added_float_to_integer["name"], "Running")
@@ -487,7 +509,8 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     sink = add_node_live(
         local_api,
         stream_id,
-        {"type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}", "name": "sink"},
+        f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
+        "sink",
     )
 
     connect_seconds, connected_link_id = seconds_taken_by(
@@ -514,7 +537,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
 
     add_seconds, _ = seconds_taken_by(
         lambda: add_node_live(
-            local_api, stream_id, {"type": pattern["type"], "name": "second-pattern"}
+            local_api, stream_id, pattern["type"], "second-pattern"
         )
     )
     assert add_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
