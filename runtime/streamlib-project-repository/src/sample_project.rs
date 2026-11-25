@@ -181,6 +181,11 @@ impl SampleProjectTheRuntimeUnitCarries {
             project_directory,
             self.project_file.project,
             &self.project_file.name,
+            |relative| {
+                files_the_copy_writes
+                    .binary_search_by(|copied| copied.as_str().cmp(relative))
+                    .is_ok()
+            },
         )
     }
 }

@@ -50,6 +50,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -427,7 +428,7 @@ def stream_members_of_the_archive(archive):
 
 def view_members_of_the_archive(archive):
     """Each view the archive's `views/<folder>/tatolab_view.json` declares, as a catalog entry names it."""
-    project = json.loads(archive.read(PROJECT_FILE_NAME))["project"]
+    project = str(uuid.UUID(json.loads(archive.read(PROJECT_FILE_NAME))["project"]))
     members = []
     for member_name in sorted(archive.namelist()):
         if not re.fullmatch(rf"{VIEWS_DIRECTORY_NAME}/[^/]+/{re.escape(VIEW_MANIFEST_FILE_NAME)}", member_name):

@@ -205,6 +205,7 @@ impl ProjectRepository {
             into,
             self.project_file.project,
             &self.project_file.name,
+            |_| true,
         )?;
         let duplicate = Self::open(into)?;
         duplicate.history.commit_tracked_files(

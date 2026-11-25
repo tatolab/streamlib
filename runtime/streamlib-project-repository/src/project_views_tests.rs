@@ -304,6 +304,13 @@ fn a_copy_of_a_project_places_its_own_views_by_the_copys_uuid_in_each_of_its_str
     }
     let plain_before = std::fs::read(sample_directory.join("streams/plain.graph.json")).unwrap();
     let copy_directory = workspace.path().join("my-set");
+    std::fs::create_dir_all(copy_directory.join("streams")).unwrap();
+    let already_there = serde_json::to_vec_pretty(&a_stream_placing(&["Acme DJ:deck"])).unwrap();
+    std::fs::write(
+        copy_directory.join("streams/already-there.graph.json"),
+        &already_there,
+    )
+    .unwrap();
     let copy = Uuid::new_v4();
 
     crate::the_sample_project_named(Some(&samples_directory), "acme-dj")
@@ -336,5 +343,10 @@ fn a_copy_of_a_project_places_its_own_views_by_the_copys_uuid_in_each_of_its_str
         std::fs::read(copy_directory.join("streams/plain.graph.json")).unwrap(),
         plain_before,
         "a stream placing none of the views is copied as it was"
+    );
+    assert_eq!(
+        std::fs::read(copy_directory.join("streams/already-there.graph.json")).unwrap(),
+        already_there,
+        "a stream the copy did not write is left as it was"
     );
 }

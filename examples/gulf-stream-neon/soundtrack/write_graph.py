@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
+STAGE_VIEW = json.loads((PROJECT / "tatolab-project.json").read_text())["project"] + ":stage"
 FPS = 60
 STEP_NS = round(1e9 / FPS)
 # The trails keep the same length in seconds at any frame rate: 0.86 a frame at 30.
@@ -129,7 +130,7 @@ def graph(
     add("film_finish", "nodes.lens_shaders:FilmFinish", 10, 1.5, lines_across=float(min(height, 1080)))
     add("vignette", f"{CORE}.filters:Vignette", 11, 1.5, amount=0.42, size=0.62, softness=0.55)
     if stage:
-        add("stage", "5b0f6c2e-8d7a-4f1e-9c3b-2a6e4d8f1c70:stage", 12, 0.5)
+        add("stage", STAGE_VIEW, 12, 0.5)
         # The stage's hand, smoothed in the graph: every slider eases through a Glide spring, the
         # camera through SmoothCamera, so a few edits a second arrive as a 60 fps glide.
         for row, (name, value) in enumerate(SMOOTHED_STAGE_VALUES.items()):

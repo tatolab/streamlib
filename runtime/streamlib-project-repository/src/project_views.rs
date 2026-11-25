@@ -119,12 +119,13 @@ fn the_type_each_own_view_had_in_the_project_copied(
 /// Retype each node of the graph documents of the project at `project_directory`, a copy of the
 /// project `project_before` named `name_before`, that places one of the copy's own views by
 /// that project's UUID or name, to the view's type under the UUID the copy's project file gives
-/// it, so the copy's streams place its own views. A graph document that does not read is left
-/// as it was copied.
+/// it, so the copy's streams place its own views. Only a graph document at a project-relative
+/// path `the_copy_wrote` holds is retyped; one that does not read is left as it was copied.
 pub(crate) fn place_each_own_view_of_a_copy_by_its_type_in_the_copy(
     project_directory: &Path,
     project_before: Uuid,
     name_before: &str,
+    the_copy_wrote: impl Fn(&str) -> bool,
 ) -> Result<(), ProjectRepositoryRefusal> {
     let retyped = the_type_each_own_view_had_in_the_project_copied(
         project_directory,
@@ -134,7 +135,10 @@ pub(crate) fn place_each_own_view_of_a_copy_by_its_type_in_the_copy(
     if retyped.is_empty() {
         return Ok(());
     }
-    for stream_document in project_stream_documents(project_directory)? {
+    for stream_document in project_stream_documents(project_directory)?
+        .into_iter()
+        .filter(|stream_document| the_copy_wrote(stream_document.path.as_str()))
+    {
         let Some(mut graph_document) = stream_document
             .bytes
             .as_ref()
