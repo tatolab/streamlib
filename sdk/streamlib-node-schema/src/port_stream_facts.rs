@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::pin_type::{BuiltInPinTypeName, PinType};
 
 /// An Image stream's frame rate, as a rational number of frames per second.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImageStreamFrameRate {
     pub numerator: u32,

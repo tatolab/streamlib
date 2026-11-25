@@ -5,11 +5,6 @@
 //! one spelling in a config, `{"node": "<name>"}`, and the schema keyword that
 //! marks a config key as holding one.
 
-use std::borrow::Cow;
-
-use schemars::JsonSchema;
-use schemars::r#gen::SchemaGenerator;
-use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,56 +20,11 @@ pub const NODE_REFERENCE_SCHEMA_KEYWORD: &str = "x-tatolab-node-reference";
 pub const NODE_REFERENCE_NODE_KEY: &str = "node";
 
 /// A config value naming another node of the graph, of any type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeReferenceInConfig {
     /// The referenced node's name, as `add` gave it.
     pub node: String,
-}
-
-impl JsonSchema for NodeReferenceInConfig {
-    fn is_referenceable() -> bool {
-        false
-    }
-
-    fn schema_name() -> String {
-        "NodeReferenceInConfig".to_string()
-    }
-
-    fn schema_id() -> Cow<'static, str> {
-        Cow::Borrowed(concat!(module_path!(), "::NodeReferenceInConfig"))
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        node_reference_schema(generator)
-    }
-}
-
-fn node_reference_schema(generator: &mut SchemaGenerator) -> Schema {
-    let mut object_validation = ObjectValidation::default();
-    object_validation.properties.insert(
-        NODE_REFERENCE_NODE_KEY.to_string(),
-        generator.subschema_for::<String>(),
-    );
-    object_validation
-        .required
-        .insert(NODE_REFERENCE_NODE_KEY.to_string());
-    object_validation.additional_properties = Some(Box::new(Schema::Bool(false)));
-    let mut schema_object = SchemaObject {
-        instance_type: Some(InstanceType::Object.into()),
-        object: Some(Box::new(object_validation)),
-        ..SchemaObject::default()
-    };
-    schema_object.extensions.insert(
-        NODE_REFERENCE_SCHEMA_KEYWORD.to_string(),
-        Value::Object(serde_json::Map::new()),
-    );
-    Schema::Object(schema_object)
 }
 
 /// One config key holding a node reference: a top-level key a node type's config
@@ -281,7 +231,7 @@ mod tests {
     use super::*;
     use crate::NodeConfigJsonSchema;
 
-    #[derive(JsonSchema, Serialize, Deserialize)]
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
     #[allow(
         dead_code,
         reason = "the struct exists only for its derived JSON schema"
@@ -299,13 +249,13 @@ mod tests {
             config_keys_holding_a_node_reference(&document),
             vec![
                 ConfigKeyHoldingANodeReference {
-                    config_key: "anything".to_string(),
+                    config_key: "gateway".to_string(),
                     referenced_node_type_import_path: None,
                     takes_a_value_other_than_a_node_reference: false,
                     one_referrer_per_referenced_node: false,
                 },
                 ConfigKeyHoldingANodeReference {
-                    config_key: "gateway".to_string(),
+                    config_key: "anything".to_string(),
                     referenced_node_type_import_path: None,
                     takes_a_value_other_than_a_node_reference: false,
                     one_referrer_per_referenced_node: false,

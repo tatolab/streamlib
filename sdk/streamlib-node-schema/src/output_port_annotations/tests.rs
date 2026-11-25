@@ -43,14 +43,13 @@ fn a_texture_outputs_frame_rate_resolves_from_its_class_or_its_nodes_config() {
     assert!(resolved(serde_json::json!({"frames_per_second": "fast"})).is_err());
 }
 
-#[cfg(feature = "contract-json-schema")]
 mod contract_json_schema {
     use std::collections::BTreeSet;
 
     use serde::Serialize;
     use serde_json::{Value, json};
 
-    use schemars_1::{JsonSchema, SchemaGenerator};
+    use schemars::{JsonSchema, SchemaGenerator};
 
     use crate::{
         ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,

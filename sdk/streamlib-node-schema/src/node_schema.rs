@@ -1,9 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use schemars::JsonSchema;
-use schemars::r#gen::SchemaGenerator;
-use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -19,29 +17,17 @@ pub enum NodeLanguage {
 }
 
 impl JsonSchema for NodeLanguage {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "NodeLanguage".into()
     }
     fn schema_id() -> Cow<'static, str> {
         Cow::Borrowed("streamlib_node_schema::NodeLanguage")
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        Schema::Object(SchemaObject {
-            metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some(
-                    "Node runtime language. `deno` is accepted as an alias for `typescript`."
-                        .into(),
-                ),
-                ..Default::default()
-            })),
-            instance_type: Some(InstanceType::String.into()),
-            enum_values: Some(vec![
-                serde_json::Value::String("rust".into()),
-                serde_json::Value::String("python".into()),
-                serde_json::Value::String("typescript".into()),
-                serde_json::Value::String("deno".into()),
-            ]),
-            ..Default::default()
+        json_schema!({
+            "description": "Node runtime language. `deno` is accepted as an alias for `typescript`.",
+            "type": "string",
+            "enum": ["rust", "python", "typescript", "deno"]
         })
     }
 }
@@ -145,7 +131,7 @@ impl<'de> Deserialize<'de> for RuntimeConfig {
 }
 
 impl JsonSchema for RuntimeConfig {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "RuntimeConfig".into()
     }
     fn schema_id() -> Cow<'static, str> {
@@ -154,19 +140,9 @@ impl JsonSchema for RuntimeConfig {
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         let simple = generator.subschema_for::<NodeLanguage>();
         let full = generator.subschema_for::<RuntimeConfigFull>();
-        Schema::Object(SchemaObject {
-            metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some(
-                    "Runtime configuration: either a bare language string (`rust`, `python`, `typescript`) or a `{ language, options, env }` object."
-                        .into(),
-                ),
-                ..Default::default()
-            })),
-            subschemas: Some(Box::new(SubschemaValidation {
-                one_of: Some(vec![simple, full]),
-                ..Default::default()
-            })),
-            ..Default::default()
+        json_schema!({
+            "description": "Runtime configuration: either a bare language string (`rust`, `python`, `typescript`) or a `{ language, options, env }` object.",
+            "oneOf": [simple, full]
         })
     }
 }
@@ -294,68 +270,30 @@ impl<'de> Deserialize<'de> for NodeSchemaExecution {
 }
 
 impl JsonSchema for NodeSchemaExecution {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "NodeSchemaExecution".into()
     }
     fn schema_id() -> Cow<'static, str> {
         Cow::Borrowed("streamlib_node_schema::NodeSchemaExecution")
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        let simple = Schema::Object(SchemaObject {
-            instance_type: Some(InstanceType::String.into()),
-            enum_values: Some(vec![
-                serde_json::Value::String("reactive".into()),
-                serde_json::Value::String("manual".into()),
-                serde_json::Value::String("continuous".into()),
-            ]),
-            ..Default::default()
-        });
-        let continuous_object = {
-            use schemars::schema::{ObjectValidation, SingleOrVec};
-            let mut props = schemars::Map::new();
-            props.insert(
-                "type".into(),
-                Schema::Object(SchemaObject {
-                    instance_type: Some(InstanceType::String.into()),
-                    enum_values: Some(vec![serde_json::Value::String("continuous".into())]),
-                    ..Default::default()
-                }),
-            );
-            props.insert(
-                "interval_ms".into(),
-                Schema::Object(SchemaObject {
-                    instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
-                    number: Some(Box::new(schemars::schema::NumberValidation {
-                        minimum: Some(0.0),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                }),
-            );
-            Schema::Object(SchemaObject {
-                instance_type: Some(InstanceType::Object.into()),
-                object: Some(Box::new(ObjectValidation {
-                    properties: props,
-                    required: ["type".to_string()].into_iter().collect(),
-                    additional_properties: Some(Box::new(Schema::Bool(false))),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            })
-        };
-        Schema::Object(SchemaObject {
-            metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some(
-                    "Execution mode: `reactive`, `manual`, `continuous` (string), or `{ type: continuous, interval_ms: N }`."
-                        .into(),
-                ),
-                ..Default::default()
-            })),
-            subschemas: Some(Box::new(SubschemaValidation {
-                one_of: Some(vec![simple, continuous_object]),
-                ..Default::default()
-            })),
-            ..Default::default()
+        json_schema!({
+            "description": "Execution mode: `reactive`, `manual`, `continuous` (string), or `{ type: continuous, interval_ms: N }`.",
+            "oneOf": [
+                {
+                    "type": "string",
+                    "enum": ["reactive", "manual", "continuous"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "type": { "type": "string", "enum": ["continuous"] },
+                        "interval_ms": { "type": "integer", "minimum": 0.0 }
+                    },
+                    "required": ["type"],
+                    "additionalProperties": false
+                }
+            ]
         })
     }
 }
@@ -405,15 +343,11 @@ pub struct NodePortSchema {
     /// consumer states what it needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::AudioWindowContract>,
-    /// What an output states of its stream as the annotations of its pin. Its schema is open
-    /// JSON: only the control contract's schemars renders pin annotations.
+    /// What an output states of its stream as the annotations of its pin.
     #[serde(default)]
-    #[schemars(with = "serde_json::Value")]
     pub annotations: crate::pin_type::PinAnnotations,
-    /// The pin type this port declares; `None` when a setting chooses it. Its schema is
-    /// open JSON: only the control contract's schemars renders pin types.
+    /// The pin type this port declares; `None` when a setting chooses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<serde_json::Value>")]
     pub pin_type: Option<crate::pin_type::PinType>,
     /// The setting whose chosen pin type this port carries, as `pin_type = from_setting("…")`
     /// states it; `None` when the port states its type itself.

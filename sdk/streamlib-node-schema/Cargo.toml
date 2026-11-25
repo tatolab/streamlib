@@ -15,17 +15,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }  # used by schemars for enum_values literals
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }  # NFKD + combining-mark test the exposed-name cast drops accents with
-schemars = "0.8"  # JsonSchema impls on the node-schema and descriptor types
-# The schemars the control contract renders, behind the off-by-default `contract-json-schema`
-# feature. Renamed because the crate's other types still derive schemars 0.8; only `pin_type/`
-# derives this one.
-schemars_1 = { package = "schemars", version = "1.2", optional = true, features = ["uuid1"] }
+schemars = { version = "1.2", features = ["uuid1"] }  # JsonSchema impls on the node-schema and descriptor types, which the control contract renders
 uuid = { version = "1.11", features = ["serde"] }  # an Asset pin's stored value names its asset by UUID
-
-[features]
-# Adds the schemars 1.2 `JsonSchema` derive to the `pin_type/` types and the JSON Schema of each
-# built-in pin type's stored value, which the control contract renders.
-contract-json-schema = ["dep:schemars_1"]
 
 [dev-dependencies]
 rmp-serde = { workspace = true }

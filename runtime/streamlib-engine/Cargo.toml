@@ -107,7 +107,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true  # names the setting a node's config is refused at
 toml.workspace = true
-schemars = "0.8"  # JSON Schema generation from Rust types
+schemars = { version = "1.2", features = ["uuid1"] }  # JSON Schema generation from Rust types
 jsonschema = { version = "0.60", default-features = false }
 
 

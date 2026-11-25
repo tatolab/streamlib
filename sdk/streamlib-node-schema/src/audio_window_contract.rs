@@ -211,42 +211,13 @@ mod channel_count_declared_or_following_the_source {
 ///
 /// The derive would render `Option<u32>` as an integer-or-null, which is not a
 /// shape this field ever takes.
-fn audio_window_channels_json_schema(
-    _: &mut schemars::r#gen::SchemaGenerator,
-) -> schemars::schema::Schema {
-    use schemars::schema::{
-        InstanceType, NumberValidation, Schema, SchemaObject, SubschemaValidation,
-    };
-
-    let declared_count = Schema::Object(SchemaObject {
-        instance_type: Some(InstanceType::Integer.into()),
-        number: Some(Box::new(NumberValidation {
-            minimum: Some(1.0),
-            ..Default::default()
-        })),
-        ..Default::default()
-    });
-    let follows_the_source = Schema::Object(SchemaObject {
-        instance_type: Some(InstanceType::String.into()),
-        enum_values: Some(vec![serde_json::Value::String(
-            AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE.into(),
-        )]),
-        ..Default::default()
-    });
-
-    Schema::Object(SchemaObject {
-        metadata: Some(Box::new(schemars::schema::Metadata {
-            description: Some(
-                "Output channel count, or `source` to carry whatever count the source sends."
-                    .into(),
-            ),
-            ..Default::default()
-        })),
-        subschemas: Some(Box::new(SubschemaValidation {
-            one_of: Some(vec![declared_count, follows_the_source]),
-            ..Default::default()
-        })),
-        ..Default::default()
+fn audio_window_channels_json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Output channel count, or `source` to carry whatever count the source sends.",
+        "oneOf": [
+            { "type": "integer", "minimum": 1.0 },
+            { "type": "string", "enum": [AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE] },
+        ],
     })
 }
 

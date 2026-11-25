@@ -3,7 +3,6 @@
 
 use std::fmt;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{SchemaError, SchemaResult};
@@ -27,7 +26,7 @@ use crate::error::{SchemaError, SchemaResult};
 /// and a Python path led by an import's folder,
 /// `imports/<folder>/<module>:<qualname>`, names a class in that import's own
 /// node code, imported from that folder.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct NodeClassImportPath(String);
 
@@ -177,8 +176,7 @@ impl<'de> Deserialize<'de> for NodeClassImportPath {
 
 /// A plain string in the control contract, which reads a node's `type` and never checks its
 /// grammar: the runtime refuses a path it cannot read where the path is given.
-#[cfg(feature = "contract-json-schema")]
-impl schemars_1::JsonSchema for NodeClassImportPath {
+impl schemars::JsonSchema for NodeClassImportPath {
     fn inline_schema() -> bool {
         true
     }
@@ -187,8 +185,8 @@ impl schemars_1::JsonSchema for NodeClassImportPath {
         "NodeClassImportPath".into()
     }
 
-    fn json_schema(_generator: &mut schemars_1::SchemaGenerator) -> schemars_1::Schema {
-        schemars_1::json_schema!({ "type": "string" })
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "string" })
     }
 }
 

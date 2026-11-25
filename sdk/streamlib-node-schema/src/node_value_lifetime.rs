@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// How long a value set live on an input lives, as the input declares it, or as a `GraphInput`
 /// states it for the value it publishes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum NodeValueLifetime {

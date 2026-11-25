@@ -7,7 +7,7 @@
 //! a Tensor, and a member named twice. A pin type a client reads is checked for each member's
 //! own shape and the members' names alone, since the lists of types a member may be grow.
 
-use schemars_1::Schema;
+use schemars::Schema;
 use serde_json::{Map, Value, json};
 
 use super::BuiltInPinTypeName;

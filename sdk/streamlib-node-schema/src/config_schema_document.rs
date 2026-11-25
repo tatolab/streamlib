@@ -1,9 +1,15 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use schemars::schema::{RootSchema, Schema, SchemaObject, SingleOrVec};
-use schemars::visit::{Visitor, visit_root_schema, visit_schema_object};
+use schemars::generate::SchemaSettings;
+use schemars::transform::{Transform, transform_subschemas};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde_json::Value;
+
+use crate::node_reference_in_config::{NODE_REFERENCE_SCHEMA_KEYWORD, NodeReferenceInConfig};
+
+/// The keyword a 2020-12 document holds its definitions under.
+const DEFINITIONS_KEYWORD: &str = "$defs";
 
 /// Where a `$ref` points in a 2020-12 document.
 const DEFINITION_POINTER_PREFIX: &str = "#/$defs/";
@@ -18,22 +24,20 @@ pub trait NodeConfigJsonSchema {
     fn node_config_schema_document() -> Value;
 }
 
-impl<T: schemars::JsonSchema> NodeConfigJsonSchema for T {
+impl<T: JsonSchema> NodeConfigJsonSchema for T {
     fn node_config_schema_document() -> Value {
-        let root_schema = schemars::r#gen::SchemaSettings::draft07()
-            .with(|settings| {
-                settings.meta_schema = None;
-                settings.definitions_path = DEFINITION_POINTER_PREFIX.to_string();
-            })
-            .with_visitor(TupleItemsRewrittenAsPrefixItems)
-            .with_visitor(OnlyDeclaredDescriptionsKept)
-            .into_generator()
-            .into_root_schema_for::<T>();
+        let mut generator = SchemaSettings::draft2020_12()
+            .with(|settings| settings.meta_schema = None)
+            .into_generator();
+        let mut document = generator.root_schema_for::<T>();
 
-        let mut document =
-            serde_json::to_value(root_schema).expect("a schemars root schema always serializes");
-        rename_the_root_definitions_keyword_to_defs(&mut document);
-        document
+        let root_title = document.remove("title");
+        OnlyDeclaredDescriptionsKept.transform(&mut document);
+        if let Some(root_title) = root_title {
+            document.insert("title".to_string(), root_title);
+        }
+        mark_the_node_reference_definition(&mut generator, &mut document);
+        document.to_value()
     }
 }
 
@@ -43,115 +47,63 @@ impl<T: schemars::JsonSchema> NodeConfigJsonSchema for T {
 const DECLARED_DESCRIPTION_EXTENSION_KEY: &str = "x-streamlib-declared-description";
 
 /// `schema`, marked with the description its key declares.
-pub fn schema_carrying_the_declared_description(schema: Schema, description: &str) -> Schema {
-    let mut schema_object = schema.into_object();
-    schema_object.extensions.insert(
+pub fn schema_carrying_the_declared_description(mut schema: Schema, description: &str) -> Schema {
+    schema.insert(
         DECLARED_DESCRIPTION_EXTENSION_KEY.to_string(),
         Value::String(description.to_string()),
     );
-    Schema::Object(schema_object)
+    schema
 }
 
 /// Drops every `description` and `title` a doc comment filled, then gives each
-/// schema the description its attribute declared. The root keeps the `title`
-/// the generator names it by.
+/// schema the description its attribute declared.
 #[derive(Debug, Clone)]
 struct OnlyDeclaredDescriptionsKept;
 
-impl Visitor for OnlyDeclaredDescriptionsKept {
-    fn visit_root_schema(&mut self, root: &mut RootSchema) {
-        let root_title = root
-            .schema
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.title.clone());
-        visit_root_schema(self, root);
-        if root_title.is_some() {
-            root.schema.metadata().title = root_title;
-        }
-    }
-
-    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
-        visit_schema_object(self, schema);
-        if let Some(metadata) = schema.metadata.as_deref_mut() {
-            metadata.description = None;
-            metadata.title = None;
-        }
-        if let Some(Value::String(declared_description)) =
-            schema.extensions.remove(DECLARED_DESCRIPTION_EXTENSION_KEY)
-        {
-            schema.metadata().description = Some(declared_description);
-        }
-    }
-}
-
-/// `RootSchema` serializes its definitions map under the draft-07 keyword
-/// whatever the generator's pointer prefix says, so the root key is renamed
-/// here to match the `#/$defs/` the references already carry.
-fn rename_the_root_definitions_keyword_to_defs(document: &mut Value) {
-    if let Some(root_object) = document.as_object_mut()
-        && let Some(definitions) = root_object.remove("definitions")
-    {
-        root_object.insert("$defs".to_string(), definitions);
-    }
-}
-
-/// Rewrites a tuple's positional item schemas into the keyword 2020-12 reads
-/// them under.
-///
-/// Draft-07 says positional schemas with an array-valued `items` and bounds
-/// the rest with `additionalItems`; 2020-12 says `prefixItems` and lets
-/// `items` mean the rest. A single-schema `items` means the same thing in both
-/// and is left alone. Typed rather than a walk over the serialized document,
-/// so a config type whose own `default` or `enum` data happens to hold a key
-/// named `items` is never touched.
-#[derive(Debug, Clone)]
-struct TupleItemsRewrittenAsPrefixItems;
-
-impl Visitor for TupleItemsRewrittenAsPrefixItems {
-    fn visit_schema_object(&mut self, schema: &mut SchemaObject) {
-        visit_schema_object(self, schema);
-
-        let positional_item_schemas = match schema.array.as_deref_mut() {
-            Some(array) if matches!(array.items, Some(SingleOrVec::Vec(_))) => {
-                let Some(SingleOrVec::Vec(positional_item_schemas)) = array.items.take() else {
-                    return;
-                };
-                array.items = array.additional_items.take().map(SingleOrVec::Single);
-                positional_item_schemas
-            }
-            _ => return,
+impl Transform for OnlyDeclaredDescriptionsKept {
+    fn transform(&mut self, schema: &mut Schema) {
+        transform_subschemas(self, schema);
+        let Some(schema_object) = schema.as_object_mut() else {
+            return;
         };
-
-        schema.extensions.insert(
-            "prefixItems".to_string(),
-            Value::Array(
-                positional_item_schemas
-                    .into_iter()
-                    .map(|item_schema| {
-                        serde_json::to_value(item_schema).expect("a schema always serializes")
-                    })
-                    .collect(),
-            ),
-        );
+        schema_object.remove("description");
+        schema_object.remove("title");
+        if let Some(declared_description @ Value::String(_)) =
+            schema_object.remove(DECLARED_DESCRIPTION_EXTENSION_KEY)
+        {
+            schema_object.insert("description".to_string(), declared_description);
+        }
     }
 }
 
-/// The single-schema `items` the visitor left untouched, for the tests below.
-#[cfg(test)]
-fn single_schema_items(schema: &SchemaObject) -> Option<&schemars::schema::Schema> {
-    match schema.array.as_deref()?.items.as_ref()? {
-        SingleOrVec::Single(item_schema) => Some(item_schema),
-        SingleOrVec::Vec(_) => None,
+/// Marks the definition a config's node references point at with the keyword
+/// that says a key holds one. The contract states the same type without it, so
+/// the keyword is added to config documents only. The generator already named
+/// the type's definition while building `document`, so asking it again returns
+/// that name rather than registering a new one.
+fn mark_the_node_reference_definition(generator: &mut SchemaGenerator, document: &mut Schema) {
+    let reference = generator.subschema_for::<NodeReferenceInConfig>();
+    let Some(definition_name) = reference
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|pointer| pointer.strip_prefix(DEFINITION_POINTER_PREFIX))
+    else {
+        return;
+    };
+    if let Some(Value::Object(definition)) = document
+        .get_mut(DEFINITIONS_KEYWORD)
+        .and_then(|definitions| definitions.get_mut(definition_name))
+    {
+        definition.insert(
+            NODE_REFERENCE_SCHEMA_KEYWORD.to_string(),
+            Value::Object(serde_json::Map::new()),
+        );
     }
 }
 
 #[cfg(test)]
 mod config_schema_document_tests {
     use super::*;
-    use schemars::JsonSchema;
-    use schemars::r#gen::SchemaGenerator;
-    use schemars::schema::Schema;
     use serde::{Deserialize, Serialize};
 
     /// The shape a served document is checked against: a declared description
@@ -230,7 +182,7 @@ mod config_schema_document_tests {
     fn a_declared_description_is_served_on_a_key_whose_schema_is_a_reference() {
         let document = FixtureSourceConfig::node_config_schema_document();
         let scaling = &document["properties"]["scaling"];
-        assert_eq!(scaling["allOf"][0]["$ref"], "#/$defs/FixtureScaling");
+        assert_eq!(scaling["$ref"], "#/$defs/FixtureScaling");
         assert_eq!(
             scaling["description"],
             "How the frame maps onto the window."
@@ -330,29 +282,5 @@ mod config_schema_document_tests {
         assert_eq!(device_ids["type"], "array");
         assert_eq!(device_ids["items"]["type"], "string");
         assert!(device_ids.get("prefixItems").is_none(), "{device_ids}");
-    }
-
-    /// A tuple's draft-07 `additionalItems` is what 2020-12 calls `items`.
-    #[test]
-    fn a_bounded_tuple_tail_becomes_the_items_keyword() {
-        let mut schema = SchemaObject {
-            array: Some(Box::new(schemars::schema::ArrayValidation {
-                items: Some(SingleOrVec::Vec(vec![Schema::Bool(true)])),
-                additional_items: Some(Box::new(Schema::Bool(false))),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        TupleItemsRewrittenAsPrefixItems.visit_schema_object(&mut schema);
-
-        assert_eq!(
-            single_schema_items(&schema),
-            Some(&Schema::Bool(false)),
-            "the draft-07 tail schema becomes 2020-12's `items`"
-        );
-        assert_eq!(
-            schema.extensions.get("prefixItems"),
-            Some(&serde_json::json!([true]))
-        );
     }
 }
