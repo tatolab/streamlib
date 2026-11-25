@@ -31,9 +31,9 @@ __all__ = [
     "EncodedVideoPinType",
     "FloatPinType",
     "FloatSize",
-    "FromConfig",
-    "FromConfigChannelsOutputPortSampleRate",
-    "FromConfigImageOutputPortFrameRate",
+    "FromSetting",
+    "FromSettingChannelsOutputPortSampleRate",
+    "FromSettingImageOutputPortFrameRate",
     "ImageOutputPortFrameRate",
     "ImageStreamFrameRate",
     "IntegerPinType",
@@ -445,20 +445,20 @@ class StatedImageOutputPortFrameRate(TypedDict):
     stated: ImageStreamFrameRate
 
 
-class FromConfig(TypedDict):
-    """What a `from_config` key holds."""
+class FromSetting(TypedDict):
+    """What a `from_setting` key holds."""
 
-    config_key: str
+    setting: str
 
 
-class FromConfigImageOutputPortFrameRate(TypedDict):
-    """The value of the node's config key of this name."""
+class FromSettingImageOutputPortFrameRate(TypedDict):
+    """The value of the node's setting of this name."""
 
-    from_config: FromConfig
+    from_setting: FromSetting
 
 
 type ImageOutputPortFrameRate = (
-    StatedImageOutputPortFrameRate | FromConfigImageOutputPortFrameRate
+    StatedImageOutputPortFrameRate | FromSettingImageOutputPortFrameRate
 )
 """The frame rate a Texture output states, written on the class or read from one of its
 node's settings.
@@ -479,14 +479,14 @@ class StatedChannelsOutputPortSampleRate(TypedDict):
     stated: int
 
 
-class FromConfigChannelsOutputPortSampleRate(TypedDict):
-    """The value of the node's config key of this name."""
+class FromSettingChannelsOutputPortSampleRate(TypedDict):
+    """The value of the node's setting of this name."""
 
-    from_config: FromConfig
+    from_setting: FromSetting
 
 
 type ChannelsOutputPortSampleRate = (
-    StatedChannelsOutputPortSampleRate | FromConfigChannelsOutputPortSampleRate
+    StatedChannelsOutputPortSampleRate | FromSettingChannelsOutputPortSampleRate
 )
 """The sample rate an Audio output states, written on the class or read from one of its
 node's settings.

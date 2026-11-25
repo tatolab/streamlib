@@ -48,8 +48,8 @@ fn the_module_names_every_built_in_type_and_the_wire_form_of_a_declaration() {
 #[test]
 fn an_object_nested_under_the_same_key_in_two_places_is_one_class() {
     let module = render_python_pin_types_module(&committed_contract()).unwrap();
-    assert_eq!(module.matches("class FromConfig(TypedDict):").count(), 1);
-    assert!(module.contains("    from_config: FromConfig\n"));
+    assert_eq!(module.matches("class FromSetting(TypedDict):").count(), 1);
+    assert!(module.contains("    from_setting: FromSetting\n"));
 }
 
 #[test]

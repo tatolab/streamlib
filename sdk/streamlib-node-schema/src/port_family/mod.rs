@@ -99,21 +99,29 @@ pub enum OutputPortDeclaredNames {
 }
 
 /// The sample rate a Channels output states, written on the class or read
-/// from its node's config.
+/// from one of its node's settings, which the wire names `from_setting`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleRate {
     Stated(u32),
-    FromConfig { config_key: String },
+    #[serde(rename = "from_setting", alias = "from_config")]
+    FromConfig {
+        #[serde(rename = "setting", alias = "config_key")]
+        config_key: String,
+    },
 }
 
 /// The frame rate an Image output states, written on the class or read from
-/// its node's config.
+/// one of its node's settings, which the wire names `from_setting`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOutputPortFrameRate {
     Stated(crate::ImageStreamFrameRate),
-    FromConfig { config_key: String },
+    #[serde(rename = "from_setting", alias = "from_config")]
+    FromConfig {
+        #[serde(rename = "setting", alias = "config_key")]
+        config_key: String,
+    },
 }
 
 /// The sample type of a Channels output.

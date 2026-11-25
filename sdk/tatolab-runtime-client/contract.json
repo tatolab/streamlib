@@ -10530,26 +10530,25 @@
             "additionalProperties": false
           },
           {
-            "description": "The value of the node's config key of this name.",
+            "description": "The value of the node's setting of this name.",
             "type": "object",
             "properties": {
-              "from_config": {
+              "from_setting": {
                 "type": "object",
                 "properties": {
-                  "config_key": {
+                  "setting": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "config_key"
+                  "setting"
                 ]
               }
             },
             "required": [
-              "from_config"
+              "from_setting"
             ],
-            "additionalProperties": false,
-            "x-removed-in": 4
+            "additionalProperties": false
           }
         ],
         "description": "The frame rate a Texture output states, written on the class or read from one of its node's settings."
@@ -10593,26 +10592,25 @@
             "additionalProperties": false
           },
           {
-            "description": "The value of the node's config key of this name.",
+            "description": "The value of the node's setting of this name.",
             "type": "object",
             "properties": {
-              "from_config": {
+              "from_setting": {
                 "type": "object",
                 "properties": {
-                  "config_key": {
+                  "setting": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "config_key"
+                  "setting"
                 ]
               }
             },
             "required": [
-              "from_config"
+              "from_setting"
             ],
-            "additionalProperties": false,
-            "x-removed-in": 4
+            "additionalProperties": false
           }
         ],
         "description": "The sample rate an Audio output states, written on the class or read from one of its node's settings."
