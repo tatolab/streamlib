@@ -145,6 +145,18 @@ def test_a_device_the_backend_cannot_open_refuses_setup_naming_it(
         microphone.setup(microphone_wired_to_a_reader.microphone_context)
 
 
+def test_an_empty_device_id_opens_the_backends_default_device(
+    microphone_wired_to_a_reader,
+):
+    microphone = a_microphone(device_id="")
+    context = microphone_wired_to_a_reader.microphone_context
+    microphone.setup(context)
+    try:
+        assert any("<default>" in record for record in microphone_wired_to_a_reader.log_records)
+    finally:
+        microphone.teardown(context)
+
+
 def test_a_microphone_stopped_and_started_again_keeps_publishing(
     microphone_wired_to_a_reader,
 ):
