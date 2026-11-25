@@ -157,11 +157,13 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "name",
         "type",
         "input_values",
-        "exposed_config_fields",
         "studio",
         "fragment",
     ],
+    // `exposed_config_fields` and `config_checksum` stay so the graphs recorded while `graph`
+    // rendered them still load; neither is read.
     live_keys: &[
+        "exposed_config_fields",
         "kind",
         "language",
         "config_checksum",

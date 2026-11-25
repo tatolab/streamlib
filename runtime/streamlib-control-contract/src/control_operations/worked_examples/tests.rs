@@ -168,11 +168,19 @@ fn every_suggested_call_in_an_example_parses_as_the_suggested_operations_request
 }
 
 #[test]
-fn no_example_calls_or_suggests_a_replaced_operation() {
+fn no_example_calls_or_suggests_a_replaced_or_removed_operation() {
     let replaced: BTreeSet<&str> = CONTROL_OPERATIONS
         .iter()
         .filter(|declaration| declaration.replaced_by.is_some())
         .map(|declaration| declaration.method_name)
+        .chain([
+            "set_node_config",
+            "set_pin_value",
+            "set_exposed_config_fields",
+            "list_project_node_types",
+            "write_studio_view_output",
+            "write_graph_input",
+        ])
         .collect();
     for (declaration, example) in every_example() {
         for value in every_value_of(&example) {

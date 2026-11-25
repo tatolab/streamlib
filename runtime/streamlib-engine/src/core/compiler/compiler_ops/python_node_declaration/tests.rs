@@ -495,8 +495,8 @@ fn a_ports_family_reads_into_its_descriptor_and_a_key_its_family_does_not_take_i
     assert_eq!(
         camera.descriptor.outputs[0].family.frame_rate,
         Some(
-            crate::core::descriptors::ImageOutputPortFrameRate::FromConfig {
-                config_key: "frames_per_second".into()
+            crate::core::descriptors::ImageOutputPortFrameRate::FromSetting {
+                setting: "frames_per_second".into()
             }
         )
     );

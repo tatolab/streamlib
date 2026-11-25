@@ -150,8 +150,8 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// Apply `request` as [`Self::apply_one_request`] does, as each operation it stands for: a
-    /// `disconnect` closes the gap it leaves in a pin group; a `set_node_input_value` choosing another type for a `GraphInput`
-    /// carries its saved value into that type.
+    /// `disconnect` closes the gap it leaves in a pin group; a `set_node_input_value` choosing
+    /// another type for a `GraphInput` carries its saved value into that type.
     pub(super) fn apply_one_action(
         &self,
         request: StreamGraphAction,
@@ -160,16 +160,15 @@ impl StreamGraphTransactionExecutor<'_> {
     ) -> Result<Vec<OneGraphRequestApplied>, GraphRequestRefusal> {
         match &request {
             StreamGraphAction::Disconnect { .. } => {
-                return self
-                    .apply_a_disconnect_closing_the_gap_it_leaves(request, stream_id, staged);
+                self.apply_a_disconnect_closing_the_gap_it_leaves(request, stream_id, staged)
             }
             StreamGraphAction::SetNodeInputValue { .. } => {
-                return self.apply_a_set_carrying_a_retyped_saved_value(request, stream_id, staged);
+                self.apply_a_set_carrying_a_retyped_saved_value(request, stream_id, staged)
             }
-            _ => {}
+            _ => self
+                .apply_one_request(request, stream_id, staged)
+                .map(|applied| vec![applied]),
         }
-        self.apply_one_request(request, stream_id, staged)
-            .map(|applied| vec![applied])
     }
 }
 

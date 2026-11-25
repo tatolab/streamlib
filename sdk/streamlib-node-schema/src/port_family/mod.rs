@@ -104,10 +104,10 @@ pub enum OutputPortDeclaredNames {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelsOutputPortSampleRate {
     Stated(u32),
-    #[serde(rename = "from_setting", alias = "from_config")]
-    FromConfig {
-        #[serde(rename = "setting", alias = "config_key")]
-        config_key: String,
+    #[serde(alias = "from_config")]
+    FromSetting {
+        #[serde(alias = "config_key")]
+        setting: String,
     },
 }
 
@@ -117,10 +117,10 @@ pub enum ChannelsOutputPortSampleRate {
 #[serde(rename_all = "snake_case")]
 pub enum ImageOutputPortFrameRate {
     Stated(crate::ImageStreamFrameRate),
-    #[serde(rename = "from_setting", alias = "from_config")]
-    FromConfig {
-        #[serde(rename = "setting", alias = "config_key")]
-        config_key: String,
+    #[serde(alias = "from_config")]
+    FromSetting {
+        #[serde(alias = "config_key")]
+        setting: String,
     },
 }
 
@@ -469,7 +469,7 @@ pub fn output_port_frame_rate_resolved_against_config(
     let config_key = match declaration.frame_rate.as_ref() {
         None => return Ok(None),
         Some(ImageOutputPortFrameRate::Stated(frame_rate)) => return Ok(Some(*frame_rate)),
-        Some(ImageOutputPortFrameRate::FromConfig { config_key }) => config_key,
+        Some(ImageOutputPortFrameRate::FromSetting { setting }) => setting,
     };
     let refusal = |held: &serde_json::Value| {
         format!(

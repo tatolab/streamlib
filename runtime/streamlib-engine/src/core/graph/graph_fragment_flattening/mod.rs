@@ -425,7 +425,6 @@ impl GraphFragmentAsDrawn {
         &self,
         running_nodes_by_cast_name: &mut HashMap<String, GraphNodeOutput>,
         running_links: &[LinkOutput],
-        node_types: &NodeTypesOneStreamResolves,
     ) -> GraphNodeOutput {
         let stored = self.node.fragment.clone().unwrap_or_default();
         let mut nodes = Vec::new();
@@ -437,11 +436,9 @@ impl GraphFragmentAsDrawn {
                     .iter()
                     .find(|held| held.path_of_names == name_it_runs_under)
                 {
-                    Some(held) => held.rendered_as_a_container(
-                        running_nodes_by_cast_name,
-                        running_links,
-                        node_types,
-                    ),
+                    Some(held) => {
+                        held.rendered_as_a_container(running_nodes_by_cast_name, running_links)
+                    }
                     None => rendered_as_stored(node),
                 }
             } else if let Some(interface_node) = self
@@ -666,11 +663,7 @@ impl GraphFragmentsAsDrawn {
     /// Render each fragment into `graph_response`, a render of the graph the runtime runs: its
     /// nodes and every link with an end on one taken out, and the fragment put back where it
     /// was drawn as one container holding them, with each drawn link to it.
-    pub fn render_into(
-        &self,
-        graph_response: &mut GraphResponse,
-        node_types: &NodeTypesOneStreamResolves,
-    ) {
+    pub fn render_into(&self, graph_response: &mut GraphResponse) {
         if self.fragments.is_empty() {
             return;
         }
@@ -697,11 +690,8 @@ impl GraphFragmentsAsDrawn {
             true
         });
         for fragment in &self.fragments {
-            let container = fragment.rendered_as_a_container(
-                &mut running_nodes_by_cast_name,
-                &running_links,
-                node_types,
-            );
+            let container =
+                fragment.rendered_as_a_container(&mut running_nodes_by_cast_name, &running_links);
             let position = fragment
                 .position_among_its_levels_nodes
                 .min(graph_response.nodes.len());

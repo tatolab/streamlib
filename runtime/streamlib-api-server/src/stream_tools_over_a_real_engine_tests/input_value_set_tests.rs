@@ -205,51 +205,16 @@ async fn a_committed_input_value_is_saved_applied_recorded_and_undone() {
     assert_eq!(mixer["input_values"], json!({}), "{mixer}");
 }
 
-/// The node catalog lists the mixer's config field as an input that takes no wire, and setting
-/// it by that name with `set_node_input_value` saves it and sets it on the running node; a field
-/// that may be null carries no pin type.
+/// A setting of the mixer is set by its name with `set_node_input_value`, which saves it and sets
+/// it on the running node.
 ///
-/// Mental-revert: rendering only the declared inputs leaves `frame_width` out of the catalog's
-/// inputs.
+/// Mental-revert: refusing a name no port declares refuses `frame_width`.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_catalog_lists_a_setting_that_set_node_input_value_sets() {
+async fn a_setting_is_set_by_its_name_with_set_node_input_value() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_mixer();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-
-    let catalog = serde_json::to_value(crate::handlers::node_catalog_response(
-        &engine
-            .operations_on_the_loaded_streams()
-            .node_catalog_of_the_stream_a_call_names(&stream_id)
-            .expect("the stream is loaded"),
-    ))
-    .expect("the catalog renders");
-    let mixer_type = catalog["nodes"]
-        .as_array()
-        .expect("node types")
-        .iter()
-        .find(|node_type| {
-            node_type["type"] == InputValueTestNode::node_class_import_path().as_str()
-        })
-        .expect("the catalog lists the mixer's type");
-    let inputs = mixer_type["inputs"].as_array().expect("inputs");
-    assert_eq!(
-        inputs
-            .iter()
-            .map(|input| input["name"].as_str().expect("a name"))
-            .collect::<Vec<_>>(),
-        ["gain", "video", "frame_width"],
-        "{mixer_type}"
-    );
-    let frame_width = &inputs[2];
-    assert_eq!(
-        frame_width["input_mode"],
-        json!({ "mode": "setting_only", "read": "at_setup" }),
-        "{frame_width}"
-    );
-    assert!(frame_width.get("pin_type").is_none(), "{frame_width}");
-    assert!(frame_width.get("family").is_none(), "{frame_width}");
 
     engine
         .the_answer_or_the_refusal_of(
@@ -258,7 +223,7 @@ async fn the_catalog_lists_a_setting_that_set_node_input_value_sets() {
                     "value": 640, "author": an_agent_named("alice") }),
         )
         .await
-        .expect("the setting is set by the name the catalog lists");
+        .expect("the setting is set by its name");
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
     assert_eq!(
         mixer["input_values"],

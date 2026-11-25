@@ -405,8 +405,6 @@ pub(crate) fn the_listed_origin_of(origin: NodeTypeSourceOrigin) -> NodeTypeSour
     }
 }
 
-/// The node types the runtime brings itself, by import path, each filed under the group the
-/// project's and its imports' `node_type_groups` put it in, else the one it declares.
 /// `read`, a node type its source declares, as `list_node_types` lists it, its description
 /// coming from `described_from`.
 pub(crate) fn a_node_type_listed(
@@ -423,6 +421,8 @@ pub(crate) fn a_node_type_listed(
     }
 }
 
+/// The node types the runtime brings itself, by import path, each filed under the group the
+/// project's and its imports' `node_type_groups` put it in, else the one it declares.
 fn the_built_in_source(node_type_groups: &NodeTypeGroupsOfAProject) -> NodeTypeSourceListed {
     NodeTypeSourceListed {
         origin: NodeTypeSourceListedOrigin::BuiltIn,

@@ -393,14 +393,14 @@ fn a_key_this_runtime_does_not_read_is_refused_naming_it_and_where_it_sits() {
             serde_json::json!({"nodes": [with(a_node.clone(), "confg")]}),
             [
                 "node `camera` carries the key `confg`",
-                "`id`, `name`, `type`, `input_values`, `exposed_config_fields`, `studio` and `fragment`",
+                "`id`, `name`, `type`, `input_values`, `studio` and `fragment`",
             ],
         ),
         (
             serde_json::json!({"nodes": [{"name": "camera", "typ": A_CAMERA_CLASS}]}),
             [
                 "node `camera` carries the key `typ`",
-                "`id`, `name`, `type`, `input_values`, `exposed_config_fields`, `studio` and `fragment`",
+                "`id`, `name`, `type`, `input_values`, `studio` and `fragment`",
             ],
         ),
         (

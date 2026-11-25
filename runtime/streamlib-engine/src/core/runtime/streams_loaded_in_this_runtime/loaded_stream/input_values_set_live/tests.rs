@@ -380,11 +380,7 @@ fn the_graph_renders_the_value_each_input_reads_and_keeps_its_pins_saved() {
         assert_eq!(rendered_input["value"], json!(value));
         assert_eq!(rendered_input["value_comes_from"], "live");
     }
-    assert_eq!(
-        rendered_mix["input_values"],
-        json!({ "b": 0.1 }),
-        "the saved values stay"
-    );
+    assert_eq!(rendered_mix["input_values"], json!({ "b": 0.1 }), "saved");
 }
 
 #[test]

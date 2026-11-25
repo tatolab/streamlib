@@ -28,7 +28,6 @@ use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::{
     BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamListingState,
-    StreamLocation,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 
@@ -36,7 +35,6 @@ use std::time::Duration;
 
 use super::*;
 use serde_json::json;
-use streamlib::sdk::descriptors::NodeClassImportPath;
 
 mod graph_edit_tool_tests;
 mod graph_logs_and_stream_tool_tests;

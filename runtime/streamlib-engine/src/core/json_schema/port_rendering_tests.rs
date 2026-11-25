@@ -275,8 +275,8 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
         crate::core::descriptors::PortFamily::Image,
         Some(serde_json::json!({"frames_per_second": 30})),
         Some(
-            crate::core::descriptors::ImageOutputPortFrameRate::FromConfig {
-                config_key: "frames_per_second".into(),
+            crate::core::descriptors::ImageOutputPortFrameRate::FromSetting {
+                setting: "frames_per_second".into(),
             },
         ),
     )))

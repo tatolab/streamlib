@@ -301,8 +301,8 @@ mod tests {
         let camera_video = output_port(
             "video",
             PortFamilyDeclaration {
-                frame_rate: Some(ImageOutputPortFrameRate::FromConfig {
-                    config_key: "frames_per_second".into(),
+                frame_rate: Some(ImageOutputPortFrameRate::FromSetting {
+                    setting: "frames_per_second".into(),
                 }),
                 ..PortFamilyDeclaration::of_family(PortFamily::Image)
             },

@@ -829,8 +829,10 @@ fn the_family_of_an_output_port_in(
         .flatten()
         .find(|port| port["name"] == end.port.as_str())
         .and_then(|port| {
-            serde_json::from_value::<streamlib::sdk::descriptors::PinType>(port["pin_type"].clone())
-                .ok()
+            <streamlib::sdk::descriptors::PinType as serde::Deserialize>::deserialize(
+                &port["pin_type"],
+            )
+            .ok()
         })
         .and_then(|pin_type| streamlib::sdk::descriptors::PortFamily::carrying(&pin_type));
     carried_by_its_pin_type

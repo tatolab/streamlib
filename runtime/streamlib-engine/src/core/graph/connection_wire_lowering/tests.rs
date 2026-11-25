@@ -115,10 +115,9 @@ fn rendered(resolution: &GraphSnapshotWithGraphOnlyNodesResolved) -> GraphRespon
         studio: None,
         function_node_pool: None,
     };
-    resolution.graph_only_nodes_as_drawn.render_into(
-        &mut graph_response,
-        &node_types_of_a_relay_its_tracks_and_their_sends(),
-    );
+    resolution
+        .graph_only_nodes_as_drawn
+        .render_into(&mut graph_response);
     graph_response
 }
 

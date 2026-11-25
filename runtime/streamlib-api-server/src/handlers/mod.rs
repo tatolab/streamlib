@@ -1,17 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The local API's router, built by [`build_router`], the graph rendering the control operations
-//! and the MCP resources share, and the node catalog rendering the control operations read.
+//! The local API's router, built by [`build_router`], and the graph rendering the control
+//! operations and the MCP resources share.
 
 use axum::{Router, routing::get};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use streamlib::sdk::descriptors::NodeDescriptor;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::json_schema::{
-    NodeDescriptorOutput, PortFamilyDescriptorOutput, RegistryResponse,
-};
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, StreamListing};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
@@ -182,17 +178,6 @@ pub(crate) fn give_the_stream_graph_its_listed_condition(
             "the stream `{}`'s condition was left out of its graph: {not_serialized}",
             listing.stream_id
         ),
-    }
-}
-
-/// A node catalog: each descriptor rendered, and every port family.
-pub(crate) fn node_catalog_response(node_catalog: &[NodeDescriptor]) -> RegistryResponse {
-    RegistryResponse {
-        nodes: node_catalog
-            .iter()
-            .map(NodeDescriptorOutput::from)
-            .collect(),
-        families: PortFamilyDescriptorOutput::every_port_family(),
     }
 }
 
