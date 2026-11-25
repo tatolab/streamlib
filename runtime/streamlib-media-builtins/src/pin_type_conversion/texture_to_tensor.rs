@@ -42,7 +42,6 @@ pub const TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME: &str = "image";
         "array",
         description = "One Array frame per Image frame, its slot as the `image` attribute",
         pin_type = Tensor,
-        names = ["image"],
         residency = "gpu"
     ),
 )]

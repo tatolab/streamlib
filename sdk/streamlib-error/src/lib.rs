@@ -160,9 +160,9 @@ pub enum Error {
         port_name: String,
     },
 
-    /// Stream facts stated for an output port of another family.
+    /// Stream facts stated for an output port of a pin type they do not describe.
     #[error(transparent)]
-    StreamFactsOfAnotherFamily(#[from] streamlib_node_schema::StreamFactsOfAnotherFamily),
+    StreamFactsOfAnotherPinType(#[from] streamlib_node_schema::StreamFactsOfAnotherPinType),
 
     /// A node named in a stream has no output port of the name given.
     #[error(

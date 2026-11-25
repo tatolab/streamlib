@@ -197,9 +197,9 @@ impl GraphNode {
     }
 
     /// Resolve this node's ports against what its input values declare of them: a
-    /// `GraphInput`'s `value` ports take the pin type, the family, the range and the lifetime
-    /// its settings name, a `Constant`'s the pin type its `pin_type` chooses, and every output
-    /// carries its stream facts on the family its settings read at setup choose. The ports of
+    /// `GraphInput`'s `value` ports take the pin type, the range and the lifetime its settings
+    /// name, a `Constant`'s the pin type its `pin_type` chooses, and every output carries its
+    /// stream facts on the pin type its settings read at setup choose. The ports of
     /// every other node type are as it declares them.
     pub(crate) fn resolve_the_ports_its_settings_declare(&mut self) {
         if self.node_type.carries_the_value_its_pin_type_chooses() {
@@ -207,7 +207,7 @@ impl GraphNode {
                 .resolved_against_the_input_values(&self.node_type, &self.input_values);
         }
         self.stream_facts_of_output_ports
-            .take_the_families_declared_by(
+            .take_the_pin_types_declared_by(
                 &self.ports.outputs,
                 Some(&self.the_values_its_port_facts_read()),
             );

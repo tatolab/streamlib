@@ -109,7 +109,7 @@ fn a_node_view_manifest_reads_with_its_defaults_filled_in() {
 
     assert_eq!(manifest.title, "DJ Deck");
     assert_eq!(manifest.placement, TatolabViewPlacement::Node);
-    assert_eq!(manifest.inputs[0].family, PortFamily::Channels);
+    assert_eq!(manifest.inputs[0].pin_type, PinType::Audio {});
     assert_eq!(manifest.outputs[0].range, Some([0.0, 1.0]));
     assert_eq!(manifest.capabilities, vec![TatolabViewCapability::Camera]);
     assert!(manifest.accepts.files.is_empty());
@@ -166,7 +166,7 @@ fn each_way_a_manifest_falls_short_is_named_by_its_field() {
         "`outputs[0].name`: a port name is lower-case letters, digits and underscores.",
         "`outputs[1].name`: `Fader` is named twice.",
         "`outputs[0].range`: a range is [lowest, highest], lowest first.",
-        "`outputs[0].range`: only an Array port carries a range.",
+        "`outputs[0].range`: only a Tensor port carries a range.",
         "`placement`: an `area` view has no node",
     ] {
         assert!(refusal.contains(expected), "{expected} in {refusal}");
@@ -294,35 +294,27 @@ fn a_port_naming_its_pin_type_serves_the_family_its_messages_belong_to() {
     let read: Vec<_> = manifest
         .outputs
         .iter()
-        .map(|port| (port.name.as_str(), port.family, port.pin_type.clone()))
+        .map(|port| (port.name.as_str(), port.pin_type.clone()))
         .collect();
     assert_eq!(
         read,
         [
             (
                 "picture",
-                PortFamily::Image,
                 PinType::Texture {
                     pixel_formats: vec![]
                 }
             ),
-            (
-                "level",
-                PortFamily::Channels,
-                PinType::Float { exact_size: None }
-            ),
-            ("weights", PortFamily::Array, PinType::Tensor {}),
+            ("level", PinType::Float { exact_size: None }),
+            ("weights", PinType::Tensor {}),
         ]
     );
 }
 
-/// A port of a bundle of numbers, a record of named numbers to or from a node, rides Records,
+/// A port of a bundle of numbers, a record of named numbers to or from a node, rides one message
 /// whole, as one map of its members; a bundle holding a Texture rides no message a view reads.
-///
-/// Mental-revert: finding the family with `PortFamily::carrying` alone refuses the bundle of
-/// numbers, which no built-in type's family carries.
 #[test]
-fn a_port_of_a_bundle_of_numbers_rides_records_and_one_holding_a_texture_is_refused() {
+fn a_port_of_a_bundle_of_numbers_rides_one_message_and_one_holding_a_texture_is_refused() {
     let camera = json!({ "type": "bundle", "members": [
         { "name": "yaw", "member_type": { "type": "float" } },
         { "name": "burst", "member_type": { "type": "integer" } },
@@ -332,7 +324,6 @@ fn a_port_of_a_bundle_of_numbers_rides_records_and_one_holding_a_texture_is_refu
         json!([{ "name": "camera", "pin_type": camera }]),
     ))
     .expect("a bundle of numbers opens");
-    assert_eq!(manifest.outputs[0].family, PortFamily::Records);
     assert_eq!(
         manifest.outputs[0].pin_type,
         serde_json::from_value::<PinType>(camera).expect("a bundle pin type")
@@ -515,8 +506,8 @@ fn an_output_a_panel_writes_of_a_type_that_holds_no_value_is_refused() {
     .expect_err("a panel writes no Trigger value");
     assert!(
         refusal.contains(
-            "`outputs[0].pin_type`: a panel writes a value onto a `records` output, and a \
-             Trigger holds none."
+            "`outputs[0].pin_type`: a panel writes a value onto this output, and a Trigger \
+             holds none."
         ),
         "{refusal}"
     );

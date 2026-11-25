@@ -54,8 +54,10 @@ fn a_chain_of_five_nodes() -> StreamGraphDocument {
     .unwrap()
 }
 
-fn every_output_port_is_an_image(_: &StreamGraphDocumentLinkEnd) -> Result<String, String> {
-    Ok("image".to_owned())
+fn every_output_port_is_a_texture(
+    _: &StreamGraphDocumentLinkEnd,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(Some(json!({ "type": "texture" })))
 }
 
 fn fresh_uuids() -> impl FnMut() -> Uuid {
@@ -108,7 +110,7 @@ fn collapse_blur_and_tint(
             Uuid::from_u128(0x99),
             "look",
             uuid(LOOK_STREAM),
-            &every_output_port_is_an_image,
+            &every_output_port_is_a_texture,
             &mut fresh_uuids(),
         )
         .unwrap()
@@ -180,12 +182,12 @@ fn a_collapsed_selection_is_a_new_stream_placed_where_its_nodes_were() {
             (
                 "blur-video".to_owned(),
                 GRAPH_INPUT_NODE_TYPE.to_owned(),
-                json!({ "port": "blur-video", "family": "image" })
+                json!({ "port": "blur-video", "pin_type": { "type": "texture" } })
             ),
             (
                 "tint-video".to_owned(),
                 GRAPH_OUTPUT_NODE_TYPE.to_owned(),
-                json!({ "port": "tint-video", "family": "image" })
+                json!({ "port": "tint-video", "pin_type": { "type": "texture" } })
             ),
         ]
     );
@@ -282,9 +284,9 @@ fn an_unlocked_placed_stream_passing_its_input_straight_to_its_output_links_the_
         "asset": LOOK_STREAM,
         "nodes": [
             { "id": passing_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-              "input_values": { "port": "video", "family": "image" } },
+              "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
             { "id": passing_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-              "input_values": { "port": "graded", "family": "image" } },
+              "input_values": { "port": "graded", "pin_type": { "type": "texture" } } },
         ],
         "links": [a_link(passing_input, "value", passing_output, "value")],
     }))
@@ -322,11 +324,11 @@ fn a_generators_frozen_output_unlocked_is_plain_nodes_a_refresh_no_longer_reache
               "fragment": {
                   "nodes": [
                       { "id": generated_input, "name": "graphinput", "type": GRAPH_INPUT_NODE_TYPE,
-                        "input_values": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
                       { "id": generated_blur, "name": "soft-blur", "type": "looks.nodes:Blur",
                         "input_values": { "radius": 3 } },
                       { "id": generated_output, "name": "graphoutput", "type": GRAPH_OUTPUT_NODE_TYPE,
-                        "input_values": { "port": "out", "family": "image" } },
+                        "input_values": { "port": "out", "pin_type": { "type": "texture" } } },
                   ],
                   "links": [
                       a_link(generated_input, "value", generated_blur, "video"),
@@ -382,7 +384,7 @@ fn a_stream_interface_node_and_a_name_clash_are_refused() {
     let document = StreamGraphDocument::from_value(json!({
         "nodes": [
             { "id": input, "name": "camera-in", "type": GRAPH_INPUT_NODE_TYPE,
-              "input_values": { "port": "camera", "family": "image" } },
+              "input_values": { "port": "camera", "pin_type": { "type": "texture" } } },
             { "id": BLUR, "name": "blur", "type": "looks.nodes:Blur" },
             { "id": placed, "name": "other", "type": STREAM_FRAGMENT_NODE_TYPE,
               "input_values": { "stream": { "asset": "00000000-0000-4000-8000-000000000002" } } },
@@ -400,7 +402,7 @@ fn a_stream_interface_node_and_a_name_clash_are_refused() {
             Uuid::from_u128(0x99),
             name,
             uuid(LOOK_STREAM),
-            &every_output_port_is_an_image,
+            &every_output_port_is_a_texture,
             &mut fresh_uuids(),
         )
     };
@@ -487,16 +489,16 @@ fn an_unlocked_placed_stream_holding_a_generators_output_copies_every_node_and_g
         "asset": LOOK_STREAM,
         "nodes": [
             { "id": placed_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-              "input_values": { "port": "video", "family": "image" } },
+              "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
             { "id": subgraph, "name": "grade", "type": "looks.generators:grade",
               "fragment": {
                   "nodes": [
                       { "id": subgraph_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
-                        "input_values": { "port": "video", "family": "image" } },
+                        "input_values": { "port": "video", "pin_type": { "type": "texture" } } },
                       { "id": held_in_the_subgraph, "name": "tint", "type": "looks.nodes:Tint",
                         "studio": { "group": group_in_the_subgraph } },
                       { "id": subgraph_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-                        "input_values": { "port": "graded", "family": "image" } },
+                        "input_values": { "port": "graded", "pin_type": { "type": "texture" } } },
                   ],
                   "groups": [{ "id": group_in_the_subgraph, "title": "tints" }],
                   "links": [
@@ -505,7 +507,7 @@ fn an_unlocked_placed_stream_holding_a_generators_output_copies_every_node_and_g
                   ],
               } },
             { "id": placed_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
-              "input_values": { "port": "graded", "family": "image" } },
+              "input_values": { "port": "graded", "pin_type": { "type": "texture" } } },
         ],
         "links": [
             a_link(placed_input, "value", subgraph, "video"),

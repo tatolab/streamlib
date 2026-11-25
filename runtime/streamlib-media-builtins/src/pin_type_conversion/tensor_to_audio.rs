@@ -61,7 +61,6 @@ impl Default for TensorToAudioSettings {
         "channels",
         description = "One Channels block per frame, one channel per name in `channel_names`",
         pin_type = Audio,
-        names = from_setting("channel_names"),
         rate = from_setting("sample_rate")
     ),
 )]

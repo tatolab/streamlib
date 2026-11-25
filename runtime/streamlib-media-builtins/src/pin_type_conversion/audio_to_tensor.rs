@@ -33,7 +33,6 @@ pub const AUDIO_TO_TENSOR_SAMPLES_ATTRIBUTE_NAME: &str = "samples";
         "array",
         description = "One Array frame per block, its samples as the `samples` attribute",
         pin_type = Tensor,
-        names = ["samples"],
         residency = "cpu"
     ),
 )]

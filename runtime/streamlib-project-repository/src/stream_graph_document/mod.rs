@@ -39,7 +39,7 @@ use input_values_and_asset_references_at_every_level::{
 
 pub use fragment_node_uuids_kept_by_name::fragment_with_each_node_uuid_kept_by_its_name;
 pub use node_types_of_the_graph_itself::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PIN_TYPE_SETTING, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
     is_a_node_type_of_the_graph_itself,
 };

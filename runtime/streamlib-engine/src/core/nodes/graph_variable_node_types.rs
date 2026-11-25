@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinDeclaration, PinFlow,
-    PinType, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    PinType, PortDescriptor,
 };
 use crate::core::error::Result;
 use crate::core::graph::graph_variable_resolution::{
@@ -146,19 +146,18 @@ fn variable_setting(description: &str) -> PortDescriptor {
 }
 
 /// A `value` port stating `description`, carried as a value of any type: the type of the port
-/// linked into the setter, its family alone deciding a link until the graph resolves it.
+/// linked into the setter.
 fn value_port(description: &str) -> PortDescriptor {
     PortDescriptor::new(
         GRAPH_VARIABLE_VALUE_PORT_NAME,
         description,
         false,
-        PortFamilyDeclaration::of_family(PortFamily::Records),
+        PinDeclaration {
+            pin_type: DeclaredPinType::Any,
+            flow: PinFlow::Value,
+            annotations: PinAnnotations::default(),
+            former_names: Vec::new(),
+            may_be_unset: false,
+        },
     )
-    .with_pin_declaration(PinDeclaration {
-        pin_type: DeclaredPinType::Any,
-        flow: PinFlow::Value,
-        annotations: PinAnnotations::default(),
-        former_names: Vec::new(),
-        may_be_unset: false,
-    })
 }

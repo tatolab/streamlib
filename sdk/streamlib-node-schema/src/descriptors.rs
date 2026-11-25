@@ -95,6 +95,23 @@ impl PortDescriptor {
         }
     }
 
+    /// A setting named `name` whose schema states no one pin type: it takes no wire, and its
+    /// value is checked by its schema alone.
+    pub fn a_setting_of_no_pin_type(
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            pin_declaration: None,
+            ..Self::new(
+                name,
+                description,
+                false,
+                PinDeclaration::exactly(PinType::String {}),
+            )
+        }
+    }
+
     /// The pin type and flow the port declares, as its author states them.
     pub fn declared_pin(&self) -> Option<PinDeclaration> {
         self.pin_declaration.clone()

@@ -9,8 +9,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use streamlib_node_schema::PortFamily;
-use streamlib_node_schema::pin_type::{BundleMessage, PinType, built_in_pin_type};
+use streamlib_node_schema::pin_type::{BundleMessage, PinType};
 
 use crate::manifest_fields::{
     a_value_never_written_as_null, is_a_contract_version,
@@ -26,14 +25,37 @@ pub const VIEW_CONTRACT_READ_MINOR: u64 = 1;
 /// The first minor of [`VIEW_CONTRACT_READ_MAJOR`] in which a declared port names its `pin_type`.
 const VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE: u64 = 1;
 
-/// The families of the outputs a panel writes: each value of one is set on the view node's input
-/// of the output's name, and published on the output.
-pub const FAMILIES_A_PANEL_WRITES: [PortFamily; 3] =
-    [PortFamily::Array, PortFamily::Channels, PortFamily::Records];
+/// Whether a panel writes an output of `pin_type`: each value of one is set on the view node's
+/// input of the output's name, and published on the output. A picture or an encoded stream only
+/// a node writes.
+pub fn a_panel_writes(pin_type: &PinType) -> bool {
+    !matches!(
+        pin_type,
+        PinType::Texture { .. } | PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }
+    )
+}
 
-/// Whether a panel writes an output of `family`.
-pub fn a_panel_writes(family: PortFamily) -> bool {
-    FAMILIES_A_PANEL_WRITES.contains(&family)
+/// Whether a whole value of `pin_type` rides one message a view's port reads or writes: no List,
+/// named type, Connection or setting's type does, nor a bundle holding a picture, audio or an
+/// encoded unit, which travels as a Bundle frame only a node takes apart.
+fn rides_one_message_a_view_reads(pin_type: &PinType) -> bool {
+    match pin_type.the_message_a_bundle_travels_as() {
+        Some(travels_as) => travels_as != BundleMessage::BundleFrame,
+        None => !matches!(
+            pin_type,
+            PinType::ListOf { .. }
+                | PinType::Named { .. }
+                | PinType::Connection { .. }
+                | PinType::NodeReference { .. }
+                | PinType::PinTypeChoice { .. }
+        ),
+    }
+}
+
+/// Whether a port of `pin_type` carries Tensors, so it may state the range of their values.
+fn carries_tensors(pin_type: &PinType) -> bool {
+    matches!(pin_type, PinType::Tensor {})
+        || pin_type.the_message_a_bundle_travels_as() == Some(BundleMessage::ArrayFrameOfTensors)
 }
 
 /// What `tatolab_view.json` declares, defaults filled in.
@@ -100,9 +122,6 @@ impl TatolabViewPlacement {
 pub struct TatolabViewDeclaredPort {
     /// The port's name: lower-case letters, digits and underscores.
     pub name: String,
-    /// The one family the messages of the port's pin type belong to, which a reader of the
-    /// contract's earlier versions still reads beside the pin type.
-    pub family: PortFamily,
     /// The pin type the port carries.
     pub pin_type: PinType,
     /// What the port carries.
@@ -119,7 +138,7 @@ pub struct TatolabViewDeclaredPort {
 struct TatolabViewDeclaredPortAsWritten {
     name: String,
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
-    family: Option<PortFamily>,
+    family: Option<Value>,
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pin_type: Option<PinType>,
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
@@ -138,7 +157,7 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
                 return Err(format!("port `{name}` names the `pin_type` it carries"));
             }
             (None, Some(family)) => {
-                return Err(the_words_of_a_port_declared_by_family(name, family));
+                return Err(the_words_of_a_port_declared_by_family(&name, &family));
             }
             (Some(_), Some(_)) => {
                 return Err(format!(
@@ -151,15 +170,14 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
         pin_type
             .validate()
             .map_err(|why| format!("`pin_type`: {why}"))?;
-        let Some(family) = PortFamily::carrying_a_whole_value_of(&pin_type) else {
+        if !rides_one_message_a_view_reads(&pin_type) {
             return Err(format!(
                 "`pin_type`: a {pin_type} rides no message a view's port reads or writes; a \
                  view declares a port of a type a link carries"
             ));
-        };
+        }
         Ok(Self {
             name: port.name,
-            family,
             pin_type,
             description: port.description,
             range: port.range,
@@ -167,32 +185,58 @@ impl TryFrom<TatolabViewDeclaredPortAsWritten> for TatolabViewDeclaredPort {
     }
 }
 
+/// The types a port declared by each of the older `family` field's values carried, by that
+/// value, as a refusal of the field names them for the author to write in its place.
+const THE_TYPES_A_PORT_OF_EACH_OLDER_FAMILY_CARRIED: &[(&str, &[&str])] = &[
+    ("image", &["texture"]),
+    (
+        "channels",
+        &[
+            "boolean",
+            "integer",
+            "float",
+            "color",
+            "vector",
+            "rectangle",
+            "transform",
+            "audio",
+        ],
+    ),
+    ("array", &["tensor"]),
+    ("records", &["string", "menu", "asset", "trigger"]),
+    ("packets", &["encoded_video", "encoded_audio"]),
+];
+
 /// Why port `name`, declared by the older `family` field as `family`, does not open, and what
-/// it writes in its place: the one pin type the family's messages carry where there is one, as
-/// an Image port's Texture; else the types it may become, none picked, since a guessed type can
-/// refuse a link that works today.
-fn the_words_of_a_port_declared_by_family(name: &str, family: PortFamily) -> String {
-    let family_name = family.wire_name();
+/// it writes in its place: the one pin type a port of that family carried where there is one,
+/// as an Image port's Texture; else the types it may become, none picked, since a guessed type
+/// can refuse a link that works today.
+fn the_words_of_a_port_declared_by_family(name: &str, family: &Value) -> String {
+    let family_name = family.as_str().map_or_else(|| family.to_string(), str::to_owned);
     let to_write = format!(
-        "in place of `\"family\": \"{family_name}\"`, with `\"contract\": \
+        "in place of `\"family\": {family}`, with `\"contract\": \
          \"{VIEW_CONTRACT_READ_MAJOR}.{VIEW_CONTRACT_MINOR_OF_A_PORTS_PIN_TYPE}\"`"
     );
-    let pin_types: Vec<&str> = family
-        .the_pin_types_it_carries()
-        .into_iter()
-        .map(|pin_type| built_in_pin_type(pin_type).typescript_form)
-        .collect();
-    let bundle_advice = if BundleMessage::RecordsMap.its_family() == Some(family) {
+    let pin_types = THE_TYPES_A_PORT_OF_EACH_OLDER_FAMILY_CARRIED
+        .iter()
+        .find(|(older_family, _)| *older_family == family_name)
+        .map_or(&[][..], |(_, pin_types)| *pin_types);
+    let bundle_advice = if family_name == "records" {
         ", or a `bundle` of small members, as a record of named numbers is, written \
          `{\"type\": \"bundle\", \"members\": [{\"name\": \"<name>\", \
          \"member_type\": {\"type\": \"float\"}}, ...]}`"
     } else {
         ""
     };
-    match pin_types.as_slice() {
+    match pin_types {
         [pin_type] => format!(
             "port `{name}` is declared by the older `family` field, which a view's port no \
-             longer names; write `\"pin_type\": {{\"type\": {pin_type}}}` {to_write}"
+             longer names; write `\"pin_type\": {{\"type\": \"{pin_type}\"}}` {to_write}"
+        ),
+        [] => format!(
+            "port `{name}` is declared by the older `family` field, which a view's port no \
+             longer names: write the type it carries as its `pin_type`, as \
+             `{{\"type\": \"<type>\"}}`, {to_write}"
         ),
         _ => format!(
             "port `{name}` is declared by the older `family` field, which a view's port no \
@@ -200,7 +244,7 @@ fn the_words_of_a_port_declared_by_family(name: &str, family: PortFamily) -> Str
              one it carries as its `pin_type`, as `{{\"type\": \"<type>\"}}`, {to_write}",
             pin_types
                 .iter()
-                .map(|pin_type| format!("`{}`", pin_type.trim_matches('"')))
+                .map(|pin_type| format!("`{pin_type}`"))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -392,10 +436,10 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
                         Some(&port.name),
                     );
                 }
-                if port.family != PortFamily::Array {
+                if !carries_tensors(&port.pin_type) {
                     issue(
                         format!("{direction}[{index}].range"),
-                        "only an Array port carries a range",
+                        "only a Tensor port carries a range",
                         Some(&port.name),
                     );
                 }
@@ -420,12 +464,13 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         );
     }
     for (index, output) in manifest.outputs.iter().enumerate() {
-        if a_panel_writes(output.family) && !is_a_type_a_panel_writes_a_value_of(&output.pin_type) {
+        if a_panel_writes(&output.pin_type)
+            && !is_a_type_a_panel_writes_a_value_of(&output.pin_type)
+        {
             issue(
                 format!("outputs[{index}].pin_type"),
                 &format!(
-                    "a panel writes a value onto a `{}` output, and a {} holds none",
-                    output.family.wire_name(),
+                    "a panel writes a value onto this output, and a {} holds none",
                     output.pin_type
                 ),
                 Some(&output.name),
@@ -449,7 +494,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
         let name = output.name.as_str();
         let why = if input_names.contains(name) {
             format!("`{name}` names an input too, and a port is named once")
-        } else if a_panel_writes(output.family) && setting_names.contains(name) {
+        } else if a_panel_writes(&output.pin_type) && setting_names.contains(name) {
             format!(
                 "`{name}` names a setting too, and the value of an output a panel writes is set \
                  on the view node's input of the output's name, so such an output is named \
@@ -488,7 +533,7 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
 
 /// Whether a panel writes values of `pin_type` onto an output: one a pin of it holds, or the
 /// samples of an Audio block or the numbers of a Tensor.
-fn is_a_type_a_panel_writes_a_value_of(pin_type: &PinType) -> bool {
+pub fn is_a_type_a_panel_writes_a_value_of(pin_type: &PinType) -> bool {
     pin_type.holds_a_stored_value() || matches!(pin_type, PinType::Audio {} | PinType::Tensor {})
 }
 

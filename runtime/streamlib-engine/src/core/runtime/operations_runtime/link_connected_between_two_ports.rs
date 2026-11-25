@@ -31,8 +31,7 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::{
     ALinkConnected, Graph, Link, LinkUniqueId, NodeRunId, WhyTheNodeLeaves,
-    cast_exposed_name_to_url_safe, refuse_a_link_its_pin_types_or_families_refuse,
-    refuse_the_names_and_codec_the_links_through_a_convert_node_refuse,
+    cast_exposed_name_to_url_safe, refuse_a_link_its_pin_types_refuse,
     the_verdict_on_a_link_between_typed_ends,
 };
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
@@ -83,9 +82,8 @@ impl ALinkConnectedOrSetAside {
 
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
-/// Connect judges two typed ports by their pin link verdict, and any other two by their
-/// families, names, codec and formats, and refuses, by name before any channel exists, a link
-/// that does not connect as it is; `a_link_connected` says how leniently a link of a saved
+/// Connect judges a link by its two ports' pin link verdict, once its graph types both, and
+/// refuses, by name before any channel exists, a link that does not connect as it is; `a_link_connected` says how leniently a link of a saved
 /// graph is judged by its pin types. A link the engine cannot wire is refused or set aside, as
 /// `when_the_engine_cannot_wire_it` says.
 #[tracing::instrument(
@@ -171,11 +169,11 @@ fn the_ends_connect_links(
 }
 
 /// Refuse a link from `from` to `to` that connect refuses, in `graph`, before anything is made:
-/// an end the graph cannot take, a link its pin types or families refuse, or one whose channel
+/// an end the graph cannot take, a link its pin types refuse, or one whose channel
 /// cannot be named. A link of a saved graph, as `a_link_connected` says, keeps one the verdict
-/// refuses by its pin types alone when its families take it. Answers the verdict of two typed
-/// ends that connect, `None` for ends their families judge, and the channel the link carries
-/// on.
+/// refuses by its pin types alone when both its ends travel as one kind of message. Answers the
+/// verdict of two typed ends that connect, `None` for a link with an end its graph does not type
+/// yet, and the channel the link carries on.
 fn refuse_a_link_connect_refuses(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -184,8 +182,7 @@ fn refuse_a_link_connect_refuses(
 ) -> Result<(Option<PinLinkVerdict>, ChannelName)> {
     refuse_a_source_this_graph_cannot_take(graph, from)?;
     refuse_a_destination_this_graph_cannot_take(graph, to)?;
-    let verdict =
-        refuse_a_link_its_pin_types_or_families_refuse(graph, from, to, a_link_connected)?;
+    let verdict = refuse_a_link_its_pin_types_refuse(graph, from, to, a_link_connected)?;
     let channel =
         crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
             .map_err(|source| Error::InvalidLink(source.to_string()))?;
@@ -195,11 +192,11 @@ fn refuse_a_link_connect_refuses(
 /// The verdict a connect made now takes on a link from `from` to `to` in the graph `compiler`
 /// holds, judged as [`connect_impl`] judges it under [`ALinkConnected::MadeNow`] and
 /// [`WhenTheEngineCannotWireALink::Refuse`], and left out of the graph: the verdict of two
-/// typed ends that connect, `None` for ends their families judge, refused as connect refuses
-/// the link; but a link whose two typed ends connect through a built-in conversion answers that
-/// verdict, naming the convert node a transaction's `connect` places between them, once each of
-/// the two links through it is one an island takes, carrying the names and codec the end it
-/// feeds requires. Connect itself never places it, so a graph written in code stays what its
+/// typed ends that connect, `None` for a link with an end its graph does not type yet, refused as
+/// connect refuses the link; but a link whose two typed ends connect through a built-in
+/// conversion answers that verdict, naming the convert node a transaction's `connect` places
+/// between them, once each of the two links through it is one an island takes. Connect itself
+/// never places it, so a graph written in code stays what its
 /// code says.
 pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     compiler: &Arc<Compiler>,
@@ -249,12 +246,6 @@ fn the_verdict_of_ends_held_in(
                 &from,
                 &to,
                 &convert_node.conversion,
-            )?;
-            refuse_the_names_and_codec_the_links_through_a_convert_node_refuse(
-                graph,
-                &from,
-                &to,
-                convert_node,
             )?;
             Ok(Some(verdict))
         }
@@ -448,7 +439,7 @@ impl ANodeTypesPortToJudge {
 /// for its one judgement, logging nothing a commit reads, and dropped before the next is placed.
 ///
 /// A link is first judged with the node as placed, as `connect` would judge it after an
-/// `add_node`, so a family that refuses the link refuses it here. The port is then judged by
+/// `add_node`, so a verdict that refuses the link refuses it here. The port is then judged by
 /// what it declares: one of several types as each in turn, answering the one that connects
 /// best; any type, or a type found from a link or a setting, as the held end's type, the last
 /// warning that it is found only once a node is placed. A port the type does not declare is

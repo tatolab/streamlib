@@ -9,8 +9,7 @@
 //! same config keys.
 
 use crate::core::descriptors::{
-    NodeDescriptor, NodeInputMode, PinDeclaration, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime,
+    NodeDescriptor, NodeInputMode, PinDeclaration, PortDescriptor, SettingReadTime,
 };
 use crate::core::graph::input_values::{
     TakesAWireRendered, the_settings_rendered_reading_the_values_held,
@@ -31,29 +30,24 @@ pub(crate) fn the_settings_of_a_view_node(descriptor: &NodeDescriptor) -> Vec<Po
 }
 
 /// `setting` as a setting read when the node is set up: of exactly the pin type its schema
-/// states, with the annotations it states, else of no pin type and on Records, the family that
-/// carries any value, with the default its schema states.
+/// states, with the annotations it states, else of no pin type, with the default its schema
+/// states.
 fn a_view_setting_declared(setting: ConfigFieldDescribedAsASetting) -> PortDescriptor {
-    let family = setting
-        .pin_type
-        .as_ref()
-        .and_then(PortFamily::carrying)
-        .unwrap_or(PortFamily::Records);
-    let mut port = PortDescriptor::new(
-        setting.name,
-        setting.description,
-        false,
-        PortFamilyDeclaration::of_family(family),
-    )
+    let port = match setting.pin_type {
+        Some(pin_type) => PortDescriptor::new(
+            setting.name,
+            setting.description,
+            false,
+            PinDeclaration {
+                annotations: setting.annotations,
+                ..PinDeclaration::exactly(pin_type)
+            },
+        ),
+        None => PortDescriptor::a_setting_of_no_pin_type(setting.name, setting.description),
+    }
     .with_input_mode(NodeInputMode::SettingOnly {
         read: SettingReadTime::AtSetup,
     });
-    if let Some(pin_type) = setting.pin_type {
-        port = port.with_pin_declaration(PinDeclaration {
-            annotations: setting.annotations,
-            ..PinDeclaration::exactly(pin_type)
-        });
-    }
     match setting.default_value {
         Some(default) => port.with_pin_default(default),
         None => port,

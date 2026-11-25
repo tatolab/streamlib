@@ -13,8 +13,8 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::descriptors::{
-    ImageStreamFacts, ImageStreamFrameRate, PortFamily, PortStreamFacts,
-    output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
+    DeclaredPinType, ImageStreamFacts, ImageStreamFrameRate, PinType, PortStreamFacts,
+    output_port_frame_rate_resolved_against_config,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, PortInfo, cast_exposed_name_to_url_safe};
@@ -22,7 +22,8 @@ use crate::iceoryx2::InboundLinkName;
 
 #[derive(Debug)]
 struct StreamFactsOfOneOutputPort {
-    family: PortFamily,
+    /// The one type the port carries under its node's settings; `None` while its graph finds it.
+    pin_type: Option<PinType>,
     /// The frame rate its declaration resolved to when it last took the facts it declares.
     declared_frame_rate: Option<ImageStreamFrameRate>,
     current_facts: Option<PortStreamFacts>,
@@ -34,8 +35,8 @@ pub(crate) struct StreamFactsOfOutputPorts {
 }
 
 impl StreamFactsOfOutputPorts {
-    /// Each output port with its family resolved against `node_config`, an
-    /// Image port carrying the frame rate it declares.
+    /// Each output port with its pin type resolved against `node_config`, a
+    /// Texture port carrying the frame rate it declares.
     pub(crate) fn as_declared_by(
         output_ports: &[PortInfo],
         node_config: Option<&serde_json::Value>,
@@ -68,11 +69,11 @@ impl StreamFactsOfOutputPorts {
         }
     }
 
-    /// Carry each of `output_ports` on the family and frame rate its declaration resolves to
-    /// against `node_values` again: a port whose family or declared frame rate that changes
+    /// Carry each of `output_ports` on the pin type and frame rate its declaration resolves to
+    /// against `node_values` again: a port whose pin type or declared frame rate that changes
     /// takes the facts it declares, as [`Self::as_declared_by`] reads them, and every other port
     /// keeps what it carries.
-    pub(crate) fn take_the_families_declared_by(
+    pub(crate) fn take_the_pin_types_declared_by(
         &self,
         output_ports: &[PortInfo],
         node_values: Option<&serde_json::Value>,
@@ -82,7 +83,7 @@ impl StreamFactsOfOutputPorts {
             let declared = the_facts_declared_by(port, node_values);
             match facts_by_output_port.get_mut(&port.name) {
                 Some(held)
-                    if held.family == declared.family
+                    if held.pin_type == declared.pin_type
                         && held.declared_frame_rate == declared.declared_frame_rate => {}
                 Some(held) => *held = declared,
                 None => {
@@ -103,7 +104,7 @@ impl StreamFactsOfOutputPorts {
     }
 
     /// Replace `output_port`'s facts, refusing a port the node does not declare
-    /// and facts of another family than the port's.
+    /// and facts that do not describe a stream of the port's pin type.
     pub(crate) fn replace_facts_of(&self, output_port: &str, facts: PortStreamFacts) -> Result<()> {
         let output_port = cast_exposed_name_to_url_safe(output_port)?;
         let mut facts_by_output_port = self.facts_by_output_port.write();
@@ -116,11 +117,13 @@ impl StreamFactsOfOutputPorts {
                 listed_or_none(&declared_output_ports)
             )));
         };
-        crate::core::descriptors::refuse_stream_facts_of_another_family(
-            &output_port,
-            port.family,
-            &facts,
-        )?;
+        if let Some(pin_type) = &port.pin_type {
+            crate::core::descriptors::refuse_stream_facts_of_another_pin_type(
+                &output_port,
+                pin_type,
+                &facts,
+            )?;
+        }
         port.current_facts = Some(facts);
         Ok(())
     }
@@ -236,14 +239,13 @@ impl UpstreamStreamFactsByInboundLink {
     }
 }
 
-/// The facts output `port` declares, its family and frame rate resolved against `node_config`:
-/// the frame rate its pin states, else the one its family declaration states.
+/// The facts output `port` declares, its pin type and frame rate resolved against `node_config`:
+/// the frame rate its pin states.
 fn the_facts_declared_by(
     port: &PortInfo,
     node_config: Option<&serde_json::Value>,
 ) -> StreamFactsOfOneOutputPort {
-    let family = output_port_family_resolved_against_config(&port.family, node_config)
-        .unwrap_or(port.family.family);
+    let pin_type = the_pin_type_of_an_output_under(port, node_config);
     let declared_frame_rate =
         output_port_frame_rate_resolved_against_config(port.stated_frame_rate(), node_config)
             .ok()
@@ -255,10 +257,28 @@ fn the_facts_declared_by(
         })
     });
     StreamFactsOfOneOutputPort {
-        family,
+        pin_type,
         declared_frame_rate,
         current_facts,
     }
+}
+
+/// The one type output `port` carries while its node holds `node_config`: the one it states, or
+/// the one the setting that chooses it holds; `None` for a port its graph types.
+fn the_pin_type_of_an_output_under(
+    port: &PortInfo,
+    node_config: Option<&serde_json::Value>,
+) -> Option<PinType> {
+    if let Some(DeclaredPinType::SetByInput { input_name }) = port
+        .declared_pin_type
+        .as_ref()
+        .map(|declared| &declared.pin_type)
+    {
+        return node_config
+            .and_then(|config| config.get(input_name))
+            .and_then(|held| serde_json::from_value(held.clone()).ok());
+    }
+    port.pin.as_ref().map(|pin| pin.pin_type.clone())
 }
 
 #[cfg(test)]

@@ -842,9 +842,8 @@ fn set_the_saved_value(
     })
 }
 
-/// Refuse the input values the node `node_run_id` of `graph` holds when a wired link out of it,
-/// or out of a convert node it is, would refuse them, or when one names a node the graph does
-/// not hold.
+/// Refuse the input values the node `node_run_id` of `graph` holds when a wired link out of a
+/// convert node it is would refuse them, or when one names a node the graph does not hold.
 fn refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
     graph: &Graph,
     node_types: &crate::core::nodes::NodeTypesOneStreamResolves,
@@ -854,11 +853,6 @@ fn refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
         return Ok(());
     };
     let input_values = &node.input_values;
-    crate::core::graph::refuse_input_values_a_wired_link_out_of_the_node_would_refuse(
-        graph,
-        node_run_id,
-        input_values,
-    )?;
     crate::core::graph::refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
         graph,
         node_run_id,

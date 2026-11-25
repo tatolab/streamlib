@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::core::descriptors::PortFamily;
+use crate::core::descriptors::PinType;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent};
 use crate::core::nodes::{the_names_listed, the_refusal_of_a_value_an_output_does_not_carry};
-use crate::core::pin_value_packing::the_message_a_value_written_onto_an_output_is;
+use crate::core::pin_value_packing::pack_pin_value;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 use streamlib_project_repository::a_panel_writes;
@@ -23,8 +23,8 @@ impl LoadedStreamInThisRuntime {
     /// is `node_id`, and one of whose outputs a panel writes `value` onto, as `port_name`: the
     /// node whose input of that output's name a write sets. Refused for a stream whose project
     /// is stopped; a node that is not of a view type, that does not run, or that has no such
-    /// output; and a value no panel writes there: any onto an Image or Packets output, and
-    /// `null`. The stream's graph lock is held across a compile, so the read waits off the async
+    /// output; and a value no panel writes there: any onto a Texture or encoded output, one its
+    /// type does not take, and `null`. The stream's graph lock is held across a compile, so the read waits off the async
     /// workers.
     pub(crate) async fn read_the_running_view_node_a_panel_writes(
         &self,
@@ -52,7 +52,7 @@ impl LoadedStreamInThisRuntime {
         tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 compiler.scope_reading(|graph| {
-                    let (node, family) = the_running_view_node_of_the_id(
+                    let (node, pin_type) = the_running_view_node_of_the_id(
                         graph,
                         &stream_id,
                         &node_id,
@@ -62,7 +62,7 @@ impl LoadedStreamInThisRuntime {
                     refuse_a_value_no_panel_writes_onto_the_output(
                         &node.display_name,
                         &port_name,
-                        family,
+                        &pin_type,
                         &value,
                     )?;
                     Ok(node.node_uuid)
@@ -84,7 +84,7 @@ fn the_running_view_node_of_the_id<'graph>(
     node_id: &str,
     port_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<(&'graph GraphNode, PortFamily)> {
+) -> Result<(&'graph GraphNode, PinType)> {
     let no_such_node = || {
         Error::NodeNotFound(format!(
             "no node in the stream `{stream_id}` has the id `{node_id}`"
@@ -120,27 +120,38 @@ fn the_running_view_node_of_the_id<'graph>(
             the_names_listed(node.ports.outputs.iter().map(|port| &port.name))
         )));
     };
-    Ok((node, output.family.family))
+    let Some(pin) = &output.pin else {
+        return Err(Error::PortError(format!(
+            "output `{port_name}` of node `{}` carries no pin type, so no panel writes it",
+            node.display_name
+        )));
+    };
+    Ok((node, pin.pin_type.clone()))
 }
 
-/// Refuse `value` written onto output `port_name`, of `family`, of the view node named
-/// `node_name` when no panel writes it there: any value onto an output of a family no panel
-/// writes, and `null`, which sets no value; each in the words of the message the family carries.
+/// Refuse `value` written onto output `port_name`, of `pin_type`, of the view node named
+/// `node_name` when no panel writes it there: any value onto an output of a type no panel writes,
+/// one that type does not take, and `null`, which sets no value; each in the words of the
+/// message the type travels as.
 fn refuse_a_value_no_panel_writes_onto_the_output(
     node_name: &str,
     port_name: &str,
-    family: PortFamily,
+    pin_type: &PinType,
     value: &serde_json::Value,
 ) -> Result<()> {
-    if a_panel_writes(family) && !value.is_null() {
-        return Ok(());
-    }
-    match the_message_a_value_written_onto_an_output_is(family, value, 0) {
-        Ok(_) => Ok(()),
-        Err(why) => Err(the_refusal_of_a_value_an_output_does_not_carry(
-            node_name, port_name, family, &why,
-        )),
-    }
+    let why = if value.is_null() {
+        "`null` sets no value".to_string()
+    } else if !a_panel_writes(pin_type) {
+        format!("a panel writes no {pin_type} value; a node writes it")
+    } else {
+        match pack_pin_value(pin_type, value, 0) {
+            Ok(_) => return Ok(()),
+            Err(why) => why,
+        }
+    };
+    Err(the_refusal_of_a_value_an_output_does_not_carry(
+        node_name, port_name, pin_type, &why,
+    ))
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ pub(crate) enum PinTypeInItsGraph {
     Any,
     /// No type its graph settles: a port its node type declares no pin for, an output that
     /// declares any type, one following an input nothing typed is linked into, or one whose type
-    /// a setting chooses while the setting holds none. Its family judges its links.
+    /// a setting chooses while the setting holds none. A link at it is judged once it is typed.
     Untyped,
 }
 
@@ -81,8 +81,7 @@ pub(crate) fn declares_its_type_exactly(port: &PortInfo) -> bool {
     )
 }
 
-/// Whether `port` carries exactly the one type it declares: it declares its type exactly, and
-/// neither a config key nor another input sets its family.
+/// Whether `port` carries exactly the one type it declares.
 pub(crate) fn states_one_type_exactly(port: &PortInfo) -> bool {
     declares_its_type_exactly(port)
         && matches!(the_pin_type_it_states(port), PinTypeInItsGraph::Is(_))
@@ -156,16 +155,11 @@ pub(crate) fn the_type_a_convert_node_gives_under(
     conversion.output_given_under(&held)
 }
 
-/// The type `port` states exactly, unless a config key or another input sets its family, which
-/// keeps such a port, not yet typed, judged by its family.
+/// The type `port` states exactly; untyped for a port that states none.
 pub(crate) fn the_pin_type_it_states(port: &PortInfo) -> PinTypeInItsGraph {
-    let family = &port.family;
-    let family_set_another_way = family.family_from_config_key.is_some()
-        || family.codec_from_config_key.is_some()
-        || family.family_follows_input_port.is_some();
     match &port.pin {
-        Some(pin) if !family_set_another_way => PinTypeInItsGraph::Is(pin.pin_type.clone()),
-        _ => PinTypeInItsGraph::Untyped,
+        Some(pin) => PinTypeInItsGraph::Is(pin.pin_type.clone()),
+        None => PinTypeInItsGraph::Untyped,
     }
 }
 
@@ -233,4 +227,76 @@ pub(crate) fn the_pin_type_a_setting_chooses(
         .get(&setting.name)
         .or(setting.pin_default.as_ref())?;
     serde_json::from_value(held.clone()).ok()
+}
+
+/// The outputs a link out of `port_name` of `node` carries on: the output itself, or, for one
+/// whose type is that of an input of its node, every output linked into that input, followed
+/// upstream. Empty while no input it follows has a link yet, or the outputs it follows only loop
+/// back on themselves.
+pub(crate) fn the_outputs_a_link_carries_on<'graph>(
+    graph: &'graph Graph,
+    node: &'graph GraphNode,
+    port_name: &'graph str,
+) -> Vec<(&'graph GraphNode, &'graph str)> {
+    let mut carried_on = Vec::new();
+    let mut outputs_to_follow = vec![(node, port_name)];
+    let mut outputs_followed: HashSet<(&NodeRunId, &str)> = HashSet::new();
+    while let Some((node, port_name)) = outputs_to_follow.pop() {
+        if !outputs_followed.insert((&node.id, port_name)) {
+            continue;
+        }
+        let Some(output) = node.output_port(port_name) else {
+            continue;
+        };
+        let Some(followed_input_port) = the_input_an_output_takes_the_type_of(output) else {
+            carried_on.push((node, port_name));
+            continue;
+        };
+        let links_into_the_followed_input = graph.traversal().e(()).iter().filter(|link| {
+            link.to_port().node_run_id() == &node.id
+                && link.to_port().port_name() == followed_input_port
+                && graph.stands(link)
+        });
+        for link_into_the_followed_input in links_into_the_followed_input {
+            if let Some(upstream_node) = graph
+                .traversal()
+                .v(link_into_the_followed_input.source().node_run_id())
+                .first()
+            {
+                outputs_to_follow.push((
+                    upstream_node,
+                    link_into_the_followed_input.source().port_name(),
+                ));
+            }
+        }
+    }
+    carried_on
+}
+
+/// The input of its node whose type `output` takes, as `SameAsInput` declares it; `None` for
+/// an output declared any other way.
+pub(crate) fn the_input_an_output_takes_the_type_of(output: &PortInfo) -> Option<&str> {
+    match output
+        .declared_pin_type
+        .as_ref()
+        .map(|declared| &declared.pin_type)
+    {
+        Some(DeclaredPinType::SameAsInput { input_port_name }) => Some(input_port_name),
+        _ => None,
+    }
+}
+
+/// The one type a link out of output `port_name` of `node_id` carries in `graph`; `None` while
+/// its graph does not settle one type there.
+pub(crate) fn the_pin_type_a_link_out_of_an_output_carries(
+    graph: &Graph,
+    node_id: &NodeRunId,
+    port_name: &str,
+) -> Option<PinType> {
+    let node = graph.traversal().v(node_id).first()?;
+    let output = node.output_port(port_name)?;
+    match the_pin_type_of_a_port_in_its_graph(graph, node, output, PortDirection::Output) {
+        PinTypeInItsGraph::Is(pin_type) => Some(pin_type),
+        _ => None,
+    }
 }
