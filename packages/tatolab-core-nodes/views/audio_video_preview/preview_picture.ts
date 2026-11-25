@@ -4,7 +4,7 @@
 // The picture wired into `video`, letterboxed on black, or at its own size, with the safe areas over it when asked for,
 // and what the frames say of it: their size, their rate and the timecode of the last one.
 
-import type { TatoAppViewConnection, ViewInputEvent } from "@tatolab/tato-app-view-sdk";
+import { wordsOfTheMessageRead, type TatoAppViewConnection, type ViewInputEvent } from "@tatolab/tato-app-view-sdk";
 import { createElement, useEffect, useRef, useState } from "react";
 
 /** How the picture sits in the area. */
@@ -114,7 +114,7 @@ export function PreviewPicture({ connection, fit, showsSafeAreas, onReading }: {
             return;
           }
           case "message":
-            return notShown(`video carries ${inputEvent.reading.family}, not a picture.`);
+            return notShown(`video carries ${wordsOfTheMessageRead(inputEvent.reading)}, not a picture.`);
           case "unwired":
           case "reopening":
           case "ended":

@@ -4,7 +4,7 @@
 // The sound wired into `audio`: played through the view's monitor level, and drawn as one meter per channel on a
 // decibel scale, each with the peak it held over the last moment.
 
-import type { PortViewerChannelWaveform, TatoAppViewConnection } from "@tatolab/tato-app-view-sdk";
+import { wordsOfTheMessageRead, type PortViewerChannelWaveform, type TatoAppViewConnection } from "@tatolab/tato-app-view-sdk";
 import { createElement, useEffect, useState } from "react";
 import { PreviewAudioPlayback } from "./preview_audio_playback.ts";
 
@@ -75,7 +75,7 @@ export function PreviewMeters({ connection, monitorLevel, onReading }: { connect
       (inputEvent) => {
         switch (inputEvent.kind) {
           case "message": {
-            if (inputEvent.reading.family !== "channels") return notHeard(`audio carries ${inputEvent.reading.family}, not sound.`);
+            if (inputEvent.reading.message !== "channels_block") return notHeard(`audio carries ${wordsOfTheMessageRead(inputEvent.reading)}, not sound.`);
             playback.play(inputEvent.reading);
             const { channel_waveforms: waveforms, sample_rate: sampleRate, channel_count: channelCount } = inputEvent.reading;
             setMeters((metersBefore) => metersAfter(metersBefore, waveforms, performance.now()));

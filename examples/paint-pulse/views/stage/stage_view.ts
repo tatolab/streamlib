@@ -18,6 +18,7 @@ import {
   type StreamGraphReading,
   type TatoAppViewConnection,
   type ViewInputEvent,
+  wordsOfTheMessageRead,
 } from "@tatolab/tato-app-view-sdk";
 import { StageSound } from "./stage_sound.ts";
 
@@ -316,7 +317,7 @@ function onVideo(inputEvent: ViewInputEvent): void {
         : `The stage can't draw ${inputEvent.format_wire_name} pixels.`;
       return;
     case "message":
-      notice.textContent = `video carries ${inputEvent.reading.family}, not a picture.`;
+      notice.textContent = `video carries ${wordsOfTheMessageRead(inputEvent.reading)}, not a picture.`;
       return;
     case "unwired":
     case "reopening":
@@ -327,7 +328,7 @@ function onVideo(inputEvent: ViewInputEvent): void {
 }
 
 function onAudio(inputEvent: ViewInputEvent): void {
-  if (inputEvent.kind === "message" && inputEvent.reading.family === "channels") sound.play(inputEvent.reading);
+  if (inputEvent.kind === "message" && inputEvent.reading.message === "channels_block") sound.play(inputEvent.reading);
   else if (inputEvent.kind === "unwired" || inputEvent.kind === "reopening" || inputEvent.kind === "ended") sound.stop();
 }
 
