@@ -109,7 +109,9 @@ fn a_get_with_no_setter_is_refused_naming_it_and_the_variables_set() {
     );
 }
 
-fn resolved_once_flattened(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
+pub(super) fn resolved_once_flattened(
+    graph: serde_json::Value,
+) -> Result<GraphSnapshotWithVariablesResolved> {
     let flattening = GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
         .with_graph_fragments_flattened(&crate::core::nodes::NodeTypesOneStreamResolves::new())
@@ -122,7 +124,7 @@ fn resolved_once_flattened(graph: serde_json::Value) -> Result<GraphSnapshotWith
         )
 }
 
-fn a_fragment_whose_tint_reads_the_variable_shade(
+pub(super) fn a_fragment_whose_tint_reads_the_variable_shade(
     nodes_beside_the_tint: serde_json::Value,
     links_beside_the_tints: serde_json::Value,
 ) -> serde_json::Value {
@@ -148,7 +150,7 @@ fn a_fragment_whose_tint_reads_the_variable_shade(
     serde_json::json!({"nodes": nodes, "links": links})
 }
 
-fn a_shade_set_inside() -> serde_json::Value {
+pub(super) fn a_shade_set_inside() -> serde_json::Value {
     a_fragment_whose_tint_reads_the_variable_shade(
         serde_json::json!([
             {"name": "palette", "type": "rig:Palette"},
@@ -162,7 +164,7 @@ fn a_shade_set_inside() -> serde_json::Value {
     )
 }
 
-fn a_camera_through(
+pub(super) fn a_camera_through(
     fragments: &[(&str, serde_json::Value)],
     top_level_nodes: serde_json::Value,
     top_level_links: serde_json::Value,

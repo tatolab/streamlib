@@ -86,8 +86,8 @@ pub(crate) fn the_node_type_of_a_set_variable() -> Result<NodeDescriptor> {
         "SetVariable",
         SET_VARIABLE_NODE_TYPE,
         "Names one value under `variable`: the port's output linked into `value`, or the node \
-         in `node_reference`. Every `GetVariable` of the name on its level, or on a level \
-         inside it, reads that value with no wire drawn.",
+         in `node_reference`. Every `GetVariable` reading it on its level, or on a level inside \
+         it, reads that value with no wire drawn, and still does once it is renamed.",
     )?;
     descriptor.inputs = vec![
         variable_setting("The variable's name, which every `GetVariable` of it reads."),

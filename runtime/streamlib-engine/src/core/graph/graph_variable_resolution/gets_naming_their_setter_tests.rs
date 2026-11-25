@@ -4,8 +4,8 @@
 //! A `GetVariable` naming the `SetVariable` it reads by that node's UUID.
 
 use super::tests::{
-    a_camera_variable_read_by_two_displays, a_graph_response_of, a_rendered_node, link, refusal_of,
-    resolved,
+    a_camera_through, a_camera_variable_read_by_two_displays, a_graph_response_of, a_rendered_node,
+    a_shade_set_inside, link, refusal_of, resolved, resolved_once_flattened,
 };
 use super::*;
 
@@ -107,5 +107,128 @@ fn a_get_naming_its_setter_renders_the_variable_its_setter_sets_now() {
             .as_ref()
             .and_then(|variable| variable.variable.as_deref()),
         Some("lens")
+    );
+}
+
+const SET_SHADE_UUID: &str = "2f8e4a1c-7b3d-4c5e-9a6f-0d1e2f3a4b5c";
+
+/// `fragment` with its `get-shade` naming the setter of `setter_uuid`, and its own `set-shade`,
+/// when it holds one, of that UUID.
+fn with_its_get_naming(mut fragment: serde_json::Value, setter_uuid: &str) -> serde_json::Value {
+    for node in fragment["nodes"].as_array_mut().unwrap() {
+        match node["name"].as_str() {
+            Some("set-shade") => node["id"] = serde_json::json!(setter_uuid),
+            Some("get-shade") => {
+                node["input_values"] =
+                    serde_json::json!({ GET_VARIABLE_SET_VARIABLE_CONFIG_KEY: setter_uuid });
+            }
+            _ => {}
+        }
+    }
+    fragment
+}
+
+const SET_COOL_SHADE_UUID: &str = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d";
+
+/// `fragment` with its `get-shade` naming the setter of `read_uuid` and its own `set-shade` of
+/// `setter_uuid`.
+fn with_its_setter_and_get_naming(
+    fragment: serde_json::Value,
+    setter_uuid: &str,
+    read_uuid: &str,
+) -> serde_json::Value {
+    let mut fragment = with_its_get_naming(fragment, read_uuid);
+    for node in fragment["nodes"].as_array_mut().unwrap() {
+        if node["name"] == "set-shade" {
+            node["id"] = serde_json::json!(setter_uuid);
+        }
+    }
+    fragment
+}
+
+#[test]
+fn a_fragment_placed_twice_reads_each_placements_own_setter_by_its_uuid() {
+    let resolution = resolved_once_flattened(a_camera_through(
+        &[
+            (
+                "warm",
+                with_its_get_naming(a_shade_set_inside(), SET_SHADE_UUID),
+            ),
+            (
+                "cool",
+                with_its_get_naming(a_shade_set_inside(), SET_COOL_SHADE_UUID),
+            ),
+        ],
+        serde_json::json!([]),
+        serde_json::json!([]),
+    ))
+    .expect("each placement reads its own setter");
+    let links = &resolution.graph_the_runtime_runs.links;
+    assert!(links.contains(&link(("warm/palette", "colour"), ("warm/tint", "shade_in"))));
+    assert!(links.contains(&link(("cool/palette", "colour"), ("cool/tint", "shade_in"))));
+}
+
+/// Mental-revert: finding a setter by its UUID on any level reads the `warm` placement's setter
+/// from inside `cool`, a level that never encloses it.
+#[test]
+fn a_get_naming_a_setter_of_a_level_beside_its_own_is_refused() {
+    let refusal = resolved_once_flattened(a_camera_through(
+        &[
+            (
+                "warm",
+                with_its_get_naming(a_shade_set_inside(), SET_SHADE_UUID),
+            ),
+            (
+                "cool",
+                with_its_setter_and_get_naming(
+                    a_shade_set_inside(),
+                    SET_COOL_SHADE_UUID,
+                    SET_SHADE_UUID,
+                ),
+            ),
+        ],
+        serde_json::json!([]),
+        serde_json::json!([]),
+    ))
+    .expect_err("a get reads its own level or an enclosing one")
+    .to_string();
+    assert!(
+        refusal.contains(&format!(
+            "`GetVariable` node `cool/get-shade` reads the `SetVariable` node `{SET_SHADE_UUID}`, \
+             which is gone from its level and every enclosing one"
+        )),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_get_inside_a_fragment_reads_the_enclosing_setter_its_uuid_names() {
+    let resolution = resolved_once_flattened(a_camera_through(
+        &[(
+            "look",
+            with_its_get_naming(
+                super::tests::a_fragment_whose_tint_reads_the_variable_shade(
+                    serde_json::json!([]),
+                    serde_json::json!([]),
+                ),
+                SET_SHADE_UUID,
+            ),
+        )],
+        serde_json::json!([
+            {"name": "palette", "type": "rig:Palette"},
+            {"id": SET_SHADE_UUID, "name": "set-shade", "type": "tatolab.stream:SetVariable",
+             "input_values": {"variable": "tone"}},
+        ]),
+        serde_json::json!([
+            {"source": {"node": "palette", "port": "colour"},
+             "target": {"node": "set-shade", "port": "value"}},
+        ]),
+    ))
+    .expect("the get reads the stream's setter of its UUID");
+    assert!(
+        resolution
+            .graph_the_runtime_runs
+            .links
+            .contains(&link(("palette", "colour"), ("look/tint", "shade_in")))
     );
 }

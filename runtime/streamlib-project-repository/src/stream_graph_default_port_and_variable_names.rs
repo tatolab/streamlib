@@ -30,8 +30,9 @@ const DEFAULT_GRAPH_VARIABLE_NAME_PREFIX: &str = "var";
 /// `config`, of a node of `node_type` being added to `level`, holding the name the node takes
 /// when `config` names none: a `GraphInput` the next free `input1`, `input2` …, a `GraphOutput`
 /// the next free `output1` …, a `SetVariable` the next free `var1` …, each unique among its
-/// kind on the level, and a `GetVariable` the variable of the level's last `SetVariable`. Any
-/// other node's config, and a config that names one, is returned as it is.
+/// kind on the level, and a `GetVariable` the level's last `SetVariable`, by its UUID, as
+/// [`the_input_values_of_a_get_reading`] names one. Any other node's config, and a config that
+/// names one, is returned as it is.
 pub fn config_holding_the_default_name_of_a_graph_port_or_variable(
     node_type: &str,
     mut config: Map<String, Value>,
@@ -66,27 +67,23 @@ pub fn config_holding_the_default_name_of_a_graph_port_or_variable(
             ),
         ),
         GET_VARIABLE_NODE_TYPE => {
-            if config.contains_key(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY) {
+            if config.contains_key(GET_VARIABLE_SET_VARIABLE_CONFIG_KEY)
+                || config.contains_key(GRAPH_VARIABLE_NAME_CONFIG_KEY)
+            {
                 return config;
             }
-            let chosen = config
-                .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
-                .and_then(Value::as_str)
-                .filter(|variable| !variable.is_empty())
-                .map(str::to_owned)
-                .or_else(|| {
-                    the_names_nodes_of_the_type_hold(
-                        level,
-                        SET_VARIABLE_NODE_TYPE,
-                        GRAPH_VARIABLE_NAME_CONFIG_KEY,
-                    )
-                    .pop()
-                });
-            let Some(variable) = chosen else {
+            let Some(variable_of_the_last_setter) = the_names_nodes_of_the_type_hold(
+                level,
+                SET_VARIABLE_NODE_TYPE,
+                GRAPH_VARIABLE_NAME_CONFIG_KEY,
+            )
+            .pop() else {
                 return config;
             };
-            config.remove(GRAPH_VARIABLE_NAME_CONFIG_KEY);
-            config.extend(the_input_values_of_a_get_reading(&variable, level));
+            config.extend(the_input_values_of_a_get_reading(
+                &variable_of_the_last_setter,
+                level,
+            ));
             return config;
         }
         _ => return config,
@@ -279,26 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn a_get_variable_added_naming_a_variable_names_its_setter_on_the_level() {
-        let level = a_level_holding(json!([
-            {"id": "00000000-0000-0000-0000-000000000001", "name": "setvariable",
-             "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "var1"}},
-            {"id": "00000000-0000-0000-0000-000000000002", "name": "setvariable-2",
-             "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "blur"}},
-        ]));
-        assert_eq!(
-            the_default_named(GET_VARIABLE_NODE_TYPE, json!({"variable": "var1"}), &level),
-            json!({"set_variable": "00000000-0000-0000-0000-000000000001"})
-        );
-        assert_eq!(
-            the_default_named(GET_VARIABLE_NODE_TYPE, json!({"variable": "outer"}), &level),
-            json!({"variable": "outer"}),
-            "a variable no setter of the level sets may be an enclosing level's"
-        );
-    }
-
-    #[test]
-    fn a_get_variable_reading_a_variable_two_setters_of_the_level_set_keeps_its_name() {
+    fn a_get_reading_a_variable_no_one_setter_of_the_level_sets_keeps_its_name() {
         let level = a_level_holding(json!([
             {"id": "00000000-0000-0000-0000-000000000001", "name": "setvariable",
              "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "blur"}},
@@ -306,9 +284,14 @@ mod tests {
              "type": SET_VARIABLE_NODE_TYPE, "input_values": {"variable": "blur"}},
         ]));
         assert_eq!(
-            the_default_named(GET_VARIABLE_NODE_TYPE, json!({"variable": "blur"}), &level),
+            Value::Object(the_input_values_of_a_get_reading("blur", &level)),
             json!({"variable": "blur"}),
             "the stream refuses two setters of one variable on a level, naming both"
+        );
+        assert_eq!(
+            Value::Object(the_input_values_of_a_get_reading("outer", &level)),
+            json!({"variable": "outer"}),
+            "a variable no setter of the level sets may be an enclosing level's"
         );
     }
 
