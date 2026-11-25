@@ -38,6 +38,7 @@ from ._graph_generator_detection import (
     _type_name_as_written,
     is_graph_generator,
 )
+from ._graph_generator_settings import the_settings_a_graph_generator_promotes
 
 
 # The class attribute a built-in node carries the path it is registered under in.
@@ -362,6 +363,17 @@ class StreamBuilder:
         with _running_the_graph_generator(generator_function):
             generator_function(fragment_builder, **promoted_settings)
         fragment = fragment_builder._compiled_fragment()
+        input_port_names = fragment_builder._interface_port_names(_GRAPH_INPUT_NODE_TYPE)
+        settings = the_settings_a_graph_generator_promotes(generator_function)
+        for setting in settings:
+            if setting["name"] in input_port_names:
+                raise ValueError(
+                    f"graph generator `{identity}` promotes a setting `{setting['name']}` and "
+                    f"its fragment declares an Input `{setting['name']}`: the fragment node "
+                    f"cannot have two inputs of one name, so rename one"
+                )
+        if settings:
+            fragment["settings"] = settings
         self._recorded_nodes_by_name[node_name] = _RecordedNode(
             name=node_name,
             node_type=identity,
@@ -372,7 +384,7 @@ class StreamBuilder:
         )
         return GraphFragmentReference(
             node_name,
-            input_port_names=fragment_builder._interface_port_names(_GRAPH_INPUT_NODE_TYPE),
+            input_port_names=input_port_names,
             output_port_names=fragment_builder._interface_port_names(_GRAPH_OUTPUT_NODE_TYPE),
         )
 

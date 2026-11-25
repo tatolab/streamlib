@@ -48,6 +48,7 @@ STREAM_GRAPH_BUILDER_SOURCES = tuple(
         "_stream_graph_builder.py",
         "_stream_builder.py",
         "_graph_generator_detection.py",
+        "_graph_generator_settings.py",
         "_typed_node_pins.py",
     )
 )
@@ -478,6 +479,10 @@ def test_the_builder_modules_import_nothing_native() -> None:
                 (1, "_pin_declaration"),
                 (1, "_pin_type_choice"),
                 (1, "_class_node_pin_group"),
+                (1, "_graph_generator_settings"),
+                (1, "_description"),
+                (1, "_input_declaration_annotations"),
+                (1, "_node_declaration_refusal"),
             }, module_name
 
 

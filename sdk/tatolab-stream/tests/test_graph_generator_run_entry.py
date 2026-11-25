@@ -21,7 +21,9 @@ RUN_ENTRY_MODULE = "tatolab.stream._graph_generator_run_entry"
 RUN_ENTRY_TIMEOUT_SECONDS = 60.0
 
 LOOK_GENERATOR_SOURCE = '''
-from tatolab.stream import GraphInput, GraphOutput, StreamBuilder, graph_generator
+from typing import Annotated
+
+from tatolab.stream import Description, GraphInput, GraphOutput, StreamBuilder, graph_generator
 
 
 @graph_generator
@@ -30,6 +32,20 @@ def look(stream_builder: StreamBuilder, port: str = "video") -> None:
     source = stream_builder.add(GraphInput, input_values={"port": port, "family": "packets"})
     sink = stream_builder.add(GraphOutput, input_values={"port": port, "family": "packets"})
     stream_builder.connect(source.output("value"), sink.input("value"))
+
+
+@graph_generator
+def tuned(
+    stream_builder: StreamBuilder,
+    passes: Annotated[int, Description("How many times the picture is blurred.")] = 3,
+    label="glow",
+) -> None:
+    stream_builder.add(GraphInput, input_values={"port": label, "family": "packets"})
+
+
+@graph_generator
+def clashing(stream_builder: StreamBuilder, video: int = 1) -> None:
+    stream_builder.add(GraphInput, input_values={"port": "video", "family": "packets"})
 
 
 @graph_generator
@@ -98,9 +114,32 @@ def test_a_generator_run_answers_the_fragment_node_it_is_stored_as(
                     {"source": {"node": "graphinput", "port": "value"},
                      "target": {"node": "graphoutput", "port": "value"}},
                 ],
+                "settings": [
+                    {"name": "port", "description": "", "family": {"family": "records"},
+                     "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}},
+                                         "flow": "value"},
+                     "input_mode": {"mode": "setting_only", "read": "at_setup"},
+                     "pin_default": "video"},
+                ],
             },
         },
     }
+
+
+def test_each_typed_setting_a_generator_promotes_is_declared_with_its_description(
+    project_directory: Path,
+) -> None:
+    document = run_entry(project_directory, "generators.looks:tuned")
+
+    assert document["placed"]["input_values"] == {}
+    assert document["placed"]["fragment"]["settings"] == [
+        {"name": "passes", "description": "How many times the picture is blurred.",
+         "family": {"family": "channels"},
+         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}},
+                             "flow": "value"},
+         "input_mode": {"mode": "setting_only", "read": "at_setup"},
+         "pin_default": 3},
+    ], "an untyped setting, `label`, is declared as no input"
 
 
 def test_a_fragment_given_no_name_takes_its_generators(project_directory: Path) -> None:
@@ -115,8 +154,12 @@ def test_a_fragment_given_no_name_takes_its_generators(project_directory: Path) 
         (
             ("generators.looks:not_a_generator",),
             "`generators.looks:not_a_generator` is not a @graph_generator function. Module "
-            "`generators.looks` defines: `generators.looks:look`, "
+            "`generators.looks` defines: `generators.looks:clashing`, `generators.looks:look`, "
             "`generators.looks:places_itself`, `generators.looks:raises`",
+        ),
+        (
+            ("generators.looks:clashing",),
+            "promotes a setting `video` and its fragment declares an Input `video`",
         ),
         (("generators.absent:look",), "ModuleNotFoundError: No module named 'generators.absent'"),
         (("generators.looks:look", "--settings", '{"radius": 3}'), "it promotes no `radius`"),

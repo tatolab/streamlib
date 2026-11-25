@@ -16,12 +16,16 @@ use streamlib_node_schema::{
 };
 use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 
+use crate::core::compiler::compiler_ops::python_node_declaration::read_the_settings_a_graph_generator_promotes;
+use crate::core::descriptors::PortDescriptor;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PORT_CONFIG_KEY, GraphInterfaceAsDrawn,
     GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
     is_a_graph_interface_node_type, the_family_a_port_linked_to_an_interface_node_carries,
 };
-use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph::graph_snapshot::{
+    GraphFragment, GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode,
+};
 use crate::core::graph::input_values::{
     TakesAWireRendered, the_read_of_an_input_a_link_feeds,
     the_settings_rendered_reading_the_values_held,
@@ -526,6 +530,14 @@ impl GraphFragmentAsDrawn {
                 ),
             );
         }
+        inputs.splice(
+            0..0,
+            the_settings_rendered_reading_the_values_held(
+                &the_settings_its_generator_promotes(&stored, &self.node.name),
+                &self.node.input_values,
+                TakesAWireRendered::NoneOfThemTakesOne,
+            ),
+        );
         GraphNodeOutput {
             id: self
                 .node
@@ -795,6 +807,22 @@ fn rendered_with_the_live_keys_of(
         },
         ..(*running).clone()
     }
+}
+
+/// Each setting the generator of a fragment storing `stored` promotes, as its run declared it;
+/// one that does not read as a described input is left out, and logged naming
+/// `fragment_node_name`.
+fn the_settings_its_generator_promotes(
+    stored: &GraphFragment,
+    fragment_node_name: &str,
+) -> Vec<PortDescriptor> {
+    read_the_settings_a_graph_generator_promotes(&stored.settings).unwrap_or_else(|unread| {
+        tracing::warn!(
+            "fragment `{fragment_node_name}`'s stored settings do not read, so it renders \
+             none: {unread}"
+        );
+        Vec::new()
+    })
 }
 
 /// A node no running node stands for, rendered with its spec keys alone: its input values split

@@ -105,6 +105,13 @@ INVERT_TWICE_FRAGMENT: dict[str, Any] = {
         {"source": {"node": "second", "port": "video_to_downstream"},
          "target": {"node": "graphoutput", "port": "value"}},
     ],
+    "settings": [
+        {"name": "strength", "description": "", "family": {"family": "channels"},
+         "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}},
+                             "flow": "value"},
+         "input_mode": {"mode": "setting_only", "read": "at_setup"},
+         "pin_default": 4},
+    ],
 }
 
 

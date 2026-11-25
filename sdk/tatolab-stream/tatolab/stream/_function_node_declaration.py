@@ -441,7 +441,7 @@ class _FunctionNodeSignatureReading:
         input_port: "dict[str, Any]" = {
             "name": port_name,
             "description": port_description,
-            "family": _family_an_input_travels_on(declared),
+            "family": family_an_input_travels_on(declared),
             "pin_declaration": declared.declaration,
         }
         if declared.default_value is not NO_DEFAULT:
@@ -674,7 +674,7 @@ def _the_pin_type_a_pin_declares(declaration: PinDeclarationOnTheWire) -> "dict[
     return dict(declared_pin_type["pin_type"])
 
 
-def _family_an_input_travels_on(declared: DeclaredPin) -> "dict[str, Any]":
+def family_an_input_travels_on(declared: DeclaredPin) -> "dict[str, Any]":
     """The family a typed input reads: its one type's, the one all its types share, or every family.
 
     An input that takes more than one family reads every family, as one that hands on what its

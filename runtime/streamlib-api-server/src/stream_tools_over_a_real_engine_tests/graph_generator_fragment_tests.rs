@@ -388,3 +388,210 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
         ["source/video -> look/video"]
     );
 }
+
+/// A venv interpreter that, run as the graph generator run entry, records its arguments in the
+/// project's `generator-run-arguments.txt` and prints the project's `generator-run.json`.
+const STUB_VENV_INTERPRETER_RECORDING_EACH_GENERATOR_RUN: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._graph_generator_run_entry*) printf '%s\\n' \"$*\" > generator-run-arguments.txt; cat generator-run.json ;;\nesac\nexit 0\n";
+
+/// `passes`, an Integer setting of `look` read at setup, as a generator's run declares it.
+fn the_passes_setting_a_run_declares() -> Value {
+    json!({
+        "name": "passes",
+        "description": "How many times the picture is blurred.",
+        "family": { "family": "channels" },
+        "pin_declaration": {
+            "pin_type": { "kind": "is", "pin_type": { "type": "integer" } },
+            "flow": "value",
+        },
+        "input_mode": { "mode": "setting_only", "read": "at_setup" },
+        "pin_default": 3,
+    })
+}
+
+/// Make the next run of [`LOOK_GENERATOR`] place `fragment` as `look`, holding `passes` and
+/// declaring it a setting.
+fn the_next_look_run_places_holding_passes(
+    project: &ProjectWithGraphDocuments,
+    passes: u64,
+    with_a_spare: bool,
+) {
+    a_look_run_holding_passes_printed_from(project, "generator-run.json", passes, with_a_spare);
+}
+
+/// Write, as `run_document` of `project`, the run of [`LOOK_GENERATOR`] placing `look` holding
+/// `passes` and declaring it a setting.
+fn a_look_run_holding_passes_printed_from(
+    project: &ProjectWithGraphDocuments,
+    run_document: &str,
+    passes: u64,
+    with_a_spare: bool,
+) {
+    let mut fragment = a_source_into_a_sink_fragment(with_a_spare);
+    fragment["settings"] = json!([the_passes_setting_a_run_declares()]);
+    std::fs::write(
+        project.path().join(run_document),
+        json!({
+            "generator": LOOK_GENERATOR,
+            "placed": {
+                "name": "look", "type": LOOK_GENERATOR,
+                "input_values": { "passes": passes }, "fragment": fragment,
+            },
+        })
+        .to_string(),
+    )
+    .expect("the generator run document");
+}
+
+/// A setting a generator's run declares is an input of its fragment node `graph` lists, read
+/// at setup with the value the node holds; setting it runs the generator again with the node's
+/// values, as one refresh that keeps each node's UUID and that one undo takes back.
+///
+/// Mental revert: with the settings left out of the render, `look` lists no `passes` input; with
+/// the set applied as a plain input value, the generator never runs again and the refresh is
+/// never recorded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_generators_setting_is_an_input_of_its_node_and_setting_it_runs_the_generator_again() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    write_an_executable_script_from_a_child_process(
+        &project.interpreter(),
+        STUB_VENV_INTERPRETER_RECORDING_EACH_GENERATOR_RUN,
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+
+    the_next_look_run_places_holding_passes(&project, 3, false);
+    engine
+        .the_answer_or_the_refusal_of(
+            "import_graph_generator",
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR,
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the import applies: {refusal:?}"));
+    let first_document = project.the_graph_document_of("main");
+    assert_eq!(
+        the_node_named(&first_document, "look")["input_values"],
+        json!({ "passes": 3 })
+    );
+    let first_uuids = the_uuid_of_each_node_of_look_in(&first_document);
+    let look = the_node_named(&engine.the_live_graph_of(&stream_id), "look");
+    let passes = super::input_value_set_tests::the_input_named(&look, "passes");
+    assert_eq!(passes["pin_type"], json!({ "type": "integer" }), "{passes}");
+    assert_eq!(passes["value"], 3, "{passes}");
+    assert_eq!(passes["value_comes_from"], "saved", "{passes}");
+    assert_eq!(passes["takes_a_wire"], false, "{passes}");
+
+    the_next_look_run_places_holding_passes(&project, 5, true);
+    let set = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "node": the_node_named(&first_document, "look")["id"],
+                    "input": "passes", "value": 5, "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the set runs the generator again: {refusal:?}"));
+    assert_eq!(
+        set["operations"][0]["operation"], "refresh_fragment",
+        "{set}"
+    );
+    let arguments = std::fs::read_to_string(project.path().join("generator-run-arguments.txt"))
+        .expect("the generator ran again");
+    assert!(
+        arguments.contains("--name look") && arguments.contains(r#"{"passes":5}"#),
+        "the run is of `look` with the value set: {arguments}"
+    );
+    let second_document = project.the_graph_document_of("main");
+    assert_eq!(
+        the_node_named(&second_document, "look")["input_values"],
+        json!({ "passes": 5 })
+    );
+    let second_uuids = the_uuid_of_each_node_of_look_in(&second_document);
+    assert_eq!(second_uuids["pass-source"], first_uuids["pass-source"]);
+    assert!(second_uuids.contains_key("pass-spare"), "{second_document}");
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the undo applies: {refusal:?}"));
+    let undone = project.the_graph_document_of("main");
+    assert_eq!(
+        the_node_named(&undone, "look")["input_values"],
+        json!({ "passes": 3 })
+    );
+    assert_eq!(the_uuid_of_each_node_of_look_in(&undone), first_uuids);
+}
+
+/// A venv interpreter that, run as the graph generator run entry, records its arguments as
+/// [`STUB_VENV_INTERPRETER_RECORDING_EACH_GENERATOR_RUN`] does and prints the project's
+/// `generator-run-holding-5.json` for a run given `passes` 5, else its `generator-run.json`.
+const STUB_VENV_INTERPRETER_ANSWERING_A_RUN_GIVEN_FIVE_PASSES: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._graph_generator_run_entry*'\"passes\":5'*) printf '%s\\n' \"$*\" > generator-run-arguments.txt; cat generator-run-holding-5.json ;;\n  *tatolab.stream._graph_generator_run_entry*) printf '%s\\n' \"$*\" > generator-run-arguments.txt; cat generator-run.json ;;\nesac\nexit 0\n";
+
+/// A re-import of a generator given no settings, and a refresh after its module changes, each
+/// run it again with the values its fragment node holds, so a setting set on the node stays.
+///
+/// Mental revert: with the re-import run given no values, `look` goes back to `passes` 3; with
+/// the run's `input_values` read under another key, the refresh leaves `look` holding none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reimport_and_a_refresh_each_keep_the_settings_a_fragment_node_holds() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    write_an_executable_script_from_a_child_process(
+        &project.interpreter(),
+        STUB_VENV_INTERPRETER_ANSWERING_A_RUN_GIVEN_FIVE_PASSES,
+    );
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    a_look_run_holding_passes_printed_from(&project, "generator-run.json", 3, false);
+    a_look_run_holding_passes_printed_from(&project, "generator-run-holding-5.json", 5, false);
+    let import = || {
+        engine.the_answer_or_the_refusal_of(
+            "import_graph_generator",
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR,
+                    "author": an_agent_named("alice") }),
+        )
+    };
+    import()
+        .await
+        .unwrap_or_else(|refusal| panic!("the import applies: {refusal:?}"));
+    let look = the_node_named(&project.the_graph_document_of("main"), "look");
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "node": look["id"], "input": "passes", "value": 5,
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the set runs the generator again: {refusal:?}"));
+
+    import()
+        .await
+        .unwrap_or_else(|refusal| panic!("the re-import applies: {refusal:?}"));
+    assert_eq!(
+        the_node_named(&project.the_graph_document_of("main"), "look")["input_values"],
+        json!({ "passes": 5 }),
+        "the re-import keeps the value set"
+    );
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "refresh_fragments",
+            json!({ "project_directory": project.path(), "changed_files": ["generators/look.py"] }),
+        )
+        .await
+        .unwrap_or_else(|refusal| panic!("the refresh applies: {refusal:?}"));
+    let arguments = std::fs::read_to_string(project.path().join("generator-run-arguments.txt"))
+        .expect("the generator ran again");
+    assert!(
+        arguments.contains(r#"{"passes":5}"#),
+        "the refresh runs with the value held: {arguments}"
+    );
+    assert_eq!(
+        the_node_named(&project.the_graph_document_of("main"), "look")["input_values"],
+        json!({ "passes": 5 }),
+        "the refresh keeps the value set"
+    );
+}
