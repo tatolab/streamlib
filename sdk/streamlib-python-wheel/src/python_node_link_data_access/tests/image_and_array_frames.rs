@@ -34,7 +34,7 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
             )
             .unwrap();
 
-        let received = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Array);
+        let received = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ArrayFrame);
         assert_eq!(received.len().unwrap(), 2);
         assert_eq!(
             received
@@ -78,7 +78,7 @@ fn an_array_frame_of_cpu_attributes_reads_back_as_borrowed_tensors_by_name() {
                 true,
             )
             .expect("a read Array frame relays unchanged");
-        let relayed = read_as_the_family_type(python, &destination, PortFamilyOfTheRead::Array);
+        let relayed = read_as_the_type_of_its_kind(python, &destination, MessageKindOfTheRead::ArrayFrame);
         let relayed_boxes = relayed.get_item("boxes").unwrap();
         let relayed_boxes = relayed_boxes.cast::<PythonTensorCpuAttribute>().unwrap();
         assert_eq!(relayed_boxes.get().shape(), vec![2u64, 3]);
@@ -226,8 +226,8 @@ fn an_image_frame_reads_back_claimed_and_writes_on_as_the_same_frame() {
                 .read_from_input_port_offering_gpu_access(
                     python,
                     "frames_from_upstream",
-                    PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
-                        PortFamilyOfTheRead::Image,
+                    PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(
+                        MessageKindOfTheRead::ImageFrame,
                     )),
                     Some(&gpu),
                 )
@@ -432,8 +432,8 @@ fn texture_to_tensor_borrows_the_frames_own_slot_with_no_copy() {
             .read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
-                    PortFamilyOfTheRead::Image,
+                PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(
+                    MessageKindOfTheRead::ImageFrame,
                 )),
                 Some(&gpu),
             )
@@ -456,8 +456,8 @@ fn texture_to_tensor_borrows_the_frames_own_slot_with_no_copy() {
             .read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
-                    PortFamilyOfTheRead::Array,
+                PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(
+                    MessageKindOfTheRead::ArrayFrame,
                 )),
                 Some(&gpu),
             )
@@ -639,8 +639,8 @@ fn tensor_to_texture_copies_a_cpu_attribute_into_a_pixel_buffer_read_back_as_the
             .read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
-                    PortFamilyOfTheRead::Image,
+                PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(
+                    MessageKindOfTheRead::ImageFrame,
                 )),
                 Some(&gpu),
             )

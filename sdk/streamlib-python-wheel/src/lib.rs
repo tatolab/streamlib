@@ -29,7 +29,7 @@ mod python_monotonic_timer;
 mod python_node_context;
 mod python_node_declaration;
 mod python_node_link_data_access;
-mod python_port_family_read_types;
+mod python_message_kind_read_types;
 mod python_port_payload;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
@@ -47,9 +47,9 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_node_link_data_access::PythonNodeLinkDataAccess>()?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
-    module.add_class::<python_port_family_read_types::PythonAudio>()?;
-    module.add_class::<python_port_family_read_types::PythonEncodedMedia>()?;
-    module.add_class::<python_port_family_read_types::PythonTensorCpuAttribute>()?;
+    module.add_class::<python_message_kind_read_types::PythonAudio>()?;
+    module.add_class::<python_message_kind_read_types::PythonEncodedMedia>()?;
+    module.add_class::<python_message_kind_read_types::PythonTensorCpuAttribute>()?;
     module.add_function(wrap_pyfunction!(
         python_node_link_data_access::open_node_link_data_access_for_helper_process,
         module

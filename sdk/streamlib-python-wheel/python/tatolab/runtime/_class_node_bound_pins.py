@@ -4,7 +4,7 @@
 """The pins a helper binds on a class node under bare `@node`, and how a value of each pin type is read off a port and written on one.
 
 Each pin resolves its port and how it reads or writes once, when it is bound. A Texture,
-Audio, Tensor or encoded pin reads and writes its port by name as the family its type implies; a Trigger's fire reads as `True` and is written as the empty record every
+Audio, Tensor or encoded pin reads and writes its port by name as the kind of message its type travels as; a Trigger's fire reads as `True` and is written as the empty record every
 Trigger message is. A Boolean, Integer or Float travels as a control message, a Color, Vector,
 Rectangle or Transform as one on each channel of its parts, a String, Menu, Asset, List or bundle as the
 record `{"value": <stored JSON form>}`, and a named type as the bytes its class packs, each read
@@ -57,14 +57,14 @@ __all__ = [
     "the_reader_of_a_value_at_an_input_port",
 ]
 
-# The family each pin type that travels as a stream reads and writes as, by its wire name.
-_FAMILY_OF_EACH_STREAM_PIN_TYPE: "dict[str, str]" = {
-    "texture": "image",
-    "audio": "channels",
-    "tensor": "array",
-    "encoded_video": "packets",
-    "encoded_audio": "packets",
-    "trigger": "records",
+# The kind of message each pin type that travels as a stream reads and writes as, by its wire name.
+_MESSAGE_KIND_OF_EACH_STREAM_PIN_TYPE: "dict[str, str]" = {
+    "texture": "image_frame",
+    "audio": "channels_block",
+    "tensor": "array_frame",
+    "encoded_video": "packets_unit",
+    "encoded_audio": "packets_unit",
+    "trigger": "records_message",
 }
 
 # The pin types whose value travels as one number on a control message.
@@ -127,10 +127,10 @@ def the_reader_of_a_value_at_an_input_port(
     what_it_is = f"`{node_id}`'s input `{input_port}`"
     pin_type_name = pin_type["type"]
     if pin_type_name in ("texture", "tensor"):
-        families = [_FAMILY_OF_EACH_STREAM_PIN_TYPE[pin_type_name]]
+        kinds = [_MESSAGE_KIND_OF_EACH_STREAM_PIN_TYPE[pin_type_name]]
 
         def read_the_newest_frame() -> Any:
-            return inputs.read(input_port, families=families)
+            return inputs.read(input_port, kinds=kinds)
 
         return read_the_newest_frame
     if pin_type_name in _NUMBER_PIN_TYPES:
@@ -202,7 +202,7 @@ def the_reader_of_a_value_at_an_input_port(
 class BoundInputPin:
     """An `InputPin` of a running class node: reads the messages its port receives."""
 
-    __slots__ = ("_inputs", "_port", "_node_id", "_read_a_value", "_families", "_reads_a_fire")
+    __slots__ = ("_inputs", "_port", "_node_id", "_read_a_value", "_kinds", "_reads_a_fire")
 
     def __init__(
         self,
@@ -216,10 +216,10 @@ class BoundInputPin:
         self._port = member.port
         self._node_id = node_id
         pin_types = _the_pin_types_of(member)
-        families = [_FAMILY_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"]) for pin_type in pin_types]
+        kinds = [_MESSAGE_KIND_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"]) for pin_type in pin_types]
         self._reads_a_fire = [pin_type["type"] for pin_type in pin_types] == ["trigger"]
         self._read_a_value: Optional[ValueReadAtAnInputPort] = None
-        if len(pin_types) == 1 and families[0] is None:
+        if len(pin_types) == 1 and kinds[0] is None:
             self._read_a_value = the_reader_of_a_value_at_an_input_port(
                 pin_types[0],
                 link_data_access=link_data_access,
@@ -233,15 +233,15 @@ class BoundInputPin:
                     f"`{node_id}`'s pin `{member.port}` is a {pin_types[0]['type']}, which no "
                     f"wire carries"
                 )
-        self._families = list(dict.fromkeys(family for family in families if family is not None)) or [
-            "records"
+        self._kinds = list(dict.fromkeys(kind for kind in kinds if kind is not None)) or [
+            "records_message"
         ]
 
     def read(self) -> Any:
         """The next value waiting at this pin, or `None` when none is."""
         if self._read_a_value is not None:
             return self._read_a_value()
-        payload = self._inputs.read(self._port, families=self._families)
+        payload = self._inputs.read(self._port, kinds=self._kinds)
         if payload is None:
             return None
         return True if self._reads_a_fire else payload
@@ -253,7 +253,7 @@ class BoundInputPin:
                 f"`{self._node_id}`'s pin `{self._port}` carries a value, which arrives as its "
                 f"newest. To fix: read it with `read()`"
             )
-        message = self._inputs.read_message(self._port, families=self._families)
+        message = self._inputs.read_message(self._port, kinds=self._kinds)
         if message is None or not self._reads_a_fire:
             return message
         return dataclasses.replace(message, payload=True)
@@ -339,9 +339,9 @@ class BoundOutputPin:
             self._codec = None
             self._writes = "connection"
             return
-        family = _FAMILY_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"])
+        kind = _MESSAGE_KIND_OF_EACH_STREAM_PIN_TYPE.get(pin_type["type"])
         self._write_a_value: Optional[Callable[[Any, Optional[int]], None]] = None
-        if family is None:
+        if kind is None:
             self._write_a_value = _the_writer_of_a_value_on_an_output_port(
                 pin_type,
                 link_data_access=link_data_access,
@@ -350,7 +350,7 @@ class BoundOutputPin:
                 output_port=member.port,
             )
         codecs = pin_type.get("codecs") or []
-        self._codec: Optional[str] = codecs[0] if family == "packets" and len(codecs) == 1 else None
+        self._codec: Optional[str] = codecs[0] if kind == "packets_unit" and len(codecs) == 1 else None
         self._writes = pin_type["type"]
 
     def write(
@@ -371,10 +371,10 @@ class BoundOutputPin:
                     f"`{self._node_id}`'s output `{self._port}` is a Trigger, which fires with "
                     f"`write(True)`, and was given {value!r}"
                 )
-            self._outputs.write(self._port, {}, timestamp_ns, family="records")
+            self._outputs.write(self._port, {}, timestamp_ns, kind="records_message")
         elif self._writes in ("encoded_video", "encoded_audio"):
             self._outputs.write(
-                self._port, value, timestamp_ns, starts_group, family="packets", codec=self._codec
+                self._port, value, timestamp_ns, starts_group, kind="packets_unit", codec=self._codec
             )
         elif self._writes == "audio":
             if start_sample is None or sample_rate is None:
@@ -386,13 +386,13 @@ class BoundOutputPin:
                 self._port,
                 value,
                 timestamp_ns,
-                family="channels",
+                kind="channels_block",
                 start_sample=start_sample,
                 sample_rate=sample_rate,
             )
         else:
             self._outputs.write(
-                self._port, value, timestamp_ns, family=_FAMILY_OF_EACH_STREAM_PIN_TYPE[self._writes]
+                self._port, value, timestamp_ns, kind=_MESSAGE_KIND_OF_EACH_STREAM_PIN_TYPE[self._writes]
             )
 
     def loan(self, payload_byte_len: int, timestamp_ns: Optional[int] = None, starts_group: bool = True) -> Any:

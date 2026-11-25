@@ -21,17 +21,17 @@ use streamlib::sdk::rhi::TextureFormat;
 
 use super::{PythonNodeLinkDataAccess, declared_port_name_the_spelling_names, unwired_port_error};
 use crate::python_bag_conversion::{
-    family_type_built_offering_gpu_access, records_message_dict_of,
+    type_of_its_kind_built_offering_gpu_access, records_message_dict_of,
 };
 use crate::python_node_context::{PooledGpuFrameClaimHeldByARead, PythonGpuContextLimitedAccess};
-use crate::python_port_family_read_types::{
+use crate::python_message_kind_read_types::{
     PythonAudio, PythonEncodedMedia, PythonTensorCpuAttribute,
 };
 use crate::python_port_payload::PythonPortPayloadBorrow;
 
 impl PythonNodeLinkDataAccess {
     /// The next message's payload on `port_name`, offering
-    /// `offered_gpu_limited_access` to the family type a read builds.
+    /// `offered_gpu_limited_access` to the type of its kind a read builds.
     ///
     /// The one read body; the context-carrying reader passes its capability
     /// and the bare data plane passes nothing.
@@ -221,110 +221,109 @@ impl PythonNodeLinkDataAccess {
 /// What a read hands back for a message's payload.
 #[derive(Clone, Copy)]
 pub(crate) enum PortPayloadReadShape {
-    /// The `PortPayloadBorrow` of the sample: a read naming no family.
+    /// The `PortPayloadBorrow` of the sample: a read naming no kind of message.
     RawBorrow,
-    /// The arriving family's own type, built from the message's descriptor
-    /// kind: a read naming the families its port takes.
-    FamilyType(PortFamiliesOfTheRead),
+    /// The type of the arriving message's kind, built from its descriptor: a read naming the
+    /// kinds of message its port takes.
+    OfItsKind(MessageKindsOfTheRead),
 }
 
-/// A port family, as a read or a write names it by its wire name.
+/// A kind of message a read or a write names by its wire name, each the kind of a descriptor
+/// the type of its port travels as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PortFamilyOfTheRead {
-    Image,
-    Array,
-    Channels,
-    Packets,
-    Records,
+pub(crate) enum MessageKindOfTheRead {
+    ImageFrame,
+    ArrayFrame,
+    ChannelsBlock,
+    PacketsUnit,
+    RecordsMessage,
 }
 
-impl PortFamilyOfTheRead {
+impl MessageKindOfTheRead {
     const ALL: [Self; 5] = [
-        Self::Image,
-        Self::Array,
-        Self::Channels,
-        Self::Packets,
-        Self::Records,
+        Self::ImageFrame,
+        Self::ArrayFrame,
+        Self::ChannelsBlock,
+        Self::PacketsUnit,
+        Self::RecordsMessage,
     ];
 
-    /// The family's name on the wire, such as `image`.
+    /// The kind's name on the wire, such as `image_frame`.
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
-            Self::Image => "image",
-            Self::Array => "array",
-            Self::Channels => "channels",
-            Self::Packets => "packets",
-            Self::Records => "records",
+            Self::ImageFrame => "image_frame",
+            Self::ArrayFrame => "array_frame",
+            Self::ChannelsBlock => "channels_block",
+            Self::PacketsUnit => "packets_unit",
+            Self::RecordsMessage => "records_message",
         }
     }
 
-    /// The family the wire names `wire_name`, or `None` for any other name.
+    /// The kind the wire names `wire_name`, or `None` for any other name.
     pub(crate) fn of_wire_name(wire_name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
-            .find(|family| family.wire_name() == wire_name)
+            .find(|kind| kind.wire_name() == wire_name)
     }
 
-    /// The descriptor kind every message of this family carries.
+    /// The descriptor kind every message of this kind carries.
     fn descriptor_kind(self) -> DataChannelPayloadDescriptorKind {
         match self {
-            Self::Image => DataChannelPayloadDescriptorKind::ImageFrame,
-            Self::Array => DataChannelPayloadDescriptorKind::ArrayFrame,
-            Self::Channels => DataChannelPayloadDescriptorKind::ChannelsBlock,
-            Self::Packets => DataChannelPayloadDescriptorKind::PacketsUnit,
-            Self::Records => DataChannelPayloadDescriptorKind::RecordsMessage,
+            Self::ImageFrame => DataChannelPayloadDescriptorKind::ImageFrame,
+            Self::ArrayFrame => DataChannelPayloadDescriptorKind::ArrayFrame,
+            Self::ChannelsBlock => DataChannelPayloadDescriptorKind::ChannelsBlock,
+            Self::PacketsUnit => DataChannelPayloadDescriptorKind::PacketsUnit,
+            Self::RecordsMessage => DataChannelPayloadDescriptorKind::RecordsMessage,
         }
     }
 }
 
-/// The families a read takes: the one its port declares and any other its pin's types imply.
+/// The kinds of message a read takes: the one its port's pin type travels as and any other
+/// its pin's types travel as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PortFamiliesOfTheRead {
-    declared_family: PortFamilyOfTheRead,
-    is_taken_by_family: [bool; PortFamilyOfTheRead::ALL.len()],
+pub(crate) struct MessageKindsOfTheRead {
+    declared_kind: MessageKindOfTheRead,
+    is_taken_by_kind: [bool; MessageKindOfTheRead::ALL.len()],
 }
 
-impl PortFamiliesOfTheRead {
-    /// An input taking `declared_family` alone.
+impl MessageKindsOfTheRead {
+    /// An input taking `declared_kind` alone.
     #[cfg(test)]
-    pub(crate) fn of_one(declared_family: PortFamilyOfTheRead) -> Self {
-        Self::of_the_declared_family_and_also(declared_family, [])
+    pub(crate) fn of_one(declared_kind: MessageKindOfTheRead) -> Self {
+        Self::of_the_declared_kind_and_also(declared_kind, [])
     }
 
-    /// An input taking `declared_family` and each of `also_taken_families`.
-    pub(crate) fn of_the_declared_family_and_also(
-        declared_family: PortFamilyOfTheRead,
-        also_taken_families: impl IntoIterator<Item = PortFamilyOfTheRead>,
+    /// An input taking `declared_kind` and each of `also_taken_kinds`.
+    pub(crate) fn of_the_declared_kind_and_also(
+        declared_kind: MessageKindOfTheRead,
+        also_taken_kinds: impl IntoIterator<Item = MessageKindOfTheRead>,
     ) -> Self {
-        let mut is_taken_by_family = [false; PortFamilyOfTheRead::ALL.len()];
-        for family in std::iter::once(declared_family).chain(also_taken_families) {
-            is_taken_by_family[family as usize] = true;
+        let mut is_taken_by_kind = [false; MessageKindOfTheRead::ALL.len()];
+        for taken in std::iter::once(declared_kind).chain(also_taken_kinds) {
+            is_taken_by_kind[taken as usize] = true;
         }
         Self {
-            declared_family,
-            is_taken_by_family,
+            declared_kind,
+            is_taken_by_kind,
         }
     }
 
-    /// These families and `family` too.
-    pub(crate) fn also_taking(mut self, family: PortFamilyOfTheRead) -> Self {
-        self.is_taken_by_family[family as usize] = true;
+    /// These kinds and `kind` too.
+    pub(crate) fn also_taking(mut self, kind: MessageKindOfTheRead) -> Self {
+        self.is_taken_by_kind[kind as usize] = true;
         self
     }
 
-    /// The taken family whose messages carry `kind`.
-    fn family_carrying(
-        self,
-        kind: DataChannelPayloadDescriptorKind,
-    ) -> Option<PortFamilyOfTheRead> {
-        PortFamilyOfTheRead::ALL.into_iter().find(|family| {
-            self.is_taken_by_family[*family as usize] && family.descriptor_kind() == kind
+    /// Whether a message described as `descriptor_kind` is of a kind this read takes.
+    fn takes(self, descriptor_kind: DataChannelPayloadDescriptorKind) -> bool {
+        MessageKindOfTheRead::ALL.into_iter().any(|kind| {
+            self.is_taken_by_kind[kind as usize] && kind.descriptor_kind() == descriptor_kind
         })
     }
 }
 
-/// One message's payload as a `PortPayloadBorrow`, or the family type a read
-/// naming families builds from it — the half every read shares once the
+/// One message's payload as a `PortPayloadBorrow`, or the type of its kind a read
+/// naming kinds builds from it — the half every read shares once the
 /// payload is in hand.
 #[allow(
     clippy::too_many_arguments,
@@ -340,19 +339,16 @@ fn payload_read_as_its_shape<'py>(
     read_shape: PortPayloadReadShape,
     offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if let PortPayloadReadShape::FamilyType(families) = read_shape {
+    if let PortPayloadReadShape::OfItsKind(kinds) = read_shape {
         let kind = payload_descriptor.known_kind();
-        let family_of_the_message = kind
-            .as_ref()
-            .ok()
-            .and_then(|kind| families.family_carrying(*kind));
-        if family_of_the_message.is_none() {
-            let family = families.declared_family;
+        if !kind.as_ref().is_ok_and(|kind| kinds.takes(*kind)) {
+            let declared_kind = kinds.declared_kind;
             return Err(PyTypeError::new_err(format!(
-                "a read of {family:?} input port {port_name:?} got a message described as \
-                 {kind:?} rather than {:?}: its producer wrote it as raw bytes rather than as \
-                 a family the port takes. Read it naming no family to take its raw payload.",
-                family.descriptor_kind()
+                "a read of {declared_kind:?} input port {port_name:?} got a message described \
+                 as {kind:?} rather than {:?}: its producer wrote it as raw bytes rather than as \
+                 a kind of message the port takes. Read it naming no kind to take its raw \
+                 payload.",
+                declared_kind.descriptor_kind()
             )));
         }
         match kind {
@@ -519,7 +515,7 @@ pub(crate) fn image_frame_of_the_read<'py>(
         color_info_of_the_image_frame_colour(python, image_frame.colour)?,
     )?;
     fields.set_item("timestamp_ns", timestamp_ns)?;
-    family_type_built_offering_gpu_access(
+    type_of_its_kind_built_offering_gpu_access(
         &python
             .import("tatolab.stream.image_frame")?
             .getattr("Texture")?,
@@ -582,7 +578,7 @@ fn array_frame_of_the_read<'py>(
                 fields.set_item("surface_id", surface_id)?;
                 fields.set_item("dtype", &row.dtype)?;
                 fields.set_item("shape", PyTuple::new(python, &row.shape)?)?;
-                family_type_built_offering_gpu_access(
+                type_of_its_kind_built_offering_gpu_access(
                     &array_frame_module.getattr("TensorGpuAttribute")?,
                     &fields,
                     offered_gpu_limited_access,

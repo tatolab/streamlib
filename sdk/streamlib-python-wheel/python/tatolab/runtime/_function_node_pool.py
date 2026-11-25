@@ -38,8 +38,8 @@ from tatolab.runtime._node_the_wheel_hosts import (
 # it hands on unread.
 _WRITTEN_AS_A_RECORD = "record"
 _HANDED_ON_AS_A_MESSAGE = "message"
-# The family the wheel's reader and writer name a record by.
-_RECORDS_FAMILY = "records"
+# The kind of message the wheel's reader and writer name a record by.
+_RECORDS_MESSAGE_KIND = "records_message"
 
 
 class FunctionNodePool:
@@ -136,9 +136,9 @@ class _FunctionNodePoolBase:
     def _write_one_carry(self, ctx: Any, input_port: str, output_port: str, carries: str) -> None:
         """Write the value of the island `input_port` reads to `output_port`; an island into a setting only once it changed."""
         if carries == _WRITTEN_AS_A_RECORD:
-            record = link_input_data_reader_of(ctx).read(input_port, families=[_RECORDS_FAMILY])
+            record = link_input_data_reader_of(ctx).read(input_port, kinds=[_RECORDS_MESSAGE_KIND])
             if record is not None:
-                link_output_data_writer_of(ctx).write(output_port, record, family=_RECORDS_FAMILY)
+                link_output_data_writer_of(ctx).write(output_port, record, kind=_RECORDS_MESSAGE_KIND)
             return
         message = read_the_message_at_an_input_port_unread(
             link_data_access=self._link_data_access, input_port=input_port

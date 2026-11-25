@@ -19,7 +19,7 @@ use crate::moq_gateway::MoqGatewayThread as MoqGatewayRunningThread;
 use crate::moq_gateway_relay_settings::MoqGatewayRelaySettings;
 use crate::moq_node_ipc::{MoqNodeIpc, MoqStreamServiceNames};
 use crate::moq_track_receive::{
-    MoqReceivedTrackFamily, MoqReceivedTrackOutput, MoqTrackReceiveAsked,
+    MoqReceivedTrackContent, MoqReceivedTrackOutput, MoqTrackReceiveAsked,
     MoqTrackReceiveThread as MoqTrackReceiveRunningThread,
 };
 use crate::moq_track_send::{
@@ -276,14 +276,14 @@ impl MoqTrackSendPublisher {
 struct MoqReceivedTrackModuleHostOutput {
     module_host: ModuleHost,
     content: ModuleHostOutputPort,
-    family: MoqReceivedTrackFamily,
+    carries: MoqReceivedTrackContent,
 }
 
 impl MoqReceivedTrackOutput for MoqReceivedTrackModuleHostOutput {
     fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool {
-        let payload_descriptor = match &self.family {
-            MoqReceivedTrackFamily::Named => Ok(ModuleHostTablePayloadDescriptor::bytes()),
-            MoqReceivedTrackFamily::Packets { codec } => {
+        let payload_descriptor = match &self.carries {
+            MoqReceivedTrackContent::Named => Ok(ModuleHostTablePayloadDescriptor::bytes()),
+            MoqReceivedTrackContent::Packets { codec } => {
                 packets_unit_payload_descriptor(codec).map_err(|refusal| format!("{refusal:?}"))
             }
         };
@@ -319,7 +319,7 @@ impl MoqReceivedTrackOutput for MoqReceivedTrackModuleHostOutput {
         &mut self,
         packets_stream_facts: &serde_json::Value,
     ) {
-        if !matches!(self.family, MoqReceivedTrackFamily::Packets { .. }) {
+        if !matches!(self.carries, MoqReceivedTrackContent::Packets { .. }) {
             return;
         }
         if let Err(refusal) = self
@@ -349,7 +349,7 @@ impl MoqTrackReceiveThread {
     #[new]
     #[pyo3(signature = (
         module_host_table, *, runtime_id, stream_id, receive_node, gateway_node, broadcast,
-        track, max_age_milliseconds, family, codec=None,
+        track, max_age_milliseconds, carries, codec=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn start(
@@ -361,18 +361,18 @@ impl MoqTrackReceiveThread {
         broadcast: String,
         track: String,
         max_age_milliseconds: u64,
-        family: &str,
+        carries: &str,
         codec: Option<String>,
     ) -> PyResult<Self> {
-        let family = match family {
-            "packets" => MoqReceivedTrackFamily::Packets {
+        let carries = match carries {
+            "encoded" => MoqReceivedTrackContent::Packets {
                 codec: codec.unwrap_or_default(),
             },
-            "named" => MoqReceivedTrackFamily::Named,
+            "named" => MoqReceivedTrackContent::Named,
             other => {
                 return Err(MoqModuleError::Refused {
                     what: format!(
-                        "MoqTrackReceive carries Packets or a named type, and `family` names {other:?}"
+                        "MoqTrackReceive carries encoded media or a named type, and `carries` names {other:?}"
                     ),
                 }
                 .into());
@@ -393,7 +393,7 @@ impl MoqTrackReceiveThread {
             Box::new(MoqReceivedTrackModuleHostOutput {
                 module_host,
                 content,
-                family,
+                carries,
             }),
         )?;
         Ok(Self { receive })

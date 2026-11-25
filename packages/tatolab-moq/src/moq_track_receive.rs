@@ -30,9 +30,9 @@ const THE_RECEIVE_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(50);
 /// a stop.
 const CONTENT_SAMPLES_A_PASS_WRITES: usize = 64;
 
-/// The family a receive node's `content` output carries.
+/// What a receive node's `content` output carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MoqReceivedTrackFamily {
+pub enum MoqReceivedTrackContent {
     /// Packets units coded as the codec named; empty for a plain byte stream.
     Packets { codec: String },
     /// A module's named type, each object the bytes its class packs.

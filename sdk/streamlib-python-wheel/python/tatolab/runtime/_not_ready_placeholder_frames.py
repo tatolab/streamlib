@@ -56,6 +56,16 @@ def the_placeholder_texture_format_of_an_image_output(
     return None
 
 
+def the_texture_an_output_port_declares(port: "dict[str, Any]") -> "Optional[dict[str, Any]]":
+    """The Texture pin type the declared output `port` is exactly, or `None` for a port of any
+    other pin type."""
+    declared = (port.get("pin_declaration") or {}).get("pin_type") or {}
+    if declared.get("kind") != "is":
+        return None
+    pin_type = declared.get("pin_type") or {}
+    return pin_type if pin_type.get("type") == "texture" else None
+
+
 class TransparentFramesOnTheImageOutputsOfANodeNotReady:
     """Sends one transparent frame on each Image output of a node, per call."""
 
@@ -66,17 +76,16 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
     ) -> None:
         self._texture_ring_by_image_output: "dict[str, NodeOutputTextureRing]" = {}
         for port in declared_output_ports:
-            family_declaration = port.get("family") or {}
-            if family_declaration.get("family") != "image":
+            texture = the_texture_an_output_port_declares(port)
+            if texture is None:
                 continue
-            texture_format = the_placeholder_texture_format_of_an_image_output(
-                list(family_declaration.get("formats") or [])
-            )
+            declared_formats = list(texture.get("pixel_formats") or [])
+            texture_format = the_placeholder_texture_format_of_an_image_output(declared_formats)
             if texture_format is None:
                 warn_once(
                     "this not-ready node's Image output declares no format with a transparent "
                     "pixel, so it is sent nothing while the node is not ready",
-                    {"port": port["name"], "formats": family_declaration.get("formats")},
+                    {"port": port["name"], "formats": declared_formats},
                 )
                 continue
             self._texture_ring_by_image_output[port["name"]] = NodeOutputTextureRing(
@@ -105,7 +114,7 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
                 link_output_data_writer_of(context).write(
                     port_name,
                     TextureToWrite.of_texture(slot, PLACEHOLDER_FRAME_COLOUR),
-                    family="image",
+                    kind="image_frame",
                 )
             except Exception as refusal:
                 self._warn_once(

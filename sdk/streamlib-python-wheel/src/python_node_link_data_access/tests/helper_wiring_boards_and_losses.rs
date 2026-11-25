@@ -465,8 +465,8 @@ fn a_windowed_input_link_hands_the_child_windows_rather_than_the_blocks_it_was_s
             .read_from_input_port_offering_gpu_access(
                 python,
                 "audio_from_upstream",
-                PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
-                    PortFamilyOfTheRead::Channels,
+                PortPayloadReadShape::OfItsKind(MessageKindsOfTheRead::of_one(
+                    MessageKindOfTheRead::ChannelsBlock,
                 )),
                 None,
             )
