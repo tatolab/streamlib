@@ -133,7 +133,8 @@ class NodeScopeComputedValue:
 def computed(build: Callable[[], Any]) -> NodeScopeComputedValue:
     """Declare a value `build` computes from what it reads with `get()`, into the scope a node's body declares on this thread.
 
-    `build` runs on the scope's worker thread, holding the GIL only while it runs. A value it
+    `build` runs on the scope's worker thread, which holds the GIL while it runs, and briefly to
+    compare a value with `==` and to release one. A value it
     replaces is closed there with its `close()`, if it has one, once nothing in a scope holds it;
     an object that came in as an input's value is never closed.
     """

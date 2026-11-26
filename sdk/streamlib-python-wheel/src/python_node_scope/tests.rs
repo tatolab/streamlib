@@ -509,3 +509,32 @@ assert len(set(map(id, closes))) == 3, closes
 "#,
     );
 }
+
+#[test]
+fn a_second_close_returns_only_once_the_first_has_closed_every_value() {
+    run_with_the_frame_loop(
+        r#"
+closes = []
+
+class SlowToCloseDevice:
+    def __init__(self, generation):
+        self.generation = generation
+    def close(self):
+        time.sleep(0.2)
+        closes.append(self)
+
+declared = NodeScopeBeingDeclared()
+generation = declared.input(0)
+device = declared.declare(lambda: computed(lambda: SlowToCloseDevice(generation.get())))
+scope = declared.start()
+run_frames_until(scope, lambda: device.get().generation == 0)
+
+first_close = threading.Thread(target=scope.close)
+first_close.start()
+time.sleep(0.05)
+scope.close()
+assert len(closes) == 1, closes
+first_close.join(5.0)
+"#,
+    );
+}

@@ -23,6 +23,7 @@ use streamlib_scope::{
     computed, fail_this_build_on_a_computed_value_not_yet_built,
 };
 
+use crate::python_attached_from_any_thread::attached_from_any_thread;
 use python_value_in_a_node_scope::PythonValueInANodeScope;
 
 create_exception!(
@@ -115,7 +116,24 @@ enum PythonBuildEnded {
 }
 
 /// Build a computed value by calling `build`, attached to the interpreter only while it runs.
-fn build_with_the_python_function(build: &Py<PyAny>) -> Result<PythonValueInANodeScope, String> {
+/// A computed value's Python build function, released attached wherever the scope lets go of it.
+struct PythonBuildFunction(Option<Py<PyAny>>);
+
+impl Drop for PythonBuildFunction {
+    fn drop(&mut self) {
+        if let Some(build) = self.0.take() {
+            attached_from_any_thread(|python| drop(build.into_bound(python)));
+        }
+    }
+}
+
+fn build_with_the_python_function(
+    build: &PythonBuildFunction,
+) -> Result<PythonValueInANodeScope, String> {
+    let build = build
+        .0
+        .as_ref()
+        .expect("a build function is held until the scope lets go of it");
     let ended = Python::try_attach(|python| match build.bind(python).call0() {
         Ok(value) => {
             PythonBuildEnded::Built(PythonValueInANodeScope::a_computed_value(value.unbind()))
@@ -188,6 +206,7 @@ pub(crate) fn declare_a_computed_value_of_a_python_node(
         ));
     };
     let worker_thread = declared.worker_thread;
+    let build = PythonBuildFunction(Some(build));
     Ok(PythonNodeScopeComputedValue {
         declared_in: declared.identity,
         computed: computed(move || {
@@ -255,6 +274,7 @@ impl PythonNodeScopeBeingDeclared {
             scope: parking_lot::RwLock::new(Some(scope)),
             frame_view: parking_lot::Mutex::new(Some(frame_view)),
             thread_running_a_frame: parking_lot::Mutex::new(None),
+            letting_go: parking_lot::Mutex::new(()),
         });
         close_at_interpreter_exit(python, &running)?;
         Ok(PythonRunningNodeScope(running))
@@ -321,13 +341,17 @@ struct RunningNodeScopeShared {
     scope: parking_lot::RwLock<Option<Scope>>,
     frame_view: parking_lot::Mutex<Option<FrameView>>,
     thread_running_a_frame: parking_lot::Mutex<Option<ThreadId>>,
+    letting_go: parking_lot::Mutex<()>,
 }
 
 impl RunningNodeScopeShared {
     /// Wait for a frame running on another thread, stop the worker once its build in flight
     /// returns, and drop every value, closing what a build made. Made detached, never on the
     /// scope's worker or inside one of its frames.
+    /// Every caller waits until the first has let go, so a second close, or the one at
+    /// interpreter exit, returns only once the worker is joined and the values are closed.
     fn let_go_of_the_scope(&self) {
+        let _letting_go = self.letting_go.lock();
         let frame_view = self.frame_view.lock().take();
         let scope = self.scope.write().take();
         drop(scope);
