@@ -83,7 +83,7 @@ class TypedNodePins:
             _found_by_each_name(output_ports),
             {group["name"]: _found_by_each_name(group["inputs"]) for group in pin_groups},
             {group["name"]: _found_by_each_name(group["outputs"]) for group in pin_groups},
-            frozenset(config_schema["properties"]) if config_schema is not None else frozenset(),
+            frozenset(config_schema.get("properties", {})) if config_schema is not None else frozenset(),
         )
 
     def port_named(self, name: str, direction: PortDirection) -> str:

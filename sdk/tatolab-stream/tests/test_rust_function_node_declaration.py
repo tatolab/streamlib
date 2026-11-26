@@ -249,6 +249,16 @@ def a_gate_declaration(**overrides: Any) -> "dict[str, Any]":
 RustGate = node.rust_function(a_gate_declaration())
 
 
+@graph_generator
+def rust_gate_stream(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(RustGate, name="gate")
+
+
+def test_a_stream_adds_a_rust_function_node_that_declares_no_config():
+    graph = run_graph_generator(rust_gate_stream)
+    assert [graph_node["type"] for graph_node in graph["nodes"]] == [f"{__name__}:Gate"]
+
+
 def test_a_rust_gate_called_hands_on_the_object_it_was_handed_or_none():
     handed = object()
     assert RustGate(handed) is handed
