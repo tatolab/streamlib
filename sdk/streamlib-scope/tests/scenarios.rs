@@ -860,6 +860,34 @@ fn a_comparison_that_panics_in_a_write_fails_the_write_and_the_scope_still_close
 }
 
 #[test]
+fn a_comparison_that_panics_in_a_write_refuses_the_whole_write_and_the_scope_keeps_working() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let level = declared.input(PanicsOnCompare(0));
+    let (scope, mut view) = declared.start().unwrap();
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scope.write(|writes| {
+            writes.write(taps, 9);
+            writes.write(level, PanicsOnCompare(1));
+        });
+    }));
+    assert!(failed.is_err());
+    assert_eq!(
+        view.run_frame(|| (*taps.get(), level.get().0)),
+        Some((3, 0))
+    );
+
+    scope.write(|writes| {
+        writes.write(taps, 9);
+        writes.write(level, PanicsOnCompare(2));
+    });
+    assert_eq!(
+        view.run_frame(|| (*taps.get(), level.get().0)),
+        Some((9, 2))
+    );
+}
+
+#[test]
 fn a_value_the_frame_replaced_is_dropped_by_a_write_of_any_input() {
     let alive = Arc::new(AtomicUsize::new(0));
     let mut declared = ScopeBeingDeclared::new();

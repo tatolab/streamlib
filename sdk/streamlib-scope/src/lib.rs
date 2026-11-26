@@ -360,18 +360,24 @@ impl ScopeSlots {
     /// slot holds. The slot's previous value is never its last holder: the frame view or the
     /// hand-over holds it too.
     fn store(&mut self, index: usize, value: &AnyValue) -> Option<AnyValue> {
-        let slot = &mut self.slots[index];
-        if slot
-            .value
+        (!self.holds_equal(index, value)).then(|| self.replace(index, value))
+    }
+
+    /// Whether slot `index` holds a value equal to `value`, by the value's `PartialEq`.
+    fn holds_equal(&self, index: usize, value: &AnyValue) -> bool {
+        let slot = &self.slots[index];
+        slot.value
             .as_ref()
             .is_some_and(|held| (slot.equal)(held.as_ref(), value.as_ref()))
-        {
-            return None;
-        }
+    }
+
+    /// Put `value` in slot `index` as a change, and return it to hand over.
+    fn replace(&mut self, index: usize, value: &AnyValue) -> AnyValue {
         self.revision += 1;
+        let slot = &mut self.slots[index];
         slot.value = Some(Arc::clone(value));
         slot.changed_at = self.revision;
-        Some(Arc::clone(value))
+        Arc::clone(value)
     }
 
     /// The first slot left to build, in declaration order from `first`, wrapping around.
@@ -658,10 +664,29 @@ impl Scope {
             refuse(Refusal::HandleOfAnotherScope);
         }
         let mut slots = lock(&self.shared.slots);
+        // Every value is compared before any is stored, and a comparison that panics is caught
+        // here, so the write is refused whole and the lock is not poisoned.
+        let unchanged = catch_unwind(AssertUnwindSafe(|| {
+            written
+                .values
+                .iter()
+                .map(|(index, value)| slots.holds_equal(*index, value))
+                .collect::<Vec<bool>>()
+        }));
+        let unchanged = match unchanged {
+            Ok(unchanged) => unchanged,
+            Err(payload) => {
+                drop(slots);
+                drop(written);
+                resume_unwind(payload)
+            }
+        };
         let changed: Vec<(usize, AnyValue)> = written
             .values
             .iter()
-            .filter_map(|(index, value)| slots.store(*index, value).map(|value| (*index, value)))
+            .zip(unchanged)
+            .filter(|(_, unchanged)| !unchanged)
+            .map(|((index, value), _)| (*index, slots.replace(*index, value)))
             .collect();
         if changed.is_empty() {
             drop(slots);
