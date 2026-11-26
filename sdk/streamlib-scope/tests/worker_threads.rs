@@ -28,6 +28,19 @@ fn scope_workers_settled_at(expected: usize) -> usize {
     }
 }
 
+/// Whether a worker thread shows up within `window`. A new thread takes its name from inside
+/// itself, so one counted at once after `start` may not carry it yet.
+fn a_scope_worker_appears_within(window: Duration) -> bool {
+    let deadline = Instant::now() + window;
+    while Instant::now() < deadline {
+        if scope_workers_running() > 0 {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    false
+}
+
 fn scope_workers_running() -> usize {
     std::fs::read_dir("/proc/self/task")
         .unwrap()
@@ -46,7 +59,7 @@ fn a_scope_starts_a_worker_only_for_a_computed_value() {
     let mut declared = ScopeBeingDeclared::new();
     let level = declared.input(Counted::new(0, &alive));
     let (scope, mut view) = declared.start().unwrap();
-    assert_eq!(scope_workers_running(), 0);
+    assert!(!a_scope_worker_appears_within(Duration::from_millis(200)));
     for value in 1..=50 {
         scope.write(|writes| writes.write(level, Counted::new(value, &alive)));
         assert_eq!(view.run_frame(|| level.get().value), Some(value));
