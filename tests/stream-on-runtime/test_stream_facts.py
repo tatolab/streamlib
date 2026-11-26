@@ -89,8 +89,8 @@ def test_declared_replaced_refused_and_read_downstream(
     }, "every class node renders its kind on its graph node"
     assert all("language" not in node for node in graph["nodes"])
 
-    assert "encoded" in refusal and "Packets" in refusal and "Image" in refusal, (
-        f"refused facts name the port and both families: {refusal!r}"
+    assert "encoded" in refusal and "Encoded video" in refusal and "Texture" in refusal, (
+        f"refused facts name the port, its pin type and the facts' type: {refusal!r}"
     )
     assert all(
         facts is None or facts == REPLACEMENT_READ_DOWNSTREAM for facts in read_downstream

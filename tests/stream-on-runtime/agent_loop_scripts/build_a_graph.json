@@ -5,7 +5,10 @@
     "givens": {
       "source_node_type": "tatolab.testpattern:TestPatternSource",
       "source_label": "source",
-      "source_config": { "width": 320, "height": 180 },
+      "source_width_input": "width",
+      "source_width": 320,
+      "source_height_input": "height",
+      "source_height": 180,
       "source_output": "video",
       "compositor_node_type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor",
       "compositor_label": "compositor",
@@ -48,8 +51,21 @@
             "operation": "add_node",
             "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
             "type": { "$given": "source_node_type" },
-            "as": { "$given": "source_label" },
-            "config": { "$given": "source_config" }
+            "as": { "$given": "source_label" }
+          },
+          {
+            "operation": "set_node_input_value",
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+            "node": { "$given": "source_label" },
+            "input": { "$given": "source_width_input" },
+            "value": { "$given": "source_width" }
+          },
+          {
+            "operation": "set_node_input_value",
+            "stream": { "$read": { "step": "streams", "pointer": "/streams/0/stream" } },
+            "node": { "$given": "source_label" },
+            "input": { "$given": "source_height_input" },
+            "value": { "$given": "source_height" }
           },
           {
             "operation": "add_node",
