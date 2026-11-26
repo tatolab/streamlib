@@ -538,3 +538,31 @@ first_close.join(5.0)
 "#,
     );
 }
+
+#[test]
+fn a_value_whose_close_closes_or_drops_its_own_scope_does_not_hang_the_close() {
+    run_with_the_frame_loop(
+        r#"
+closes = []
+node = {}
+
+class DeviceThatTearsDownItsNode:
+    def close(self):
+        closes.append(self)
+        node["scope"].close()
+        node.pop("scope", None)
+
+declared = NodeScopeBeingDeclared()
+generation = declared.input(0)
+device = declared.declare(lambda: computed(lambda: DeviceThatTearsDownItsNode()))
+node["scope"] = declared.start()
+run_frames_until(node["scope"], lambda: True)
+
+closer = threading.Thread(target=lambda: node["scope"].close())
+closer.start()
+closer.join(5.0)
+assert not closer.is_alive(), "the close hung"
+assert len(closes) == 1, closes
+"#,
+    );
+}

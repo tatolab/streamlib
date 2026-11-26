@@ -274,7 +274,7 @@ impl PythonNodeScopeBeingDeclared {
             scope: parking_lot::RwLock::new(Some(scope)),
             frame_view: parking_lot::Mutex::new(Some(frame_view)),
             thread_running_a_frame: parking_lot::Mutex::new(None),
-            letting_go: parking_lot::Mutex::new(()),
+            letting_go: parking_lot::ReentrantMutex::new(()),
         });
         close_at_interpreter_exit(python, &running)?;
         Ok(PythonRunningNodeScope(running))
@@ -341,7 +341,8 @@ struct RunningNodeScopeShared {
     scope: parking_lot::RwLock<Option<Scope>>,
     frame_view: parking_lot::Mutex<Option<FrameView>>,
     thread_running_a_frame: parking_lot::Mutex<Option<ThreadId>>,
-    letting_go: parking_lot::Mutex<()>,
+    /// Reentrant: a value's `close()` run while letting go may close or drop its own scope.
+    letting_go: parking_lot::ReentrantMutex<()>,
 }
 
 impl RunningNodeScopeShared {
