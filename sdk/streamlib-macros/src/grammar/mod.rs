@@ -11,6 +11,7 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized};
 
 mod port_grammar;
+mod value_input_grammar;
 
 use port_grammar::{DeclaredPort, parse_port};
 

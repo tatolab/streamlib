@@ -16,6 +16,7 @@ use syn::parse::ParseStream;
 use syn::{Ident, LitInt, LitStr, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
+use super::value_input_grammar::{reject_a_value_input_key_on_an_output, value_input_declared};
 use super::{DeclaredDescription, ParsedPort, ParsedValueInput, PortDirection};
 
 /// What one `input(...)` or `output(...)` declares: a port, or a value input of a node written
@@ -380,78 +381,6 @@ pub(super) fn parse_port(
         may_be_unset: may_be_unset.is_some(),
         takes_a_value,
     }))
-}
-
-/// Refuse `key`, which only a value input states, on `output("{name}", …)`.
-fn reject_a_value_input_key_on_an_output(
-    direction: PortDirection,
-    name: &str,
-    key: &str,
-    key_span: proc_macro2::Span,
-) -> syn::Result<()> {
-    if direction == PortDirection::Output {
-        return Err(syn::Error::new(
-            key_span,
-            format!(
-                "`{key}` is declared by a value input, not `output(\"{name}\", ...)` — an \
-                 output writes what its node sends, and holds no value of its own"
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// The value input `input("{name}", value = …, default = …)` declares: its type and default
-/// both stated, and no key a port takes beside them.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "each is one part of the declaration the value input is read from"
-)]
-fn value_input_declared(
-    name: String,
-    name_span: proc_macro2::Span,
-    declared_marker_ident: Ident,
-    cast_name: String,
-    description: Option<DeclaredDescription>,
-    value_type: Option<(proc_macro2::Span, syn::Type)>,
-    value_default: Option<(proc_macro2::Span, syn::Expr)>,
-    port_keys_stated: &[(String, proc_macro2::Span)],
-) -> syn::Result<ParsedValueInput> {
-    if let Some((key, key_span)) = port_keys_stated.first() {
-        return Err(syn::Error::new(
-            *key_span,
-            format!(
-                "value input `{name}` declares `{key}`, which a port takes — a value input \
-                 states its `value = <type>`, its `default = …` and its `description`, and \
-                 nothing else"
-            ),
-        ));
-    }
-    let Some((_, value_type)) = value_type else {
-        return Err(syn::Error::new(
-            name_span,
-            format!(
-                "input `{name}` declares a `default` and no `value = <type>` — a value input \
-                 states the type of the value it holds"
-            ),
-        ));
-    };
-    let Some((_, default)) = value_default else {
-        return Err(syn::Error::new(
-            name_span,
-            format!(
-                "value input `{name}` declares no `default = …` — a value input holds its \
-                 default until it is set"
-            ),
-        ));
-    };
-    Ok(ParsedValueInput {
-        declared_ident: declared_marker_ident,
-        cast_name,
-        description,
-        value_type,
-        default,
-    })
 }
 
 /// Parse `former_names = ["…"]` on port `name`, whose cast name is `cast_name`: each name cast as

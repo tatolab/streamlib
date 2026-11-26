@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::the_value_input_of_a_node_function;
+use crate::node_function_value_input::the_value_input_of_a_node_function;
 use crate::pin_type::{IntegerSize, NodeInputMode, PinType, SettingReadTime};
 
 #[test]

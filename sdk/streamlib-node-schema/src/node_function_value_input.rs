@@ -48,7 +48,3 @@ pub fn the_value_input_of_a_node_function<T: SettingPinType + Serialize>(
     input.delivery_profile = None;
     input
 }
-
-#[cfg(test)]
-#[path = "node_function_value_input_tests.rs"]
-mod tests;

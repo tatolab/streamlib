@@ -17,6 +17,8 @@ pub mod exposed_name_cast;
 pub mod node_class_import_path;
 pub mod node_class_short_name;
 pub mod node_function_value_input;
+#[cfg(test)]
+mod node_function_value_input_tests;
 pub mod node_kind;
 pub mod node_reference_in_config;
 pub mod node_schema;
