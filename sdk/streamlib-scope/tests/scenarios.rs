@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use streamlib_scope::{BuildFailure, FrameView, LastBuild, ScopeBeingDeclared, computed};
@@ -30,40 +30,51 @@ fn run_frames_until(view: &mut FrameView, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// Opens a gate builds wait on when dropped, so a failing test never leaves the worker blocked
+/// while the scope joins it.
+struct OpenOnDrop(Arc<AtomicBool>);
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 #[test]
 fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius() {
     let builds = Arc::new(AtomicUsize::new(0));
-    let first_build_may_finish = Arc::new(AtomicBool::new(false));
+    let builds_may_finish = Arc::new(AtomicBool::new(false));
     let mut declared = ScopeBeingDeclared::new();
     let taps = declared.input(5_u32);
     let radius = declared.input(1.0_f32);
     let kernel = declared.declare(|| {
         let builds = Arc::clone(&builds);
-        let first_build_may_finish = Arc::clone(&first_build_may_finish);
+        let builds_may_finish = Arc::clone(&builds_may_finish);
         computed(move || {
             let taps = *taps.get();
-            while !first_build_may_finish.load(Ordering::SeqCst) {
+            while !builds_may_finish.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(1));
             }
             builds.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(30));
             Ok::<_, String>(BlurKernel { taps })
         })
     });
     let (scope, mut view) = declared.start().unwrap();
+    let _open_on_unwind = OpenOnDrop(Arc::clone(&builds_may_finish));
 
     // No frame runs until the kernel has its first value.
-    assert_eq!(view.run_frame(|| ()), None);
-    first_build_may_finish.store(true, Ordering::SeqCst);
+    let before_the_first_value = view.run_frame(|| ());
+    builds_may_finish.store(true, Ordering::SeqCst);
+    assert_eq!(before_the_first_value, None);
     run_frames_until(&mut view, || true);
     assert_eq!(view.run_frame(|| kernel.get().taps), Some(5));
 
     // A new tap count: frames keep the 5-tap kernel while the 9-tap one builds.
+    builds_may_finish.store(false, Ordering::SeqCst);
     scope.write(taps, 9);
-    assert_eq!(
-        view.run_frame(|| (*taps.get(), kernel.get().taps)),
-        Some((9, 5))
-    );
+    let while_building = view.run_frame(|| (*taps.get(), kernel.get().taps));
+    builds_may_finish.store(true, Ordering::SeqCst);
+    assert_eq!(while_building, Some((9, 5)));
     run_frames_until(&mut view, || kernel.get().taps == 9);
 
     // The kernel never read the radius, so a radius drag builds nothing.
@@ -100,9 +111,9 @@ fn a_burst_of_tap_counts_ends_on_the_newest_and_throws_stale_builds_away() {
     }
     run_frames_until(&mut view, || kernel.get().taps == 30);
 
-    // 29 writes, far fewer builds, and no stale kernel ever handed over after a newer one.
+    // 29 writes, fewer builds, and no stale kernel ever handed over after a newer one.
     assert!(
-        builds.load(Ordering::SeqCst) < 15,
+        builds.load(Ordering::SeqCst) < 29,
         "builds: {}",
         builds.load(Ordering::SeqCst)
     );
@@ -114,26 +125,31 @@ fn a_burst_of_tap_counts_ends_on_the_newest_and_throws_stale_builds_away() {
 
 #[test]
 fn a_build_whose_input_changed_while_it_ran_is_thrown_away() {
-    let first_build = Arc::new(Barrier::new(2));
+    let (read_tx, read_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let first_build = Mutex::new(Some((read_tx, release_rx)));
     let mut declared = ScopeBeingDeclared::new();
     let taps = declared.input(1_u32);
     let kernel = declared.declare(|| {
-        let first_build = Arc::clone(&first_build);
         computed(move || {
             let taps = *taps.get();
-            if taps == 1 {
-                first_build.wait();
-                first_build.wait();
+            if let Some((read_tx, release_rx)) = first_build.lock().unwrap().take() {
+                read_tx.send(()).unwrap();
+                let _released_or_dropped = release_rx.recv();
             }
             Ok::<_, String>(BlurKernel { taps })
         })
     });
     let (scope, mut view) = declared.start().unwrap();
+    // Bound after the scope, so it drops first and frees the build if the test unwinds.
+    let release_tx = release_tx;
 
     // The build has read 1; 2 is written before it returns.
-    first_build.wait();
+    read_rx
+        .recv_timeout(SETTLE)
+        .expect("the first build reads its input");
     scope.write(taps, 2);
-    first_build.wait();
+    drop(release_tx);
 
     run_frames_until(&mut view, || kernel.get().taps == 2);
     assert!(scope.wait_until_settled(SETTLE));

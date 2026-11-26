@@ -12,7 +12,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
 use std::thread::JoinHandle;
 
 type AnyValue = Arc<dyn Any + Send + Sync>;
@@ -536,13 +536,20 @@ impl Scope {
     #[must_use]
     pub fn wait_until_settled(&self, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
-        while !lock(&self.shared.slots).is_settled() {
+        loop {
+            let settled = match self.shared.slots.try_lock() {
+                Ok(slots) => slots.is_settled(),
+                Err(TryLockError::WouldBlock) => false,
+                Err(TryLockError::Poisoned(_)) => panic!("{NO_LOCK_HELD_ACROSS_A_PANIC}"),
+            };
+            if settled {
+                return true;
+            }
             if std::time::Instant::now() >= deadline {
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        true
     }
 }
 
@@ -600,11 +607,11 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         // Values the frame thread replaced are released here, off the frame thread.
         let replaced = std::mem::take(&mut *lock(&shared.replaced));
         drop(replaced);
+        if shared.closing.load(Ordering::SeqCst) {
+            return;
+        }
         let slots = lock(&shared.slots);
         let Some(next) = slots.next_build() else {
-            if shared.closing.load(Ordering::SeqCst) {
-                return;
-            }
             let _unused = shared
                 .something_to_build
                 .wait_timeout(slots, std::time::Duration::from_millis(20))
