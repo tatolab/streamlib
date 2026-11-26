@@ -11,6 +11,7 @@ pub use streamlib_node_schema::description_lint::{
 pub use streamlib_node_schema::descriptors::{
     CodeExamples, NodeDescriptor, NodeRuntime, PortDescriptor,
 };
+pub use streamlib_node_schema::node_function_value_input::the_value_input_of_a_node_function;
 pub use streamlib_node_schema::node_settings::{
     NodeSettings, SettingChoosingAPinType, SettingChosenFromOptions, SettingPinType,
     the_choice_among_the_bundles_its_stream_declares, the_default_of_a_setting,

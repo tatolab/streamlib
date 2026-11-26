@@ -16,14 +16,22 @@ use syn::parse::ParseStream;
 use syn::{Ident, LitInt, LitStr, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
-use super::{DeclaredDescription, ParsedPort, PortDirection};
+use super::{DeclaredDescription, ParsedPort, ParsedValueInput, PortDirection};
+
+/// What one `input(...)` or `output(...)` declares: a port, or a value input of a node written
+/// as one function.
+pub(crate) enum DeclaredPort {
+    Port(ParsedPort),
+    Value(ParsedValueInput),
+}
 
 /// Parse an `input(...)` / `output(...)` port body.
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, pin_type = <PinType> |
 /// pin_type = from_setting("<setting>"), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
-/// takes_a_value = true, <stream fact key> = …]`.
+/// takes_a_value = true, <stream fact key> = …]`, or, for a value input of a node written as
+/// one function, `<name-string>, value = <Type>, default = <expression>[, description = "..."]`.
 ///
 /// A port states its pin type. A Texture port states the pixel formats it carries with
 /// `formats = […]`, and an output states what it knows of its stream as the annotations of its
@@ -43,7 +51,7 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 pub(super) fn parse_port(
     input: ParseStream<'_>,
     direction: PortDirection,
-) -> syn::Result<ParsedPort> {
+) -> syn::Result<DeclaredPort> {
     let content;
     parenthesized!(content in input);
 
@@ -85,6 +93,10 @@ pub(super) fn parse_port(
     let mut may_be_unset: Option<proc_macro2::Span> = None;
     let mut takes_a_value = false;
     let mut stream_facts = StreamFactsStated::default();
+    let mut value_type: Option<(proc_macro2::Span, syn::Type)> = None;
+    let mut value_default: Option<(proc_macro2::Span, syn::Expr)> = None;
+    // Every key but `description`, `value` and `default`, which a value input takes no other of.
+    let mut port_keys_stated: Vec<(String, proc_macro2::Span)> = Vec::new();
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -94,6 +106,12 @@ pub(super) fn parse_port(
         reject_positional_port_schema(&content, &name, direction)?;
         let key: Ident = content.parse()?;
         let key_span = key.span();
+        if !matches!(
+            key.to_string().as_str(),
+            "description" | "value" | "default"
+        ) {
+            port_keys_stated.push((key.to_string(), key_span));
+        }
 
         // `audio_window` is the one port key with a call form —
         // `audio_window(sample_rate = …)` beside `audio_window = match_device`
@@ -120,6 +138,14 @@ pub(super) fn parse_port(
         match key.to_string().as_str() {
             "description" => {
                 description = Some(DeclaredDescription::parse(&content)?);
+            }
+            "value" => {
+                reject_a_value_input_key_on_an_output(direction, &name, "value", key_span)?;
+                value_type = Some((key_span, content.parse()?));
+            }
+            "default" => {
+                reject_a_value_input_key_on_an_output(direction, &name, "default", key_span)?;
+                value_default = Some((key_span, content.parse()?));
             }
             "delivery_profile" => {
                 let lit: LitStr = content.parse()?;
@@ -227,13 +253,27 @@ pub(super) fn parse_port(
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
                          `borrow_quota`, `description`, `audio_window`, `pin_type`, \
-                         `lifetime`, `flow`, `former_names`, `may_be_unset`, `takes_a_value`, or \
-                         one of the stream fact keys `rate`, `frame_rate`, `dtype`, `formats`, \
-                         `residency`"
+                         `lifetime`, `flow`, `former_names`, `may_be_unset`, `takes_a_value`, \
+                         `value`, `default`, or one of the stream fact keys `rate`, `frame_rate`, \
+                         `dtype`, `formats`, `residency`"
                     ),
                 ));
             }
         }
+    }
+
+    if value_type.is_some() || value_default.is_some() {
+        return value_input_declared(
+            name,
+            name_lit.span(),
+            declared_marker_ident,
+            cast_name,
+            description,
+            value_type,
+            value_default,
+            &port_keys_stated,
+        )
+        .map(DeclaredPort::Value);
     }
 
     let stated_pin_type = match (pin_type, pin_type_from_setting) {
@@ -324,7 +364,7 @@ pub(super) fn parse_port(
         }
     }
 
-    Ok(ParsedPort {
+    Ok(DeclaredPort::Port(ParsedPort {
         declared_marker_ident,
         cast_name,
         description,
@@ -339,6 +379,78 @@ pub(super) fn parse_port(
         former_names: former_names.map(|(_, names)| names).unwrap_or_default(),
         may_be_unset: may_be_unset.is_some(),
         takes_a_value,
+    }))
+}
+
+/// Refuse `key`, which only a value input states, on `output("{name}", …)`.
+fn reject_a_value_input_key_on_an_output(
+    direction: PortDirection,
+    name: &str,
+    key: &str,
+    key_span: proc_macro2::Span,
+) -> syn::Result<()> {
+    if direction == PortDirection::Output {
+        return Err(syn::Error::new(
+            key_span,
+            format!(
+                "`{key}` is declared by a value input, not `output(\"{name}\", ...)` — an \
+                 output writes what its node sends, and holds no value of its own"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The value input `input("{name}", value = …, default = …)` declares: its type and default
+/// both stated, and no key a port takes beside them.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each is one part of the declaration the value input is read from"
+)]
+fn value_input_declared(
+    name: String,
+    name_span: proc_macro2::Span,
+    declared_marker_ident: Ident,
+    cast_name: String,
+    description: Option<DeclaredDescription>,
+    value_type: Option<(proc_macro2::Span, syn::Type)>,
+    value_default: Option<(proc_macro2::Span, syn::Expr)>,
+    port_keys_stated: &[(String, proc_macro2::Span)],
+) -> syn::Result<ParsedValueInput> {
+    if let Some((key, key_span)) = port_keys_stated.first() {
+        return Err(syn::Error::new(
+            *key_span,
+            format!(
+                "value input `{name}` declares `{key}`, which a port takes — a value input \
+                 states its `value = <type>`, its `default = …` and its `description`, and \
+                 nothing else"
+            ),
+        ));
+    }
+    let Some((_, value_type)) = value_type else {
+        return Err(syn::Error::new(
+            name_span,
+            format!(
+                "input `{name}` declares a `default` and no `value = <type>` — a value input \
+                 states the type of the value it holds"
+            ),
+        ));
+    };
+    let Some((_, default)) = value_default else {
+        return Err(syn::Error::new(
+            name_span,
+            format!(
+                "value input `{name}` declares no `default = …` — a value input holds its \
+                 default until it is set"
+            ),
+        ));
+    };
+    Ok(ParsedValueInput {
+        declared_ident: declared_marker_ident,
+        cast_name,
+        description,
+        value_type,
+        default,
     })
 }
 

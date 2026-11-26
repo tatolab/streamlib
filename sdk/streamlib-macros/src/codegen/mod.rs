@@ -13,6 +13,7 @@ use syn::ItemStruct;
 use syn::spanned::Spanned;
 
 mod author_visibility;
+mod node_function_emit;
 mod node_settings_emit;
 mod pin_declaration_tokens;
 mod port_marker_module;
@@ -24,6 +25,11 @@ use author_visibility::{
 use node_settings_emit::NodeSettingsEmitted;
 use pin_declaration_tokens::pin_declaration_tokens;
 use port_marker_module::generate_port_marker_module;
+
+pub(crate) use node_function_emit::{
+    generate_from_a_node_function, node_name_of_a_node_function,
+    refusal_of_a_value_input_on_a_struct,
+};
 
 pub(crate) fn generate_from_parsed_node_attr(
     item: &ItemStruct,
@@ -334,8 +340,12 @@ fn generate_node_impl_from_schema(
         };
 
     let from_config_body = generate_from_config_from_schema(schema, settings, custom_fields);
-    let descriptor_impl =
-        generate_descriptor_from_schema(schema, declared_meta_and_port_descriptions, settings);
+    let descriptor_impl = generate_descriptor_from_schema(
+        schema,
+        declared_meta_and_port_descriptions,
+        settings,
+        &quote! {},
+    );
     let node_spec_constructor = settings.node_spec_constructor(member_visibility);
     let settings_taken_from_the_input_values = settings.settings_taken_from_the_input_values();
     let setup_marked = settings.setup_marked();
@@ -503,10 +513,14 @@ impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
     }
 }
 
+/// The descriptor a node's schema, its declared meta and port descriptions and its settings
+/// build; `value_inputs`, the `.with_input(…)` calls of a node function's value inputs, follow
+/// its port inputs.
 fn generate_descriptor_from_schema(
     schema: &NodeSchema,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     settings: &NodeSettingsEmitted<'_>,
+    value_inputs: &TokenStream,
 ) -> TokenStream {
     let description =
         declared_description_str_expression(declared_meta_and_port_descriptions.node_description);
@@ -642,6 +656,7 @@ fn generate_descriptor_from_schema(
                     #category
                     #conversion
                     #(#ipc_input_ports)*
+                    #value_inputs
                     #setting_inputs
                     #(#ipc_output_ports)*
             )
@@ -832,3 +847,6 @@ mod node_struct_emit_tests;
 
 #[cfg(test)]
 mod pin_declaration_tokens_tests;
+
+#[cfg(test)]
+mod node_function_emit_tests;

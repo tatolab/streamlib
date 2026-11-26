@@ -16,6 +16,7 @@ pub mod error;
 pub mod exposed_name_cast;
 pub mod node_class_import_path;
 pub mod node_class_short_name;
+pub mod node_function_value_input;
 pub mod node_kind;
 pub mod node_reference_in_config;
 pub mod node_schema;
@@ -49,6 +50,7 @@ pub use node_class_import_path::{
     SET_VARIABLE_NODE_TYPE, is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
 };
 pub use node_class_short_name::NodeClassShortName;
+pub use node_function_value_input::the_value_input_of_a_node_function;
 pub use node_kind::{FunctionNodeLanguage, NodeKind};
 pub use node_reference_in_config::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, NODE_REFERENCE_SCHEMA_KEYWORD,

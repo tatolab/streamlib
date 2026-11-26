@@ -259,6 +259,8 @@ pub mod sdk {
         };
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};
+
+        pub use streamlib_scope::{BuildFailure, Computed, Input, LastBuild, computed};
     }
 
     pub use crate::crossbeam_channel;

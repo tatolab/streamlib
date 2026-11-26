@@ -619,6 +619,7 @@ fn rendered_descriptor() -> String {
         &minimal_schema(),
         &no_declared_meta_or_port_descriptions(),
         &NodeSettingsEmitted::of(None),
+        &quote! {},
     ))
 }
 
@@ -632,6 +633,7 @@ fn only_a_node_paced_by_real_time_declares_it_on_its_descriptor() {
             },
             &no_declared_meta_or_port_descriptions(),
             &NodeSettingsEmitted::of(None),
+            &quote! {},
         ))
     };
     assert!(rendered_for(true).contains(".paced_by_real_time()"));
@@ -648,6 +650,7 @@ fn only_a_node_that_declares_a_category_sets_one_on_its_descriptor() {
                 ..no_declared_meta_or_port_descriptions()
             },
             &NodeSettingsEmitted::of(None),
+            &quote! {},
         ))
     };
     assert!(rendered_for(Some("Effects/Stylize")).contains(".with_category(\"Effects/Stylize\")"));
@@ -664,6 +667,7 @@ fn only_a_node_that_states_a_conversion_says_so_on_its_descriptor() {
                 ..no_declared_meta_or_port_descriptions()
             },
             &NodeSettingsEmitted::of(None),
+            &quote! {},
         ))
     };
     assert!(rendered_for(true).contains(".stating_a_conversion()"));
@@ -886,6 +890,7 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         &minimal_schema(),
         &no_declared_meta_or_port_descriptions(),
         &settings,
+        &quote! {},
     ));
     assert!(
         descriptor.contains(".with_the_inputs_of_its_settings::<crate::BlurSettings>()"),

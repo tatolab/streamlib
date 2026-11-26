@@ -10,12 +10,50 @@ use grammar as attribute_grammar;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{ItemStruct, parse_macro_input};
+use syn::spanned::Spanned;
+use syn::{Item, ItemFn, ItemStruct, parse_macro_input};
 
+/// Declares a node type, on a struct or on a function.
+///
+/// On a function, the node is written as one function: its body runs once, when the node is set
+/// up, declares the node's `computed(…)` values and returns its per-frame function. Its
+/// parameters are the node's value inputs as `Input<T>` handles, each declared with
+/// `input("name", value = T, default = …)` and named after its input, its `InputMailboxes`, its
+/// `OutputWriter` and the `&RuntimeContextFullAccess<'_>` the body runs with.
 #[proc_macro_attribute]
 pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut item_struct = parse_macro_input!(item as ItemStruct);
+    let item = parse_macro_input!(item as Item);
+    match item {
+        Item::Fn(item_fn) => node_function(attr, item_fn),
+        Item::Struct(item_struct) => node_struct(attr, item_struct),
+        other => syn::Error::new(
+            other.span(),
+            "#[node(...)] declares a node on a struct, or on a function written as one function",
+        )
+        .to_compile_error()
+        .into(),
+    }
+}
 
+fn node_function(attr: TokenStream, mut item_fn: ItemFn) -> TokenStream {
+    let node_meta =
+        match attribute_grammar::DeclaredNodeMeta::take_from_attributes(&mut item_fn.attrs) {
+            Ok(node_meta) => node_meta,
+            Err(err) => return err.to_compile_error().into(),
+        };
+    let node_name = codegen::node_name_of_a_node_function(&item_fn.sig.ident);
+    let parsed = match attribute_grammar::parse2(attr.into(), node_meta, &node_name) {
+        Ok(parsed) => parsed,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    TokenStream::from(codegen::generate_from_a_node_function(
+        item_fn,
+        &parsed,
+        sdk_root(),
+    ))
+}
+
+fn node_struct(attr: TokenStream, mut item_struct: ItemStruct) -> TokenStream {
     let node_meta =
         match attribute_grammar::DeclaredNodeMeta::take_from_attributes(&mut item_struct.attrs) {
             Ok(node_meta) => node_meta,
@@ -25,6 +63,9 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Some(refusal) = codegen::refusal_of_a_value_input_on_a_struct(&parsed) {
+        return refusal.to_compile_error().into();
+    }
 
     TokenStream::from(codegen::generate_from_parsed_node_attr(
         &item_struct,

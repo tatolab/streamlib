@@ -5577,6 +5577,7 @@ dependencies = [
  "streamlib-node-schema",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
+ "streamlib-scope",
  "streamlib-slang-shader-compiler",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
