@@ -147,6 +147,11 @@ expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-scope"
+expression = "GPL-3.0-only"
+license-files = []
+
+[[licenses.clarify]]
 name = "streamlib-ipc-types"
 expression = "GPL-3.0-only"
 license-files = []
