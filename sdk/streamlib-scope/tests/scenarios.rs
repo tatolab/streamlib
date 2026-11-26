@@ -808,3 +808,55 @@ fn a_comparison_that_panics_in_a_write_fails_the_write_and_the_scope_still_close
     assert!(failed.is_err());
     drop(view);
 }
+
+#[test]
+fn a_value_the_frame_replaced_is_dropped_by_a_write_of_any_input() {
+    let alive = Arc::new(AtomicUsize::new(0));
+    let mut declared = ScopeBeingDeclared::new();
+    let buffer = declared.input(Counted::new(0, &alive));
+    let level = declared.input(0_u32);
+    let (scope, mut view) = declared.start().unwrap();
+
+    scope.write(|writes| writes.write(buffer, Counted::new(1, &alive)));
+    assert_eq!(view.run_frame(|| buffer.get().value), Some(1));
+    // The frame replaced the first buffer; a write of another input drops it.
+    scope.write(|writes| writes.write(level, 1));
+    assert_eq!(alive.load(Ordering::SeqCst), 1);
+}
+
+/// A built value whose comparison panics, as a value's `PartialEq` might on some state.
+#[derive(Debug)]
+struct PanicsWhenCompared(u32);
+
+impl PartialEq for PanicsWhenCompared {
+    fn eq(&self, _other: &Self) -> bool {
+        panic!("compared a built value")
+    }
+}
+
+#[test]
+fn a_built_value_whose_comparison_panics_fails_its_build_and_the_scope_keeps_working() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let kernel =
+        declared.declare(|| computed(move || Ok::<_, String>(PanicsWhenCompared(*taps.get()))));
+    let (scope, mut view) = declared.start().unwrap();
+    run_frames_until(&mut view, || kernel.get().0 == 3);
+
+    scope.write(|writes| writes.write(taps, 4));
+    assert!(scope.wait_until_settled(SETTLE));
+    assert_eq!(
+        scope.last_build_of(kernel),
+        LastBuild::Failed {
+            builds: 2,
+            why: BuildFailure::ComparisonPanicked("compared a built value".to_string())
+        }
+    );
+    // The previous value keeps serving, and the scope still takes writes.
+    assert_eq!(
+        view.run_frame(|| (*taps.get(), kernel.get().0)),
+        Some((4, 3))
+    );
+    scope.write(|writes| writes.write(taps, 5));
+    assert!(scope.wait_until_settled(SETTLE));
+}

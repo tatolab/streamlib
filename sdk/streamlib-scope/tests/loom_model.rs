@@ -37,11 +37,9 @@ fn a_transaction_is_never_seen_half_applied_and_closing_ends_the_worker() {
         }
         writer.join().unwrap();
 
-        // The write landed before the close, so the next flush takes it whether or not a build
-        // of it ran before the close.
-        view.flush();
-        if let Some(inputs) = view.run_frame(|| (*first.get(), *second.get())) {
-            assert_eq!(inputs, (1, 1));
-        }
+        // A frame after the close still sees both inputs of the write or neither.
+        view.run_frame(|| {
+            assert_eq!(*first.get(), *second.get(), "a frame saw half a write");
+        });
     });
 }

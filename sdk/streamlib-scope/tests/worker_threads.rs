@@ -8,12 +8,25 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod common;
 
 use common::Counted;
 use streamlib_scope::{ScopeBeingDeclared, computed};
+
+/// The worker threads alive, waiting up to a second for any that are joined but not yet gone
+/// from `/proc`, which lists a thread for a moment after its join returns.
+fn scope_workers_settled_at(expected: usize) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let running = scope_workers_running();
+        if running == expected || Instant::now() >= deadline {
+            return running;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 
 fn scope_workers_running() -> usize {
     std::fs::read_dir("/proc/self/task")
@@ -25,7 +38,7 @@ fn scope_workers_running() -> usize {
 
 #[test]
 fn a_scope_starts_a_worker_only_for_a_computed_value() {
-    assert_eq!(scope_workers_running(), 0);
+    assert_eq!(scope_workers_settled_at(0), 0);
 
     // Inputs alone: no worker. Writes still reach the frame, and the values the frame replaces
     // are dropped by the next write rather than kept.
@@ -50,5 +63,5 @@ fn a_scope_starts_a_worker_only_for_a_computed_value() {
     assert!(scope.wait_until_settled(Duration::from_secs(5)));
     assert_eq!(scope_workers_running(), 1);
     drop((scope, view));
-    assert_eq!(scope_workers_running(), 0);
+    assert_eq!(scope_workers_settled_at(0), 0);
 }

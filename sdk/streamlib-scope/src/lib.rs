@@ -252,6 +252,9 @@ pub enum BuildFailure {
     ReadAComputedValueNotYetBuilt,
     /// The build panicked with this message.
     Panicked(String),
+    /// Comparing the built value with the one it would replace panicked with this message; the
+    /// previous value keeps serving.
+    ComparisonPanicked(String),
 }
 
 impl fmt::Display for BuildFailure {
@@ -262,6 +265,12 @@ impl fmt::Display for BuildFailure {
                 f.write_str("it reads a computed value that is not built yet")
             }
             BuildFailure::Panicked(message) => write!(f, "it panicked: {message}"),
+            BuildFailure::ComparisonPanicked(message) => {
+                write!(
+                    f,
+                    "comparing its value with the previous one panicked: {message}"
+                )
+            }
         }
     }
 }
@@ -395,7 +404,18 @@ impl ScopeSlots {
         };
         let builds = last_build.builds() + 1;
         let (handed_over, last_build) = match built {
-            Ok(value) => (self.store(index, value), LastBuild::Built { builds }),
+            // Caught here, the panic unwinds no further than the comparison, so the lock the
+            // worker holds is not poisoned and the slot is left as it was.
+            Ok(value) => match catch_unwind(AssertUnwindSafe(|| self.store(index, value))) {
+                Ok(handed_over) => (handed_over, LastBuild::Built { builds }),
+                Err(payload) => (
+                    None,
+                    LastBuild::Failed {
+                        builds,
+                        why: BuildFailure::ComparisonPanicked(message_of_a_panic(payload.as_ref())),
+                    },
+                ),
+            },
             Err(why) => (
                 None,
                 LastBuild::Failed {
@@ -675,9 +695,10 @@ impl Scope {
 }
 
 impl Drop for Scope {
-    /// Close the scope: a build in flight finishes, no pending build starts, and the values the
-    /// frame view replaced are dropped here rather than with the view. A lock poisoned by a
-    /// value's `PartialEq` still closes the scope, since this may run while that panic unwinds.
+    /// Close the scope: a build in flight finishes, no pending build starts, and what the hand-over
+    /// still holds, replaced values and values the frame view never took, is dropped here rather
+    /// than with the view. A lock poisoned by a value's `PartialEq` still closes the scope, since
+    /// this may run while that panic unwinds.
     fn drop(&mut self) {
         self.shared
             .slots
@@ -694,7 +715,7 @@ impl Drop for Scope {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter_mut()
-            .filter_map(HandOver::take_replaced)
+            .filter_map(|cell| std::mem::replace(cell, HandOver::Empty).into_value())
             .collect();
         drop(released);
     }
@@ -741,16 +762,18 @@ fn run_a_build(
 
 impl ScopeAcrossThreads {
     /// Hand each changed value over to the frame view, all under one lock, in place of what its
-    /// slot's cell held: a value the view has not taken yet, or one it replaced. Return those to
-    /// drop outside the locks.
+    /// slot's cell held: a value the view has not taken yet, or one it replaced. Return those,
+    /// and every other value the view replaced, to drop outside the locks.
     fn hand_over(&self, changed: impl IntoIterator<Item = (usize, AnyValue)>) -> Vec<AnyValue> {
         let mut hand_over = lock(&self.hand_over);
-        changed
-            .into_iter()
-            .filter_map(|(index, value)| {
-                std::mem::replace(&mut hand_over[index], HandOver::New(value)).into_value()
-            })
-            .collect()
+        let mut released: Vec<AnyValue> = hand_over
+            .iter_mut()
+            .filter_map(HandOver::take_replaced)
+            .collect();
+        released.extend(changed.into_iter().filter_map(|(index, value)| {
+            std::mem::replace(&mut hand_over[index], HandOver::New(value)).into_value()
+        }));
+        released
     }
 
     /// Drop the values the frame view replaced, outside the lock.
