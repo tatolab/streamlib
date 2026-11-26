@@ -162,8 +162,10 @@ class LastBuildOfANodeScopeComputedValue:
     def builds(self) -> int:
         """How many builds have run."""
     @property
-    def failure(self) -> Literal["raised", "read_a_computed_value_not_yet_built", "panicked"] | None:
-        """Of a failed build: `"raised"`, `"read_a_computed_value_not_yet_built"` or `"panicked"`."""
+    def failure(
+        self,
+    ) -> Literal["raised", "read_a_computed_value_not_yet_built", "panicked", "comparison_panicked"] | None:
+        """Of a failed build: `"raised"`, `"read_a_computed_value_not_yet_built"`, `"panicked"` or `"comparison_panicked"`."""
     @property
     def why(self) -> str | None:
         """Of a failed build: why, as the exception or the panic said it."""

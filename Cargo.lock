@@ -5781,6 +5781,9 @@ dependencies = [
 [[package]]
 name = "streamlib-scope"
 version = "0.68.82"
+dependencies = [
+ "loom",
+]
 
 [[package]]
 name = "streamlib-slang-shader-compiler"

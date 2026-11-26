@@ -293,7 +293,8 @@ pub(crate) struct PythonLastBuildOfANodeScopeComputedValue {
     state: &'static str,
     /// How many builds have run.
     builds: u64,
-    /// Of a failed build: `"raised"`, `"read_a_computed_value_not_yet_built"` or `"panicked"`.
+    /// Of a failed build: `"raised"`, `"read_a_computed_value_not_yet_built"`, `"panicked"` or
+    /// `"comparison_panicked"`.
     failure: Option<&'static str>,
     /// Of a failed build: why, as the exception or the panic said it.
     why: Option<String>,
@@ -323,6 +324,7 @@ impl From<LastBuild> for PythonLastBuildOfANodeScopeComputedValue {
                         "read_a_computed_value_not_yet_built"
                     }
                     BuildFailure::Panicked(_) => "panicked",
+                    BuildFailure::ComparisonPanicked(_) => "comparison_panicked",
                 }),
                 why: Some(why.to_string()),
             },
@@ -451,7 +453,9 @@ impl PythonRunningNodeScope {
     ) -> PyResult<()> {
         self.refuse_a_handle_declared_elsewhere(input.declared_in)?;
         let value = PythonValueInANodeScope::an_input_value(value);
-        self.with_the_scope_detached(python, |scope| scope.write(input.input, value))
+        self.with_the_scope_detached(python, |scope| {
+            scope.write(|writes| writes.write(input.input, value));
+        })
     }
 
     /// Take the values built since the last frame, then call `frame` with `get()` reading them,
