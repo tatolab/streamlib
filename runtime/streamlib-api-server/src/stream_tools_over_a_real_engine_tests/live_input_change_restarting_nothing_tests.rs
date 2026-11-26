@@ -49,7 +49,10 @@ async fn an_input_set_through_transact_while_playing_restarts_nothing() {
         )
         .await
         .expect("the level is set");
-    assert!(answer.get("nodes_rebuilt").is_none(), "no node is rebuilt: {answer}");
+    assert!(
+        answer.get("nodes_rebuilt").is_none(),
+        "no node is rebuilt: {answer}"
+    );
 
     engine
         .assert_the_stream_restarted_nothing(&project, &stream_id)
