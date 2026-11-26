@@ -434,6 +434,28 @@ impl HandOver {
             HandOver::New(value) | HandOver::Replaced(value) => Some(value),
         }
     }
+
+    /// The new value the cell holds, leaving it empty; any other cell is left as it is.
+    fn take_new(&mut self) -> Option<AnyValue> {
+        match std::mem::replace(self, HandOver::Empty) {
+            HandOver::New(value) => Some(value),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+
+    /// The replaced value the cell holds, leaving it empty; any other cell is left as it is.
+    fn take_replaced(&mut self) -> Option<AnyValue> {
+        match std::mem::replace(self, HandOver::Empty) {
+            HandOver::Replaced(value) => Some(value),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
 }
 
 struct ScopeAcrossThreads {
@@ -604,6 +626,8 @@ impl Scope {
             .filter_map(|(index, value)| slots.store(*index, value).map(|value| (*index, value)))
             .collect();
         if changed.is_empty() {
+            drop(slots);
+            drop(written);
             return;
         }
         let superseded = self.shared.hand_over(changed);
@@ -696,7 +720,7 @@ impl ScopeAcrossThreads {
     /// Hand each changed value over to the frame view, all under one lock, in place of what its
     /// slot's cell held: a value the view has not taken yet, or one it replaced. Return those to
     /// drop outside the locks.
-    fn hand_over(&self, changed: Vec<(usize, AnyValue)>) -> Vec<AnyValue> {
+    fn hand_over(&self, changed: impl IntoIterator<Item = (usize, AnyValue)>) -> Vec<AnyValue> {
         let mut hand_over = lock(&self.hand_over);
         changed
             .into_iter()
@@ -711,8 +735,7 @@ impl ScopeAcrossThreads {
         let mut hand_over = lock(&self.hand_over);
         let released: Vec<AnyValue> = hand_over
             .iter_mut()
-            .filter(|cell| matches!(cell, HandOver::Replaced(_)))
-            .filter_map(|cell| std::mem::replace(cell, HandOver::Empty).into_value())
+            .filter_map(HandOver::take_replaced)
             .collect();
         drop(hand_over);
         drop(released);
@@ -756,7 +779,7 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         first = 0;
         let superseded = slots
             .record_build(next.index, read_at, &built)
-            .map(|value| shared.hand_over(vec![(next.index, value)]));
+            .map(|value| shared.hand_over(std::iter::once((next.index, value))));
         drop(slots);
         // An equal, superseded or thrown-away value is released only after the lock, in case its
         // Drop is slow.
@@ -801,11 +824,8 @@ impl FrameView {
         };
         let mut replaced_any = false;
         for (slot, cell) in hand_over.iter_mut().enumerate() {
-            if !matches!(cell, HandOver::New(_)) {
+            let Some(value) = cell.take_new() else {
                 continue;
-            }
-            let HandOver::New(value) = std::mem::replace(cell, HandOver::Empty) else {
-                unreachable!("the cell holds a new value")
             };
             if let Some(replaced) = self.values[slot].replace(value) {
                 *cell = HandOver::Replaced(replaced);

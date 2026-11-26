@@ -10,6 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+mod common;
+
+use common::Counted;
 use streamlib_scope::{ScopeBeingDeclared, computed};
 
 fn scope_workers_running() -> usize {
@@ -18,34 +21,6 @@ fn scope_workers_running() -> usize {
         .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("comm")).ok())
         .filter(|name| name.trim_end() == "scope-builds")
         .count()
-}
-
-/// A value that counts how many of it are alive.
-struct Counted {
-    value: u32,
-    alive: Arc<AtomicUsize>,
-}
-
-impl Counted {
-    fn new(value: u32, alive: &Arc<AtomicUsize>) -> Self {
-        alive.fetch_add(1, Ordering::SeqCst);
-        Self {
-            value,
-            alive: Arc::clone(alive),
-        }
-    }
-}
-
-impl PartialEq for Counted {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl Drop for Counted {
-    fn drop(&mut self) {
-        self.alive.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 #[test]

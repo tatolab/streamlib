@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+mod common;
+
+use common::Counted;
 use streamlib_scope::{BuildFailure, FrameView, LastBuild, ScopeBeingDeclared, computed};
 
 /// A kernel built for a tap count, standing in for a compiled blur shader.
@@ -212,34 +215,6 @@ fn a_value_whose_input_changes_faster_than_it_builds_does_not_starve_the_others(
     run_frames_until(&mut view, || *follows_other.get() == 1);
     drop(stop_on_unwind);
     writer.join().unwrap();
-}
-
-/// A value that counts how many of its instances are alive.
-struct Counted {
-    value: u32,
-    alive: Arc<AtomicUsize>,
-}
-
-impl Counted {
-    fn new(value: u32, alive: &Arc<AtomicUsize>) -> Self {
-        alive.fetch_add(1, Ordering::SeqCst);
-        Self {
-            value,
-            alive: Arc::clone(alive),
-        }
-    }
-}
-
-impl PartialEq for Counted {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl Drop for Counted {
-    fn drop(&mut self) {
-        self.alive.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 #[test]
