@@ -76,7 +76,13 @@ fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius()
     // A new tap count: frames keep the 5-tap kernel while the 9-tap one builds.
     builds_may_finish.store(false, Ordering::SeqCst);
     scope.write(|writes| writes.write(taps, 9));
-    let while_building = view.run_frame(|| (*taps.get(), kernel.get().taps));
+    // A flush that finds the hand-over held takes the 9 at a later frame.
+    let mut while_building = None;
+    run_frames_until(&mut view, || {
+        let seen = (*taps.get(), kernel.get().taps);
+        while_building = Some(seen);
+        seen.0 == 9
+    });
     builds_may_finish.store(true, Ordering::SeqCst);
     assert_eq!(while_building, Some((9, 5)));
     run_frames_until(&mut view, || kernel.get().taps == 9);
@@ -500,6 +506,48 @@ fn a_transaction_naming_another_scopes_input_is_refused_whole() {
 }
 
 #[test]
+fn a_transaction_whose_refusal_is_caught_is_still_refused_whole() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let mut other = ScopeBeingDeclared::new();
+    let others_taps = other.input(3_u32);
+    let (scope, mut view) = declared.start().unwrap();
+
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scope.write(|writes| {
+            writes.write(taps, 9);
+            let _caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                writes.write(others_taps, 9);
+            }));
+        });
+    }));
+    assert!(refused.is_err());
+    assert_eq!(view.run_frame(|| *taps.get()), Some(3));
+}
+
+#[test]
+fn a_transaction_handed_another_scopes_writes_is_refused_whole() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let mut other = ScopeBeingDeclared::new();
+    let others_taps = other.input(3_u32);
+    let (scope, mut view) = declared.start().unwrap();
+    let (other_scope, mut other_view) = other.start().unwrap();
+
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scope.write(|writes| {
+            other_scope.write(|others_writes| {
+                others_writes.write(others_taps, 9);
+                std::mem::swap(writes, others_writes);
+            });
+        });
+    }));
+    assert!(refused.is_err());
+    assert_eq!(view.run_frame(|| *taps.get()), Some(3));
+    assert_eq!(other_view.run_frame(|| *others_taps.get()), Some(3));
+}
+
+#[test]
 fn closing_a_scope_with_builds_pending_returns_without_running_them() {
     let (first_build_started, started) = mpsc::channel();
     let (release_first_build, released) = mpsc::channel::<()>();
@@ -524,6 +572,8 @@ fn closing_a_scope_with_builds_pending_returns_without_running_them() {
         })
     });
     let (scope, view) = declared.start().unwrap();
+    // Bound after the scope, so it drops first and releases the build if the test unwinds.
+    let release_first_build = release_first_build;
     started.recv_timeout(SETTLE).unwrap();
 
     let (closed, closed_now) = mpsc::channel();
@@ -853,10 +903,8 @@ fn a_built_value_whose_comparison_panics_fails_its_build_and_the_scope_keeps_wor
         }
     );
     // The previous value keeps serving, and the scope still takes writes.
-    assert_eq!(
-        view.run_frame(|| (*taps.get(), kernel.get().0)),
-        Some((4, 3))
-    );
+    run_frames_until(&mut view, || *taps.get() == 4);
+    assert_eq!(view.run_frame(|| kernel.get().0), Some(3));
     scope.write(|writes| writes.write(taps, 5));
     assert!(scope.wait_until_settled(SETTLE));
 }

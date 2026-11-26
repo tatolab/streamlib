@@ -620,12 +620,18 @@ pub struct Scope {
 pub struct Writes {
     scope_id: ScopeId,
     values: Vec<(usize, AnyValue)>,
+    /// A write here was refused; the whole write is, even if the refusal was caught.
+    refused: bool,
 }
 
 impl Writes {
     /// Write `value` to `input` with the others. A later write of the same input wins.
     pub fn write<T: Send + Sync + 'static>(&mut self, input: Input<T>, value: T) {
-        let index = input.slot.in_scope(self.scope_id);
+        if input.slot.scope_id != self.scope_id {
+            self.refused = true;
+            refuse(Refusal::HandleOfAnotherScope);
+        }
+        let index = input.slot.slot;
         let value: AnyValue = Arc::new(value);
         match self
             .values
@@ -645,8 +651,12 @@ impl Scope {
         let mut written = Writes {
             scope_id: self.shared.scope_id,
             values: Vec::new(),
+            refused: false,
         };
         writes(&mut written);
+        if written.refused || written.scope_id != self.shared.scope_id {
+            refuse(Refusal::HandleOfAnotherScope);
+        }
         let mut slots = lock(&self.shared.slots);
         let changed: Vec<(usize, AnyValue)> = written
             .values
@@ -800,9 +810,16 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         }
         let Some(next) = slots.next_build(first) else {
             drop(slots);
-            // A write, a give-back or the close unparks the worker; an unpark that lands before
-            // the park makes it return at once.
-            sync::park();
+            // A value dropped above may have taken the unpark of a flush that replaced another,
+            // so look before parking.
+            let replaced_left = lock(&shared.hand_over)
+                .iter()
+                .any(|cell| matches!(cell, HandOver::Replaced(_)));
+            if !replaced_left {
+                // A write, a flush that replaced a value or the close unparks the worker; an
+                // unpark that lands before the park makes it return at once.
+                sync::park();
+            }
             continue;
         };
         drop(slots);

@@ -80,13 +80,8 @@ fn flush_and_get_allocate_nothing_while_inputs_change_and_values_rebuild() {
         std::thread::sleep(Duration::from_millis(1));
     }
 
-    let mut frames_seeing_a_new_kernel = 0;
     let mut last_kernel_len = 0;
-    for step in 1..=2_000_u32 {
-        scope.write(|writes| {
-            writes.write(taps, 1 + step % 7);
-            writes.write(radius, step as f32);
-        });
+    let mut measured_frame = |step: u32| -> usize {
         let (kernel_len, allocations) = allocations_in(|| {
             view.flush();
             view.run_frame(|| {
@@ -95,15 +90,30 @@ fn flush_and_get_allocate_nothing_while_inputs_change_and_values_rebuild() {
             })
         });
         assert_eq!(allocations, 0, "frame {step} allocated");
-        let kernel_len = kernel_len.expect("a built scope runs every frame");
-        if kernel_len != last_kernel_len {
-            frames_seeing_a_new_kernel += 1;
-            last_kernel_len = kernel_len;
-        }
+        kernel_len.expect("a built scope runs every frame")
+    };
+    for step in 1..=2_000_u32 {
+        scope.write(|writes| {
+            writes.write(taps, 1 + step % 7);
+            writes.write(radius, step as f32);
+        });
+        last_kernel_len = measured_frame(step);
         if step % 100 == 0 {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
-    // The count covered frames that took new values, not only frames with nothing to take.
-    assert!(frames_seeing_a_new_kernel > 1);
+
+    // Then one kernel the frames have not seen: the counted frames include the one that takes it.
+    let unseen_taps = 8 + last_kernel_len as u32 / 64;
+    scope.write(|writes| writes.write(taps, unseen_taps));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut step = 2_001;
+    while measured_frame(step) != 64 * unseen_taps as usize {
+        assert!(
+            Instant::now() < deadline,
+            "the unseen kernel never reached a frame"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+        step += 1;
+    }
 }
