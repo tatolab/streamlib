@@ -69,7 +69,9 @@ mod input_value_set_tests;
 mod input_value_test_node;
 mod link_candidates_checked_before_one_is_made_tests;
 mod link_checked_before_it_is_made_tests;
+mod live_input_change_restarting_nothing_tests;
 mod loop_closing_link_judged_before_commit_tests;
+mod node_counting_its_builds;
 mod node_rebuilt_by_a_setting_tests;
 mod node_type_group_tests;
 mod node_type_reads_tests;
@@ -88,6 +90,7 @@ mod renamed_pin_tests;
 mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;
 mod stream_named_by_its_id_tests;
+mod stub_exclusive_device;
 mod texture_format_convert_inserted_on_a_link_tests;
 mod trigger_fire_tests;
 mod typed_pin_link_tests;
@@ -889,4 +892,79 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             subgraph,
         }
     }
+}
+
+/// Assert `graph_document`, a stream's graph document, holds what `running`, its live graph
+/// render, runs: the same nodes by UUID, each with its name, type and saved input values, the
+/// same links, and no input running a live value the document does not hold.
+fn assert_the_graph_document_equals_the_running_graph(graph_document: &Value, running: &Value) {
+    let live_inputs: Vec<String> = running["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|node| {
+            node["ports"]["inputs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|input| {
+                    std::iter::once(input).chain(input["members"].as_array().into_iter().flatten())
+                })
+                .filter(|input| input["value_comes_from"] == "live")
+                .map(move |input| format!("{}: {input}", node["name"]))
+        })
+        .collect();
+    assert_eq!(
+        live_inputs,
+        Vec::<String>::new(),
+        "inputs run live values the document does not hold"
+    );
+    assert_eq!(
+        the_nodes_and_links_held_in(graph_document),
+        the_nodes_and_links_held_in(running),
+        "the graph document and the running graph"
+    );
+}
+
+/// The nodes `graph` holds, by UUID, each with its name, type and saved input values, and its
+/// links, each end by its node's UUID; `graph` is a graph document or a live graph render, a
+/// document's link naming its node by UUID or by name.
+fn the_nodes_and_links_held_in(graph: &Value) -> Value {
+    let nodes: Vec<&Value> = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["components"]["pending_deletion"] != true)
+        .collect();
+    let uuid_of = |node: &Value| -> Value {
+        nodes
+            .iter()
+            .find(|held| held["id"] == *node || held["name"] == *node)
+            .map(|held| held["id"].clone())
+            .unwrap_or_else(|| panic!("a link names a node `{node}` the graph does not hold"))
+    };
+    let mut held_nodes: Vec<Value> = nodes
+        .iter()
+        .map(|node| {
+            let input_values = match &node["input_values"] {
+                Value::Null => json!({}),
+                input_values => input_values.clone(),
+            };
+            json!({ "id": node["id"], "name": node["name"], "type": node["type"],
+                    "input_values": input_values })
+        })
+        .collect();
+    held_nodes.sort_by_key(|node| node["id"].to_string());
+    let end_of = |end: &Value| {
+        json!({ "node": uuid_of(&end["node"]), "port": end["port"], "member": end["member"] })
+    };
+    let mut held_links: Vec<Value> = graph["links"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|link| link["components"]["pending_deletion"] != true)
+        .map(|link| json!({ "source": end_of(&link["source"]), "target": end_of(&link["target"]) }))
+        .collect();
+    held_links.sort_by_key(Value::to_string);
+    json!({ "nodes": held_nodes, "links": held_links })
 }
