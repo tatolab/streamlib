@@ -9,7 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use streamlib_scope::{BuildFailure, FrameView, LastBuild, ScopeBeingDeclared, computed};
+use streamlib_scope::{
+    BuildFailure, FrameView, LastBuild, ReadRefused, ScopeBeingDeclared, computed,
+    fail_this_build_on_a_computed_value_not_yet_built,
+};
 
 /// A kernel built for a tap count, standing in for a compiled blur shader.
 #[derive(Debug, PartialEq)]
@@ -562,4 +565,62 @@ fn a_frame_reading_another_scopes_input_is_refused() {
     let others_taps = other.input(3_u32);
     let (_scope, mut view) = ScopeBeingDeclared::new().start().unwrap();
     view.run_frame(|| others_taps.get());
+}
+
+#[test]
+fn try_get_answers_why_it_read_no_value_instead_of_panicking() {
+    let mut other = ScopeBeingDeclared::new();
+    let others_taps = other.input(3_u32);
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    assert_eq!(
+        taps.try_get().unwrap_err(),
+        ReadRefused::OutsideABuildOrAFrame
+    );
+    let (_scope, mut view) = declared.start().unwrap();
+    assert_eq!(
+        view.run_frame(|| others_taps.try_get().unwrap_err()),
+        Some(ReadRefused::HandleOfAnotherScope)
+    );
+    assert_eq!(view.run_frame(|| *taps.try_get().unwrap()), Some(3));
+}
+
+#[test]
+fn a_binding_that_saw_a_computed_value_not_yet_built_fails_its_build_the_same_way() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(4_u32);
+    let (odd_taps, kernel) = declared.declare(|| {
+        let odd_taps = computed(move || {
+            let taps = *taps.get();
+            if taps.is_multiple_of(2) {
+                return Err(EvenTapCount(taps));
+            }
+            Ok(taps)
+        });
+        let kernel = computed(move || {
+            let seen = odd_taps.try_get();
+            let Ok(odd_taps) = seen else {
+                assert_eq!(seen.unwrap_err(), ReadRefused::ComputedValueNotYetBuilt);
+                fail_this_build_on_a_computed_value_not_yet_built()
+            };
+            Ok::<_, String>(BlurKernel { taps: *odd_taps })
+        });
+        (odd_taps, kernel)
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    assert!(scope.wait_until_settled(SETTLE));
+    assert!(matches!(
+        scope.last_build_of(odd_taps),
+        LastBuild::Failed { .. }
+    ));
+    assert_eq!(
+        scope.last_build_of(kernel),
+        LastBuild::Failed {
+            builds: 1,
+            why: BuildFailure::ReadAComputedValueNotYetBuilt
+        }
+    );
+
+    scope.write(taps, 5);
+    run_frames_until(&mut view, || kernel.get().taps == 5);
 }
