@@ -97,7 +97,9 @@ mod tests {
         let device = Arc::new(StubExclusiveDevice::default());
 
         drop(device.open().expect("the first holder opens it"));
-        let second = device.open().expect("the next holder opens it once it is closed");
+        let second = device
+            .open()
+            .expect("the next holder opens it once it is closed");
 
         assert_eq!((device.opens(), device.closes()), (2, 1));
         drop(second);

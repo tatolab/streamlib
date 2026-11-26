@@ -955,9 +955,7 @@ fn the_nodes_and_links_held_in(graph: &Value) -> Value {
         })
         .collect();
     held_nodes.sort_by_key(|node| node["id"].to_string());
-    let end_of = |end: &Value| {
-        json!({ "node": uuid_of(&end["node"]), "port": end["port"], "member": end["member"] })
-    };
+    let end_of = |end: &Value| json!({ "node": uuid_of(&end["node"]), "port": end["port"], "member": end["member"] });
     let mut held_links: Vec<Value> = graph["links"]
         .as_array()
         .into_iter()

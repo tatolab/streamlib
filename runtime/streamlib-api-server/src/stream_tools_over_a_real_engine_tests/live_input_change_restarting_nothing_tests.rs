@@ -65,7 +65,11 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         stream_id: &str,
     ) {
         let (setups, teardowns, opens) = the_builds_counted_in(stream_id, |counted| {
-            (counted.setups(), counted.teardowns(), counted.device().opens())
+            (
+                counted.setups(),
+                counted.teardowns(),
+                counted.device().opens(),
+            )
         });
         assert_eq!(
             (setups, teardowns, opens),
