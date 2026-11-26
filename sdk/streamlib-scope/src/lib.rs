@@ -16,7 +16,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, TryLockError};
+use std::sync::{Arc, PoisonError, TryLockError};
 
 /// What the scope's threads meet through: std's locks and threads, or loom's in a loom model
 /// build.
@@ -606,7 +606,15 @@ impl Writes {
     /// Write `value` to `input` with the others. A later write of the same input wins.
     pub fn write<T: Send + Sync + 'static>(&mut self, input: Input<T>, value: T) {
         let index = input.slot.in_scope(self.scope_id);
-        self.values.push((index, Arc::new(value)));
+        let value: AnyValue = Arc::new(value);
+        match self
+            .values
+            .iter_mut()
+            .find(|(written, _)| *written == index)
+        {
+            Some((_, earlier)) => *earlier = value,
+            None => self.values.push((index, value)),
+        }
     }
 }
 
@@ -667,13 +675,28 @@ impl Scope {
 }
 
 impl Drop for Scope {
-    /// Close the scope: a build in flight finishes, and no pending build starts.
+    /// Close the scope: a build in flight finishes, no pending build starts, and the values the
+    /// frame view replaced are dropped here rather than with the view. A lock poisoned by a
+    /// value's `PartialEq` still closes the scope, since this may run while that panic unwinds.
     fn drop(&mut self) {
-        lock(&self.shared.slots).closing = true;
+        self.shared
+            .slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closing = true;
         if let Some(worker) = self.worker.take() {
             worker.thread().unpark();
             let _ = worker.join();
         }
+        let released: Vec<AnyValue> = self
+            .shared
+            .hand_over
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter_mut()
+            .filter_map(HandOver::take_replaced)
+            .collect();
+        drop(released);
     }
 }
 

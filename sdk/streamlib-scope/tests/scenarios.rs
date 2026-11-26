@@ -7,6 +7,7 @@
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 mod common;
@@ -420,9 +421,13 @@ fn three_inputs_set_in_one_transaction_build_once() {
     assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(builds.load(Ordering::SeqCst), 1);
 
+    // A pause between the writes gives the worker time to build between them, were they
+    // applied one by one.
     scope.write(|writes| {
         writes.write(first, 7);
+        std::thread::sleep(Duration::from_millis(20));
         writes.write(second, 7);
+        std::thread::sleep(Duration::from_millis(20));
         writes.write(third, 7);
     });
     assert!(scope.wait_until_settled(SETTLE));
@@ -682,4 +687,124 @@ fn a_frame_reading_another_scopes_input_is_refused() {
     let others_taps = other.input(3_u32);
     let (_scope, mut view) = ScopeBeingDeclared::new().start().unwrap();
     view.run_frame(|| others_taps.get());
+}
+
+/// A value that records the thread it was dropped on.
+struct DroppedOn {
+    value: u32,
+    drops: Arc<Mutex<Vec<ThreadId>>>,
+}
+
+impl DroppedOn {
+    fn new(value: u32, drops: &Arc<Mutex<Vec<ThreadId>>>) -> Self {
+        Self {
+            value,
+            drops: Arc::clone(drops),
+        }
+    }
+}
+
+impl PartialEq for DroppedOn {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Drop for DroppedOn {
+    fn drop(&mut self) {
+        self.drops.lock().unwrap().push(std::thread::current().id());
+    }
+}
+
+/// Runs frames on a thread of their own until `done`, and returns that thread's id.
+fn frame_thread_runs_until(view: &mut FrameView, done: impl FnMut() -> bool + Send) -> ThreadId {
+    std::thread::scope(|threads| {
+        threads
+            .spawn(move || {
+                run_frames_until(view, done);
+                std::thread::current().id()
+            })
+            .join()
+            .unwrap()
+    })
+}
+
+#[test]
+fn a_value_the_frame_replaces_is_never_dropped_on_the_frame_thread() {
+    let inputs_dropped_on = Arc::new(Mutex::new(Vec::new()));
+    let builds_dropped_on = Arc::new(Mutex::new(Vec::new()));
+    let mut declared = ScopeBeingDeclared::new();
+    let level = declared.input(DroppedOn::new(0, &inputs_dropped_on));
+    let built = declared.declare(|| {
+        let builds_dropped_on = Arc::clone(&builds_dropped_on);
+        computed(move || Ok::<_, String>(DroppedOn::new(level.get().value, &builds_dropped_on)))
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    let mut frame_threads = Vec::new();
+    for value in 1..=20 {
+        scope.write(|writes| writes.write(level, DroppedOn::new(value, &inputs_dropped_on)));
+        frame_threads.push(frame_thread_runs_until(&mut view, || {
+            level.get().value == value && built.get().value == value
+        }));
+    }
+    assert!(scope.wait_until_settled(SETTLE));
+    drop(scope);
+    let inputs_dropped_on = inputs_dropped_on.lock().unwrap();
+    let builds_dropped_on = builds_dropped_on.lock().unwrap();
+    assert!(!inputs_dropped_on.is_empty() && !builds_dropped_on.is_empty());
+    for dropped_on in inputs_dropped_on.iter().chain(builds_dropped_on.iter()) {
+        assert!(
+            !frame_threads.contains(dropped_on),
+            "a value was dropped on a frame thread"
+        );
+    }
+}
+
+#[test]
+fn a_value_the_frame_replaces_in_a_scope_of_inputs_alone_is_dropped_by_the_writer() {
+    let dropped_on = Arc::new(Mutex::new(Vec::new()));
+    let mut declared = ScopeBeingDeclared::new();
+    let level = declared.input(DroppedOn::new(0, &dropped_on));
+    let (scope, mut view) = declared.start().unwrap();
+    let mut frame_threads = Vec::new();
+    for value in 1..=20 {
+        scope.write(|writes| writes.write(level, DroppedOn::new(value, &dropped_on)));
+        frame_threads.push(frame_thread_runs_until(&mut view, || {
+            level.get().value == value
+        }));
+    }
+    // Closing drops the one value the frame replaced since the last write.
+    drop(scope);
+    let dropped_on = dropped_on.lock().unwrap();
+    assert_eq!(dropped_on.len(), 20);
+    for dropped_on in dropped_on.iter() {
+        assert!(
+            !frame_threads.contains(dropped_on),
+            "a value was dropped on a frame thread"
+        );
+    }
+}
+
+/// An input whose comparison panics once its value is 1.
+struct PanicsOnCompare(u32);
+
+impl PartialEq for PanicsOnCompare {
+    fn eq(&self, other: &Self) -> bool {
+        assert!(self.0 != 1 && other.0 != 1, "compared a poisoned value");
+        self.0 == other.0
+    }
+}
+
+#[test]
+fn a_comparison_that_panics_in_a_write_fails_the_write_and_the_scope_still_closes() {
+    let mut declared = ScopeBeingDeclared::new();
+    let level = declared.input(PanicsOnCompare(0));
+    let (scope, view) = declared.start().unwrap();
+    // The scope is closed as the panic unwinds, as a node's is when its writer fails.
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        scope.write(|writes| writes.write(level, PanicsOnCompare(1)));
+        drop(scope);
+    }));
+    assert!(failed.is_err());
+    drop(view);
 }
