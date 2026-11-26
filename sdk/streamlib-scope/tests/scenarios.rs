@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use streamlib_scope::{BuildFailure, FrameView, LastBuild, ScopeBeingDeclared, computed};
@@ -16,6 +16,8 @@ use streamlib_scope::{BuildFailure, FrameView, LastBuild, ScopeBeingDeclared, co
 struct BlurKernel {
     taps: u32,
 }
+
+const SETTLE: Duration = Duration::from_secs(5);
 
 fn run_frames_until(view: &mut FrameView, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -69,7 +71,7 @@ fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius()
     for step in 0..50 {
         scope.write(radius, step as f32);
     }
-    scope.wait_until_settled();
+    assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(builds.load(Ordering::SeqCst), before);
 }
 
@@ -108,6 +110,57 @@ fn a_burst_of_tap_counts_ends_on_the_newest_and_throws_stale_builds_away() {
         handed_over.windows(2).all(|pair| pair[0] <= pair[1]),
         "{handed_over:?}"
     );
+}
+
+#[test]
+fn a_build_whose_input_changed_while_it_ran_is_thrown_away() {
+    let first_build = Arc::new(Barrier::new(2));
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(1_u32);
+    let kernel = declared.declare(|| {
+        let first_build = Arc::clone(&first_build);
+        computed(move || {
+            let taps = *taps.get();
+            if taps == 1 {
+                first_build.wait();
+                first_build.wait();
+            }
+            Ok::<_, String>(BlurKernel { taps })
+        })
+    });
+    let (scope, mut view) = declared.start().unwrap();
+
+    // The build has read 1; 2 is written before it returns.
+    first_build.wait();
+    scope.write(taps, 2);
+    first_build.wait();
+
+    run_frames_until(&mut view, || kernel.get().taps == 2);
+    assert!(scope.wait_until_settled(SETTLE));
+    assert_eq!(scope.last_build_of(kernel), LastBuild::Built { builds: 1 });
+}
+
+#[test]
+fn writing_the_value_an_input_holds_builds_nothing() {
+    let builds = Arc::new(AtomicUsize::new(0));
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let kernel = declared.declare(|| {
+        let builds = Arc::clone(&builds);
+        computed(move || {
+            builds.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(BlurKernel { taps: *taps.get() })
+        })
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    run_frames_until(&mut view, || true);
+
+    for _ in 0..10 {
+        scope.write(taps, 3);
+    }
+    assert!(scope.wait_until_settled(SETTLE));
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+    assert_eq!(scope.last_build_of(kernel), LastBuild::Built { builds: 1 });
 }
 
 /// One layer of a compositor: what an opacity drag changes.
@@ -152,7 +205,7 @@ fn a_compositor_gains_a_layer_live_and_an_opacity_drag_builds_no_kernel() {
             ],
         );
     }
-    scope.wait_until_settled();
+    assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(kernel_builds.load(Ordering::SeqCst), after_first);
 
     // Wire the empty slot: a third layer. The kernels follow without a rebuild of the node.
@@ -241,7 +294,7 @@ fn a_camera_device_change_opens_the_new_device_with_never_two_holders() {
     scope.write(device_id, 1);
     run_frames_until(&mut view, || camera.get().frame() == Some(1));
     // The replaced lease is released off the frame thread; one holder throughout.
-    scope.wait_until_settled();
+    assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(device.open_holders.load(Ordering::SeqCst), 1);
 }
 
@@ -275,7 +328,7 @@ fn a_failed_build_keeps_the_previous_value_and_is_not_retried_until_its_input_ch
     run_frames_until(&mut view, || true);
 
     scope.write(taps, 4);
-    scope.wait_until_settled();
+    assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(view.run_frame(|| kernel.get().taps), Some(3));
     assert!(matches!(
         scope.last_build_of(kernel),
@@ -314,7 +367,7 @@ fn a_build_reading_a_computed_value_not_yet_built_fails_and_builds_again_once_it
         (odd_taps, kernel)
     });
     let (scope, mut view) = declared.start().unwrap();
-    scope.wait_until_settled();
+    assert!(scope.wait_until_settled(SETTLE));
     assert!(matches!(
         scope.last_build_of(odd_taps),
         LastBuild::Failed {
@@ -348,7 +401,7 @@ fn a_build_that_panics_fails_with_its_message_and_the_worker_keeps_building() {
         })
     });
     let (scope, mut view) = declared.start().unwrap();
-    scope.wait_until_settled();
+    assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(
         scope.last_build_of(kernel),
         LastBuild::Failed {
