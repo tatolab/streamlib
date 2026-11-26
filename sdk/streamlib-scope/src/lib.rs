@@ -12,7 +12,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 type AnyValue = Arc<dyn Any + Send + Sync>;
@@ -245,6 +245,14 @@ struct Shared {
     closing: AtomicBool,
 }
 
+/// Builds run under `catch_unwind` with no lock held, so only a value's own `PartialEq` panicking
+/// mid-comparison can poison a lock.
+const NO_LOCK_HELD_ACROSS_A_PANIC: &str = "a value's PartialEq panicked while the scope was locked";
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().expect(NO_LOCK_HELD_ACROSS_A_PANIC)
+}
+
 fn equal_as<T: PartialEq + 'static>(left: &dyn Any, right: &dyn Any) -> bool {
     match (left.downcast_ref::<T>(), right.downcast_ref::<T>()) {
         (Some(left), Some(right)) => left == right,
@@ -366,7 +374,7 @@ impl Scope {
             refuse(Refusal::HandleOfAnotherScope);
         }
         let value: AnyValue = Arc::new(value);
-        let mut scope = self.shared.slots.lock().unwrap();
+        let mut scope = lock(&self.shared.slots);
         let slot = &scope.slots[input.slot];
         if slot
             .value
@@ -383,7 +391,7 @@ impl Scope {
         self.shared
             .handed_over
             .lock()
-            .unwrap()
+            .expect(NO_LOCK_HELD_ACROSS_A_PANIC)
             .push((input.slot, value));
         drop(scope);
         self.shared.something_to_build.notify_one();
@@ -394,7 +402,7 @@ impl Scope {
         if computed.scope != self.shared.scope {
             refuse(Refusal::HandleOfAnotherScope);
         }
-        match &self.shared.slots.lock().unwrap().slots[computed.slot].role {
+        match &lock(&self.shared.slots).slots[computed.slot].role {
             SlotRole::Computed { last_build, .. } => last_build.clone(),
             SlotRole::Input => unreachable!("a computed handle names a computed slot"),
         }
@@ -404,7 +412,7 @@ impl Scope {
     pub fn wait_until_settled(&self) {
         loop {
             {
-                let scope = self.shared.slots.lock().unwrap();
+                let scope = lock(&self.shared.slots);
                 if (0..scope.slots.len()).all(|index| !is_left_to_build(&scope, index)) {
                     return;
                 }
@@ -480,8 +488,9 @@ fn run_a_build(
 fn build_until_closed(shared: &Shared) {
     loop {
         // Values the frame thread replaced are released here, off the frame thread.
-        drop(std::mem::take(&mut *shared.replaced.lock().unwrap()));
-        let scope = shared.slots.lock().unwrap();
+        let replaced = std::mem::take(&mut *lock(&shared.replaced));
+        drop(replaced);
+        let scope = lock(&shared.slots);
         let next = (0..scope.slots.len()).find(|index| is_left_to_build(&scope, *index));
         let Some(index) = next else {
             if shared.closing.load(Ordering::SeqCst) {
@@ -490,7 +499,7 @@ fn build_until_closed(shared: &Shared) {
             let _unused = shared
                 .something_to_build
                 .wait_timeout(scope, std::time::Duration::from_millis(20))
-                .unwrap();
+                .expect(NO_LOCK_HELD_ACROSS_A_PANIC);
             continue;
         };
         let SlotRole::Computed { build, .. } = &scope.slots[index].role else {
@@ -502,7 +511,7 @@ fn build_until_closed(shared: &Shared) {
         let changed_at: Vec<u64> = scope.slots.iter().map(|slot| slot.changed_at).collect();
         drop(scope);
         let (built, read) = run_a_build(shared.scope, &build, values);
-        let mut scope = shared.slots.lock().unwrap();
+        let mut scope = lock(&shared.slots);
         let revision = scope.revision;
         let read_at: Vec<(usize, u64)> =
             read.iter().map(|read| (*read, changed_at[*read])).collect();
@@ -531,7 +540,7 @@ fn build_until_closed(shared: &Shared) {
                 if !unchanged {
                     slot.value = Some(Arc::clone(&value));
                     slot.changed_at = revision + 1;
-                    shared.handed_over.lock().unwrap().push((index, value));
+                    lock(&shared.handed_over).push((index, value));
                 }
                 LastBuild::Built { builds }
             }
