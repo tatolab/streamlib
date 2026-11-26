@@ -32,6 +32,7 @@ __all__ = [
     "FunctionNodeEvaluatedAsAStandaloneNode",
     "LastBuildOfANodeScopeComputedValue",
     "NodeScopeBeingDeclared",
+    "NodeScopeComputedOutsideADeclaration",
     "NodeScopeComputedValue",
     "NodeScopeComputedValueNotYetBuilt",
     "NodeScopeHandleOfAnotherScope",
@@ -107,7 +108,10 @@ class NodeScopeReadOutsideABuildOrAFrame(RuntimeError):
     """`.get()` reads only in a computed value's build or in the per-frame function."""
 
 class NodeScopeHandleOfAnotherScope(RuntimeError):
-    """The handle belongs to another node's scope than the build or frame reading it."""
+    """The handle belongs to another node's scope than the one it was handed to."""
+
+class NodeScopeComputedOutsideADeclaration(RuntimeError):
+    """`computed` declares only while a node's body declares its scope."""
 
 class NodeScopeComputedValueNotYetBuilt(RuntimeError):
     """A build read a computed value that has no value yet; it builds again once that value is built."""
@@ -127,7 +131,7 @@ class NodeScopeComputedValue:
         """The computed value: in a build, as the build started, recorded as read; in a frame, always a value."""
 
 def computed(build: Callable[[], Any]) -> NodeScopeComputedValue:
-    """Declare a value `build` computes from what it reads with `get()`, into the scope being declared on this thread.
+    """Declare a value `build` computes from what it reads with `get()`, into the scope a node's body declares on this thread.
 
     `build` runs on the scope's worker thread, holding the GIL only while it runs. A value it
     replaces is closed there with its `close()`, if it has one, once nothing in a scope holds it;
@@ -165,7 +169,11 @@ class LastBuildOfANodeScopeComputedValue:
 
 @final
 class RunningNodeScope:
-    """A Python node's running scope: sets and wires write its inputs, and the frame thread runs each frame through it."""
+    """A Python node's running scope: sets and wires write its inputs, and the frame thread runs each frame through it.
+
+    Close it with `close()`: the cycle a build function can make back to the node holding it is not
+    one the garbage collector can see. A scope left open is closed at interpreter exit.
+    """
 
     def write(self, input: NodeScopeInput, value: Any) -> None:
         """Write `value` to `input`; a value equal to the one it holds builds nothing."""
@@ -176,7 +184,7 @@ class RunningNodeScope:
     def wait_until_settled(self, timeout_seconds: float) -> bool:
         """Wait up to `timeout_seconds` until no computed value is left to build; whether it settled."""
     def close(self) -> None:
-        """Wait for a frame running on another thread, stop the worker once its build in flight returns, and close every computed value. Refused inside a frame of this scope."""
+        """Wait for a frame running on another thread, stop the worker once its build in flight returns, and close every value a build made. Refused inside a frame or a build of this scope."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,

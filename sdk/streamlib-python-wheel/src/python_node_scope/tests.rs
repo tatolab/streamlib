@@ -372,3 +372,140 @@ scope.close()
 "#,
     );
 }
+
+#[test]
+fn a_replaced_value_with_no_close_is_freed_off_the_frame_thread() {
+    run_with_the_frame_loop(
+        r#"
+freed_on = []
+
+class LargeTensor:
+    def __init__(self, size):
+        self.size = size
+    def __del__(self):
+        freed_on.append((self.size, threading.get_ident()))
+
+declared = NodeScopeBeingDeclared()
+size = declared.input(1)
+tensor = declared.declare(lambda: computed(lambda: LargeTensor(size.get())))
+scope = declared.start()
+run_frames_until(scope, lambda: tensor.get().size == 1)
+
+scope.write(size, 2)
+run_frames_until(scope, lambda: tensor.get().size == 2 and len(freed_on) == 1)
+for _ in range(20):
+    run_frames_until(scope, lambda: True)
+assert [freed for freed, _ in freed_on] == [1], freed_on
+assert all(thread != FRAME_THREAD for _, thread in freed_on), freed_on
+scope.close()
+"#,
+    );
+}
+
+#[test]
+fn a_value_one_scope_built_and_another_took_as_an_input_is_closed_once_neither_holds_it() {
+    run_with_the_frame_loop(
+        r#"
+closes = []
+
+class StubDevice:
+    def __init__(self, device_id):
+        self.device_id = device_id
+    def close(self):
+        closes.append(self.device_id)
+
+declared_a = NodeScopeBeingDeclared()
+device_id = declared_a.input(0)
+device = declared_a.declare(lambda: computed(lambda: StubDevice(device_id.get())))
+scope_a = declared_a.start()
+run_frames_until(scope_a, lambda: device.get().device_id == 0)
+
+declared_b = NodeScopeBeingDeclared()
+wired_device = declared_b.input(None)
+scope_b = declared_b.start()
+device_0 = []
+scope_a.run_frame(lambda: device_0.append(device.get()))
+scope_b.write(wired_device, device_0[0])
+scope_b.write(wired_device, None)
+device_0.clear()
+
+scope_a.write(device_id, 1)
+run_frames_until(scope_a, lambda: device.get().device_id == 1 and closes == [0])
+scope_a.close()
+scope_b.close()
+assert closes == [0, 1], closes
+"#,
+    );
+}
+
+#[test]
+fn a_handle_of_another_scope_and_computed_outside_a_body_raise_their_own_kinds() {
+    run_against_the_node_scope(
+        r#"
+other = NodeScopeBeingDeclared()
+others_input = other.input(1)
+others_kernel = other.declare(lambda: computed(lambda: others_input.get()))
+scope = NodeScopeBeingDeclared().start()
+for refused_call in (
+    lambda: scope.write(others_input, 2),
+    lambda: scope.last_build_of(others_kernel),
+):
+    try:
+        refused_call()
+    except NodeScopeHandleOfAnotherScope:
+        pass
+    else:
+        raise AssertionError("a handle of another scope was taken")
+try:
+    computed(lambda: 1)
+except NodeScopeComputedOutsideADeclaration:
+    pass
+else:
+    raise AssertionError("computed declared outside a body")
+scope.close()
+other.start().close()
+"#,
+    );
+}
+
+#[test]
+fn a_build_closing_or_dropping_its_own_scope_neither_hangs_nor_joins_itself() {
+    run_with_the_frame_loop(
+        r#"
+closes = []
+refusals = []
+holder = []
+
+class StubDevice:
+    def close(self):
+        closes.append(self)
+
+declared = NodeScopeBeingDeclared()
+generation = declared.input(0)
+def build_the_device():
+    if generation.get() == 1:
+        try:
+            holder[0].close()
+        except RuntimeError as refused:
+            refusals.append(str(refused))
+    if generation.get() == 2:
+        holder.clear()
+    return StubDevice()
+device = declared.declare(lambda: computed(build_the_device))
+holder.append(declared.start())
+run_frames_until(holder[0], lambda: True)
+
+holder[0].write(generation, 1)
+assert holder[0].wait_until_settled(5.0)
+assert len(refusals) == 1 and "cannot close its own" in refusals[0], refusals
+
+scope = holder[0]
+scope.write(generation, 2)
+del scope
+deadline = time.monotonic() + 5.0
+while len(closes) < 3 and time.monotonic() < deadline:
+    time.sleep(0.01)
+assert len(set(map(id, closes))) == 3, closes
+"#,
+    );
+}
