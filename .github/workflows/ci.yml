@@ -11,7 +11,7 @@ name: CI
 #   Unit Test (Linux)          every Rust test suite, the hardware tests on a
 #                              software GPU (the lavapipe the runtime carries);
 #                              skipped on a pull request that changes no path the
-#                              workspace's Rust build reads; the loom model,
+#                              workspace's Rust build reads; the loom models,
 #                              doctests and test-root suites run off pull requests
 #   Integration test (Linux)   real streams on a real `tatolabd`: builds the
 #                              runtime binaries those tests drive (a test fixture,
@@ -403,6 +403,7 @@ jobs:
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p streamlib-vulkan-video
           -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk -p tatolab-module-sdk-macros
           -p tatolab-read-track -p streamlib-relay-track-reader -p streamlib-asset-media-facts
+          -p streamlib-scope
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3,tatolab-module-sdk/function-node
           --lib --bins --tests
 
@@ -414,6 +415,13 @@ jobs:
           RUSTFLAGS: --cfg loom
           CARGO_TARGET_DIR: target/loom
         run: cargo test --locked --release -p streamlib-ipc-types --test gpu_pool_claim_table_loom_model
+
+      - name: Scope write, build and flush loom model
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        env:
+          RUSTFLAGS: --cfg loom
+          CARGO_TARGET_DIR: target/loom
+        run: cargo test --locked --release -p streamlib-scope --test loom_model
 
       - name: Engine and media built-ins doctests
         if: ${{ !cancelled() && github.event_name != 'pull_request' }}

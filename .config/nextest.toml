@@ -23,6 +23,7 @@ default-filter = """
   | package(streamlib-relay-track-reader)
   | package(streamlib-asset-media-facts)
   | package(tatolab-module-sdk)
+  | package(streamlib-scope)
   | ((kind(lib) | kind(proc-macro)) & (
         package(streamlib-macros)
       | package(streamlib-node-schema)
