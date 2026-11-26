@@ -89,34 +89,39 @@ fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius()
 #[test]
 fn a_burst_of_tap_counts_ends_on_the_newest_and_throws_stale_builds_away() {
     let builds = Arc::new(AtomicUsize::new(0));
+    let builds_may_finish = Arc::new(AtomicBool::new(true));
     let mut declared = ScopeBeingDeclared::new();
     let taps = declared.input(1_u32);
     let kernel = declared.declare(|| {
         let builds = Arc::clone(&builds);
+        let builds_may_finish = Arc::clone(&builds_may_finish);
         computed(move || {
             let taps = *taps.get();
+            while !builds_may_finish.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
             builds.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(20));
             Ok::<_, String>(BlurKernel { taps })
         })
     });
     let (scope, mut view) = declared.start().unwrap();
+    let _open_on_unwind = OpenOnDrop(Arc::clone(&builds_may_finish));
     run_frames_until(&mut view, || true);
 
+    // Builds are held for the whole burst, so at most one starts during it.
+    builds_may_finish.store(false, Ordering::SeqCst);
     let mut handed_over = Vec::new();
     for taps_now in 2..=30 {
         scope.write(taps, taps_now);
-        std::thread::sleep(Duration::from_millis(2));
         handed_over.extend(view.run_frame(|| kernel.get().taps));
     }
+    builds_may_finish.store(true, Ordering::SeqCst);
     run_frames_until(&mut view, || kernel.get().taps == 30);
+    assert!(scope.wait_until_settled(SETTLE));
 
-    // 29 writes, fewer builds, and no stale kernel ever handed over after a newer one.
-    assert!(
-        builds.load(Ordering::SeqCst) < 29,
-        "builds: {}",
-        builds.load(Ordering::SeqCst)
-    );
+    // The first build, one held build read mid-burst, and one from the newest value.
+    let builds = builds.load(Ordering::SeqCst);
+    assert!(builds <= 3, "builds: {builds}");
     assert!(
         handed_over.windows(2).all(|pair| pair[0] <= pair[1]),
         "{handed_over:?}"
