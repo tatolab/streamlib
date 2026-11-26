@@ -161,6 +161,102 @@ fn a_build_whose_input_changed_while_it_ran_is_thrown_away() {
     assert_eq!(scope.last_build_of(kernel), LastBuild::Built { builds: 1 });
 }
 
+/// Stops a background writer when dropped, so a failing test never leaves it running.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_value_whose_input_changes_faster_than_it_builds_does_not_starve_the_others() {
+    let mut declared = ScopeBeingDeclared::new();
+    let dragged = declared.input(0_u32);
+    let other = declared.input(0_u32);
+    let (_slow, follows_other) = declared.declare(|| {
+        let slow = computed(move || {
+            let dragged = *dragged.get();
+            std::thread::sleep(Duration::from_millis(20));
+            Ok::<_, String>(dragged)
+        });
+        let follows_other = computed(move || Ok::<_, String>(*other.get()));
+        (slow, follows_other)
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    run_frames_until(&mut view, || true);
+
+    let scope = Arc::new(scope);
+    let stop = Arc::new(AtomicBool::new(false));
+    let writes = Arc::new(AtomicUsize::new(0));
+    let writer = {
+        let (scope, stop, writes) = (Arc::clone(&scope), Arc::clone(&stop), Arc::clone(&writes));
+        std::thread::spawn(move || {
+            let mut step = 1;
+            while !stop.load(Ordering::SeqCst) {
+                scope.write(dragged, step);
+                writes.fetch_add(1, Ordering::SeqCst);
+                step += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    let stop_on_unwind = StopOnDrop(Arc::clone(&stop));
+    while writes.load(Ordering::SeqCst) < 50 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    // While `dragged` keeps changing, the other value still builds.
+    scope.write(other, 1);
+    run_frames_until(&mut view, || *follows_other.get() == 1);
+    drop(stop_on_unwind);
+    writer.join().unwrap();
+}
+
+/// A value that counts how many of its instances are alive.
+struct Counted {
+    value: u32,
+    alive: Arc<AtomicUsize>,
+}
+
+impl Counted {
+    fn new(value: u32, alive: &Arc<AtomicUsize>) -> Self {
+        alive.fetch_add(1, Ordering::SeqCst);
+        Self {
+            value,
+            alive: Arc::clone(alive),
+        }
+    }
+}
+
+impl PartialEq for Counted {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.alive.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn writes_no_frame_has_taken_keep_only_the_newest_value() {
+    let alive = Arc::new(AtomicUsize::new(0));
+    let mut declared = ScopeBeingDeclared::new();
+    let level = declared.input(Counted::new(0, &alive));
+    let (scope, mut view) = declared.start().unwrap();
+
+    for value in 1..=100 {
+        scope.write(level, Counted::new(value, &alive));
+    }
+    // The frame view's value and the newest one, nothing in between.
+    assert_eq!(alive.load(Ordering::SeqCst), 2);
+    assert_eq!(view.run_frame(|| level.get().value), Some(100));
+}
+
 #[test]
 fn writing_the_value_an_input_holds_builds_nothing() {
     let builds = Arc::new(AtomicUsize::new(0));

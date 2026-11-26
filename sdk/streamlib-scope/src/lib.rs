@@ -330,8 +330,12 @@ impl ScopeSlots {
         Some(Arc::clone(value))
     }
 
-    fn next_build(&self) -> Option<NextBuild> {
-        let index = (0..self.slots.len()).find(|index| self.is_left_to_build(*index))?;
+    /// The first slot left to build, in declaration order from `first`, wrapping around.
+    fn next_build(&self, first: usize) -> Option<NextBuild> {
+        let count = self.slots.len();
+        let index = (0..count)
+            .map(|offset| (first + offset) % count)
+            .find(|index| self.is_left_to_build(*index))?;
         let SlotRole::Computed { build, .. } = &self.slots[index].role else {
             unreachable!("only a computed slot is left to build")
         };
@@ -383,7 +387,8 @@ struct ScopeAcrossThreads {
     scope_id: ScopeId,
     slots: Mutex<ScopeSlots>,
     something_to_build: Condvar,
-    handed_over: Mutex<Vec<(usize, AnyValue)>>,
+    /// The newest value of each slot not yet taken by the frame view.
+    handed_over: Mutex<Vec<Option<AnyValue>>>,
     replaced: Mutex<Vec<AnyValue>>,
     closing: AtomicBool,
 }
@@ -471,11 +476,12 @@ impl ScopeBeingDeclared {
             slots: self.slots,
         };
         let initial = slots.values();
+        let slot_count = initial.len();
         let shared = Arc::new(ScopeAcrossThreads {
             scope_id: self.scope_id,
             slots: Mutex::new(slots),
             something_to_build: Condvar::new(),
-            handed_over: Mutex::new(Vec::new()),
+            handed_over: Mutex::new(vec![None; slot_count]),
             replaced: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
         });
@@ -488,7 +494,7 @@ impl ScopeBeingDeclared {
         let view = FrameView {
             ready: initial.iter().all(Option::is_some),
             values: initial,
-            replaced_here: Vec::with_capacity(16),
+            replaced_here: Vec::with_capacity(slot_count),
             shared: Arc::clone(&shared),
         };
         let writer = Scope {
@@ -516,9 +522,10 @@ impl Scope {
             drop(slots);
             return;
         };
-        lock(&self.shared.handed_over).push((index, handed_over));
+        let superseded = self.shared.hand_over(index, handed_over);
         drop(slots);
         self.shared.something_to_build.notify_one();
+        drop(superseded);
     }
 
     /// How the last build of `computed` went.
@@ -602,7 +609,18 @@ fn run_a_build(
     (built, read)
 }
 
+impl ScopeAcrossThreads {
+    /// Hand `value` over to the frame view in place of any value of slot `index` it has not
+    /// taken yet, and return that superseded value to drop outside the locks.
+    fn hand_over(&self, index: usize, value: AnyValue) -> Option<AnyValue> {
+        lock(&self.handed_over)[index].replace(value)
+    }
+}
+
 fn build_until_closed(shared: &ScopeAcrossThreads) {
+    // After a build is thrown away, the next search starts past it, so a value whose inputs
+    // change faster than it builds does not starve the others.
+    let mut first = 0;
     loop {
         // Values the frame thread replaced are released here, off the frame thread.
         let replaced = std::mem::take(&mut *lock(&shared.replaced));
@@ -611,7 +629,7 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
             return;
         }
         let slots = lock(&shared.slots);
-        let Some(next) = slots.next_build() else {
+        let Some(next) = slots.next_build(first) else {
             let _unused = shared
                 .something_to_build
                 .wait_timeout(slots, std::time::Duration::from_millis(20))
@@ -632,14 +650,17 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         if slots.any_changed_since(&read_at) {
             drop(slots);
             drop(built);
+            first = next.index + 1;
             continue;
         }
-        if let Some(value) = slots.record_build(next.index, read_at, &built) {
-            lock(&shared.handed_over).push((next.index, value));
-        }
+        first = 0;
+        let superseded = slots
+            .record_build(next.index, read_at, &built)
+            .and_then(|value| shared.hand_over(next.index, value));
         drop(slots);
-        // An equal or thrown-away result is released only after the lock, in case its Drop is
-        // slow.
+        // An equal, superseded or thrown-away value is released only after the lock, in case its
+        // Drop is slow.
+        drop(superseded);
         drop(built);
     }
 }
@@ -673,8 +694,10 @@ impl FrameView {
     /// the writer or the worker holds the hand-over, the view stays as it is until the next flush.
     pub fn flush(&mut self) {
         if let Ok(mut handed_over) = self.shared.handed_over.try_lock() {
-            for (slot, value) in handed_over.drain(..) {
-                if let Some(replaced) = self.values[slot].replace(value) {
+            for (slot, handed_over) in handed_over.iter_mut().enumerate() {
+                if let Some(value) = handed_over.take()
+                    && let Some(replaced) = self.values[slot].replace(value)
+                {
                     self.replaced_here.push(replaced);
                 }
             }
