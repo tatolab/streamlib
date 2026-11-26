@@ -48,7 +48,7 @@ fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius()
             Ok::<_, String>(BlurKernel { taps })
         })
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
 
     // No frame runs until the kernel has its first value.
     assert_eq!(view.run_frame(|| ()), None);
@@ -87,7 +87,7 @@ fn a_burst_of_tap_counts_ends_on_the_newest_and_throws_stale_builds_away() {
             Ok::<_, String>(BlurKernel { taps })
         })
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
     run_frames_until(&mut view, || true);
 
     let mut handed_over = Vec::new();
@@ -135,7 +135,7 @@ fn a_compositor_gains_a_layer_live_and_an_opacity_drag_builds_no_kernel() {
             )
         })
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
     run_frames_until(&mut view, || kernels.get().len() == 2);
     let after_first = kernel_builds.load(Ordering::SeqCst);
 
@@ -235,7 +235,7 @@ fn a_camera_device_change_opens_the_new_device_with_never_two_holders() {
         let device = Arc::clone(&device);
         computed(move || Ok::<_, String>(device.open(*device_id.get())))
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
     run_frames_until(&mut view, || camera.get().frame() == Some(0));
 
     scope.write(device_id, 1);
@@ -271,7 +271,7 @@ fn a_failed_build_keeps_the_previous_value_and_is_not_retried_until_its_input_ch
             Ok(BlurKernel { taps })
         })
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
     run_frames_until(&mut view, || true);
 
     scope.write(taps, 4);
@@ -313,7 +313,7 @@ fn a_build_reading_a_computed_value_not_yet_built_fails_and_builds_again_once_it
         });
         (odd_taps, kernel)
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
     scope.wait_until_settled();
     assert!(matches!(
         scope.last_build_of(odd_taps),
@@ -347,7 +347,7 @@ fn a_build_that_panics_fails_with_its_message_and_the_worker_keeps_building() {
             Ok::<_, String>(BlurKernel { taps })
         })
     });
-    let (scope, mut view) = declared.start();
+    let (scope, mut view) = declared.start().unwrap();
     scope.wait_until_settled();
     assert_eq!(
         scope.last_build_of(kernel),
@@ -390,6 +390,6 @@ fn computed_outside_a_declaration_is_refused() {
 fn a_frame_reading_another_scopes_input_is_refused() {
     let mut other = ScopeBeingDeclared::new();
     let others_taps = other.input(3_u32);
-    let (_scope, mut view) = ScopeBeingDeclared::new().start();
+    let (_scope, mut view) = ScopeBeingDeclared::new().start().unwrap();
     view.run_frame(|| others_taps.get());
 }

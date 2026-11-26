@@ -19,20 +19,42 @@ type AnyValue = Arc<dyn Any + Send + Sync>;
 type BuildOfAnyValue = Arc<dyn Fn() -> Result<AnyValue, String> + Send + Sync>;
 type EqualityOfAnyValues = fn(&dyn Any, &dyn Any) -> bool;
 
-static NEXT_SCOPE_ID: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScopeId(u64);
+
+impl ScopeId {
+    fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// The slot a handle names, in the scope it was declared in.
+#[derive(Clone, Copy)]
+struct SlotOf {
+    scope: ScopeId,
+    slot: usize,
+}
+
+impl SlotOf {
+    fn in_scope(self, scope: ScopeId) -> usize {
+        if self.scope != scope {
+            refuse(Refusal::HandleOfAnotherScope);
+        }
+        self.slot
+    }
+}
 
 /// An input of a scope holding a `T`, read with [`Input::get`] in a build or a frame.
 pub struct Input<T> {
-    scope: u64,
-    slot: usize,
+    slot: SlotOf,
     of: PhantomData<fn() -> T>,
 }
 
 /// A value computed from a scope's inputs and other computed values, holding a `T`, read with
 /// [`Computed::get`] in a build or a frame.
 pub struct Computed<T> {
-    scope: u64,
-    slot: usize,
+    slot: SlotOf,
     of: PhantomData<fn() -> T>,
 }
 
@@ -82,18 +104,18 @@ struct ReadOfAComputedValueNotYetBuilt;
 /// What a build or a frame on this thread reads from.
 enum Reading {
     Build {
-        scope: u64,
+        scope: ScopeId,
         values: Vec<Option<AnyValue>>,
         read: Vec<usize>,
     },
     Frame {
-        scope: u64,
+        scope: ScopeId,
         values: Vec<Option<AnyValue>>,
     },
 }
 
 struct Declaring {
-    scope: u64,
+    scope: ScopeId,
     slots: Vec<Slot>,
 }
 
@@ -102,32 +124,28 @@ thread_local! {
     static DECLARING: RefCell<Option<Declaring>> = const { RefCell::new(None) };
 }
 
-fn read_slot(scope: u64, slot: usize) -> Option<AnyValue> {
-    READING.with_borrow_mut(|reading| {
-        let (reading_scope, values) = match reading {
-            None => refuse(Refusal::GetOutsideABuildOrAFrame),
-            Some(Reading::Build {
-                scope,
-                values,
-                read,
-            }) => {
-                read.push(slot);
-                (*scope, values)
-            }
-            Some(Reading::Frame { scope, values }) => (*scope, values),
-        };
-        if reading_scope != scope {
-            refuse(Refusal::HandleOfAnotherScope);
+fn read_slot(slot: SlotOf) -> Option<AnyValue> {
+    READING.with_borrow_mut(|reading| match reading {
+        None => refuse(Refusal::GetOutsideABuildOrAFrame),
+        Some(Reading::Build {
+            scope,
+            values,
+            read,
+        }) => {
+            let slot = slot.in_scope(*scope);
+            read.push(slot);
+            values[slot].clone()
         }
-        values[slot].clone()
+        Some(Reading::Frame { scope, values }) => values[slot.in_scope(*scope)].clone(),
     })
 }
 
 impl<T: Send + Sync + 'static> Input<T> {
     /// The input's value: in a build, as it was when the build started, recorded as read; in a
     /// frame, as of the frame's boundary. Refused anywhere else.
+    #[must_use]
     pub fn get(self) -> Arc<T> {
-        read_slot(self.scope, self.slot)
+        read_slot(self.slot)
             .expect("an input always holds a value")
             .downcast::<T>()
             .expect("an input holds its own type")
@@ -138,13 +156,22 @@ impl<T: Send + Sync + 'static> Computed<T> {
     /// The computed value: in a build, as it was when the build started, recorded as read, and a
     /// value not yet built fails the build until it is built; in a frame, always a value, since
     /// frames run only once every computed value has one. Refused anywhere else.
+    #[must_use]
     pub fn get(self) -> Arc<T> {
-        match read_slot(self.scope, self.slot) {
+        match read_slot(self.slot) {
             Some(value) => value
                 .downcast::<T>()
                 .expect("a computed value holds its own type"),
             None => resume_unwind(Box::new(ReadOfAComputedValueNotYetBuilt)),
         }
+    }
+}
+
+fn declare_slot(scope: ScopeId, slots: &mut Vec<Slot>, slot: Slot) -> SlotOf {
+    slots.push(slot);
+    SlotOf {
+        scope,
+        slot: slots.len() - 1,
     }
 }
 
@@ -161,23 +188,22 @@ where
             .map(|value| Arc::new(value) as AnyValue)
             .map_err(|error| error.to_string())
     });
+    let slot = Slot {
+        role: SlotRole::Computed {
+            build,
+            read_at: Vec::new(),
+            last_build: LastBuild::NotYetBuilt,
+        },
+        value: None,
+        changed_at: 0,
+        equal: equal_as::<T>,
+    };
     DECLARING.with_borrow_mut(|declaring| {
         let Some(declaring) = declaring else {
             refuse(Refusal::ComputedOutsideADeclaration)
         };
-        declaring.slots.push(Slot {
-            role: SlotRole::Computed {
-                build,
-                read_at: Vec::new(),
-                last_build: LastBuild::NotYetBuilt,
-            },
-            value: None,
-            changed_at: 0,
-            equal: equal_as::<T>,
-        });
         Computed {
-            scope: declaring.scope,
-            slot: declaring.slots.len() - 1,
+            slot: declare_slot(declaring.scope, &mut declaring.slots, slot),
             of: PhantomData,
         }
     })
@@ -215,11 +241,26 @@ pub enum LastBuild {
     Failed { builds: u64, why: BuildFailure },
 }
 
+impl LastBuild {
+    fn builds(&self) -> u64 {
+        match self {
+            LastBuild::NotYetBuilt => 0,
+            LastBuild::Built { builds } | LastBuild::Failed { builds, .. } => *builds,
+        }
+    }
+}
+
+/// A slot a build read, and the revision it had changed at when the build started.
+struct Read {
+    slot: usize,
+    seen: u64,
+}
+
 enum SlotRole {
     Input,
     Computed {
         build: BuildOfAnyValue,
-        read_at: Vec<(usize, u64)>,
+        read_at: Vec<Read>,
         last_build: LastBuild,
     },
 }
@@ -236,8 +277,103 @@ struct ScopeSlots {
     slots: Vec<Slot>,
 }
 
+/// A build to run off the lock: the slot it builds and the slots' values and revisions as it
+/// starts.
+struct NextBuild {
+    index: usize,
+    build: BuildOfAnyValue,
+    values: Vec<Option<AnyValue>>,
+    changed_at: Vec<u64>,
+}
+
+impl ScopeSlots {
+    fn values(&self) -> Vec<Option<AnyValue>> {
+        self.slots.iter().map(|slot| slot.value.clone()).collect()
+    }
+
+    fn any_changed_since(&self, read_at: &[Read]) -> bool {
+        read_at
+            .iter()
+            .any(|read| self.slots[read.slot].changed_at > read.seen)
+    }
+
+    fn is_left_to_build(&self, index: usize) -> bool {
+        match &self.slots[index].role {
+            SlotRole::Input => false,
+            SlotRole::Computed {
+                read_at,
+                last_build,
+                ..
+            } => *last_build == LastBuild::NotYetBuilt || self.any_changed_since(read_at),
+        }
+    }
+
+    fn is_settled(&self) -> bool {
+        (0..self.slots.len()).all(|index| !self.is_left_to_build(index))
+    }
+
+    /// Store `value` in slot `index` and return it to hand over, unless it equals the value the
+    /// slot holds.
+    fn store(&mut self, index: usize, value: AnyValue) -> Option<AnyValue> {
+        let slot = &mut self.slots[index];
+        if slot
+            .value
+            .as_ref()
+            .is_some_and(|held| (slot.equal)(held.as_ref(), value.as_ref()))
+        {
+            return None;
+        }
+        self.revision += 1;
+        slot.value = Some(Arc::clone(&value));
+        slot.changed_at = self.revision;
+        Some(value)
+    }
+
+    fn next_build(&self) -> Option<NextBuild> {
+        let index = (0..self.slots.len()).find(|index| self.is_left_to_build(*index))?;
+        let SlotRole::Computed { build, .. } = &self.slots[index].role else {
+            unreachable!("only a computed slot is left to build")
+        };
+        Some(NextBuild {
+            index,
+            build: Arc::clone(build),
+            values: self.values(),
+            changed_at: self.slots.iter().map(|slot| slot.changed_at).collect(),
+        })
+    }
+
+    /// Record how the build of slot `index` went, and return its value to hand over when it
+    /// changed. A failure keeps the previous value, built again only when what it read changes.
+    fn record_build(
+        &mut self,
+        index: usize,
+        read_at: Vec<Read>,
+        built: Result<AnyValue, BuildFailure>,
+    ) -> Option<AnyValue> {
+        let SlotRole::Computed { last_build, .. } = &self.slots[index].role else {
+            unreachable!("only a computed slot is built")
+        };
+        let builds = last_build.builds() + 1;
+        let (handed_over, last_build) = match built {
+            Ok(value) => (self.store(index, value), LastBuild::Built { builds }),
+            Err(why) => (None, LastBuild::Failed { builds, why }),
+        };
+        let SlotRole::Computed {
+            read_at: recorded_read_at,
+            last_build: recorded_last_build,
+            ..
+        } = &mut self.slots[index].role
+        else {
+            unreachable!("only a computed slot is built")
+        };
+        *recorded_read_at = read_at;
+        *recorded_last_build = last_build;
+        handed_over
+    }
+}
+
 struct Shared {
-    scope: u64,
+    scope: ScopeId,
     slots: Mutex<ScopeSlots>,
     something_to_build: Condvar,
     handed_over: Mutex<Vec<(usize, AnyValue)>>,
@@ -245,8 +381,6 @@ struct Shared {
     closing: AtomicBool,
 }
 
-/// Builds run under `catch_unwind` with no lock held, so only a value's own `PartialEq` panicking
-/// mid-comparison can poison a lock.
 const NO_LOCK_HELD_ACROSS_A_PANIC: &str = "a value's PartialEq panicked while the scope was locked";
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -262,14 +396,14 @@ fn equal_as<T: PartialEq + 'static>(left: &dyn Any, right: &dyn Any) -> bool {
 
 /// A node's scope while it is being declared: its inputs, then its computed values.
 pub struct ScopeBeingDeclared {
-    scope: u64,
+    scope: ScopeId,
     slots: Vec<Slot>,
 }
 
 impl Default for ScopeBeingDeclared {
     fn default() -> Self {
         Self {
-            scope: NEXT_SCOPE_ID.fetch_add(1, Ordering::Relaxed),
+            scope: ScopeId::next(),
             slots: Vec::new(),
         }
     }
@@ -291,21 +425,21 @@ impl Drop for DeclaringOnThisThread<'_> {
 }
 
 impl ScopeBeingDeclared {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// An input holding `value` until it is written.
     pub fn input<T: PartialEq + Send + Sync + 'static>(&mut self, value: T) -> Input<T> {
-        self.slots.push(Slot {
+        let slot = Slot {
             role: SlotRole::Input,
             value: Some(Arc::new(value)),
             changed_at: 0,
             equal: equal_as::<T>,
-        });
+        };
         Input {
-            scope: self.scope,
-            slot: self.slots.len() - 1,
+            slot: declare_slot(self.scope, &mut self.slots, slot),
             of: PhantomData,
         }
     }
@@ -324,15 +458,15 @@ impl ScopeBeingDeclared {
     }
 
     /// Start the scope's worker, and return the scope and the one view its frame thread reads.
-    pub fn start(self) -> (Scope, FrameView) {
-        let initial: Vec<Option<AnyValue>> =
-            self.slots.iter().map(|slot| slot.value.clone()).collect();
+    pub fn start(self) -> std::io::Result<(Scope, FrameView)> {
+        let slots = ScopeSlots {
+            revision: 0,
+            slots: self.slots,
+        };
+        let initial = slots.values();
         let shared = Arc::new(Shared {
             scope: self.scope,
-            slots: Mutex::new(ScopeSlots {
-                revision: 0,
-                slots: self.slots,
-            }),
+            slots: Mutex::new(slots),
             something_to_build: Condvar::new(),
             handed_over: Mutex::new(Vec::new()),
             replaced: Mutex::new(Vec::new()),
@@ -342,8 +476,7 @@ impl ScopeBeingDeclared {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("scope-builds".into())
-                .spawn(move || build_until_closed(&shared))
-                .expect("a thread for the scope's builds")
+                .spawn(move || build_until_closed(&shared))?
         };
         let view = FrameView {
             ready: initial.iter().all(Option::is_some),
@@ -351,17 +484,16 @@ impl ScopeBeingDeclared {
             replaced_here: Vec::with_capacity(16),
             shared: Arc::clone(&shared),
         };
-        (
-            Scope {
-                shared,
-                worker: Some(worker),
-            },
-            view,
-        )
+        let scope = Scope {
+            shared,
+            worker: Some(worker),
+        };
+        Ok((scope, view))
     }
 }
 
 /// The writer's side of a running scope: sets and wires write here.
+#[must_use]
 pub struct Scope {
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
@@ -370,39 +502,21 @@ pub struct Scope {
 impl Scope {
     /// Write `value` to `input`. A value equal to the one it holds changes nothing.
     pub fn write<T: Send + Sync + 'static>(&self, input: Input<T>, value: T) {
-        if input.scope != self.shared.scope {
-            refuse(Refusal::HandleOfAnotherScope);
-        }
-        let value: AnyValue = Arc::new(value);
-        let mut scope = lock(&self.shared.slots);
-        let slot = &scope.slots[input.slot];
-        if slot
-            .value
-            .as_ref()
-            .is_some_and(|held| (slot.equal)(held.as_ref(), value.as_ref()))
-        {
+        let index = input.slot.in_scope(self.shared.scope);
+        let mut slots = lock(&self.shared.slots);
+        let Some(value) = slots.store(index, Arc::new(value)) else {
             return;
-        }
-        scope.revision += 1;
-        let revision = scope.revision;
-        let slot = &mut scope.slots[input.slot];
-        slot.value = Some(Arc::clone(&value));
-        slot.changed_at = revision;
-        self.shared
-            .handed_over
-            .lock()
-            .expect(NO_LOCK_HELD_ACROSS_A_PANIC)
-            .push((input.slot, value));
-        drop(scope);
+        };
+        lock(&self.shared.handed_over).push((index, value));
+        drop(slots);
         self.shared.something_to_build.notify_one();
     }
 
     /// How the last build of `computed` went.
+    #[must_use]
     pub fn last_build_of<T>(&self, computed: Computed<T>) -> LastBuild {
-        if computed.scope != self.shared.scope {
-            refuse(Refusal::HandleOfAnotherScope);
-        }
-        match &lock(&self.shared.slots).slots[computed.slot].role {
+        let index = computed.slot.in_scope(self.shared.scope);
+        match &lock(&self.shared.slots).slots[index].role {
             SlotRole::Computed { last_build, .. } => last_build.clone(),
             SlotRole::Input => unreachable!("a computed handle names a computed slot"),
         }
@@ -410,13 +524,7 @@ impl Scope {
 
     /// Wait until no computed value is left to build, for tests.
     pub fn wait_until_settled(&self) {
-        loop {
-            {
-                let scope = lock(&self.shared.slots);
-                if (0..scope.slots.len()).all(|index| !is_left_to_build(&scope, index)) {
-                    return;
-                }
-            }
+        while !lock(&self.shared.slots).is_settled() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
@@ -428,22 +536,6 @@ impl Drop for Scope {
         self.shared.something_to_build.notify_one();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
-        }
-    }
-}
-
-fn is_left_to_build(scope: &ScopeSlots, index: usize) -> bool {
-    match &scope.slots[index].role {
-        SlotRole::Input => false,
-        SlotRole::Computed {
-            read_at,
-            last_build,
-            ..
-        } => {
-            *last_build == LastBuild::NotYetBuilt
-                || read_at
-                    .iter()
-                    .any(|(read, seen)| scope.slots[*read].changed_at > *seen)
         }
     }
 }
@@ -461,7 +553,7 @@ fn message_of_a_panic(payload: &(dyn Any + Send)) -> String {
 /// Run `build` with its `.get()` reads served from `values` and recorded, and return its result
 /// and the slots it read.
 fn run_a_build(
-    scope: u64,
+    scope: ScopeId,
     build: &BuildOfAnyValue,
     values: Vec<Option<AnyValue>>,
 ) -> (Result<AnyValue, BuildFailure>, Vec<usize>) {
@@ -490,79 +582,39 @@ fn build_until_closed(shared: &Shared) {
         // Values the frame thread replaced are released here, off the frame thread.
         let replaced = std::mem::take(&mut *lock(&shared.replaced));
         drop(replaced);
-        let scope = lock(&shared.slots);
-        let next = (0..scope.slots.len()).find(|index| is_left_to_build(&scope, *index));
-        let Some(index) = next else {
+        let slots = lock(&shared.slots);
+        let Some(next) = slots.next_build() else {
             if shared.closing.load(Ordering::SeqCst) {
                 return;
             }
             let _unused = shared
                 .something_to_build
-                .wait_timeout(scope, std::time::Duration::from_millis(20))
+                .wait_timeout(slots, std::time::Duration::from_millis(20))
                 .expect(NO_LOCK_HELD_ACROSS_A_PANIC);
             continue;
         };
-        let SlotRole::Computed { build, .. } = &scope.slots[index].role else {
-            unreachable!("only a computed slot is left to build")
-        };
-        let build = Arc::clone(build);
-        let values: Vec<Option<AnyValue>> =
-            scope.slots.iter().map(|slot| slot.value.clone()).collect();
-        let changed_at: Vec<u64> = scope.slots.iter().map(|slot| slot.changed_at).collect();
-        drop(scope);
-        let (built, read) = run_a_build(shared.scope, &build, values);
-        let mut scope = lock(&shared.slots);
-        let revision = scope.revision;
-        let read_at: Vec<(usize, u64)> =
-            read.iter().map(|read| (*read, changed_at[*read])).collect();
-        // The newest inputs win: a result built from a value that changed meanwhile is thrown
-        // away, and the loop builds again from the newest values.
-        if read_at
-            .iter()
-            .any(|(read, seen)| scope.slots[*read].changed_at > *seen)
-        {
+        drop(slots);
+        let (built, read) = run_a_build(shared.scope, &next.build, next.values);
+        let read_at: Vec<Read> = read
+            .into_iter()
+            .map(|slot| Read {
+                slot,
+                seen: next.changed_at[slot],
+            })
+            .collect();
+        let mut slots = lock(&shared.slots);
+        // The newest inputs win: the loop builds again from the newest values.
+        if slots.any_changed_since(&read_at) {
             continue;
         }
-        let slot = &mut scope.slots[index];
-        let builds = match &slot.role {
-            SlotRole::Computed {
-                last_build: LastBuild::Built { builds } | LastBuild::Failed { builds, .. },
-                ..
-            } => builds + 1,
-            _ => 1,
-        };
-        let last_build = match built {
-            Ok(value) => {
-                let unchanged = slot
-                    .value
-                    .as_ref()
-                    .is_some_and(|held| (slot.equal)(held.as_ref(), value.as_ref()));
-                if !unchanged {
-                    slot.value = Some(Arc::clone(&value));
-                    slot.changed_at = revision + 1;
-                    lock(&shared.handed_over).push((index, value));
-                }
-                LastBuild::Built { builds }
-            }
-            // The previous value keeps serving; it is built again only when what it read changes.
-            Err(why) => LastBuild::Failed { builds, why },
-        };
-        if let SlotRole::Computed {
-            read_at: recorded,
-            last_build: recorded_build,
-            ..
-        } = &mut slot.role
-        {
-            *recorded = read_at;
-            *recorded_build = last_build;
-        }
-        if scope.slots[index].changed_at == revision + 1 {
-            scope.revision = revision + 1;
+        if let Some(value) = slots.record_build(next.index, read_at, built) {
+            lock(&shared.handed_over).push((next.index, value));
         }
     }
 }
 
 /// The frame thread's view of a scope. It changes only at [`FrameView::flush`].
+#[must_use]
 pub struct FrameView {
     values: Vec<Option<AnyValue>>,
     ready: bool,
