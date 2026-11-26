@@ -24,10 +24,13 @@ class StubExclusiveDevice:
     may take at once; a second holder is refused, as a busy device refuses it."""
 
     def __init__(self) -> None:
-        self._descriptor = os.open(
-            os.environ[STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE],
-            os.O_RDWR | os.O_CREAT,
-        )
+        path = os.environ.get(STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE)
+        if path is None:
+            raise RuntimeError(
+                f"{STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE} names no file to lock as the "
+                "stub exclusive device; the test hands it to the runtime's environment"
+            )
+        self._descriptor = os.open(path, os.O_RDWR | os.O_CREAT)
         try:
             fcntl.flock(self._descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

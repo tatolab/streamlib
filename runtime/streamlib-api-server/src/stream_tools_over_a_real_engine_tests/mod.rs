@@ -902,10 +902,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
 /// render, runs: the same nodes by UUID, each with its name, type and saved input values, the
 /// same links, and no input running a live value the document does not hold.
 fn assert_the_graph_document_equals_the_running_graph(graph_document: &Value, running: &Value) {
-    let live_inputs: Vec<String> = running["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let live_inputs: Vec<String> = the_entries_held_in(running, "nodes")
         .flat_map(|node| {
             node["ports"]["inputs"]
                 .as_array()

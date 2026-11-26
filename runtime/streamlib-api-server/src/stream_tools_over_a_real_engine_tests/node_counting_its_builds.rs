@@ -1,13 +1,18 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A node that counts each setup and teardown it runs and holds a [`StubExclusiveDevice`] from
-//! its setup to its teardown, one device and one count for each stream it runs in.
+//! A node that counts each setup and teardown it runs, records each `level` it reads, and holds
+//! a [`StubExclusiveDevice`] from its setup to its teardown, one device and one count for each
+//! stream it runs in.
 
 use std::collections::BTreeMap;
 
 use parking_lot::Mutex;
+use streamlib::sdk::context::RuntimeContextLimitedAccess;
+use streamlib::sdk::descriptors::PinType;
 use streamlib::sdk::error::Error;
+use streamlib::sdk::nodes::ContinuousNode;
+use streamlib::sdk::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
 
 use super::stub_exclusive_device::{StubExclusiveDevice, StubExclusiveDeviceLease};
 use super::*;
@@ -15,12 +20,13 @@ use super::*;
 /// The Float input of [`NodeCountingItsBuilds`] a test sets while the stream plays.
 pub(super) const THE_COUNTING_NODES_LEVEL: &str = "level";
 
-/// The setups and teardowns [`NodeCountingItsBuilds`] ran in one stream, and that stream's
-/// device.
+/// The setups and teardowns [`NodeCountingItsBuilds`] ran in one stream, the last `level` it
+/// read, and that stream's device.
 #[derive(Debug, Default)]
 pub(super) struct BuildsCountedInOneStream {
     setups: usize,
     teardowns: usize,
+    last_level_read: Option<f64>,
     device: Arc<StubExclusiveDevice>,
 }
 
@@ -31,6 +37,10 @@ impl BuildsCountedInOneStream {
 
     pub(super) fn teardowns(&self) -> usize {
         self.teardowns
+    }
+
+    pub(super) fn last_level_read(&self) -> Option<f64> {
+        self.last_level_read
     }
 
     pub(super) fn device(&self) -> &StubExclusiveDevice {
@@ -67,17 +77,17 @@ pub(super) fn the_builds_counted_in<T>(
     )
 }
 
-/// A native node with a Float `level` input that counts its setups and teardowns and holds its
-/// stream's stub exclusive device open from setup to teardown.
+/// A native node reading its Float `level` input that counts its setups and teardowns and holds
+/// its stream's stub exclusive device open from setup to teardown.
 #[streamlib::sdk::node(
-    execution = manual,
+    execution = continuous(interval_ms = 5),
     input("level", delivery_profile = "newest", pin_type = Float),
 )]
 pub(super) struct NodeCountingItsBuilds {
     lease: Option<StubExclusiveDeviceLease>,
 }
 
-impl ManualNode for NodeCountingItsBuilds::Node {
+impl ContinuousNode for NodeCountingItsBuilds::Node {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let device = count_in(ctx.stream_id(), |counted| {
             counted.setups += 1;
@@ -97,7 +107,22 @@ impl ManualNode for NodeCountingItsBuilds::Node {
         Ok(())
     }
 
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        if let Some(message) = self.inputs.read_raw(THE_COUNTING_NODES_LEVEL)? {
+            let level = unpack_pin_value(
+                &PinType::Float { exact_size: None },
+                PackedPinValueRef {
+                    payload_descriptor: &message.payload_descriptor,
+                    payload: message.payload.bytes(),
+                },
+            )
+            .expect("a Float message unpacks")
+            .as_f64()
+            .expect("a Float unpacks to a number");
+            count_in(ctx.stream_id(), |counted| {
+                counted.last_level_read = Some(level)
+            });
+        }
         Ok(())
     }
 }

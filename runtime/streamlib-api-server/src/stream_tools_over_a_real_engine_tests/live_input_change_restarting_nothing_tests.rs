@@ -11,6 +11,9 @@ use super::node_counting_its_builds::{
 };
 use super::*;
 
+/// How long a value set may take to reach the node reading it.
+const READ_WITHIN: Duration = Duration::from_secs(10);
+
 const COUNTING_NODE_UUID: &str = "6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e";
 
 /// A project whose stream `main` holds one [`NodeCountingItsBuilds`] named `counting`, its
@@ -29,8 +32,8 @@ fn a_project_whose_main_stream_holds_a_node_counting_its_builds() -> ProjectWith
 }
 
 /// Mental-revert: an input set that rebuilds its node runs a second setup and a teardown, and
-/// opens the device twice; one held as "not live" leaves the document holding a value the
-/// running graph does not.
+/// opens the device twice; one held as "not live" never reaches the node and leaves the stream
+/// degraded.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_input_set_through_transact_while_playing_restarts_nothing() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -55,19 +58,29 @@ async fn an_input_set_through_transact_while_playing_restarts_nothing() {
     );
 
     engine
-        .assert_the_stream_restarted_nothing(&project, &stream_id)
+        .assert_the_stream_restarted_nothing_once_its_node_reads(0.75, &project, &stream_id)
         .await;
 }
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
-    /// Assert the [`NodeCountingItsBuilds`] of `stream_id` set up once and never tore down,
-    /// opening its device once, that the stream runs, and that `project`'s graph document of
-    /// `main` equals its running graph.
-    async fn assert_the_stream_restarted_nothing(
+    /// Once the [`NodeCountingItsBuilds`] of `stream_id` reads `level`, assert it set up once
+    /// and never tore down, opening its device once, that the stream runs healthy, and that
+    /// `project`'s graph document of `main` equals its running graph.
+    async fn assert_the_stream_restarted_nothing_once_its_node_reads(
         &self,
+        level: f64,
         project: &ProjectWithGraphDocuments,
         stream_id: &str,
     ) {
+        let deadline = std::time::Instant::now() + READ_WITHIN;
+        while the_builds_counted_in(stream_id, |counted| counted.last_level_read()) != Some(level) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the node reads {level} within {READ_WITHIN:?}; it last read {:?}",
+                the_builds_counted_in(stream_id, |counted| counted.last_level_read())
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let counted = the_builds_counted_in(stream_id, |counted_in_the_stream| {
             (
                 counted_in_the_stream.setups(),

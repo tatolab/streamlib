@@ -74,22 +74,29 @@ def assert_the_stub_device_never_had_two_holders(
     )
 
 
-def the_nodes_and_links_held_in(graph: dict[str, Any]) -> dict[str, Any]:
-    """The nodes `graph` holds, by name, each with its type and saved input values, and its links
-    by node name and port; `graph` is a graph document or a `graph` answer."""
-    nodes = [
-        node
-        for node in graph["nodes"]
-        if not node.get("components", {}).get("pending_deletion", False)
+def the_entries_held_in(graph: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """The entries of `graph`'s `key`, `nodes` or `links`, leaving out one pending its deletion."""
+    return [
+        entry
+        for entry in graph[key]
+        if not entry.get("components", {}).get("pending_deletion", False)
     ]
-    name_of = {node.get("id", node["name"]): node["name"] for node in nodes}
+
+
+def the_nodes_and_links_held_in(graph: dict[str, Any]) -> dict[str, Any]:
+    """The nodes `graph` holds, by UUID, each with its name, type and saved input values, and
+    its links, each end by its node's UUID; `graph` is a graph document or a `graph` answer, a
+    document's link naming its node by UUID or by name."""
+    nodes = the_entries_held_in(graph, "nodes")
+    uuid_of = {node[key]: node["id"] for node in nodes for key in ("id", "name")}
 
     def end_of(end: dict[str, Any]) -> tuple[str, str, str | None]:
-        return (name_of.get(end["node"], end["node"]), end["port"], end.get("member"))
+        return (uuid_of[end["node"]], end["port"], end.get("member"))
 
     return {
         "nodes": {
-            node["name"]: {
+            node["id"]: {
+                "name": node["name"],
                 "type": node["type"],
                 "input_values": node.get("input_values") or {},
             }
@@ -97,8 +104,7 @@ def the_nodes_and_links_held_in(graph: dict[str, Any]) -> dict[str, Any]:
         },
         "links": sorted(
             (end_of(link["source"]), end_of(link["target"]))
-            for link in graph["links"]
-            if not link.get("components", {}).get("pending_deletion", False)
+            for link in the_entries_held_in(graph, "links")
         ),
     }
 
@@ -110,7 +116,7 @@ def assert_the_graph_document_equals_the_running_graph(
     no input runs a live value the document does not hold."""
     live_inputs = [
         (node["name"], held)
-        for node in running["nodes"]
+        for node in the_entries_held_in(running, "nodes")
         for port in node.get("ports", {}).get("inputs", [])
         for held in (port, *port.get("members", []))
         if held.get("value_comes_from") == "live"
