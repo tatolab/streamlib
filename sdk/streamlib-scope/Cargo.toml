@@ -1,0 +1,16 @@
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "streamlib-scope"
+description = "A node's inputs and the values computed from them, built off the frame thread and handed to it at a frame boundary."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "streamlib_scope"
+path = "src/lib.rs"
