@@ -71,7 +71,7 @@ fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius()
 
     // A new tap count: frames keep the 5-tap kernel while the 9-tap one builds.
     builds_may_finish.store(false, Ordering::SeqCst);
-    scope.write(taps, 9);
+    scope.write(|writes| writes.write(taps, 9));
     let while_building = view.run_frame(|| (*taps.get(), kernel.get().taps));
     builds_may_finish.store(true, Ordering::SeqCst);
     assert_eq!(while_building, Some((9, 5)));
@@ -80,7 +80,7 @@ fn blur_keeps_its_old_kernel_until_the_new_one_is_built_and_ignores_the_radius()
     // The kernel never read the radius, so a radius drag builds nothing.
     let before = builds.load(Ordering::SeqCst);
     for step in 0..50 {
-        scope.write(radius, step as f32);
+        scope.write(|writes| writes.write(radius, step as f32));
     }
     assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(builds.load(Ordering::SeqCst), before);
@@ -112,7 +112,7 @@ fn a_burst_of_tap_counts_ends_on_the_newest_and_throws_stale_builds_away() {
     builds_may_finish.store(false, Ordering::SeqCst);
     let mut handed_over = Vec::new();
     for taps_now in 2..=30 {
-        scope.write(taps, taps_now);
+        scope.write(|writes| writes.write(taps, taps_now));
         handed_over.extend(view.run_frame(|| kernel.get().taps));
     }
     builds_may_finish.store(true, Ordering::SeqCst);
@@ -153,7 +153,7 @@ fn a_build_whose_input_changed_while_it_ran_is_thrown_away() {
     read_rx
         .recv_timeout(SETTLE)
         .expect("the first build reads its input");
-    scope.write(taps, 2);
+    scope.write(|writes| writes.write(taps, 2));
     drop(release_tx);
 
     run_frames_until(&mut view, || kernel.get().taps == 2);
@@ -195,7 +195,7 @@ fn a_value_whose_input_changes_faster_than_it_builds_does_not_starve_the_others(
         std::thread::spawn(move || {
             let mut step = 1;
             while !stop.load(Ordering::SeqCst) {
-                scope.write(dragged, step);
+                scope.write(|writes| writes.write(dragged, step));
                 writes.fetch_add(1, Ordering::SeqCst);
                 step += 1;
                 std::thread::sleep(Duration::from_millis(1));
@@ -208,7 +208,7 @@ fn a_value_whose_input_changes_faster_than_it_builds_does_not_starve_the_others(
     }
 
     // While `dragged` keeps changing, the other value still builds.
-    scope.write(other, 1);
+    scope.write(|writes| writes.write(other, 1));
     run_frames_until(&mut view, || *follows_other.get() == 1);
     drop(stop_on_unwind);
     writer.join().unwrap();
@@ -250,7 +250,7 @@ fn writes_no_frame_has_taken_keep_only_the_newest_value() {
     let (scope, mut view) = declared.start().unwrap();
 
     for value in 1..=100 {
-        scope.write(level, Counted::new(value, &alive));
+        scope.write(|writes| writes.write(level, Counted::new(value, &alive)));
     }
     // The frame view's value and the newest one, nothing in between.
     assert_eq!(alive.load(Ordering::SeqCst), 2);
@@ -273,7 +273,7 @@ fn writing_the_value_an_input_holds_builds_nothing() {
     run_frames_until(&mut view, || true);
 
     for _ in 0..10 {
-        scope.write(taps, 3);
+        scope.write(|writes| writes.write(taps, 3));
     }
     assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(builds.load(Ordering::SeqCst), 1);
@@ -312,28 +312,32 @@ fn a_compositor_gains_a_layer_live_and_an_opacity_drag_builds_no_kernel() {
     // Drag the first layer's opacity: the whole slot list is written each time, the count
     // stays 2, so the kernel list is not built again.
     for step in 0..40 {
-        scope.write(
-            layers,
-            vec![
-                Layer {
-                    opacity: step as f32 / 40.0,
-                },
-                Layer { opacity: 1.0 },
-            ],
-        );
+        scope.write(|writes| {
+            writes.write(
+                layers,
+                vec![
+                    Layer {
+                        opacity: step as f32 / 40.0,
+                    },
+                    Layer { opacity: 1.0 },
+                ],
+            );
+        });
     }
     assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(kernel_builds.load(Ordering::SeqCst), after_first);
 
     // Wire the empty slot: a third layer. The kernels follow without a rebuild of the node.
-    scope.write(
-        layers,
-        vec![
-            Layer { opacity: 1.0 },
-            Layer { opacity: 1.0 },
-            Layer { opacity: 0.5 },
-        ],
-    );
+    scope.write(|writes| {
+        writes.write(
+            layers,
+            vec![
+                Layer { opacity: 1.0 },
+                Layer { opacity: 1.0 },
+                Layer { opacity: 0.5 },
+            ],
+        );
+    });
     run_frames_until(&mut view, || kernels.get().len() == 3);
     assert_eq!(view.run_frame(|| layers.get().len()), Some(3));
 }
@@ -408,11 +412,152 @@ fn a_camera_device_change_opens_the_new_device_with_never_two_holders() {
     let (scope, mut view) = declared.start().unwrap();
     run_frames_until(&mut view, || camera.get().frame() == Some(0));
 
-    scope.write(device_id, 1);
+    scope.write(|writes| writes.write(device_id, 1));
     run_frames_until(&mut view, || camera.get().frame() == Some(1));
     // The replaced lease is released off the frame thread; one holder throughout.
     assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(device.open_holders.load(Ordering::SeqCst), 1);
+}
+
+/// Three taps of a kernel a transaction always sets to one value together.
+#[derive(Debug, PartialEq)]
+struct ThreeTaps {
+    taps: [u32; 3],
+}
+
+#[test]
+fn three_inputs_set_in_one_transaction_build_once() {
+    let builds = Arc::new(AtomicUsize::new(0));
+    let mut declared = ScopeBeingDeclared::new();
+    let first = declared.input(0_u32);
+    let second = declared.input(0_u32);
+    let third = declared.input(0_u32);
+    let kernel = declared.declare(|| {
+        let builds = Arc::clone(&builds);
+        computed(move || {
+            builds.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(ThreeTaps {
+                taps: [*first.get(), *second.get(), *third.get()],
+            })
+        })
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    assert!(scope.wait_until_settled(SETTLE));
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+    scope.write(|writes| {
+        writes.write(first, 7);
+        writes.write(second, 7);
+        writes.write(third, 7);
+    });
+    assert!(scope.wait_until_settled(SETTLE));
+    assert_eq!(builds.load(Ordering::SeqCst), 2);
+    run_frames_until(&mut view, || kernel.get().taps == [7, 7, 7]);
+}
+
+#[test]
+fn no_build_or_frame_sees_a_transaction_half_applied() {
+    let mut declared = ScopeBeingDeclared::new();
+    let first = declared.input(0_u32);
+    let second = declared.input(0_u32);
+    let third = declared.input(0_u32);
+    let kernel = declared.declare(|| {
+        computed(move || {
+            Ok::<_, String>(ThreeTaps {
+                taps: [*first.get(), *second.get(), *third.get()],
+            })
+        })
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    let writing_done = Arc::new(AtomicBool::new(false));
+
+    std::thread::scope(|threads| {
+        let writer = threads.spawn(|| {
+            let _done = OpenOnDrop(Arc::clone(&writing_done));
+            for value in 1..=500_u32 {
+                scope.write(|writes| {
+                    writes.write(first, value);
+                    writes.write(second, value);
+                    writes.write(third, value);
+                });
+            }
+        });
+        while !writing_done.load(Ordering::SeqCst) {
+            view.run_frame(|| {
+                let inputs = [*first.get(), *second.get(), *third.get()];
+                assert!(
+                    inputs.iter().all(|tap| *tap == inputs[0]),
+                    "a frame saw {inputs:?}"
+                );
+                let built = kernel.get().taps;
+                assert!(
+                    built.iter().all(|tap| *tap == built[0]),
+                    "a build saw {built:?}"
+                );
+            });
+        }
+        writer.join().unwrap();
+    });
+    run_frames_until(&mut view, || kernel.get().taps == [500, 500, 500]);
+}
+
+#[test]
+fn a_transaction_naming_another_scopes_input_is_refused_whole() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let mut other = ScopeBeingDeclared::new();
+    let others_taps = other.input(3_u32);
+    let (scope, mut view) = declared.start().unwrap();
+
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scope.write(|writes| {
+            writes.write(taps, 9);
+            writes.write(others_taps, 9);
+        });
+    }));
+    assert!(refused.is_err());
+    assert_eq!(view.run_frame(|| *taps.get()), Some(3));
+}
+
+#[test]
+fn closing_a_scope_with_builds_pending_returns_without_running_them() {
+    let (first_build_started, started) = mpsc::channel();
+    let (release_first_build, released) = mpsc::channel::<()>();
+    let pending_builds = Arc::new(AtomicUsize::new(0));
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    let released = Mutex::new(released);
+    let _in_flight = declared.declare(|| {
+        computed(move || {
+            let taps = *taps.get();
+            first_build_started.send(()).unwrap();
+            // Waits for the release, or for the sender to go if the test unwinds.
+            let _ = released.lock().unwrap().recv();
+            Ok::<_, String>(BlurKernel { taps })
+        })
+    });
+    let _pending = declared.declare(|| {
+        let pending_builds = Arc::clone(&pending_builds);
+        computed(move || {
+            pending_builds.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(BlurKernel { taps: *taps.get() })
+        })
+    });
+    let (scope, view) = declared.start().unwrap();
+    started.recv_timeout(SETTLE).unwrap();
+
+    let (closed, closed_now) = mpsc::channel();
+    let closing = std::thread::spawn(move || {
+        drop(scope);
+        closed.send(()).unwrap();
+    });
+    // The close marks the scope closing before it waits for the build in flight.
+    std::thread::sleep(Duration::from_millis(100));
+    drop(release_first_build);
+    closed_now.recv_timeout(SETTLE).unwrap();
+    closing.join().unwrap();
+    drop(view);
+    assert_eq!(pending_builds.load(Ordering::SeqCst), 0);
 }
 
 /// A build error of the build's own type: the scope needs only its `Display`.
@@ -444,7 +589,7 @@ fn a_failed_build_keeps_the_previous_value_and_is_not_retried_until_its_input_ch
     let (scope, mut view) = declared.start().unwrap();
     run_frames_until(&mut view, || true);
 
-    scope.write(taps, 4);
+    scope.write(|writes| writes.write(taps, 4));
     assert!(scope.wait_until_settled(SETTLE));
     assert_eq!(view.run_frame(|| kernel.get().taps), Some(3));
     assert!(matches!(
@@ -456,7 +601,7 @@ fn a_failed_build_keeps_the_previous_value_and_is_not_retried_until_its_input_ch
     std::thread::sleep(Duration::from_millis(60));
     assert_eq!(builds.load(Ordering::SeqCst), after_failure);
 
-    scope.write(taps, 7);
+    scope.write(|writes| writes.write(taps, 7));
     run_frames_until(&mut view, || kernel.get().taps == 7);
     assert!(matches!(
         scope.last_build_of(kernel),
@@ -501,7 +646,7 @@ fn a_build_reading_a_computed_value_not_yet_built_fails_and_builds_again_once_it
     );
     assert_eq!(view.run_frame(|| ()), None);
 
-    scope.write(taps, 5);
+    scope.write(|writes| writes.write(taps, 5));
     run_frames_until(&mut view, || kernel.get().taps == 5);
     assert_eq!(scope.last_build_of(kernel), LastBuild::Built { builds: 2 });
 }
@@ -527,7 +672,7 @@ fn a_build_that_panics_fails_with_its_message_and_the_worker_keeps_building() {
         }
     );
 
-    scope.write(taps, 3);
+    scope.write(|writes| writes.write(taps, 3));
     run_frames_until(&mut view, || kernel.get().taps == 3);
 }
 

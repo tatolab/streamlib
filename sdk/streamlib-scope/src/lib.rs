@@ -5,15 +5,33 @@
 //! them, built on a worker thread off the frame thread. A build is a function of no arguments
 //! whose `.get()` reads are its dependencies; a frame reads the values handed over at its last
 //! frame boundary and never waits for a build.
+//!
+//! Inputs written together, as a transaction writes them, land as one write: no build and no
+//! frame sees some of them written and not the others. The frame thread takes new values
+//! without blocking or allocating, and the values it replaces are dropped on another thread.
 
 use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
-use std::thread::JoinHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, TryLockError};
+
+/// What the scope's threads meet through: std's locks and threads, or loom's in a loom model
+/// build.
+mod sync {
+    #[cfg(loom)]
+    pub(crate) use loom::sync::{Mutex, MutexGuard};
+    #[cfg(loom)]
+    pub(crate) use loom::thread::{Builder, JoinHandle, Thread, park};
+    #[cfg(not(loom))]
+    pub(crate) use std::sync::{Mutex, MutexGuard};
+    #[cfg(not(loom))]
+    pub(crate) use std::thread::{Builder, JoinHandle, Thread, park};
+}
+
+use sync::{Mutex, MutexGuard, Thread};
 
 type AnyValue = Arc<dyn Any + Send + Sync>;
 type BuildOfAnyValue = Arc<dyn Fn() -> Result<AnyValue, String> + Send + Sync>;
@@ -119,13 +137,28 @@ struct Declaring {
     slots: Vec<Slot>,
 }
 
-thread_local! {
+#[cfg(not(loom))]
+std::thread_local! {
     static READING: RefCell<Option<Reading>> = const { RefCell::new(None) };
     static DECLARING: RefCell<Option<Declaring>> = const { RefCell::new(None) };
 }
 
+#[cfg(loom)]
+loom::thread_local! {
+    static READING: RefCell<Option<Reading>> = RefCell::new(None);
+    static DECLARING: RefCell<Option<Declaring>> = RefCell::new(None);
+}
+
+fn replace_reading(reading: Option<Reading>) -> Option<Reading> {
+    READING.with(|cell| cell.replace(reading))
+}
+
+fn replace_declaring(declaring: Option<Declaring>) -> Option<Declaring> {
+    DECLARING.with(|cell| cell.replace(declaring))
+}
+
 fn read_slot(slot: SlotOf) -> Option<AnyValue> {
-    READING.with_borrow_mut(|reading| match reading {
+    READING.with(|reading| match &mut *reading.borrow_mut() {
         None => refuse(Refusal::GetOutsideABuildOrAFrame),
         Some(Reading::Build {
             scope_id,
@@ -198,8 +231,8 @@ where
         changed_at: 0,
         equal: equal_as::<T>,
     };
-    DECLARING.with_borrow_mut(|declaring| {
-        let Some(declaring) = declaring else {
+    DECLARING.with(|declaring| {
+        let Some(declaring) = &mut *declaring.borrow_mut() else {
             refuse(Refusal::ComputedOutsideADeclaration)
         };
         Computed {
@@ -275,6 +308,8 @@ struct Slot {
 struct ScopeSlots {
     revision: u64,
     slots: Vec<Slot>,
+    /// Set by the writer as the scope closes; the worker starts no build once it sees it.
+    closing: bool,
 }
 
 /// A build to run off the lock: the slot it builds and the slots' values and revisions as it
@@ -383,20 +418,43 @@ impl ScopeSlots {
     }
 }
 
+/// What one slot's hand-over cell holds between the writer or the worker and the frame view.
+enum HandOver {
+    Empty,
+    /// The slot's newest value, not yet taken by the frame view.
+    New(AnyValue),
+    /// The value the frame view replaced, left for another thread to drop.
+    Replaced(AnyValue),
+}
+
+impl HandOver {
+    fn into_value(self) -> Option<AnyValue> {
+        match self {
+            HandOver::Empty => None,
+            HandOver::New(value) | HandOver::Replaced(value) => Some(value),
+        }
+    }
+}
+
 struct ScopeAcrossThreads {
     scope_id: ScopeId,
     slots: Mutex<ScopeSlots>,
-    something_to_build: Condvar,
-    /// The newest value of each slot not yet taken by the frame view.
-    handed_over: Mutex<Vec<Option<AnyValue>>>,
-    replaced: Mutex<Vec<AnyValue>>,
-    closing: AtomicBool,
+    hand_over: Mutex<Vec<HandOver>>,
 }
 
 const NO_LOCK_HELD_ACROSS_A_PANIC: &str = "a value's PartialEq panicked while the scope was locked";
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect(NO_LOCK_HELD_ACROSS_A_PANIC)
+}
+
+/// The lock if no other thread holds it, for the frame thread, which never waits.
+fn lock_if_free<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::WouldBlock) => None,
+        Err(TryLockError::Poisoned(_)) => panic!("{NO_LOCK_HELD_ACROSS_A_PANIC}"),
+    }
 }
 
 fn equal_as<T: PartialEq + 'static>(left: &dyn Any, right: &dyn Any) -> bool {
@@ -430,7 +488,7 @@ struct DeclaringOnThisThread<'scope> {
 
 impl Drop for DeclaringOnThisThread<'_> {
     fn drop(&mut self) {
-        if let Some(declaring) = DECLARING.replace(self.previous.take()) {
+        if let Some(declaring) = replace_declaring(self.previous.take()) {
             *self.slots = declaring.slots;
         }
     }
@@ -458,7 +516,7 @@ impl ScopeBeingDeclared {
 
     /// Run a node's body once, with every [`computed`] it calls declared into this scope.
     pub fn declare<R>(&mut self, body: impl FnOnce() -> R) -> R {
-        let previous = DECLARING.replace(Some(Declaring {
+        let previous = replace_declaring(Some(Declaring {
             scope_id: self.scope_id,
             slots: std::mem::take(&mut self.slots),
         }));
@@ -469,38 +527,42 @@ impl ScopeBeingDeclared {
         body()
     }
 
-    /// Start the scope's worker, and return the scope and the one view its frame thread reads.
+    /// Start the scope, and return it and the one view its frame thread reads. A scope with a
+    /// computed value starts a worker thread to build it; a scope of inputs alone starts none.
     pub fn start(self) -> std::io::Result<(Scope, FrameView)> {
+        let builds_anything = self
+            .slots
+            .iter()
+            .any(|slot| matches!(slot.role, SlotRole::Computed { .. }));
         let slots = ScopeSlots {
             revision: 0,
             slots: self.slots,
+            closing: false,
         };
         let initial = slots.values();
         let slot_count = initial.len();
         let shared = Arc::new(ScopeAcrossThreads {
             scope_id: self.scope_id,
             slots: Mutex::new(slots),
-            something_to_build: Condvar::new(),
-            handed_over: Mutex::new(vec![None; slot_count]),
-            replaced: Mutex::new(Vec::new()),
-            closing: AtomicBool::new(false),
+            hand_over: Mutex::new((0..slot_count).map(|_| HandOver::Empty).collect()),
         });
-        let worker = {
+        let worker = if builds_anything {
             let shared = Arc::clone(&shared);
-            std::thread::Builder::new()
-                .name("scope-builds".into())
-                .spawn(move || build_until_closed(&shared))?
+            Some(
+                sync::Builder::new()
+                    .name("scope-builds".into())
+                    .spawn(move || build_until_closed(&shared))?,
+            )
+        } else {
+            None
         };
         let view = FrameView {
             ready: initial.iter().all(Option::is_some),
             values: initial,
-            replaced_here: Vec::with_capacity(slot_count),
+            worker: worker.as_ref().map(|worker| worker.thread().clone()),
             shared: Arc::clone(&shared),
         };
-        let writer = Scope {
-            shared,
-            worker: Some(worker),
-        };
+        let writer = Scope { shared, worker };
         Ok((writer, view))
     }
 }
@@ -509,23 +571,48 @@ impl ScopeBeingDeclared {
 #[must_use]
 pub struct Scope {
     shared: Arc<ScopeAcrossThreads>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<sync::JoinHandle<()>>,
+}
+
+/// The inputs one [`Scope::write`] writes, applied together once it has them all.
+pub struct Writes {
+    scope_id: ScopeId,
+    values: Vec<(usize, AnyValue)>,
+}
+
+impl Writes {
+    /// Write `value` to `input` with the others. A later write of the same input wins.
+    pub fn write<T: Send + Sync + 'static>(&mut self, input: Input<T>, value: T) {
+        let index = input.slot.in_scope(self.scope_id);
+        self.values.push((index, Arc::new(value)));
+    }
 }
 
 impl Scope {
-    /// Write `value` to `input`. A value equal to the one it holds changes nothing.
-    pub fn write<T: Send + Sync + 'static>(&self, input: Input<T>, value: T) {
-        let index = input.slot.in_scope(self.shared.scope_id);
-        let value: AnyValue = Arc::new(value);
-        let mut slots = lock(&self.shared.slots);
-        let Some(handed_over) = slots.store(index, &value) else {
-            drop(slots);
-            return;
+    /// Write the inputs `writes` names, all as one write: a build or a frame sees all of them
+    /// or none. A value equal to the one its input holds changes nothing.
+    pub fn write(&self, writes: impl FnOnce(&mut Writes)) {
+        let mut written = Writes {
+            scope_id: self.shared.scope_id,
+            values: Vec::new(),
         };
-        let superseded = self.shared.hand_over(index, handed_over);
+        writes(&mut written);
+        let mut slots = lock(&self.shared.slots);
+        let changed: Vec<(usize, AnyValue)> = written
+            .values
+            .iter()
+            .filter_map(|(index, value)| slots.store(*index, value).map(|value| (*index, value)))
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        let superseded = self.shared.hand_over(changed);
         drop(slots);
-        self.shared.something_to_build.notify_one();
+        if let Some(worker) = &self.worker {
+            worker.thread().unpark();
+        }
         drop(superseded);
+        drop(written);
     }
 
     /// How the last build of `computed` went.
@@ -544,12 +631,7 @@ impl Scope {
     pub fn wait_until_settled(&self, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let settled = match self.shared.slots.try_lock() {
-                Ok(slots) => slots.is_settled(),
-                Err(TryLockError::WouldBlock) => false,
-                Err(TryLockError::Poisoned(_)) => panic!("{NO_LOCK_HELD_ACROSS_A_PANIC}"),
-            };
-            if settled {
+            if lock_if_free(&self.shared.slots).is_some_and(|slots| slots.is_settled()) {
                 return true;
             }
             if std::time::Instant::now() >= deadline {
@@ -561,10 +643,11 @@ impl Scope {
 }
 
 impl Drop for Scope {
+    /// Close the scope: a build in flight finishes, and no pending build starts.
     fn drop(&mut self) {
-        self.shared.closing.store(true, Ordering::SeqCst);
-        self.shared.something_to_build.notify_one();
+        lock(&self.shared.slots).closing = true;
         if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
             let _ = worker.join();
         }
     }
@@ -587,13 +670,13 @@ fn run_a_build(
     build: &BuildOfAnyValue,
     values: Vec<Option<AnyValue>>,
 ) -> (Result<AnyValue, BuildFailure>, Vec<usize>) {
-    READING.set(Some(Reading::Build {
+    let previous = replace_reading(Some(Reading::Build {
         scope_id,
         values,
         read: Vec::new(),
     }));
     let built = catch_unwind(AssertUnwindSafe(|| build()));
-    let Some(Reading::Build { mut read, .. }) = READING.take() else {
+    let Some(Reading::Build { mut read, .. }) = replace_reading(previous) else {
         unreachable!("the worker's reading is the build's own")
     };
     read.sort_unstable();
@@ -610,10 +693,29 @@ fn run_a_build(
 }
 
 impl ScopeAcrossThreads {
-    /// Hand `value` over to the frame view in place of any value of slot `index` it has not
-    /// taken yet, and return that superseded value to drop outside the locks.
-    fn hand_over(&self, index: usize, value: AnyValue) -> Option<AnyValue> {
-        lock(&self.handed_over)[index].replace(value)
+    /// Hand each changed value over to the frame view, all under one lock, in place of what its
+    /// slot's cell held: a value the view has not taken yet, or one it replaced. Return those to
+    /// drop outside the locks.
+    fn hand_over(&self, changed: Vec<(usize, AnyValue)>) -> Vec<AnyValue> {
+        let mut hand_over = lock(&self.hand_over);
+        changed
+            .into_iter()
+            .filter_map(|(index, value)| {
+                std::mem::replace(&mut hand_over[index], HandOver::New(value)).into_value()
+            })
+            .collect()
+    }
+
+    /// Drop the values the frame view replaced, outside the lock.
+    fn release_replaced(&self) {
+        let mut hand_over = lock(&self.hand_over);
+        let released: Vec<AnyValue> = hand_over
+            .iter_mut()
+            .filter(|cell| matches!(cell, HandOver::Replaced(_)))
+            .filter_map(|cell| std::mem::replace(cell, HandOver::Empty).into_value())
+            .collect();
+        drop(hand_over);
+        drop(released);
     }
 }
 
@@ -622,18 +724,16 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
     // change faster than it builds does not starve the others.
     let mut first = 0;
     loop {
-        // Values the frame thread replaced are released here, off the frame thread.
-        let replaced = std::mem::take(&mut *lock(&shared.replaced));
-        drop(replaced);
-        if shared.closing.load(Ordering::SeqCst) {
+        shared.release_replaced();
+        let slots = lock(&shared.slots);
+        if slots.closing {
             return;
         }
-        let slots = lock(&shared.slots);
         let Some(next) = slots.next_build(first) else {
-            let _unused = shared
-                .something_to_build
-                .wait_timeout(slots, std::time::Duration::from_millis(20))
-                .expect(NO_LOCK_HELD_ACROSS_A_PANIC);
+            drop(slots);
+            // A write, a give-back or the close unparks the worker; an unpark that lands before
+            // the park makes it return at once.
+            sync::park();
             continue;
         };
         drop(slots);
@@ -656,7 +756,7 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         first = 0;
         let superseded = slots
             .record_build(next.index, read_at, &built)
-            .and_then(|value| shared.hand_over(next.index, value));
+            .map(|value| shared.hand_over(vec![(next.index, value)]));
         drop(slots);
         // An equal, superseded or thrown-away value is released only after the lock, in case its
         // Drop is slow.
@@ -670,7 +770,7 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
 pub struct FrameView {
     values: Vec<Option<AnyValue>>,
     ready: bool,
-    replaced_here: Vec<AnyValue>,
+    worker: Option<Thread>,
     shared: Arc<ScopeAcrossThreads>,
 }
 
@@ -683,31 +783,38 @@ struct FrameReadingOnThisThread<'view> {
 
 impl Drop for FrameReadingOnThisThread<'_> {
     fn drop(&mut self) {
-        if let Some(Reading::Frame { values, .. }) = READING.replace(self.previous.take()) {
+        if let Some(Reading::Frame { values, .. }) = replace_reading(self.previous.take()) {
             *self.values = values;
         }
     }
 }
 
 impl FrameView {
-    /// Take every value handed over since the last flush, at a frame boundary. Never blocks: if
-    /// the writer or the worker holds the hand-over, the view stays as it is until the next flush.
+    /// Take every value handed over since the last flush, at a frame boundary, all under one
+    /// lock, so the view never holds part of one write. Never blocks and never allocates: if
+    /// another thread holds the hand-over, the view stays as it is until the next flush. Each
+    /// value it replaces is left in its slot's cell, for the worker, or the next write of that
+    /// slot, to drop.
     pub fn flush(&mut self) {
-        if let Ok(mut handed_over) = self.shared.handed_over.try_lock() {
-            for (slot, handed_over) in handed_over.iter_mut().enumerate() {
-                if let Some(value) = handed_over.take()
-                    && let Some(replaced) = self.values[slot].replace(value)
-                {
-                    self.replaced_here.push(replaced);
-                }
+        let Some(mut hand_over) = lock_if_free(&self.shared.hand_over) else {
+            return;
+        };
+        let mut replaced_any = false;
+        for (slot, cell) in hand_over.iter_mut().enumerate() {
+            if !matches!(cell, HandOver::New(_)) {
+                continue;
+            }
+            let HandOver::New(value) = std::mem::replace(cell, HandOver::Empty) else {
+                unreachable!("the cell holds a new value")
+            };
+            if let Some(replaced) = self.values[slot].replace(value) {
+                *cell = HandOver::Replaced(replaced);
+                replaced_any = true;
             }
         }
-        if !self.replaced_here.is_empty()
-            && let Ok(mut replaced) = self.shared.replaced.try_lock()
-        {
-            replaced.append(&mut self.replaced_here);
-            drop(replaced);
-            self.shared.something_to_build.notify_one();
+        drop(hand_over);
+        if replaced_any && let Some(worker) = &self.worker {
+            worker.unpark();
         }
         if !self.ready {
             self.ready = self.values.iter().all(Option::is_some);
@@ -721,7 +828,7 @@ impl FrameView {
         if !self.ready {
             return None;
         }
-        let previous = READING.replace(Some(Reading::Frame {
+        let previous = replace_reading(Some(Reading::Frame {
             scope_id: self.shared.scope_id,
             values: std::mem::take(&mut self.values),
         }));
