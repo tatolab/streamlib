@@ -8,7 +8,7 @@
 //! its `Node`, whose scope the engine hosts.
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{quote, quote_spanned};
 use streamlib_node_schema::NodeSchemaExecution;
 use syn::spanned::Spanned;
 use syn::{FnArg, GenericArgument, ItemFn, Pat, PathArguments, ReturnType, Type, TypeParamBound};
@@ -17,12 +17,13 @@ use super::author_visibility::{
     GENERATED_MODULE_MEMBER_DEPTH, GENERATED_PORT_MARKER_DEPTH,
     author_visibility_written_from_a_nested_module,
 };
+use super::node_scaffold_emit::{
+    generated_node_members_read_from_the_schema, ipc_mailbox_fields, ipc_mailbox_inits,
+    node_inherent_impl, node_module,
+};
 use super::node_settings_emit::NodeSettingsEmitted;
 use super::port_marker_module::generate_port_marker_module;
-use super::{
-    NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema,
-    generate_iceoryx2_accessors_from_schema, node_type_minted,
-};
+use super::{NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema};
 use crate::grammar::{
     ParsedNodeAttr, ParsedValueInput, PortDirection, declared_description_str_expression,
 };
@@ -54,8 +55,8 @@ pub(crate) fn generate_from_a_node_function(
     parsed: &ParsedNodeAttr,
     sdk_root: TokenStream,
 ) -> TokenStream {
-    let read = refusal_of_a_form_the_function_does_not_take(&item, parsed)
-        .map_or_else(|| read_the_node_function(&mut item, parsed), Err);
+    let read = refuse_a_form_the_function_does_not_take(&item, parsed)
+        .and_then(|()| read_the_node_function(&mut item, parsed));
     let read = match read {
         Ok(read) => read,
         Err(refusal) => {
@@ -85,8 +86,6 @@ pub(crate) fn generate_from_a_node_function(
         &member_visibility,
         &port_marker_visibility,
     );
-    let module_alias_and_constructor = no_settings.module_alias_and_constructor(&member_visibility);
-    let node_spec_constructor = no_settings.node_spec_constructor(&member_visibility);
     let value_inputs = ValueInputsEmitted {
         value_inputs: &parsed.value_inputs,
     };
@@ -96,33 +95,16 @@ pub(crate) fn generate_from_a_node_function(
         &no_settings,
         &value_inputs.descriptor_inputs(),
     );
-    let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(&schema);
-    let node_type_minted = node_type_minted(parsed.built_in_node, &schema.name);
-    let node_class_short_name = &schema.name;
-    let (execution_variant, execution_description) = match &schema.execution {
-        NodeSchemaExecution::Reactive => (
-            quote! { __streamlib_sdk::execution::ProcessExecution::Reactive },
-            "Reactive",
-        ),
-        NodeSchemaExecution::Continuous { interval_ms } => (
-            quote! {
-                __streamlib_sdk::execution::ProcessExecution::Continuous { interval_ms: #interval_ms }
-            },
-            "Continuous",
-        ),
-        NodeSchemaExecution::Manual => {
-            unreachable!("a node function's execution = manual is refused before it is emitted")
-        }
-    };
-
-    let ipc_input_field = (!schema.inputs.is_empty())
-        .then(|| quote! { inputs: __streamlib_sdk::iceoryx2::InputMailboxes, });
-    let ipc_output_field = (!schema.outputs.is_empty())
-        .then(|| quote! { outputs: __streamlib_sdk::iceoryx2::OutputWriter, });
-    let ipc_input_init = (!schema.inputs.is_empty())
-        .then(|| quote! { inputs: __streamlib_sdk::iceoryx2::InputMailboxes::empty(), });
-    let ipc_output_init = (!schema.outputs.is_empty())
-        .then(|| quote! { outputs: __streamlib_sdk::iceoryx2::OutputWriter::empty(), });
+    let node_inherent_impl = node_inherent_impl(
+        &schema,
+        parsed.built_in_node,
+        &member_visibility,
+        &no_settings,
+    );
+    let members_read_from_the_schema =
+        generated_node_members_read_from_the_schema(&schema, &descriptor_impl);
+    let ipc_mailbox_fields = ipc_mailbox_fields(&schema, &member_visibility);
+    let ipc_mailbox_inits = ipc_mailbox_inits(&schema);
 
     let value_input_fields = value_inputs.fields();
     let value_input_handle_fields = value_inputs.handle_fields();
@@ -131,43 +113,27 @@ pub(crate) fn generate_from_a_node_function(
     let value_inputs_declared_into_the_scope = value_inputs.declared_into_the_scope();
     let value_inputs_written = value_inputs.written();
 
-    let arguments = read.arguments(&parsed.value_inputs);
+    let arguments = read.arguments();
     let argument_bindings = read.argument_bindings();
     let per_frame_function_taken = match read.returned {
-        PerFrameFunctionReturned::Itself => quote! { #function_ident(#(#arguments),*) },
-        PerFrameFunctionReturned::InAResult => quote! { #function_ident(#(#arguments),*)? },
+        PerFrameFunctionReturned::Itself => quote! { super::#function_ident(#(#arguments),*) },
+        PerFrameFunctionReturned::InAResult => {
+            quote! { super::#function_ident(#(#arguments),*)? }
+        }
     };
 
     let private = quote! { __streamlib_sdk::nodes::__generated_private };
 
-    quote! {
-        #item
-
-        #[allow(non_snake_case, reason = "the generated module is named after the author's node type")]
-        #module_visibility mod #module_name {
-            use super::*;
-
-            // Alias the consumer's real SDK crate (streamlib-plugin-sdk for
-            // plugins, the streamlib facade for hosts) so the emitted paths
-            // below resolve without any `streamlib` aliasing in the consumer.
-            #[allow(unused_imports, reason = "the generated module may name nothing from the SDK root")]
-            use #sdk_root as __streamlib_sdk;
-
-            #module_alias_and_constructor
-
-            /// This node type's identity: its class in `tatolab.stream` for a
-            /// built-in, else the module path captured where the macro expanded.
-            #[allow(dead_code, reason = "the identity function is emitted for every node, and not every crate calls it")]
-            #member_visibility fn node_class_import_path()
-                -> __streamlib_sdk::descriptors::NodeClassImportPath
-            {
-                Node::node_class_import_path()
-            }
-
+    let node_module = node_module(
+        module_visibility,
+        &module_name,
+        &sdk_root,
+        &member_visibility,
+        &no_settings,
+        quote! {
             /// The node the function declares, which runs its body once, when it is set up.
             #member_visibility struct Node {
-                #ipc_input_field
-                #ipc_output_field
+                #ipc_mailbox_fields
                 /// The value each value input holds, the latest it was handed.
                 value_inputs: ValueInputs,
                 /// The scope, view and per-frame function the body made, and the handle of each
@@ -225,40 +191,14 @@ pub(crate) fn generate_from_a_node_function(
 
             #output_link_module
 
-            impl Node {
-                #member_visibility const NAME: &'static str = #node_class_short_name;
+            #node_inherent_impl
 
-                /// This node type's identity: its class in `tatolab.stream` for a
-                /// built-in, else the module path captured where the macro expanded.
-                #member_visibility fn node_class_import_path()
-                    -> __streamlib_sdk::descriptors::NodeClassImportPath
-                {
-                    #node_type_minted
-                }
-
-                #node_spec_constructor
-
-                #member_visibility fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
-                    #execution_variant
-                }
-
-                /// Returns a human-readable description of the execution mode.
-                #member_visibility fn execution_mode_description(&self) -> &'static str {
-                    #execution_description
-                }
-            }
-
-            impl __streamlib_sdk::nodes::__generated_private::GeneratedNode for Node {
-                type Config = __streamlib_sdk::nodes::EmptyConfig;
-
-                fn name(&self) -> &str {
-                    Self::NAME
-                }
+            impl #private::GeneratedNode for Node {
+                #members_read_from_the_schema
 
                 fn from_config(_config: Self::Config) -> __streamlib_sdk::error::Result<Self> {
                     Ok(Self {
-                        #ipc_input_init
-                        #ipc_output_init
+                        #ipc_mailbox_inits
                         value_inputs: ValueInputs::declared_by_default(),
                         running: ::std::option::Option::None,
                     })
@@ -291,15 +231,6 @@ pub(crate) fn generate_from_a_node_function(
                     Ok(())
                 }
 
-                fn execution_config(&self) -> __streamlib_sdk::execution::ExecutionConfig {
-                    __streamlib_sdk::execution::ExecutionConfig {
-                        execution: #execution_variant,
-                    }
-                }
-
-                #descriptor_impl
-                #iceoryx2_accessors
-
                 /// Run the body once, declaring the node's scope, and keep the per-frame
                 /// function it returns.
                 fn __generated_setup(
@@ -331,7 +262,12 @@ pub(crate) fn generate_from_a_node_function(
                     Ok(())
                 }
             }
-        }
+        },
+    );
+
+    quote! {
+        #item
+        #node_module
     }
 }
 
@@ -341,10 +277,6 @@ struct ValueInputsEmitted<'parsed> {
 }
 
 impl ValueInputsEmitted<'_> {
-    fn field_ident(value_input: &ParsedValueInput) -> Ident {
-        format_ident!("{}", value_input.declared_ident)
-    }
-
     /// The value its default states, as the type it holds.
     fn default_value(value_input: &ParsedValueInput) -> TokenStream {
         let value_type = &value_input.value_type;
@@ -359,7 +291,7 @@ impl ValueInputsEmitted<'_> {
         self.value_inputs
             .iter()
             .map(|value_input| {
-                let field = Self::field_ident(value_input);
+                let field = &value_input.declared_ident;
                 let value_type = &value_input.value_type;
                 quote! { #field: #value_type, }
             })
@@ -370,7 +302,7 @@ impl ValueInputsEmitted<'_> {
         self.value_inputs
             .iter()
             .map(|value_input| {
-                let field = Self::field_ident(value_input);
+                let field = &value_input.declared_ident;
                 let value_type = &value_input.value_type;
                 quote! { #field: __streamlib_sdk::nodes::Input<#value_type>, }
             })
@@ -379,7 +311,7 @@ impl ValueInputsEmitted<'_> {
 
     fn declared_by_default(&self) -> TokenStream {
         let fields = self.value_inputs.iter().map(|value_input| {
-            let field = Self::field_ident(value_input);
+            let field = &value_input.declared_ident;
             let default = Self::default_value(value_input);
             quote! { #field: #default, }
         });
@@ -388,7 +320,7 @@ impl ValueInputsEmitted<'_> {
 
     fn handed(&self) -> TokenStream {
         let fields = self.value_inputs.iter().map(|value_input| {
-            let field = Self::field_ident(value_input);
+            let field = &value_input.declared_ident;
             let value_type = &value_input.value_type;
             let name = &value_input.cast_name;
             let default = Self::default_value(value_input);
@@ -413,7 +345,7 @@ impl ValueInputsEmitted<'_> {
 
     fn declared_into_the_scope(&self) -> TokenStream {
         let fields = self.value_inputs.iter().map(|value_input| {
-            let field = Self::field_ident(value_input);
+            let field = &value_input.declared_ident;
             quote! { #field: declaring.input(::std::clone::Clone::clone(&self.#field)), }
         });
         quote! { ValueInputHandles { #(#fields)* } }
@@ -421,7 +353,7 @@ impl ValueInputsEmitted<'_> {
 
     fn written(&self) -> TokenStream {
         let writes = self.value_inputs.iter().map(|value_input| {
-            let field = Self::field_ident(value_input);
+            let field = &value_input.declared_ident;
             quote! { writes.write(handles.#field, ::std::clone::Clone::clone(&self.#field)); }
         });
         quote! { #(#writes)* }
@@ -435,13 +367,14 @@ impl ValueInputsEmitted<'_> {
             let description = declared_description_str_expression(value_input.description.as_ref());
             let default = Self::default_value(value_input);
             quote! {
-                .with_input(
-                    __streamlib_sdk::descriptors::the_value_input_of_a_node_function::<#value_type>(
-                        #name,
-                        #description,
-                        &#default,
-                    ),
-                )
+                .with_input(__streamlib_sdk::descriptors::the_input_taking_no_wire(
+                    #name,
+                    #description,
+                    <#value_type as __streamlib_sdk::descriptors::SettingPinType>::setting_pin_type(),
+                    __streamlib_sdk::serde_json::to_value(#default)
+                        .expect("a value input's default serializes, as every value an input holds does"),
+                    __streamlib_sdk::descriptors::SettingReadTime::EachRun,
+                ))
             }
         });
         quote! { #(#inputs)* }
@@ -449,6 +382,7 @@ impl ValueInputsEmitted<'_> {
 }
 
 /// What a parameter of a node function is, told by its type.
+#[derive(PartialEq, Eq)]
 enum ParameterRole {
     /// `&RuntimeContextFullAccess<'_>`: the runtime, for the body only.
     RuntimeContext,
@@ -493,34 +427,27 @@ impl NodeFunctionRead {
     }
 
     /// The arguments the body is called with, in the order of its parameters.
-    fn arguments(&self, value_inputs: &[ParsedValueInput]) -> Vec<TokenStream> {
+    fn arguments(&self) -> Vec<TokenStream> {
         self.parameters
             .iter()
             .map(|role| match role {
                 ParameterRole::RuntimeContext => quote! { ctx },
                 ParameterRole::InputMailboxes => quote! { inputs },
                 ParameterRole::OutputWriter => quote! { outputs },
-                ParameterRole::ValueInput(parameter) => {
-                    let value_input = value_inputs
-                        .iter()
-                        .find(|value_input| value_input.declared_ident == *parameter)
-                        .expect("a value input parameter names a declared value input");
-                    let field = ValueInputsEmitted::field_ident(value_input);
-                    quote! { handles.#field }
-                }
+                ParameterRole::ValueInput(parameter) => quote! { handles.#parameter },
             })
             .collect()
     }
 }
 
-/// The refusal of a declaration the one-function form does not take; `None` when it takes it.
-fn refusal_of_a_form_the_function_does_not_take(
+/// Refuse a declaration the one-function form does not take.
+fn refuse_a_form_the_function_does_not_take(
     item: &ItemFn,
     parsed: &ParsedNodeAttr,
-) -> Option<syn::Error> {
+) -> syn::Result<()> {
     let span = item.sig.ident.span();
     if parsed.settings_type.is_some() {
-        return Some(syn::Error::new(
+        return Err(syn::Error::new(
             span,
             "a node written as one function takes no `settings = …`: declare each value it \
              reads as an input, `input(\"name\", value = <type>, default = …)`, and read it with \
@@ -528,14 +455,14 @@ fn refusal_of_a_form_the_function_does_not_take(
         ));
     }
     if parsed.unsafe_send {
-        return Some(syn::Error::new(
+        return Err(syn::Error::new(
             span,
             "a node written as one function takes no `unsafe_send`: its per-frame function and \
              every computed value are `Send`",
         ));
     }
     if matches!(parsed.execution, NodeSchemaExecution::Manual) {
-        return Some(syn::Error::new(
+        return Err(syn::Error::new(
             span,
             "a node written as one function runs `execution = reactive` or `execution = \
              continuous(…)`; `execution = manual` is not yet written as one function",
@@ -547,7 +474,7 @@ fn refusal_of_a_form_the_function_does_not_take(
         .chain(&parsed.outputs)
         .find(|port| port.pin_type_from_setting.is_some())
     {
-        return Some(syn::Error::new(
+        return Err(syn::Error::new(
             port.declared_marker_ident.span(),
             format!(
                 "port `{}` of a node written as one function states its own `pin_type = …`; a \
@@ -557,18 +484,18 @@ fn refusal_of_a_form_the_function_does_not_take(
         ));
     }
     if !item.sig.generics.params.is_empty() || item.sig.generics.where_clause.is_some() {
-        return Some(syn::Error::new(
+        return Err(syn::Error::new(
             item.sig.generics.span(),
             "a node function takes no generic parameters: it declares one node type",
         ));
     }
     if let Some(asyncness) = &item.sig.asyncness {
-        return Some(syn::Error::new(
+        return Err(syn::Error::new(
             asyncness.span(),
             "a node function is not `async`: its body runs once, when the node is set up",
         ));
     }
-    None
+    Ok(())
 }
 
 /// Read each parameter's role and how the function returns its per-frame function, adding
@@ -593,7 +520,7 @@ fn read_the_node_function(
             ));
         };
         let role = role_of_a_parameter(&pattern.ident, &parameter.ty)?;
-        if parameters.iter().any(|seen| same_role_twice(seen, &role)) {
+        if parameters.contains(&role) {
             return Err(syn::Error::new(
                 parameter.span(),
                 "a node function takes each of its context, `InputMailboxes`, `OutputWriter` \
@@ -623,18 +550,6 @@ fn read_the_node_function(
         parameters,
         returned,
     })
-}
-
-fn same_role_twice(seen: &ParameterRole, role: &ParameterRole) -> bool {
-    match (seen, role) {
-        (ParameterRole::RuntimeContext, ParameterRole::RuntimeContext)
-        | (ParameterRole::InputMailboxes, ParameterRole::InputMailboxes)
-        | (ParameterRole::OutputWriter, ParameterRole::OutputWriter) => true,
-        (ParameterRole::ValueInput(seen), ParameterRole::ValueInput(parameter)) => {
-            seen == parameter
-        }
-        _ => false,
-    }
 }
 
 /// The last segment of the path `ty` names, with its arguments; `None` for any other type.

@@ -87,11 +87,12 @@ pub(crate) fn expand_node_settings(
             },
         };
         setting_inputs.push(quote! {
-            #sdk_root::descriptors::the_input_of_a_setting(
+            #sdk_root::descriptors::the_input_taking_no_wire(
                 #setting_name,
                 #description,
                 #pin_type,
                 #sdk_root::descriptors::the_default_of_a_setting(&defaults, #setting_name),
+                #sdk_root::descriptors::SettingReadTime::AtSetup,
             )
         });
     }

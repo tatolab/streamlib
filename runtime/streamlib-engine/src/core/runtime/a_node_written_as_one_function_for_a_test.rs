@@ -8,10 +8,8 @@
 
 use std::convert::Infallible;
 use std::sync::Once;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use crate::core::context::RuntimeContextLimitedAccess;
 use crate::core::descriptors::NodeClassImportPath;
@@ -42,8 +40,9 @@ static RAN: Mutex<WhatTheNodeFunctionRan> = Mutex::new(WhatTheNodeFunctionRan {
     gains_dropped: Vec::new(),
 });
 
-/// How long each build of the computed value takes, in milliseconds.
-static EACH_BUILD_TAKES_MS: AtomicU64 = AtomicU64::new(0);
+/// Whether each build of the computed value waits until a test lets the builds go.
+static BUILDS_HELD: Mutex<bool> = Mutex::new(false);
+static BUILDS_LET_GO: Condvar = Condvar::new();
 
 /// The computed value: the gain it was built from, recording its drop.
 struct BuiltFromAGain {
@@ -72,17 +71,19 @@ fn a_node_written_as_one_function(
     RAN.lock().bodies_run += 1;
     let built = computed(move || {
         let gain = *gain.get();
-        std::thread::sleep(Duration::from_millis(
-            EACH_BUILD_TAKES_MS.load(Ordering::Relaxed),
-        ));
+        let mut held = BUILDS_HELD.lock();
+        while *held {
+            BUILDS_LET_GO.wait(&mut held);
+        }
+        drop(held);
         RAN.lock().gains_built_from.push(gain);
         Ok::<_, Infallible>(BuiltFromAGain { gain })
     });
     move |_ctx| {
+        // Counted before the read, so a frame run before the first build is counted too.
+        RAN.lock().frames_run += 1;
         let gain = built.get().gain;
-        let mut ran = RAN.lock();
-        ran.frames_run += 1;
-        ran.gain_the_latest_frame_read = Some(gain);
+        RAN.lock().gain_the_latest_frame_read = Some(gain);
         Ok(())
     }
 }
@@ -99,15 +100,19 @@ pub fn what_the_node_function_ran() -> WhatTheNodeFunctionRan {
     RAN.lock().clone()
 }
 
-/// Forget what the node of the type ran, and build its computed value at once again, for a test
-/// starting afresh.
+/// Forget what the node of the type ran, and let its builds go, for a test starting afresh.
 pub fn forget_what_the_node_function_ran() {
     *RAN.lock() = WhatTheNodeFunctionRan::default();
-    EACH_BUILD_TAKES_MS.store(0, Ordering::Relaxed);
+    let_the_builds_go();
 }
 
-/// Make each build of the node's computed value take `duration`.
-pub fn make_each_build_take(duration: Duration) {
-    let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-    EACH_BUILD_TAKES_MS.store(millis, Ordering::Relaxed);
+/// Hold each build of the node's computed value until `let_the_builds_go`.
+pub fn hold_the_builds() {
+    *BUILDS_HELD.lock() = true;
+}
+
+/// Let each held build of the node's computed value go, and each later one run at once.
+pub fn let_the_builds_go() {
+    *BUILDS_HELD.lock() = false;
+    BUILDS_LET_GO.notify_all();
 }

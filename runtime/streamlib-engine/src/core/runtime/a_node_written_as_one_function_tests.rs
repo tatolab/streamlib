@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A node written as one function, run in a stream: a value set on its input while the stream
-//! plays builds the computed value that reads it once more and runs its body no second time; no
-//! frame runs before its computed value is first built; and removing it drops every value it
-//! built, with no build after.
+//! plays builds the computed value that reads it once more and runs its body no second time; a
+//! value it holds before the stream starts is the one its first build reads; no frame runs
+//! before its computed value is first built; and removing it drops every value it built, with no
+//! build after.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ use uuid::Uuid;
 use crate::core::graph::NodeRunId;
 use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_node_written_as_one_function_for_a_test::{
-    WhatTheNodeFunctionRan, forget_what_the_node_function_ran, make_each_build_take,
+    WhatTheNodeFunctionRan, forget_what_the_node_function_ran, hold_the_builds, let_the_builds_go,
     the_node_type_written_as_one_function, what_the_node_function_ran,
 };
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
@@ -27,7 +28,7 @@ use crate::core::runtime::{LoadedStreamInThisRuntime, Runner};
 /// The longest a test waits for what it waits on.
 const WAITED_ON_WITHIN: Duration = Duration::from_secs(10);
 
-/// A stream holding one node written as one function, its `gain` at its default, 1.
+/// A stream holding one node written as one function.
 struct AStreamOfANodeFunction {
     _runner: Arc<Runner>,
     stream: Arc<LoadedStreamInThisRuntime>,
@@ -35,7 +36,12 @@ struct AStreamOfANodeFunction {
     node_run_id: NodeRunId,
 }
 
-fn a_stream_of_a_node_function(project_directory: &std::path::Path) -> AStreamOfANodeFunction {
+/// A stream holding one node written as one function, holding `input_values`: `Value::Null`
+/// leaves its `gain` at its default, 1.
+fn a_stream_of_a_node_function(
+    project_directory: &std::path::Path,
+    input_values: Value,
+) -> AStreamOfANodeFunction {
     let node_type = the_node_type_written_as_one_function();
     forget_what_the_node_function_ran();
     let runner = Runner::new().expect("Runner::new");
@@ -47,7 +53,7 @@ fn a_stream_of_a_node_function(project_directory: &std::path::Path) -> AStreamOf
         .expect("an empty stream loads");
     let node = Uuid::new_v4();
     let node_run_id = stream
-        .add_node(NodeSpec::new(node_type, Value::Null).with_node_uuid(node))
+        .add_node(NodeSpec::new(node_type, input_values).with_node_uuid(node))
         .expect("the node function is added");
     AStreamOfANodeFunction {
         _runner: runner,
@@ -86,7 +92,9 @@ fn set_the_gain(stream: &LoadedStreamInThisRuntime, node: Uuid, gain: i32) {
 }
 
 /// What the node ran once `settled` holds of it, or when the wait runs out.
-fn once(settled: impl Fn(&WhatTheNodeFunctionRan) -> bool) -> WhatTheNodeFunctionRan {
+fn what_the_node_ran_once_it_holds(
+    settled: impl Fn(&WhatTheNodeFunctionRan) -> bool,
+) -> WhatTheNodeFunctionRan {
     let deadline = Instant::now() + WAITED_ON_WITHIN;
     loop {
         let ran = what_the_node_function_ran();
@@ -108,14 +116,16 @@ fn once(settled: impl Fn(&WhatTheNodeFunctionRan) -> bool) -> WhatTheNodeFunctio
 )]
 fn a_value_set_while_the_stream_plays_builds_what_read_it_once_and_runs_the_body_once() {
     let project_directory = tempfile::tempdir().unwrap();
-    let played = a_stream_of_a_node_function(project_directory.path());
+    let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
     start(&played.stream);
-    let before = once(|ran| ran.gain_the_latest_frame_read == Some(1));
+    let before = what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read == Some(1));
     assert_eq!(before.gain_the_latest_frame_read, Some(1), "{before:?}");
 
     set_the_gain(&played.stream, played.node, 5);
 
-    let after = once(|ran| ran.gain_the_latest_frame_read == Some(5) && ran.gains_dropped == [1]);
+    let after = what_the_node_ran_once_it_holds(|ran| {
+        ran.gain_the_latest_frame_read == Some(5) && ran.gains_dropped == [1]
+    });
     assert_eq!(after.gain_the_latest_frame_read, Some(5), "{after:?}");
     assert_eq!(after.bodies_run, 1, "the body runs once: {after:?}");
     assert_eq!(after.gains_built_from, [1, 5], "{after:?}");
@@ -130,8 +140,27 @@ fn a_value_set_while_the_stream_plays_builds_what_read_it_once_and_runs_the_body
         .expect("the node keeps running");
 }
 
-/// Mental-revert: a frame run before the first build lands would read a computed value with
-/// none, which panics in the frame, and count a frame while no build has.
+/// Mental-revert: had setup declared each value input at its default instead of the value the
+/// node holds, the first build would read 1.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_value_held_before_the_stream_starts_is_the_one_the_first_build_reads() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let played = a_stream_of_a_node_function(project_directory.path(), json!({ "gain": 3 }));
+    start(&played.stream);
+
+    let ran = what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
+    assert_eq!(ran.gains_built_from, [3], "{ran:?}");
+    assert_eq!(ran.gain_the_latest_frame_read, Some(3), "{ran:?}");
+    assert_eq!(ran.bodies_run, 1, "{ran:?}");
+}
+
+/// Mental-revert: a frame run before the first build lands is counted, and reads a computed
+/// value with none, which panics in the frame.
 #[test]
 #[serial]
 #[cfg_attr(
@@ -140,23 +169,25 @@ fn a_value_set_while_the_stream_plays_builds_what_read_it_once_and_runs_the_body
 )]
 fn no_frame_runs_before_the_computed_value_is_first_built() {
     let project_directory = tempfile::tempdir().unwrap();
-    let played = a_stream_of_a_node_function(project_directory.path());
-    make_each_build_take(Duration::from_millis(400));
+    let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
+    hold_the_builds();
     start(&played.stream);
 
-    std::thread::sleep(Duration::from_millis(100));
-    let while_building = what_the_node_function_ran();
-    assert_eq!(while_building.bodies_run, 1, "{while_building:?}");
+    // The node is continuous at 5 ms, so an ungated node runs frames many times over in this.
+    std::thread::sleep(Duration::from_millis(200));
+    let while_held = what_the_node_function_ran();
+    assert_eq!(while_held.bodies_run, 1, "{while_held:?}");
     assert!(
-        while_building.gains_built_from.is_empty(),
-        "the build is still running: {while_building:?}"
+        while_held.gains_built_from.is_empty(),
+        "the build is held: {while_held:?}"
     );
     assert_eq!(
-        while_building.frames_run, 0,
-        "no frame runs before the computed value has its first value: {while_building:?}"
+        while_held.frames_run, 0,
+        "no frame runs before the computed value has its first value: {while_held:?}"
     );
 
-    let built = once(|ran| ran.frames_run > 0);
+    let_the_builds_go();
+    let built = what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
     assert_eq!(built.gains_built_from, [1], "{built:?}");
     assert_eq!(built.gain_the_latest_frame_read, Some(1), "{built:?}");
 }
@@ -171,21 +202,27 @@ fn no_frame_runs_before_the_computed_value_is_first_built() {
 )]
 fn removing_the_node_drops_every_value_it_built_and_builds_nothing_after() {
     let project_directory = tempfile::tempdir().unwrap();
-    let played = a_stream_of_a_node_function(project_directory.path());
+    let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
     start(&played.stream);
-    once(|ran| ran.frames_run > 0);
-    make_each_build_take(Duration::from_millis(200));
+    what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
+    hold_the_builds();
     set_the_gain(&played.stream, played.node, 7);
+    // The build of 7 is held as the removal starts, and goes while the removal waits on it.
+    let letting_go = std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(200));
+        let_the_builds_go();
+    });
 
     played
         .stream
         .remove_node(&played.node_run_id)
         .expect("the node is removed while the stream plays");
-    let removed = once(|ran| every_value_built_is_dropped(ran));
+    let removed = what_the_node_ran_once_it_holds(|ran| every_value_built_is_dropped(ran));
     assert!(
         every_value_built_is_dropped(&removed),
         "every value the node built is dropped once it is removed: {removed:?}"
     );
+    letting_go.join().expect("the builds are let go");
     std::thread::sleep(Duration::from_millis(400));
     let after = what_the_node_function_ran();
 

@@ -458,8 +458,15 @@ fn parse_body(
             },
             "output" => match parse_port(input, PortDirection::Output)? {
                 DeclaredPort::Port(port) => outputs.push(port),
-                DeclaredPort::Value(_) => {
-                    unreachable!("an output's value keys are refused where they are stated")
+                DeclaredPort::Value(value_input) => {
+                    return Err(syn::Error::new(
+                        value_input.declared_ident.span(),
+                        format!(
+                            "output `{}` declares a value — an output writes what its node \
+                             sends, and holds no value of its own",
+                            value_input.cast_name
+                        ),
+                    ));
                 }
             },
             other => {

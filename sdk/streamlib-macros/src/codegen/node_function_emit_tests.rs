@@ -54,7 +54,7 @@ fn the_body_is_called_with_each_parameter_its_type_names() {
         },
     );
     assert!(
-        rendered.contains("letper_frame=a_node(outputs,handles.gain,ctx,inputs);"),
+        rendered.contains("letper_frame=super::a_node(outputs,handles.gain,ctx,inputs);"),
         "{rendered}"
     );
     assert!(rendered.contains("modANode{"), "{rendered}");
@@ -89,7 +89,7 @@ fn a_body_that_can_fail_is_called_with_its_error_handed_on() {
         },
     );
     assert!(
-        rendered.contains("letper_frame=a_node(handles.gain)?;"),
+        rendered.contains("letper_frame=super::a_node(handles.gain)?;"),
         "{rendered}"
     );
     assert!(
@@ -110,7 +110,7 @@ fn each_value_input_is_declared_on_the_descriptor_with_its_default() {
     );
     assert!(
         rendered.contains(
-            "the_value_input_of_a_node_function::<f32>(\"gain\",\"Howloud.\",&<_as__streamlib_sdk::nodes::__generated_private::TheDefaultOfAValueInput<f32>>::into_the_default(0.5),)"
+            "the_input_taking_no_wire(\"gain\",\"Howloud.\",<f32as__streamlib_sdk::descriptors::SettingPinType>::setting_pin_type(),__streamlib_sdk::serde_json::to_value(<_as__streamlib_sdk::nodes::__generated_private::TheDefaultOfAValueInput<f32>>::into_the_default(0.5))"
         ),
         "{rendered}"
     );

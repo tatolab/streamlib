@@ -682,9 +682,9 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
     let schema = minimal_schema();
     render_token_stream_without_whitespace(generate_node_impl_from_schema(
         &schema,
+        built_in_node,
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
-        &node_type_minted(built_in_node, &schema.name),
         &NodeSettingsEmitted::of(None),
         &[],
     ))
@@ -900,9 +900,9 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
 
     let node_impl = render_token_stream_without_whitespace(generate_node_impl_from_schema(
         &minimal_schema(),
+        false,
         &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
-        &node_type_minted(false, "MinimalProbe"),
         &settings,
         &[],
     ));

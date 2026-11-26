@@ -60,11 +60,6 @@ impl NodeFunctionRunning {
     pub fn write(&self, writes: impl FnOnce(&mut Writes)) {
         self.scope.write(writes);
     }
-
-    /// The scope the body declared, for what its node reports of its builds.
-    pub fn scope(&self) -> &Scope {
-        &self.scope
-    }
 }
 
 /// A value a value input's `default = …` may state for an input holding a `T`: a `T` itself, or

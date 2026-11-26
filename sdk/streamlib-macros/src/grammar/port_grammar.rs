@@ -16,7 +16,9 @@ use syn::parse::ParseStream;
 use syn::{Ident, LitInt, LitStr, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
-use super::value_input_grammar::{reject_a_value_input_key_on_an_output, value_input_declared};
+use super::value_input_grammar::{
+    note_the_first_port_key, reject_a_value_input_key_on_an_output, value_input_type_and_default,
+};
 use super::{DeclaredDescription, ParsedPort, ParsedValueInput, PortDirection};
 
 /// What one `input(...)` or `output(...)` declares: a port, or a value input of a node written
@@ -94,10 +96,11 @@ pub(super) fn parse_port(
     let mut may_be_unset: Option<proc_macro2::Span> = None;
     let mut takes_a_value = false;
     let mut stream_facts = StreamFactsStated::default();
-    let mut value_type: Option<(proc_macro2::Span, syn::Type)> = None;
-    let mut value_default: Option<(proc_macro2::Span, syn::Expr)> = None;
-    // Every key but `description`, `value` and `default`, which a value input takes no other of.
-    let mut port_keys_stated: Vec<(String, proc_macro2::Span)> = Vec::new();
+    let mut value_type: Option<syn::Type> = None;
+    let mut value_default: Option<syn::Expr> = None;
+    // The first key but `description`, `value` and `default`, which a value input takes no
+    // other of.
+    let mut first_port_key: Option<(String, proc_macro2::Span)> = None;
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -107,12 +110,8 @@ pub(super) fn parse_port(
         reject_positional_port_schema(&content, &name, direction)?;
         let key: Ident = content.parse()?;
         let key_span = key.span();
-        if !matches!(
-            key.to_string().as_str(),
-            "description" | "value" | "default"
-        ) {
-            port_keys_stated.push((key.to_string(), key_span));
-        }
+        let key_name = key.to_string();
+        note_the_first_port_key(&mut first_port_key, &key_name, key_span);
 
         // `audio_window` is the one port key with a call form —
         // `audio_window(sample_rate = …)` beside `audio_window = match_device`
@@ -136,17 +135,17 @@ pub(super) fn parse_port(
         }
 
         content.parse::<Token![=]>()?;
-        match key.to_string().as_str() {
+        match key_name.as_str() {
             "description" => {
                 description = Some(DeclaredDescription::parse(&content)?);
             }
             "value" => {
                 reject_a_value_input_key_on_an_output(direction, &name, "value", key_span)?;
-                value_type = Some((key_span, content.parse()?));
+                value_type = Some(content.parse()?);
             }
             "default" => {
                 reject_a_value_input_key_on_an_output(direction, &name, "default", key_span)?;
-                value_default = Some((key_span, content.parse()?));
+                value_default = Some(content.parse()?);
             }
             "delivery_profile" => {
                 let lit: LitStr = content.parse()?;
@@ -264,17 +263,20 @@ pub(super) fn parse_port(
     }
 
     if value_type.is_some() || value_default.is_some() {
-        return value_input_declared(
-            name,
+        let (value_type, default) = value_input_type_and_default(
+            &name,
             name_lit.span(),
-            declared_marker_ident,
+            value_type,
+            value_default,
+            first_port_key,
+        )?;
+        return Ok(DeclaredPort::Value(ParsedValueInput {
+            declared_ident: declared_marker_ident,
             cast_name,
             description,
             value_type,
-            value_default,
-            &port_keys_stated,
-        )
-        .map(DeclaredPort::Value);
+            default,
+        }));
     }
 
     let stated_pin_type = match (pin_type, pin_type_from_setting) {

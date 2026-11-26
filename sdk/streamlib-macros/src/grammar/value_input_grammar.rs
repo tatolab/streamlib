@@ -4,9 +4,21 @@
 //! The keys of a value input, `input("name", value = <type>, default = …)`, which only a node
 //! written as one function declares.
 
-use syn::Ident;
+use syn::{Expr, Type};
 
-use super::{DeclaredDescription, ParsedValueInput, PortDirection};
+use super::PortDirection;
+
+/// Note `key` in `first_port_key` when it is the first stated that a port takes and a value
+/// input does not.
+pub(super) fn note_the_first_port_key(
+    first_port_key: &mut Option<(String, proc_macro2::Span)>,
+    key: &str,
+    key_span: proc_macro2::Span,
+) {
+    if first_port_key.is_none() && !matches!(key, "description" | "value" | "default") {
+        *first_port_key = Some((key.to_owned(), key_span));
+    }
+}
 
 /// Refuse `key`, which only a value input states, on `output("{name}", …)`.
 pub(super) fn reject_a_value_input_key_on_an_output(
@@ -27,25 +39,18 @@ pub(super) fn reject_a_value_input_key_on_an_output(
     Ok(())
 }
 
-/// The value input `input("{name}", value = …, default = …)` declares: its type and default
-/// both stated, and no key a port takes beside them.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "each is one part of the declaration the value input is read from"
-)]
-pub(super) fn value_input_declared(
-    name: String,
+/// The type and default the value input `input("{name}", value = …, default = …)` declares:
+/// both stated, and no key a port takes beside them, `first_port_key` naming the first stated.
+pub(super) fn value_input_type_and_default(
+    name: &str,
     name_span: proc_macro2::Span,
-    declared_marker_ident: Ident,
-    cast_name: String,
-    description: Option<DeclaredDescription>,
-    value_type: Option<(proc_macro2::Span, syn::Type)>,
-    value_default: Option<(proc_macro2::Span, syn::Expr)>,
-    port_keys_stated: &[(String, proc_macro2::Span)],
-) -> syn::Result<ParsedValueInput> {
-    if let Some((key, key_span)) = port_keys_stated.first() {
+    value_type: Option<Type>,
+    default: Option<Expr>,
+    first_port_key: Option<(String, proc_macro2::Span)>,
+) -> syn::Result<(Type, Expr)> {
+    if let Some((key, key_span)) = first_port_key {
         return Err(syn::Error::new(
-            *key_span,
+            key_span,
             format!(
                 "value input `{name}` declares `{key}`, which a port takes — a value input \
                  states its `value = <type>`, its `default = …` and its `description`, and \
@@ -53,7 +58,7 @@ pub(super) fn value_input_declared(
             ),
         ));
     }
-    let Some((_, value_type)) = value_type else {
+    let Some(value_type) = value_type else {
         return Err(syn::Error::new(
             name_span,
             format!(
@@ -62,7 +67,7 @@ pub(super) fn value_input_declared(
             ),
         ));
     };
-    let Some((_, default)) = value_default else {
+    let Some(default) = default else {
         return Err(syn::Error::new(
             name_span,
             format!(
@@ -71,11 +76,5 @@ pub(super) fn value_input_declared(
             ),
         ));
     };
-    Ok(ParsedValueInput {
-        declared_ident: declared_marker_ident,
-        cast_name,
-        description,
-        value_type,
-        default,
-    })
+    Ok((value_type, default))
 }
