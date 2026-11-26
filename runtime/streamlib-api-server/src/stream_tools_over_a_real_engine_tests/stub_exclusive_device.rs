@@ -11,8 +11,8 @@ use parking_lot::Mutex;
 
 /// What a [`StubExclusiveDevice`] has seen since it was made.
 #[derive(Debug, Default)]
-struct HeldSoFar {
-    holder: bool,
+struct StubExclusiveDeviceOpensAndCloses {
+    held: bool,
     opens: usize,
     closes: usize,
     opens_refused_while_held: usize,
@@ -22,7 +22,7 @@ struct HeldSoFar {
 /// busy device refuses it, and recorded against the test.
 #[derive(Debug, Default)]
 pub(super) struct StubExclusiveDevice {
-    held_so_far: Mutex<HeldSoFar>,
+    held_so_far: Mutex<StubExclusiveDeviceOpensAndCloses>,
 }
 
 /// The one open hold on a [`StubExclusiveDevice`], which closes it when dropped.
@@ -47,11 +47,11 @@ impl StubExclusiveDevice {
         self: &Arc<Self>,
     ) -> std::result::Result<StubExclusiveDeviceLease, StubExclusiveDeviceAlreadyHeld> {
         let mut held_so_far = self.held_so_far.lock();
-        if held_so_far.holder {
+        if held_so_far.held {
             held_so_far.opens_refused_while_held += 1;
             return Err(StubExclusiveDeviceAlreadyHeld);
         }
-        held_so_far.holder = true;
+        held_so_far.held = true;
         held_so_far.opens += 1;
         Ok(StubExclusiveDeviceLease {
             device: Arc::clone(self),
@@ -70,7 +70,9 @@ impl StubExclusiveDevice {
         self.held_so_far_by_one_holder_at_a_time().closes
     }
 
-    fn held_so_far_by_one_holder_at_a_time(&self) -> parking_lot::MutexGuard<'_, HeldSoFar> {
+    fn held_so_far_by_one_holder_at_a_time(
+        &self,
+    ) -> parking_lot::MutexGuard<'_, StubExclusiveDeviceOpensAndCloses> {
         let held_so_far = self.held_so_far.lock();
         assert_eq!(
             held_so_far.opens_refused_while_held, 0,
@@ -83,7 +85,7 @@ impl StubExclusiveDevice {
 impl Drop for StubExclusiveDeviceLease {
     fn drop(&mut self) {
         let mut held_so_far = self.device.held_so_far.lock();
-        held_so_far.holder = false;
+        held_so_far.held = false;
         held_so_far.closes += 1;
     }
 }

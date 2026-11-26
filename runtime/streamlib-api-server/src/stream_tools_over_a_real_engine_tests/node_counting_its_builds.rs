@@ -4,7 +4,7 @@
 //! A node that counts each setup and teardown it runs and holds a [`StubExclusiveDevice`] from
 //! its setup to its teardown, one device and one count for each stream it runs in.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use parking_lot::Mutex;
 use streamlib::sdk::error::Error;
@@ -39,28 +39,32 @@ impl BuildsCountedInOneStream {
 }
 
 /// What each stream's [`NodeCountingItsBuilds`] ran, by stream id.
-static BUILDS_COUNTED_BY_STREAM: Mutex<Option<HashMap<String, BuildsCountedInOneStream>>> =
-    Mutex::new(None);
+static BUILDS_COUNTED_BY_STREAM: Mutex<BTreeMap<String, BuildsCountedInOneStream>> =
+    Mutex::new(BTreeMap::new());
 
-fn with_the_builds_counted_in<T>(
-    stream_id: &str,
-    read_or_count: impl FnOnce(&mut BuildsCountedInOneStream) -> T,
-) -> T {
-    let mut by_stream = BUILDS_COUNTED_BY_STREAM.lock();
-    read_or_count(
-        by_stream
-            .get_or_insert_with(HashMap::new)
+fn count_in<T>(stream_id: &str, count: impl FnOnce(&mut BuildsCountedInOneStream) -> T) -> T {
+    count(
+        BUILDS_COUNTED_BY_STREAM
+            .lock()
             .entry(stream_id.to_owned())
             .or_default(),
     )
 }
 
-/// Read what the [`NodeCountingItsBuilds`] of the stream `stream_id` ran.
+/// Read what the [`NodeCountingItsBuilds`] of the stream `stream_id` ran; fails the test when
+/// none ran in it.
 pub(super) fn the_builds_counted_in<T>(
     stream_id: &str,
     read: impl FnOnce(&BuildsCountedInOneStream) -> T,
 ) -> T {
-    with_the_builds_counted_in(stream_id, |counted| read(counted))
+    read(
+        BUILDS_COUNTED_BY_STREAM
+            .lock()
+            .get(stream_id)
+            .unwrap_or_else(|| {
+                panic!("no `NodeCountingItsBuilds` ran in the stream `{stream_id}`")
+            }),
+    )
 }
 
 /// A native node with a Float `level` input that counts its setups and teardowns and holds its
@@ -75,7 +79,7 @@ pub(super) struct NodeCountingItsBuilds {
 
 impl ManualNode for NodeCountingItsBuilds::Node {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let device = with_the_builds_counted_in(ctx.stream_id(), |counted| {
+        let device = count_in(ctx.stream_id(), |counted| {
             counted.setups += 1;
             Arc::clone(&counted.device)
         });
@@ -88,7 +92,7 @@ impl ManualNode for NodeCountingItsBuilds::Node {
     }
 
     fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        with_the_builds_counted_in(ctx.stream_id(), |counted| counted.teardowns += 1);
+        count_in(ctx.stream_id(), |counted| counted.teardowns += 1);
         self.lease = None;
         Ok(())
     }

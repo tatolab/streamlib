@@ -39,7 +39,7 @@ async fn an_input_set_through_transact_while_playing_restarts_nothing() {
         .the_stream_main_of_the_project_started_and_served(&project)
         .await;
 
-    engine
+    let answer = engine
         .the_answer_or_the_refusal_of(
             "transact",
             json!({ "author": an_agent_named("alice"), "operations": [
@@ -49,6 +49,7 @@ async fn an_input_set_through_transact_while_playing_restarts_nothing() {
         )
         .await
         .expect("the level is set");
+    assert!(answer.get("nodes_rebuilt").is_none(), "no node is rebuilt: {answer}");
 
     engine
         .assert_the_stream_restarted_nothing(&project, &stream_id)
@@ -64,22 +65,17 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         project: &ProjectWithGraphDocuments,
         stream_id: &str,
     ) {
-        let (setups, teardowns, opens) = the_builds_counted_in(stream_id, |counted| {
+        let counted = the_builds_counted_in(stream_id, |counted_in_the_stream| {
             (
-                counted.setups(),
-                counted.teardowns(),
-                counted.device().opens(),
+                counted_in_the_stream.setups(),
+                counted_in_the_stream.teardowns(),
+                counted_in_the_stream.device().opens(),
             )
         });
-        assert_eq!(
-            (setups, teardowns, opens),
-            (1, 0, 1),
-            "setups, teardowns and device opens"
-        );
-        assert_eq!(
-            the_listing_of(&self.operations_on_the_loaded_streams(), stream_id).await["state"],
-            "running"
-        );
+        assert_eq!(counted, (1, 0, 1), "setups, teardowns and device opens");
+        let listing = the_listing_of(&self.operations_on_the_loaded_streams(), stream_id).await;
+        assert_eq!(listing["state"], "running", "{listing}");
+        assert_eq!(listing["condition"]["health"], "healthy", "{listing}");
         assert_the_graph_document_equals_the_running_graph(
             &project.the_graph_document_of("main"),
             &self.the_live_graph_of(stream_id),

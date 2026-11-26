@@ -3,8 +3,8 @@
 
 """An input of a Python node set through `transact` while its stream plays restarts nothing:
 the probe reads the new value in the process it set up in, ran its setup once and no teardown,
-opened its stub exclusive device once and never beside another holder, the stream still runs,
-and its graph document equals its running graph.
+took its stub exclusive device, a file lock, once and was never refused it, the stream still
+runs healthy, and its graph document equals its running graph.
 """
 
 from __future__ import annotations
@@ -16,10 +16,12 @@ from typing import Any
 import pytest
 
 from helper_placement_observation import StartTatolabdRunningStream
+from live_input_probe_nodes import (
+    STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE,
+    StubExclusiveDevice,
+)
 from runtime_process_under_test import NOT_A_MARKER_LINE, MarkerLineParser
 from stream_runs_on_tatolabd import write_a_hand_written_graph_project
-
-pytestmark = pytest.mark.requires_gpu
 
 #: The probe, its `level` saved at 0.25, as the stream `main`'s one node.
 GRAPH_HOLDING_THE_PROBE = {
@@ -39,6 +41,7 @@ BUILD_AND_DEVICE_MARKERS = (
     "PROBE_SETUP",
     "PROBE_TEARDOWN",
     "STUB_DEVICE_OPENED",
+    "STUB_DEVICE_REFUSED",
     "STUB_DEVICE_CLOSED",
 )
 
@@ -60,16 +63,15 @@ def the_markers_reported_in_order(stderr_text: str) -> list[tuple[str, Any]]:
 def assert_the_stub_device_never_had_two_holders(
     reported: list[tuple[str, Any]],
 ) -> None:
-    """Fail when the stub exclusive device was ever opened while a holder still had it."""
-    holders = 0
-    for marker_name, payload in reported:
-        if marker_name == "STUB_DEVICE_OPENED":
-            holders += 1
-            assert holders == 1, (
-                f"two holders had the stub exclusive device at once: {payload}"
-            )
-        elif marker_name == "STUB_DEVICE_CLOSED":
-            holders -= 1
+    """Fail when a second holder asked for the stub exclusive device while one held it."""
+    refused = [
+        payload
+        for marker_name, payload in reported
+        if marker_name == "STUB_DEVICE_REFUSED"
+    ]
+    assert refused == [], (
+        f"two holders asked for the stub exclusive device at once: {refused}"
+    )
 
 
 def the_nodes_and_links_held_in(graph: dict[str, Any]) -> dict[str, Any]:
@@ -121,16 +123,40 @@ def assert_the_graph_document_equals_the_running_graph(
     )
 
 
+def test_a_second_holder_of_the_stub_device_is_refused_until_the_first_closes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The probe's stub exclusive device takes one holder at a time, as a busy device does."""
+    monkeypatch.setenv(
+        STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE,
+        str(tmp_path / "stub-exclusive-device"),
+    )
+    first = StubExclusiveDevice()
+
+    with pytest.raises(BlockingIOError):
+        StubExclusiveDevice()
+    first.close()
+    StubExclusiveDevice().close()
+
+
+@pytest.mark.requires_gpu
 def test_an_input_of_a_python_node_set_through_transact_while_playing_restarts_nothing(
     start_tatolabd_running_stream: StartTatolabdRunningStream, tmp_path: Path
 ):
     """Mental-revert: a set that rebuilds the probe reports a second setup, a teardown and a
     second open of its device, or reads the new level in another process; one held as not live
-    leaves the document holding a value the running graph does not."""
+    leaves the stream degraded with `edit_not_live`, the probe never reading 0.75."""
     project = write_a_hand_written_graph_project(
         tmp_path / "project", GRAPH_HOLDING_THE_PROBE
     )
-    tatolabd = start_tatolabd_running_stream(project.tatolab_run)
+    tatolabd = start_tatolabd_running_stream(
+        project.tatolab_run,
+        extra_environment={
+            STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE: str(
+                tmp_path / "stub-exclusive-device"
+            )
+        },
+    )
     stream_id = tatolabd.await_the_latest_stream_loaded()
     first_read = tatolabd.await_marker("PROBE_READ_LEVEL")
     assert first_read["level"] == pytest.approx(0.25), first_read
@@ -171,6 +197,9 @@ def test_an_input_of_a_python_node_set_through_transact_while_playing_restarts_n
         listed for listed in local_api.list_streams() if listed["stream"] == stream_id
     ]
     assert listed["state"] == "running", listed
+    assert listed["condition"]["health"] == "healthy", (
+        f"a stream holding an edit not live is degraded: {listed}"
+    )
     assert_the_graph_document_equals_the_running_graph(
         json.loads(project.graph_document_path.read_text(encoding="utf-8")),
         local_api.graph(stream=stream_id),

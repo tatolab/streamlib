@@ -616,15 +616,23 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
 /// Each node's name in `graph`, sorted, leaving out a node a stream not started holds
 /// pending its deletion at the start.
 fn sorted_node_names_in(graph: &Value) -> Vec<String> {
-    let mut names: Vec<String> = graph["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|node| node["components"]["pending_deletion"] != true)
+    let mut names: Vec<String> = the_entries_held_in(graph, "nodes")
         .filter_map(|node| node["name"].as_str().map(str::to_owned))
         .collect();
     names.sort_unstable();
     names
+}
+
+/// The entries of `graph`'s `key`, `nodes` or `links`, leaving out one pending its deletion.
+fn the_entries_held_in<'graph>(
+    graph: &'graph Value,
+    key: &str,
+) -> impl Iterator<Item = &'graph Value> {
+    graph[key]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["components"]["pending_deletion"] != true)
 }
 
 /// Each link in `graph` as `source/port -> target/port`, by node name, leaving out a link
@@ -641,11 +649,7 @@ fn links_by_node_name_in(graph: &Value) -> Vec<String> {
             .unwrap_or(node)
             .to_owned()
     };
-    graph["links"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|link| link["components"]["pending_deletion"] != true)
+    the_entries_held_in(graph, "links")
         .map(|link| {
             format!(
                 "{}/{} -> {}/{}",
@@ -930,12 +934,7 @@ fn assert_the_graph_document_equals_the_running_graph(graph_document: &Value, ru
 /// links, each end by its node's UUID; `graph` is a graph document or a live graph render, a
 /// document's link naming its node by UUID or by name.
 fn the_nodes_and_links_held_in(graph: &Value) -> Value {
-    let nodes: Vec<&Value> = graph["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|node| node["components"]["pending_deletion"] != true)
-        .collect();
+    let nodes: Vec<&Value> = the_entries_held_in(graph, "nodes").collect();
     let uuid_of = |node: &Value| -> Value {
         nodes
             .iter()
@@ -954,15 +953,11 @@ fn the_nodes_and_links_held_in(graph: &Value) -> Value {
                     "input_values": input_values })
         })
         .collect();
-    held_nodes.sort_by_key(|node| node["id"].to_string());
+    held_nodes.sort_by_cached_key(|node| node["id"].to_string());
     let end_of = |end: &Value| json!({ "node": uuid_of(&end["node"]), "port": end["port"], "member": end["member"] });
-    let mut held_links: Vec<Value> = graph["links"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|link| link["components"]["pending_deletion"] != true)
+    let mut held_links: Vec<Value> = the_entries_held_in(graph, "links")
         .map(|link| json!({ "source": end_of(&link["source"]), "target": end_of(&link["target"]) }))
         .collect();
-    held_links.sort_by_key(Value::to_string);
+    held_links.sort_by_cached_key(Value::to_string);
     json!({ "nodes": held_nodes, "links": held_links })
 }
