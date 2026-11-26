@@ -22,7 +22,7 @@ conformance gate prints as its allowlist.
 
 import sys
 from collections.abc import Callable
-from typing import Any, final
+from typing import Any, Literal, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
 
@@ -130,7 +130,8 @@ def computed(build: Callable[[], Any]) -> NodeScopeComputedValue:
     """Declare a value `build` computes from what it reads with `get()`, into the scope being declared on this thread.
 
     `build` runs on the scope's worker thread, holding the GIL only while it runs. A value it
-    replaces is closed there with its `close()`, if it has one, once no build of the scope holds it.
+    replaces is closed there with its `close()`, if it has one, once nothing in a scope holds it;
+    an object that came in as an input's value is never closed.
     """
 
 @final
@@ -150,13 +151,13 @@ class LastBuildOfANodeScopeComputedValue:
     """How the last build of a computed value went, for a node's diagnostics."""
 
     @property
-    def state(self) -> str:
+    def state(self) -> Literal["not_yet_built", "built", "failed"]:
         """`"not_yet_built"`, `"built"` or `"failed"`."""
     @property
     def builds(self) -> int:
         """How many builds have run."""
     @property
-    def failure(self) -> str | None:
+    def failure(self) -> Literal["raised", "read_a_computed_value_not_yet_built", "panicked"] | None:
         """Of a failed build: `"raised"`, `"read_a_computed_value_not_yet_built"` or `"panicked"`."""
     @property
     def why(self) -> str | None:
@@ -175,7 +176,7 @@ class RunningNodeScope:
     def wait_until_settled(self, timeout_seconds: float) -> bool:
         """Wait up to `timeout_seconds` until no computed value is left to build; whether it settled."""
     def close(self) -> None:
-        """Stop the worker once its build in flight returns, and close every computed value."""
+        """Wait for a frame running on another thread, stop the worker once its build in flight returns, and close every computed value. Refused inside a frame of this scope."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,

@@ -598,10 +598,12 @@ fn a_binding_that_saw_a_computed_value_not_yet_built_fails_its_build_the_same_wa
             Ok(taps)
         });
         let kernel = computed(move || {
-            let seen = odd_taps.try_get();
-            let Ok(odd_taps) = seen else {
-                assert_eq!(seen.unwrap_err(), ReadRefused::ComputedValueNotYetBuilt);
-                fail_this_build_on_a_computed_value_not_yet_built()
+            let odd_taps = match odd_taps.try_get() {
+                Ok(odd_taps) => odd_taps,
+                Err(refused) => {
+                    assert_eq!(refused, ReadRefused::ComputedValueNotYetBuilt);
+                    fail_this_build_on_a_computed_value_not_yet_built()
+                }
             };
             Ok::<_, String>(BlurKernel { taps: *odd_taps })
         });

@@ -90,17 +90,28 @@ pub enum ReadRefused {
     ComputedValueNotYetBuilt,
 }
 
-impl fmt::Display for ReadRefused {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ReadRefused {
+    /// The refusal a panicking `.get()` raises for it; none for a value not yet built, which fails
+    /// the build instead.
+    fn refusal(self) -> Option<Refusal> {
         match self {
-            ReadRefused::OutsideABuildOrAFrame => Refusal::GetOutsideABuildOrAFrame.fmt(f),
-            ReadRefused::HandleOfAnotherScope => Refusal::HandleOfAnotherScope.fmt(f),
-            ReadRefused::ComputedValueNotYetBuilt => {
-                BuildFailure::ReadAComputedValueNotYetBuilt.fmt(f)
-            }
+            ReadRefused::OutsideABuildOrAFrame => Some(Refusal::GetOutsideABuildOrAFrame),
+            ReadRefused::HandleOfAnotherScope => Some(Refusal::HandleOfAnotherScope),
+            ReadRefused::ComputedValueNotYetBuilt => None,
         }
     }
 }
+
+impl fmt::Display for ReadRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.refusal() {
+            Some(refusal) => refusal.fmt(f),
+            None => BuildFailure::ReadAComputedValueNotYetBuilt.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ReadRefused {}
 
 /// End the build running on this thread as [`BuildFailure::ReadAComputedValueNotYetBuilt`], for
 /// a binding whose build saw [`ReadRefused::ComputedValueNotYetBuilt`] and returned to Rust.
@@ -180,12 +191,9 @@ fn read_slot(slot: SlotOf) -> Result<Option<AnyValue>, ReadRefused> {
 }
 
 fn refuse_the_read(refused: ReadRefused) -> ! {
-    match refused {
-        ReadRefused::OutsideABuildOrAFrame => refuse(Refusal::GetOutsideABuildOrAFrame),
-        ReadRefused::HandleOfAnotherScope => refuse(Refusal::HandleOfAnotherScope),
-        ReadRefused::ComputedValueNotYetBuilt => {
-            fail_this_build_on_a_computed_value_not_yet_built()
-        }
+    match refused.refusal() {
+        Some(refusal) => refuse(refusal),
+        None => fail_this_build_on_a_computed_value_not_yet_built(),
     }
 }
 

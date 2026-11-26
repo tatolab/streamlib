@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::thread::ThreadId;
 use std::time::Duration;
 
 use crate::python_attached_from_any_thread::attached_from_any_thread;
@@ -49,36 +50,52 @@ fn raise_the_read_refusal(refused: ReadRefused) -> PyErr {
     }
 }
 
-/// How many computed-value holders the scopes of this process keep of each Python object, by
-/// its address, so an object two builds returned is closed only once neither holds it.
-static COMPUTED_VALUE_HOLDERS_OF_EACH_OBJECT: LazyLock<parking_lot::Mutex<HashMap<usize, usize>>> =
-    LazyLock::new(Default::default);
+/// What holds one Python object in the scopes of this process.
+#[derive(Default)]
+struct HoldersOfAPythonObject {
+    holders: usize,
+    held_by_an_input: bool,
+}
+
+/// The holders of each Python object the scopes of this process hold, by its address, so an
+/// object is closed only once nothing holds it, and never when it came in through an input.
+static HOLDERS_OF_EACH_PYTHON_OBJECT: LazyLock<
+    parking_lot::Mutex<HashMap<usize, HoldersOfAPythonObject>>,
+> = LazyLock::new(Default::default);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeldAs {
+    AnInputValue,
+    AComputedValue,
+}
 
 /// A Python object held in a node's scope: an input's value or a computed value. Two values are
 /// equal when they are one object or `==` says so; an `==` that raises counts as a change. A
 /// computed value is closed when the last holder of its object lets it go.
 struct PythonValueInANodeScope {
     object: Option<Py<PyAny>>,
-    closed_when_no_build_holds_it: bool,
+    held_as: HeldAs,
 }
 
 impl PythonValueInANodeScope {
-    fn an_input_value(object: Py<PyAny>) -> Self {
+    fn held_as(object: Py<PyAny>, held_as: HeldAs) -> Self {
+        let mut holders = HOLDERS_OF_EACH_PYTHON_OBJECT.lock();
+        let holders_of_the_object = holders.entry(object.as_ptr() as usize).or_default();
+        holders_of_the_object.holders += 1;
+        holders_of_the_object.held_by_an_input |= held_as == HeldAs::AnInputValue;
+        drop(holders);
         Self {
             object: Some(object),
-            closed_when_no_build_holds_it: false,
+            held_as,
         }
     }
 
+    fn an_input_value(object: Py<PyAny>) -> Self {
+        Self::held_as(object, HeldAs::AnInputValue)
+    }
+
     fn a_computed_value(object: Py<PyAny>) -> Self {
-        *COMPUTED_VALUE_HOLDERS_OF_EACH_OBJECT
-            .lock()
-            .entry(object.as_ptr() as usize)
-            .or_default() += 1;
-        Self {
-            object: Some(object),
-            closed_when_no_build_holds_it: true,
-        }
+        Self::held_as(object, HeldAs::AComputedValue)
     }
 
     fn object(&self) -> &Py<PyAny> {
@@ -103,9 +120,9 @@ impl Drop for PythonValueInANodeScope {
         let Some(object) = self.object.take() else {
             return;
         };
-        let closed_when_no_build_holds_it = self.closed_when_no_build_holds_it;
+        let held_as = self.held_as;
         attached_from_any_thread(|python| {
-            if closed_when_no_build_holds_it && is_the_last_computed_value_holder_of(&object) {
+            if is_closed_as_its_last_holder_lets_go(&object, held_as) {
                 close_the_computed_value(python, object.bind(python));
             }
             drop(object);
@@ -113,18 +130,19 @@ impl Drop for PythonValueInANodeScope {
     }
 }
 
-fn is_the_last_computed_value_holder_of(object: &Py<PyAny>) -> bool {
-    let mut holders = COMPUTED_VALUE_HOLDERS_OF_EACH_OBJECT.lock();
+fn is_closed_as_its_last_holder_lets_go(object: &Py<PyAny>, held_as: HeldAs) -> bool {
+    let mut holders = HOLDERS_OF_EACH_PYTHON_OBJECT.lock();
     let address = object.as_ptr() as usize;
-    let Some(count) = holders.get_mut(&address) else {
-        return true;
+    let Some(holders_of_the_object) = holders.get_mut(&address) else {
+        return false;
     };
-    *count -= 1;
-    if *count > 0 {
+    holders_of_the_object.holders -= 1;
+    if holders_of_the_object.holders > 0 {
         return false;
     }
+    let held_by_an_input = holders_of_the_object.held_by_an_input;
     holders.remove(&address);
-    true
+    held_as == HeldAs::AComputedValue && !held_by_an_input
 }
 
 fn close_the_computed_value(python: Python<'_>, value: &Bound<'_, PyAny>) {
@@ -136,19 +154,30 @@ fn close_the_computed_value(python: Python<'_>, value: &Bound<'_, PyAny>) {
     }
 }
 
+/// How a call of a computed value's Python build function ended.
+enum PythonBuildEnded {
+    Built(PythonValueInANodeScope),
+    ReadAComputedValueNotYetBuilt,
+    Raised(String),
+}
+
 /// Build a computed value by calling `build`, attached to the interpreter only while it runs.
 fn build_with_the_python_function(build: &Py<PyAny>) -> Result<PythonValueInANodeScope, String> {
-    let built = Python::attach(|python| match build.bind(python).call0() {
-        Ok(value) => Ok(PythonValueInANodeScope::a_computed_value(value.unbind())),
-        Err(raised) if raised.is_instance_of::<NodeScopeComputedValueNotYetBuilt>(python) => {
-            Err(None)
+    let ended = Python::attach(|python| match build.bind(python).call0() {
+        Ok(value) => {
+            PythonBuildEnded::Built(PythonValueInANodeScope::a_computed_value(value.unbind()))
         }
-        Err(raised) => Err(Some(raised.to_string())),
+        Err(raised) if raised.is_instance_of::<NodeScopeComputedValueNotYetBuilt>(python) => {
+            PythonBuildEnded::ReadAComputedValueNotYetBuilt
+        }
+        Err(raised) => PythonBuildEnded::Raised(raised.to_string()),
     });
-    match built {
-        Ok(value) => Ok(value),
-        Err(None) => fail_this_build_on_a_computed_value_not_yet_built(),
-        Err(Some(why)) => Err(why),
+    match ended {
+        PythonBuildEnded::Built(value) => Ok(value),
+        PythonBuildEnded::ReadAComputedValueNotYetBuilt => {
+            fail_this_build_on_a_computed_value_not_yet_built()
+        }
+        PythonBuildEnded::Raised(why) => Err(why),
     }
 }
 
@@ -199,10 +228,12 @@ pub(crate) struct PythonNodeScopeBeingDeclared(Option<ScopeBeingDeclared>);
 
 impl PythonNodeScopeBeingDeclared {
     fn being_declared(&mut self) -> PyResult<&mut ScopeBeingDeclared> {
-        self.0
-            .as_mut()
-            .ok_or_else(|| PyRuntimeError::new_err("the node's scope has already started"))
+        self.0.as_mut().ok_or_else(refuse_a_started_scope)
     }
+}
+
+fn refuse_a_started_scope() -> PyErr {
+    PyRuntimeError::new_err("the node's scope has already started")
 }
 
 #[pymethods]
@@ -229,16 +260,14 @@ impl PythonNodeScopeBeingDeclared {
 
     /// Start the scope's worker, which builds every computed value from here on.
     fn start(&mut self) -> PyResult<PythonRunningNodeScope> {
-        let declared = self
-            .0
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err("the node's scope has already started"))?;
+        let declared = self.0.take().ok_or_else(refuse_a_started_scope)?;
         let (scope, frame_view) = declared.start().map_err(|error| {
             PyRuntimeError::new_err(format!("the node's scope worker did not start: {error}"))
         })?;
         Ok(PythonRunningNodeScope {
             scope: parking_lot::RwLock::new(Some(scope)),
             frame_view: parking_lot::Mutex::new(Some(frame_view)),
+            thread_running_a_frame: parking_lot::Mutex::new(None),
         })
     }
 }
@@ -294,14 +323,58 @@ impl From<LastBuild> for PythonLastBuildOfANodeScopeComputedValue {
 
 /// A Python node's running scope: sets and wires write its inputs, and the frame thread runs
 /// each frame through it.
+///
+/// Every wait on its locks is made detached from the interpreter, since the thread holding a lock
+/// may need the interpreter to let go: a frame runs Python holding `frame_view`, and the scope's
+/// worker compares two values holding the scope's own lock. `frame_view` is taken before `scope`.
 #[pyclass(frozen, name = "RunningNodeScope", module = "tatolab.runtime._engine")]
 pub(crate) struct PythonRunningNodeScope {
     scope: parking_lot::RwLock<Option<Scope>>,
     frame_view: parking_lot::Mutex<Option<FrameView>>,
+    thread_running_a_frame: parking_lot::Mutex<Option<ThreadId>>,
 }
 
 fn refuse_a_closed_scope() -> PyErr {
     PyRuntimeError::new_err("the node's scope is closed")
+}
+
+/// Marks the thread a frame runs on until the frame returns or raises.
+struct FrameRunningOnThisThread<'scope>(&'scope parking_lot::Mutex<Option<ThreadId>>);
+
+impl<'scope> FrameRunningOnThisThread<'scope> {
+    fn mark(thread_running_a_frame: &'scope parking_lot::Mutex<Option<ThreadId>>) -> Self {
+        *thread_running_a_frame.lock() = Some(std::thread::current().id());
+        Self(thread_running_a_frame)
+    }
+}
+
+impl Drop for FrameRunningOnThisThread<'_> {
+    fn drop(&mut self) {
+        *self.0.lock() = None;
+    }
+}
+
+impl PythonRunningNodeScope {
+    /// Run `with_the_scope` on the running scope, detached from the interpreter.
+    fn with_the_scope_detached<R: Send>(
+        &self,
+        python: Python<'_>,
+        with_the_scope: impl FnOnce(&Scope) -> R + Send,
+    ) -> PyResult<R> {
+        python
+            .detach(|| self.scope.read().as_ref().map(with_the_scope))
+            .ok_or_else(refuse_a_closed_scope)
+    }
+}
+
+fn drop_the_scope_detached(
+    python: Python<'_>,
+    scope: Option<Scope>,
+    frame_view: Option<FrameView>,
+) {
+    // The worker may be waiting to attach for its build in flight, and closing a computed value
+    // attaches on its own.
+    python.detach(|| drop((frame_view, scope)));
 }
 
 #[pymethods]
@@ -313,12 +386,8 @@ impl PythonRunningNodeScope {
         input: &PythonNodeScopeInput,
         value: Py<PyAny>,
     ) -> PyResult<()> {
-        let scope = self.scope.read();
-        let scope = scope.as_ref().ok_or_else(refuse_a_closed_scope)?;
         let value = PythonValueInANodeScope::an_input_value(value);
-        // Detached: the worker can hold the scope's lock while it waits to compare two values.
-        python.detach(|| scope.write(input.0, value));
-        Ok(())
+        self.with_the_scope_detached(python, |scope| scope.write(input.0, value))
     }
 
     /// Take the values built since the last frame, then call `frame` with `get()` reading them,
@@ -328,6 +397,7 @@ impl PythonRunningNodeScope {
             PyRuntimeError::new_err("a frame of this node's scope is already running")
         })?;
         let frame_view = frame_view.as_mut().ok_or_else(refuse_a_closed_scope)?;
+        let _frame_running = FrameRunningOnThisThread::mark(&self.thread_running_a_frame);
         match frame_view.run_frame(|| frame.bind(python).call0()) {
             None => Ok(false),
             Some(ran) => ran.map(|_| true),
@@ -340,10 +410,8 @@ impl PythonRunningNodeScope {
         python: Python<'_>,
         computed_value: &PythonNodeScopeComputedValue,
     ) -> PyResult<PythonLastBuildOfANodeScopeComputedValue> {
-        let scope = self.scope.read();
-        let scope = scope.as_ref().ok_or_else(refuse_a_closed_scope)?;
-        Ok(python
-            .detach(|| scope.last_build_of(computed_value.0))
+        Ok(self
+            .with_the_scope_detached(python, |scope| scope.last_build_of(computed_value.0))?
             .into())
     }
 
@@ -351,19 +419,23 @@ impl PythonRunningNodeScope {
     fn wait_until_settled(&self, python: Python<'_>, timeout_seconds: f64) -> PyResult<bool> {
         let timeout = Duration::try_from_secs_f64(timeout_seconds)
             .map_err(|error| PyValueError::new_err(format!("timeout_seconds: {error}")))?;
-        let scope = self.scope.read();
-        let scope = scope.as_ref().ok_or_else(refuse_a_closed_scope)?;
-        Ok(python.detach(|| scope.wait_until_settled(timeout)))
+        self.with_the_scope_detached(python, |scope| scope.wait_until_settled(timeout))
     }
 
-    /// Stop the worker once its build in flight returns, and close every computed value.
-    fn close(&self, python: Python<'_>) {
-        let scope = self.scope.write().take();
-        let frame_view = self.frame_view.lock().take();
-        python.detach(|| {
-            drop(scope);
-            drop(frame_view);
+    /// Wait for a frame running on another thread, stop the worker once its build in flight
+    /// returns, and close every computed value. Refused inside a frame of this scope.
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
+        if *self.thread_running_a_frame.lock() == Some(std::thread::current().id()) {
+            return Err(PyRuntimeError::new_err(
+                "a frame cannot close its own node's scope; close it once the frame returns",
+            ));
+        }
+        let (scope, frame_view) = python.detach(|| {
+            let frame_view = self.frame_view.lock().take();
+            (self.scope.write().take(), frame_view)
         });
+        drop_the_scope_detached(python, scope, frame_view);
+        Ok(())
     }
 }
 
@@ -371,15 +443,9 @@ impl Drop for PythonRunningNodeScope {
     fn drop(&mut self) {
         let mut scope = self.scope.get_mut().take();
         let mut frame_view = self.frame_view.get_mut().take();
-        // Detached: the worker may be waiting to attach for its build in flight.
         Python::try_attach(|python| {
-            python.detach(|| {
-                drop(scope.take());
-                drop(frame_view.take());
-            });
+            drop_the_scope_detached(python, scope.take(), frame_view.take());
         });
-        drop(scope);
-        drop(frame_view);
     }
 }
 

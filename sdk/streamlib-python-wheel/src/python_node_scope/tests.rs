@@ -287,3 +287,88 @@ for refused_call in (lambda: scope.write(taps, 4), lambda: scope.run_frame(lambd
 "#,
     );
 }
+
+#[test]
+fn an_object_a_computed_value_hands_on_from_an_input_is_not_closed() {
+    run_with_the_frame_loop(
+        r#"
+closes = []
+
+class StubDevice:
+    def close(self):
+        closes.append(self)
+
+lent_device = StubDevice()
+declared = NodeScopeBeingDeclared()
+device = declared.input(lent_device)
+gain = declared.input(1)
+handed_on = declared.declare(lambda: computed(lambda: device.get() if gain.get() == 1 else None))
+scope = declared.start()
+run_frames_until(scope, lambda: handed_on.get() is lent_device)
+
+scope.write(gain, 2)
+run_frames_until(scope, lambda: handed_on.get() is None)
+scope.write(device, StubDevice())
+assert scope.wait_until_settled(5.0)
+run_frames_until(scope, lambda: True)
+time.sleep(0.1)
+scope.close()
+assert closes == [], closes
+"#,
+    );
+}
+
+#[test]
+fn a_close_from_another_thread_waits_for_the_running_frame() {
+    run_with_the_frame_loop(
+        r#"
+declared = NodeScopeBeingDeclared()
+taps = declared.input(3)
+kernel = declared.declare(lambda: computed(lambda: ("kernel", taps.get())))
+scope = declared.start()
+run_frames_until(scope, lambda: kernel.get() == ("kernel", 3))
+
+frame_started = threading.Event()
+frames_read = []
+def a_long_frame():
+    frame_started.set()
+    for _ in range(50):
+        frames_read.append(kernel.get())
+        scope.write(taps, len(frames_read))
+        time.sleep(0.002)
+
+closer = threading.Thread(target=lambda: (frame_started.wait(5.0), scope.close()))
+closer.start()
+assert scope.run_frame(a_long_frame)
+closer.join(5.0)
+assert not closer.is_alive(), "the close never returned"
+assert len(frames_read) == 50
+try:
+    scope.run_frame(lambda: None)
+except RuntimeError as refused:
+    assert "closed" in str(refused)
+else:
+    raise AssertionError("a closed scope ran a frame")
+"#,
+    );
+}
+
+#[test]
+fn a_frame_closing_its_own_scope_is_refused() {
+    run_with_the_frame_loop(
+        r#"
+declared = NodeScopeBeingDeclared()
+taps = declared.input(3)
+scope = declared.start()
+refusals = []
+def a_frame_that_closes():
+    try:
+        scope.close()
+    except RuntimeError as refused:
+        refusals.append(str(refused))
+assert scope.run_frame(a_frame_that_closes)
+assert len(refusals) == 1 and "cannot close its own" in refusals[0], refusals
+scope.close()
+"#,
+    );
+}

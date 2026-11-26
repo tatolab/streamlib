@@ -14,15 +14,28 @@ use pyo3::Python;
 /// `PyGILState_Ensure` asks CPython itself, so it reacquires a released thread state, nests under
 /// a held one, and creates one on a foreign thread.
 pub(crate) fn attached_from_any_thread<R>(f: impl FnOnce(Python<'_>) -> R) -> Option<R> {
-    // SAFETY: `Py_IsInitialized` may be called at any time; the ensure is paired with exactly one
-    // release on this thread, and the `Python` token lives only inside it.
-    unsafe {
-        if pyo3::ffi::Py_IsInitialized() == 0 {
-            return None;
-        }
-        let interpreter_state_before = pyo3::ffi::PyGILState_Ensure();
-        let answered = f(Python::assume_attached());
-        pyo3::ffi::PyGILState_Release(interpreter_state_before);
-        Some(answered)
+    // SAFETY: `Py_IsInitialized` may be called at any time.
+    if unsafe { pyo3::ffi::Py_IsInitialized() } == 0 {
+        return None;
+    }
+    let _attached = InterpreterAttachedOnThisThread::ensure();
+    // SAFETY: the interpreter is attached on this thread until `_attached` drops, after `f`.
+    Some(f(unsafe { Python::assume_attached() }))
+}
+
+/// One `PyGILState_Ensure`, released once on drop, also when `f` unwinds.
+struct InterpreterAttachedOnThisThread(pyo3::ffi::PyGILState_STATE);
+
+impl InterpreterAttachedOnThisThread {
+    fn ensure() -> Self {
+        // SAFETY: the interpreter is initialized; the ensure is paired with the release in `drop`.
+        Self(unsafe { pyo3::ffi::PyGILState_Ensure() })
+    }
+}
+
+impl Drop for InterpreterAttachedOnThisThread {
+    fn drop(&mut self) {
+        // SAFETY: releases the one ensure `ensure` made on this thread.
+        unsafe { pyo3::ffi::PyGILState_Release(self.0) };
     }
 }
