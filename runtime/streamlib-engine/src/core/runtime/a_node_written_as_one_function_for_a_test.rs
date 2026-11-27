@@ -72,7 +72,7 @@ fn a_node_written_as_one_function(
     gain: Input<i32>,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     RAN.lock().bodies_run += 1;
-    let built = computed(move || {
+    let built = computed(move |_ctx| {
         let gain = *gain.get();
         RAN.lock().builds_started += 1;
         BUILDS.wait_while_held();

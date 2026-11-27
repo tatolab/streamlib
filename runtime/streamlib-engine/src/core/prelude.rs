@@ -17,4 +17,5 @@ pub use crate::core::{
 };
 
 // A node written as one function: its value inputs and the values it computes from them.
-pub use streamlib_scope::{Computed, Input, computed};
+pub use crate::core::nodes::__generated_private::computed;
+pub use streamlib_scope::{Computed, Input};

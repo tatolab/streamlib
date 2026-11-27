@@ -2,28 +2,46 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use StubExclusiveDeviceEvent::{Closed, Opened};
 
 #[test]
 fn one_holder_after_another_opens_and_closes_it_each_time() {
     let device = Arc::new(StubExclusiveDevice::default());
 
-    drop(device.open().expect("the first holder opens it"));
-    let second = device
-        .open()
-        .expect("the next holder opens it once it is closed");
+    drop(device.open());
+    let second = device.open();
 
     assert_eq!((device.opens(), device.closes()), (2, 1));
     drop(second);
-    assert_eq!(device.closes(), 2);
+    assert_eq!(
+        device.events(),
+        [
+            Opened { holder: 0 },
+            Closed { holder: 0 },
+            Opened { holder: 1 },
+            Closed { holder: 1 }
+        ]
+    );
 }
 
+/// Mental-revert: an open beside the holder leaves two holders, the first closed only after the
+/// second opened.
 #[test]
-#[should_panic(expected = "two holders asked for the stub exclusive device at once")]
-fn a_second_holder_while_it_is_held_is_refused_and_fails_the_test() {
+fn an_open_while_it_is_held_closes_the_holder_first_and_its_drop_closes_nothing_more() {
     let device = Arc::new(StubExclusiveDevice::default());
-    let _first = device.open().expect("the first holder opens it");
+    let first = device.open();
 
-    assert_eq!(device.open().unwrap_err(), StubExclusiveDeviceAlreadyHeld);
+    let second = device.open();
+    drop(first);
 
-    device.opens();
+    assert_eq!(
+        device.events(),
+        [
+            Opened { holder: 0 },
+            Closed { holder: 0 },
+            Opened { holder: 1 }
+        ]
+    );
+    drop(second);
+    assert_eq!(device.closes(), 2);
 }

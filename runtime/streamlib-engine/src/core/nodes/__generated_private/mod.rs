@@ -15,5 +15,7 @@ pub(crate) use generated_node_impl::{
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use generated_node_impl::{OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWiringEnvelope};
-pub use node_function_running::{NodeFunctionRunning, PerFrameFunction, TheDefaultOfAValueInput};
+pub use node_function_running::{
+    NodeFunctionRunning, PerFrameFunction, TheDefaultOfAValueInput, computed,
+};
 pub use streamlib_scope::{ScopeBeingDeclared, Writes};
