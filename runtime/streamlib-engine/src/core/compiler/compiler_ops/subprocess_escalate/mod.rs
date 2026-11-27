@@ -48,6 +48,12 @@ pub(crate) const ESCALATE_RESPONSE_RPC: &str = "escalate_response";
 /// than queueing it behind GPU work.
 pub(crate) const ESCALATE_OP_ANSWERED_BY_NOTHING: &str = "log";
 
+/// The `op` tag of the one escalate request that builds a kernel on a helper's
+/// limited capability, [`EscalateRequest::RegisterComputeKernel`] — the bridge
+/// answers it on a worker of its own, so a frame's dispatch never waits out a
+/// shader compile and pipeline build queued ahead of it.
+pub(crate) const ESCALATE_OP_BUILDING_A_KERNEL: &str = "register_compute_kernel";
+
 /// Extract `request_id` from a request/response-shaped op. Returns `None`
 /// for fire-and-forget ops ([`EscalateRequest::Log`]), which carry no
 /// correlation token because the host never writes a reply.
@@ -280,6 +286,30 @@ pub(crate) fn refusal_of_an_escalate_request(
             .to_string(),
         message,
     }))
+}
+
+/// Wrap an [`EscalateRequest`] in the outer `{ rpc, op, payload… }` envelope a
+/// helper sends, for a request the bridge makes of its own dispatch.
+pub(crate) fn envelope_request(request: EscalateRequest) -> serde_json::Value {
+    let mut obj = serde_json::to_value(&request).unwrap_or(serde_json::Value::Null);
+    if let Some(map) = obj.as_object_mut() {
+        map.insert(
+            "rpc".to_string(),
+            serde_json::Value::String(ESCALATE_REQUEST_RPC.to_string()),
+        );
+    }
+    obj
+}
+
+/// The `handle_id` an enveloped `ok` response carries; `None` for an `err`, or
+/// a frame that is not a response at all.
+pub(crate) fn handle_id_of_an_enveloped_ok_response(answer: &serde_json::Value) -> Option<String> {
+    let mut response = answer.clone();
+    response.as_object_mut()?.remove("rpc");
+    match serde_json::from_value::<EscalateResponse>(response).ok()? {
+        EscalateResponse::Ok(ok) => Some(ok.handle_id),
+        EscalateResponse::Err(_) => None,
+    }
 }
 
 /// Wrap an [`EscalateResponse`] in the outer `{ rpc, payload… }` envelope the

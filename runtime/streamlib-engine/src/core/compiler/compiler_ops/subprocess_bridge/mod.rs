@@ -26,13 +26,13 @@ use super::subprocess_escalate::handle_lifecycle::{
     EscalateHandleRegistry, release_everything_a_torn_down_helper_held,
 };
 use super::subprocess_escalate::{
-    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatAHelperPlacedNodeReaches, process_bridge_message,
-    shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_OP_BUILDING_A_KERNEL, WhatAHelperPlacedNodeReaches,
+    process_bridge_message, shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
 };
 use subprocess_bridge_reader_and_escalate_workers::{
     SubprocessBridgeThreads, node_run_id_shortened_for_a_thread_name,
     refuse_every_link_this_subprocess_still_owed, spawn_the_native_escalate_worker,
-    spawn_the_reader_and_the_escalate_worker,
+    spawn_the_reader_and_its_two_escalate_workers,
 };
 
 /// Env var advertising the inherited child-end fd number of the escalate
@@ -182,8 +182,8 @@ pub(crate) const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
 /// open its port. Carries `link_id` and `reason`.
 pub(crate) const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
 
-/// How many escalate requests one helper may have queued for its worker before
-/// the next is refused.
+/// How many escalate requests one helper may have queued for one of its workers
+/// before the next is refused.
 ///
 /// The shipped helper blocks each calling thread on its answer, so the queue
 /// holds one request per thread; the bound only stops a helper that writes
@@ -212,6 +212,10 @@ enum IncomingSubprocessFrame {
     /// An escalate request the helper waits on an answer for, queued for the
     /// helper's escalate worker.
     EscalateRequestAwaitingAnAnswer,
+    /// A kernel build the helper waits on an answer for, queued for the
+    /// helper's kernel build worker, so the frames' dispatches queued behind it
+    /// on the escalate worker never wait out its compile.
+    EscalateRequestBuildingAKernel,
     /// One link's answer to a `wire_link` the host sent after setup.
     LinkWireAnswer {
         link_id: String,
@@ -229,6 +233,9 @@ fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSub
         return match msg.get("op").and_then(|op| op.as_str()) {
             Some(ESCALATE_OP_ANSWERED_BY_NOTHING) => {
                 IncomingSubprocessFrame::EscalateRequestAnsweredByNothing
+            }
+            Some(ESCALATE_OP_BUILDING_A_KERNEL) => {
+                IncomingSubprocessFrame::EscalateRequestBuildingAKernel
             }
             _ => IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer,
         };
@@ -334,8 +341,8 @@ impl ParentSideOfOneSubprocessBridgeSharedByItsThreads {
 }
 
 /// Bridge for one subprocess. Drop the value to tear its threads down: the
-/// socket is shut down, the reader sees EOF, and the escalate worker leaves
-/// once the reader has.
+/// socket is shut down, the reader sees EOF, and the escalate worker and the
+/// kernel build worker leave once the reader has.
 pub struct SubprocessBridge {
     parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
     lifecycle_rx: Receiver<serde_json::Value>,
@@ -348,6 +355,7 @@ pub struct SubprocessBridge {
     shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
     frame_demultiplexing_reader_thread: Option<JoinHandle<()>>,
     escalate_worker_thread: Option<JoinHandle<()>>,
+    kernel_build_worker_thread: Option<JoinHandle<()>>,
     /// The native escalate socket, shut down with the bridge so its worker
     /// sees EOF.
     native_escalate_socket_for_shutting_down: Option<UnixStream>,
@@ -371,9 +379,9 @@ impl SubprocessBridge {
         )
     }
 
-    /// Wrap a socketpair parent end and spawn the reader thread and the
-    /// escalate worker, which dispatches against `sandbox` and what the
-    /// helper's node reaches; with `native_escalate_stream`, a second worker
+    /// Wrap a socketpair parent end and spawn the reader thread, the escalate
+    /// worker and the kernel build worker, which dispatch against `sandbox` and
+    /// what the helper's node reaches; with `native_escalate_stream`, a second worker
     /// answers the helper's native code over it, against the same registry.
     pub(crate) fn new(
         stream: UnixStream,
@@ -411,7 +419,8 @@ impl SubprocessBridge {
         let SubprocessBridgeThreads {
             frame_demultiplexing_reader_thread,
             escalate_worker_thread,
-        } = spawn_the_reader_and_the_escalate_worker(
+            kernel_build_worker_thread,
+        } = spawn_the_reader_and_its_two_escalate_workers(
             BufReader::new(read_half),
             Arc::clone(&parent_side),
             Arc::clone(&escalate_request_dispatch),
@@ -444,6 +453,7 @@ impl SubprocessBridge {
             shared_native_service_leases,
             frame_demultiplexing_reader_thread: Some(frame_demultiplexing_reader_thread),
             escalate_worker_thread: Some(escalate_worker_thread),
+            kernel_build_worker_thread: Some(kernel_build_worker_thread),
             native_escalate_socket_for_shutting_down,
             native_escalate_worker_thread,
         })
@@ -507,12 +517,14 @@ impl SubprocessBridge {
 impl Drop for SubprocessBridge {
     fn drop(&mut self) {
         self.mark_dead();
-        // Given up on and shut down before draining: the escalate worker passes
-        // over every request still queued, and the reader queues nothing past
-        // EOF, because an acquire landing after the drain would strand its
-        // cache entry. A request the worker is already executing can still slip
-        // through; closing that too would mean joining the worker, which this
-        // path deliberately never blocks on.
+        // Given up on and shut down before draining: both workers pass over
+        // every request still queued, and the reader queues nothing past EOF,
+        // because an acquire landing after the drain would strand its cache
+        // entry. A request the escalate worker is already executing can still
+        // slip through; closing that too would mean joining the worker, which
+        // this path deliberately never blocks on. A build already executing on
+        // the kernel build worker releases its own kernel once it sees the helper
+        // given up on; the native escalate worker answers builds inline and does not.
         self.parent_side.shut_the_socket_down();
         if let Some(native_escalate_socket) = &self.native_escalate_socket_for_shutting_down {
             let _ = native_escalate_socket.shutdown(std::net::Shutdown::Both);
@@ -528,6 +540,7 @@ impl Drop for SubprocessBridge {
         // Detached, never joined: the OS reaps both on process exit.
         self.frame_demultiplexing_reader_thread.take();
         self.escalate_worker_thread.take();
+        self.kernel_build_worker_thread.take();
         self.native_escalate_worker_thread.take();
     }
 }
