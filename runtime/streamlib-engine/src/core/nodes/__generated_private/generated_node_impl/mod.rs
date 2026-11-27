@@ -461,7 +461,7 @@ impl OutOfProcessLinkWiringEnvelope {
             "streamlib/{node_run_id}/loss-counts/{}",
             mint_machine_global_unique_name_suffix()
         );
-        let stateful_function_nodes = self
+        let stateful_function_node = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
             .stateful_function_node_its_far_side_runs
@@ -470,12 +470,12 @@ impl OutOfProcessLinkWiringEnvelope {
         let board = iceoryx2_node.create_helper_process_loss_count_board(
             &service_name,
             output_port_names,
-            stateful_function_nodes
+            stateful_function_node
                 .iter()
                 .map(|stateful| stateful.breadcrumb_number)
                 .collect(),
         )?;
-        let function_node_state_entries: Vec<JsonValue> = stateful_function_nodes
+        let function_node_state_entries: Vec<JsonValue> = stateful_function_node
             .iter()
             .map(|stateful| {
                 let resumes_from = function_node_states.the_state_a_function_node_resumes_from(
@@ -496,7 +496,7 @@ impl OutOfProcessLinkWiringEnvelope {
             "function_node_states": function_node_state_entries,
         });
         self.loss_counts.hold_the_board_of_this_spawn(board);
-        for stateful in stateful_function_nodes {
+        if let Some(stateful) = stateful_function_node {
             function_node_states.note_the_helper_writing_the_state_of_a_function_node(
                 stateful.function_node_uuid,
                 stateful.state_fields,
