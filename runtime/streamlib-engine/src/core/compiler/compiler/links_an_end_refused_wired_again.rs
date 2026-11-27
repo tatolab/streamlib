@@ -15,7 +15,7 @@ use crate::core::graph::{
     Graph, GraphEdgeWithComponents, LinkState, LinkStateComponent, LinkUniqueId, NodeRunId,
     OutOfProcessLinkWireRepliesComponent,
 };
-use crate::core::nodes::OutOfProcessLinkWireReply;
+use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
 /// Close each link `plan` wires again after an end refused it, keeping it in the graph, so the
 /// wiring that follows opens it afresh. One `plan` no longer adds, one it holds unwired for its
@@ -62,6 +62,25 @@ pub(super) fn unwire_each_link_an_end_refused_keeping_it(
         }
     }
     Ok(())
+}
+
+/// Hold `link_id`, which could not be wired again, pending with an answer refusing it for
+/// `reason`, so it reads refused in those words and a later retry wires it again.
+pub(super) fn hold_the_link_refused_because(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    reason: &str,
+) {
+    let refusal = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+    refusal.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+        reason: reason.to_owned(),
+    });
+    if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+        link.insert(LinkStateComponent(LinkState::Pending));
+        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
+            refusal,
+        ]));
+    }
 }
 
 impl Compiler {

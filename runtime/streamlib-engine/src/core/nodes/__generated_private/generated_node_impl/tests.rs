@@ -964,3 +964,33 @@ fn an_envelope_holds_a_refused_link_or_island_until_it_forgets_it_and_no_other_c
     envelope.forget_a_function_node_island("L-island");
     assert!(!envelope.holds_a_link_its_far_side_refused());
 }
+
+/// A link recorded while the setup command waits to go out, whose handover after it fails, is
+/// held as a refusal of the far side that runs on, so it is wired again.
+///
+/// Mental-revert: refusing it without keeping its answer leaves a far side that runs on holding
+/// no refused link, so nothing retries it until the stream starts again.
+#[test]
+fn a_link_whose_handover_after_the_setup_command_fails_is_held_as_refused() {
+    let envelope =
+        OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+    envelope.hold_every_later_link_until_the_setup_command_goes_out();
+    let answer = envelope
+        .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+            PortDirection::Input,
+            link_wiring_entry("L-behind-the-setup-command", "in1"),
+        )
+        .expect("a far side that is not gone takes the link")
+        .expect("a link behind the setup command waits on the far side's answer");
+    let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+    far_side
+        .refuses_links
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    envelope
+        .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), far_side)
+        .expect("the setup command goes out");
+
+    assert!(answer.the_far_side_refused());
+    assert!(envelope.holds_a_link_its_far_side_refused());
+}

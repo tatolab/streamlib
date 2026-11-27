@@ -153,6 +153,13 @@ fn a_failed_reader_with_a_link_not_wired_stays_failed() {
             DiagnosticKindOnTheWire::LinkNotWired
         ]
     );
+    let link_not_wired = &diagnostics[1];
+    assert!(
+        link_not_wired.words.contains("its wiring failed")
+            && !link_not_wired.words.contains("wired again by itself"),
+        "a link whose wiring failed outright is wired again by nothing, so its words say so: {}",
+        link_not_wired.words
+    );
 }
 
 /// A link whose two ends no longer carry types that connect is reported as its own kind, which

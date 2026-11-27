@@ -152,15 +152,29 @@ fn a_helper_past_its_setup(
     (node_run_id, delivery)
 }
 
-/// A link between two helpers that the reader's helper refused is closed on both ends, kept,
-/// and handed to both helpers again with answers of its own by the compile an add of it makes,
-/// and it reads wired once both open it, with no stop of the stream.
-///
-/// Mental-revert: wiring it again without closing it first hands both helpers the link again
-/// while each still holds the port it opened or refused for it, and tells neither to drop it;
-/// leaving it disconnected once closed names it to no later retry if its handover fails.
-#[test]
-fn a_link_its_reader_refused_is_closed_and_wired_again_and_reads_wired_once_both_ends_open_it() {
+/// The stream a fixture compile's events publish under.
+fn the_fixtures_stream() -> crate::core::pubsub::LoadedStreamIdentity {
+    crate::core::pubsub::LoadedStreamIdentity {
+        runtime_id: "refused-link-wired-again-test".to_string(),
+        stream_id: "main".to_string(),
+        stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+    }
+}
+
+/// A link between two helpers past their setup that the reader's helper refused, and the
+/// compile an add of it plans, the link already closed as that compile closes it before its
+/// wiring.
+struct ALinkItsReaderRefused {
+    graph: RwLock<Graph>,
+    link_id: LinkUniqueId,
+    reader: NodeRunId,
+    source_side: crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery,
+    reader_side: crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery,
+    plan: CompilationPlan,
+    iceoryx2_node: crate::iceoryx2::Iceoryx2Node,
+}
+
+fn a_link_its_reader_refused_closed_to_be_wired_again() -> ALinkItsReaderRefused {
     use crate::core::json_schema::why_the_link_is_not_wired;
     use crate::core::test_support::{MockInputOnlyNode, MockOutputOnlyNode};
 
@@ -186,64 +200,140 @@ fn a_link_its_reader_refused_is_closed_and_wired_again_and_reads_wired_once_both
         .note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
     reader_side.wire_answers_owed.lock()[0]
         .note_the_far_sides_answer(refused_by_the_far_side().expect("a refusal"));
-    let is_not_wired = |graph: &Graph| {
+    assert!(
         why_the_link_is_not_wired(graph.traversal().e(&link_id).first().expect("held")).is_some()
-    };
-    let rendered_state = |graph: &Graph| {
-        crate::core::json_schema::rendered_link(
-            graph.traversal().e(&link_id).first().expect("held"),
-            &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
-            None,
-        )
-        .state
-    };
-    assert!(is_not_wired(&graph));
+    );
 
     let graph = RwLock::new(graph);
     let plan =
         the_plan_these_operations_make(&graph, vec![PendingOperation::AddLink(link_id.clone())]);
-    let mut graph = graph.into_inner();
-    unwire_each_link_an_end_refused_keeping_it(&mut graph, &plan, &[])
+    unwire_each_link_an_end_refused_keeping_it(&mut graph.write(), &plan, &[])
         .expect("the refused link is closed");
     assert_eq!(
-        graph.the_links_of_a_node_an_end_refused(&reader),
+        graph.read().the_links_of_a_node_an_end_refused(&reader),
         vec![link_id.clone()],
-        "a closed link still reads refused until it is handed over again, so a handover that \
-         fails leaves it to be wired again later"
+        "a closed link still reads refused until it is handed over again"
     );
-    for link_to_add in &plan.links_to_add {
-        super::super::compiler_ops::open_iceoryx2_service(&mut graph, link_to_add, &iceoryx2_node)
-            .expect("the refused link is handed over again");
+    ALinkItsReaderRefused {
+        graph,
+        link_id,
+        reader,
+        source_side,
+        reader_side,
+        plan,
+        iceoryx2_node,
     }
+}
+
+impl ALinkItsReaderRefused {
+    fn wire_the_links_the_plan_adds(&self) -> usize {
+        super::links_a_plan_adds_wired::wire_every_link_a_plan_adds(
+            &self.graph,
+            &self.plan.links_to_add,
+            &self.plan.links_to_wire_again,
+            &self.iceoryx2_node,
+            &the_fixtures_stream(),
+        )
+        .expect("a link an end refused never fails the compile")
+    }
+
+    fn rendered(&self) -> crate::core::json_schema::LinkOutput {
+        crate::core::json_schema::rendered_link(
+            self.graph
+                .read()
+                .traversal()
+                .e(&self.link_id)
+                .first()
+                .expect("held"),
+            &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
+            None,
+        )
+    }
+}
+
+/// A link between two helpers that the reader's helper refused is closed on both ends, kept,
+/// and handed to both helpers again with answers of its own by the wiring of the compile an add
+/// of it makes, and it reads wired once both open it, with no stop of the stream.
+///
+/// Mental-revert: wiring it again without closing it first hands both helpers the link again
+/// while each still holds the port it opened or refused for it, and tells neither to drop it.
+#[test]
+fn a_link_its_reader_refused_is_closed_and_wired_again_and_reads_wired_once_both_ends_open_it() {
+    let refused = a_link_its_reader_refused_closed_to_be_wired_again();
+
+    assert_eq!(refused.wire_the_links_the_plan_adds(), 1);
 
     let told_to_drop =
         |side: &crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery| {
             side.reclaimed_links
                 .lock()
                 .iter()
-                .filter(|reclaimed| reclaimed.link_id == link_id.as_str())
+                .filter(|reclaimed| reclaimed.link_id == refused.link_id.as_str())
                 .count()
         };
     assert_eq!(
-        (told_to_drop(&source_side), told_to_drop(&reader_side)),
+        (
+            told_to_drop(&refused.source_side),
+            told_to_drop(&refused.reader_side)
+        ),
         (1, 1)
     );
     let answers_owed =
         |side: &crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery| {
             side.wire_answers_owed.lock().clone()
         };
-    let (source_answers, reader_answers) = (answers_owed(&source_side), answers_owed(&reader_side));
+    let (source_answers, reader_answers) = (
+        answers_owed(&refused.source_side),
+        answers_owed(&refused.reader_side),
+    );
     assert_eq!((source_answers.len(), reader_answers.len()), (2, 2));
     assert_eq!(
-        (is_not_wired(&graph), rendered_state(&graph)),
-        (false, crate::core::json_schema::LinkStateOutput::Pending),
+        refused.rendered().state,
+        crate::core::json_schema::LinkStateOutput::Pending,
         "a link handed over again awaits its new answers"
     );
     for answer in [&source_answers[1], &reader_answers[1]] {
         answer.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
     }
     assert_eq!(
-        rendered_state(&graph),
+        refused.rendered().state,
         crate::core::json_schema::LinkStateOutput::Wired
+    );
+}
+
+/// A link an end refused whose handover fails when it is wired again stays refused in the
+/// failure's words, and the compile goes on, so the edits it carries land and a later retry
+/// wires the link.
+///
+/// Mental-revert: passing the failure up fails the whole commit with every edit in it; leaving
+/// the link closed as it was names it to no later retry.
+#[test]
+fn a_link_an_end_refused_whose_handover_fails_again_stays_refused_and_fails_no_compile() {
+    let refused = a_link_its_reader_refused_closed_to_be_wired_again();
+    refused
+        .reader_side
+        .refuses_links
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(refused.wire_the_links_the_plan_adds(), 0);
+
+    let rendered = refused.rendered();
+    assert_eq!(
+        rendered.state,
+        crate::core::json_schema::LinkStateOutput::Error
+    );
+    assert!(
+        rendered
+            .error_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("could not be written to the far side")),
+        "{rendered:?}"
+    );
+    assert_eq!(
+        refused
+            .graph
+            .read()
+            .the_links_of_a_node_an_end_refused(&refused.reader),
+        vec![refused.link_id.clone()]
     );
 }
