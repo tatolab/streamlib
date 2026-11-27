@@ -79,12 +79,18 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut placements_not_named: BTreeMap<String, LoadedStreamHoldingAStreamFragment> =
             match &project_repository_held {
                 Some(project_repository) => self
-                    .the_placements_an_edit_of_the_named_streams_can_reach(
+                    .the_placements_an_edit_can_reach(
                         self.the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(
                             project_repository.project_directory(),
                         ),
                         &stream_ids_in_order,
-                        stream_locations,
+                        stream_ids_in_order
+                            .iter()
+                            .filter_map(|stream_id| stream_locations.get(stream_id))
+                            .filter(|stream_location| {
+                                stream_location.project == project_repository.project_file().project
+                            })
+                            .map(|stream_location| stream_location.stream_asset),
                         project_repository,
                     )
                     .into_iter()

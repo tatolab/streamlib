@@ -274,3 +274,69 @@ async fn an_edit_no_placement_reaches_commits_while_a_placement_is_out_of_step()
         json!(2.0)
     );
 }
+
+/// A redo of an edit inside `sub` that `main` took, adding a node of a type only `main`
+/// resolves, is refused whole by `zeta`, which places `sub` since: `sub`'s document stays as the
+/// undo left it, `main` runs `sub` as it did, and `main`'s documents equal its running graph.
+///
+/// Mental-revert: bringing the placements of a reversal in line only once it is recorded
+/// redoes the edit into `sub`'s document, answers the redo as applied, and logs `zeta`'s
+/// refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_redo_a_placement_refuses_is_refused_whole_and_leaves_every_stream_as_it_was() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let (project, main_id, placing_node) = main_placing_sub(&engine).await;
+    register_the_type_only_main_resolves_on(&engine, &main_id);
+    let alice =
+        || json!({ "project_directory": project.path(), "author": an_agent_named("alice") });
+    engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": [
+                { "operation": "add_node", "stream": project.stream_asset_of("main"),
+                  "level": [placing_node], "type": A_TYPE_ONLY_MAIN_RESOLVES, "name": "only" },
+            ] }),
+        )
+        .await
+        .expect("main resolves the type it alone resolves");
+    engine
+        .the_answer_or_the_refusal_of("undo", alice())
+        .await
+        .expect("the undo takes the node out of sub");
+    project.write_the_graph_document(json!({
+        "stream": "zeta",
+        "nodes": [
+            { "id": Uuid::new_v4(), "name": "sub", "type": STREAM_FRAGMENT_NODE_TYPE,
+              "input_values": { "stream": { "asset": project.stream_asset_of("sub") } } },
+        ],
+        "links": [],
+    }));
+    engine.a_stream_loaded_from_its_graph_document(&project, "zeta");
+    let sub_before = project.the_graph_document_of("sub");
+    let main_running_before = the_nodes_and_links_with_those_placed_by(
+        &engine.the_live_graph_of(&main_id),
+        &placing_node,
+    );
+
+    let refused = engine
+        .the_answer_or_the_refusal_of("redo", alice())
+        .await
+        .expect_err("zeta refuses a type it does not resolve");
+
+    assert!(
+        refused.runtime_words.contains("OnlyMainResolvesIt"),
+        "zeta's own refusal reaches the caller: {refused:?}"
+    );
+    assert_eq!(
+        refused.refusal_code,
+        ControlOperationRefusalCode::NodeTypeNotFound,
+        "{refused:?}"
+    );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
+    let main_running = engine.the_live_graph_of(&main_id);
+    assert_eq!(
+        the_nodes_and_links_with_those_placed_by(&main_running, &placing_node),
+        main_running_before
+    );
+    assert_mains_documents_equal_its_running_graph(&project, &main_running, &placing_node);
+}

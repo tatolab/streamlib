@@ -47,23 +47,18 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// Each of `loaded`, none a stream `named` names, that places, at any depth, a stream of the
-    /// project `project_repository` holds that an edit of the streams `named` names can change:
+    /// project `project_repository` holds that an edit of the stream assets `edited` can change:
     /// one of them, or one they place, at any depth, as their documents are on disk now.
-    pub(super) fn the_placements_an_edit_of_the_named_streams_can_reach(
+    pub(super) fn the_placements_an_edit_can_reach(
         &self,
         loaded: Vec<LoadedStreamHoldingAStreamFragment>,
         named: &[String],
-        stream_locations: &HashMap<String, StreamLocation>,
+        edited: impl IntoIterator<Item = Uuid>,
         project_repository: &ProjectRepository,
     ) -> Vec<LoadedStreamHoldingAStreamFragment> {
         let project = project_repository.project_file().project;
         let mut an_edit_can_change: BTreeSet<Uuid> = BTreeSet::new();
-        let mut to_visit: Vec<Uuid> = named
-            .iter()
-            .filter_map(|stream_id| stream_locations.get(stream_id))
-            .filter(|stream_location| stream_location.project == project)
-            .map(|stream_location| stream_location.stream_asset)
-            .collect();
+        let mut to_visit: Vec<Uuid> = edited.into_iter().collect();
         while let Some(stream_asset) = to_visit.pop() {
             if !an_edit_can_change.insert(stream_asset) {
                 continue;
