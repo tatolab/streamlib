@@ -123,15 +123,15 @@ def CyberpunkAvatar(
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Camera frame in, rendered avatar stage out.
 
-    The tracker is built from the detector's inputs and the stage from its size, each again
-    when an input it read changes, while frames go on with the ones already built.
+    The tracker is built from the detector's inputs, again when one changes, while frames go on
+    with the one already built. The stage's renderer owns a GL context, which is current only on
+    the thread that made it, so the frame thread makes it at the first frame and again when the
+    stage's size changes, instead of a build on a thread of its own.
     """
     pose_tracker = computed(
         lambda: pose_tracker_or_none(detection_confidence.get(), pose_model_path.get())
     )
-    scene_renderer = computed(
-        lambda: AvatarSceneRenderer(scene_width.get(), scene_height.get())
-    )
+    scene_renderer: AvatarSceneRenderer | None = None
     smoothed_pose = SmoothedPose()
     pose_memory = PoseMemory(hold_seconds=1.5)
     frames_detected = 0
@@ -168,6 +168,7 @@ def CyberpunkAvatar(
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         nonlocal previous_elapsed_seconds, frames_detected, frames_held, frames_idled
+        nonlocal scene_renderer
         frame = video_from_camera.read()
         if frame is None:
             return
@@ -229,7 +230,12 @@ def CyberpunkAvatar(
             SolvedPose(solved_pose_record), timestamp_ns=frame.timestamp_ns
         )
 
-        stage = scene_renderer.get()
+        stage_size = (scene_width.get(), scene_height.get())
+        if scene_renderer is None or (scene_renderer.width, scene_renderer.height) != stage_size:
+            if scene_renderer is not None:
+                scene_renderer.gl.release()
+            scene_renderer = AvatarSceneRenderer(*stage_size)
+        stage = scene_renderer
         scene_pixels = stage.render(
             solve_segment_placements(settled), elapsed_seconds
         )
