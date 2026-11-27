@@ -5,6 +5,7 @@
 which the computed kernel tests set while its stream plays."""
 
 import json
+import math
 import os
 import statistics
 import time
@@ -122,7 +123,8 @@ class RebuildsAKernelSizedByItsWidth:
             return {
                 "frames": len(seconds),
                 "median": statistics.median(seconds),
-                "p90": statistics.quantiles(seconds, n=10)[-1] if len(seconds) > 1 else seconds[0],
+                # Nearest rank, so one slow frame among ten never sets it.
+                "p90": sorted(seconds)[math.ceil(0.9 * len(seconds)) - 1],
                 "max": max(seconds),
             }
 
