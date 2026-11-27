@@ -9,12 +9,13 @@
 
 use std::sync::Once;
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContextLimitedAccess;
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::Result;
 use crate::core::nodes::NODE_REGISTRY;
+use crate::core::runtime::builds_held_for_a_test::{BuildsHeldGate, TheBuildsHeld};
 use crate::sdk::nodes::{Input, computed};
 
 /// What the node of the type ran, since a test last forgot it.
@@ -43,9 +44,8 @@ static RAN: Mutex<WhatTheNodeFunctionRan> = Mutex::new(WhatTheNodeFunctionRan {
     gains_dropped: Vec::new(),
 });
 
-/// Whether each build of the computed value waits until a test lets the builds go.
-static BUILDS_HELD: Mutex<bool> = Mutex::new(false);
-static BUILDS_LET_GO: Condvar = Condvar::new();
+/// Where each build of the computed value waits while a test holds the builds.
+static BUILDS: BuildsHeldGate = BuildsHeldGate::new();
 
 /// The computed value: the gain it was built from, recording its drop.
 struct BuiltFromAGain {
@@ -75,11 +75,7 @@ fn a_node_written_as_one_function(
     let built = computed(move || {
         let gain = *gain.get();
         RAN.lock().builds_started += 1;
-        let mut held = BUILDS_HELD.lock();
-        while *held {
-            BUILDS_LET_GO.wait(&mut held);
-        }
-        drop(held);
+        BUILDS.wait_while_held();
         if gain < 0 {
             return Err(format!("a gain below zero, {gain}, amplifies nothing"));
         }
@@ -110,27 +106,10 @@ pub fn what_the_node_function_ran() -> WhatTheNodeFunctionRan {
 /// Forget what the node of the type ran, and let its builds go, for a test starting afresh.
 pub fn forget_what_the_node_function_ran() {
     *RAN.lock() = WhatTheNodeFunctionRan::default();
-    let_the_builds_go();
-}
-
-/// Each build of the node's computed value held until this is dropped, so a test that fails
-/// while builds are held lets them go as it unwinds instead of waiting on them forever.
-#[must_use = "the builds are let go when this is dropped"]
-pub struct TheBuildsHeld(());
-
-impl Drop for TheBuildsHeld {
-    fn drop(&mut self) {
-        let_the_builds_go();
-    }
+    BUILDS.let_go();
 }
 
 /// Hold each build of the node's computed value until what this returns is dropped.
 pub fn hold_the_builds() -> TheBuildsHeld {
-    *BUILDS_HELD.lock() = true;
-    TheBuildsHeld(())
-}
-
-fn let_the_builds_go() {
-    *BUILDS_HELD.lock() = false;
-    BUILDS_LET_GO.notify_all();
+    BUILDS.hold()
 }

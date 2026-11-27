@@ -140,6 +140,8 @@ class HostedNode:
         full_access_context: RuntimeContextFullAccess,
         limited_access_context: Any,
         fields: "Optional[ClassNodeFields]" = None,
+        *,
+        a_node_function: bool = False,
     ) -> None:
         self.instance = node_instance
         self.full_access_context = full_access_context
@@ -147,6 +149,9 @@ class HostedNode:
         self.fields = fields
         """The fields of a class under bare `@node`, or the value inputs of a node function, which
         follow their values; `None` for any other node."""
+        self.a_node_function = a_node_function
+        """Whether the node is written as one function, whose value inputs are written to its
+        scope."""
         self._declared_hooks = {
             hook for hook in self.LIFECYCLE_HOOKS if hasattr(node_instance, hook)
         }
@@ -316,7 +321,9 @@ def _host_a_node_function(
             node_id=node_run_id,
         ),
     )
-    return HostedNode(running, full_access_context, limited_access_context, fields)
+    return HostedNode(
+        running, full_access_context, limited_access_context, fields, a_node_function=True
+    )
 
 
 def the_words_a_process_raise_is_shown_in(raised: BaseException) -> str:

@@ -8,105 +8,44 @@
 //! build after; stopping its stream drops every value it built; and a computed value still
 //! building its first value, or whose build failed, shows in the stream's diagnostics.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use serial_test::serial;
-use streamlib_project_repository::StreamGraphOperation;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticRecoveryOnTheWire,
 };
 use uuid::Uuid;
 
-use crate::core::graph::NodeRunId;
-use crate::core::nodes::NodeSpec;
+use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::a_node_written_as_one_function_for_a_test::{
     WhatTheNodeFunctionRan, forget_what_the_node_function_ran, hold_the_builds,
     the_node_type_written_as_one_function, what_the_node_function_ran,
 };
-use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
-use crate::core::runtime::operations::RuntimeOperations;
-use crate::core::runtime::{LoadedStreamInThisRuntime, Runner};
-
-/// The longest a test waits for what it waits on.
-const WAITED_ON_WITHIN: Duration = Duration::from_secs(10);
-
-/// A stream holding one node written as one function.
-struct AStreamOfANodeFunction {
-    _runner: Arc<Runner>,
-    stream: Arc<LoadedStreamInThisRuntime>,
-    node: Uuid,
-    node_run_id: NodeRunId,
-}
+use crate::core::runtime::a_stream_of_one_node_for_a_test::{
+    AStreamOfOneNode, a_stream_of_one_node, once_it_holds, set_the_input, start,
+};
 
 /// A stream holding one node written as one function, holding `input_values`: `Value::Null`
 /// leaves its `gain` at its default, 1.
 fn a_stream_of_a_node_function(
     project_directory: &std::path::Path,
     input_values: Value,
-) -> AStreamOfANodeFunction {
+) -> AStreamOfOneNode {
     let node_type = the_node_type_written_as_one_function();
     forget_what_the_node_function_ran();
-    let runner = Runner::new().expect("Runner::new");
-    let stream = runner
-        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
-            project_directory,
-            "main",
-        ))
-        .expect("an empty stream loads");
-    let node = Uuid::new_v4();
-    let node_run_id = stream
-        .add_node(NodeSpec::new(node_type, input_values).with_node_uuid(node))
-        .expect("the node function is added");
-    AStreamOfANodeFunction {
-        _runner: runner,
-        stream,
-        node,
-        node_run_id,
-    }
-}
-
-fn start(stream: &Arc<LoadedStreamInThisRuntime>) {
-    stream.start().expect("the stream starts");
-    stream
-        .wait_until_every_node_is_running(Duration::from_secs(30))
-        .expect("every node runs");
-}
-
-fn on_the_tests_own_runtime<T>(operation: impl std::future::Future<Output = T>) -> T {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a current-thread runtime")
-        .block_on(operation)
+    a_stream_of_one_node(project_directory, node_type, input_values)
 }
 
 fn set_the_gain(stream: &LoadedStreamInThisRuntime, node: Uuid, gain: i32) {
-    on_the_tests_own_runtime(stream.apply_a_stream_graph_operation_live(
-        StreamGraphOperation::SetNodeInputValue {
-            node,
-            input: "gain".to_owned(),
-            member: None,
-            from: None,
-            to: Some(json!(gain)),
-        },
-    ))
-    .expect("a gain is set while the stream plays");
+    set_the_input(stream, node, "gain", json!(gain));
 }
 
 /// What the node ran once `settled` holds of it, or when the wait runs out.
 fn what_the_node_ran_once_it_holds(
     settled: impl Fn(&WhatTheNodeFunctionRan) -> bool,
 ) -> WhatTheNodeFunctionRan {
-    let deadline = Instant::now() + WAITED_ON_WITHIN;
-    loop {
-        let ran = what_the_node_function_ran();
-        if settled(&ran) || Instant::now() >= deadline {
-            return ran;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    once_it_holds(what_the_node_function_ran, settled)
 }
 
 /// Mental-revert: had a set rebuilt the node, its body would have run twice and the first value
@@ -280,14 +219,10 @@ fn the_diagnostics_once_they_hold(
     stream: &LoadedStreamInThisRuntime,
     settled: impl Fn(&[DiagnosticOnTheWire]) -> bool,
 ) -> Vec<DiagnosticOnTheWire> {
-    let deadline = Instant::now() + WAITED_ON_WITHIN;
-    loop {
-        let diagnostics = stream.diagnostics_of_its_nodes();
-        if settled(&diagnostics) || Instant::now() >= deadline {
-            return diagnostics;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    once_it_holds(
+        || stream.diagnostics_of_its_nodes(),
+        |diagnostics| settled(diagnostics),
+    )
 }
 
 /// The one diagnostic `diagnostics` hold, of `kind`, naming the node's computed value where the
