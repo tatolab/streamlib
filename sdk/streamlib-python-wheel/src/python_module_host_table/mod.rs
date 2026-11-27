@@ -12,6 +12,7 @@
 //! helper.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod audio_stream_on_a_device;
 mod host_memory_pixel_rows;
 mod module_host_lent_port_verbs;
 mod module_host_surface_verbs;

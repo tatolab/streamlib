@@ -24,6 +24,7 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableErrorMessage, ModuleHostTableStatus,
 };
 
+use super::audio_stream_on_a_device::{AudioStreamOnADevice, refusal_of_a_stream_taken_over};
 use super::{node_host_of, refuse, refused_while_a_frame_runs};
 
 /// The capture streams one node's native code opened, by handle.
@@ -35,7 +36,7 @@ pub(super) struct AudioCaptureStreamsOpenedForOneNode {
 }
 
 pub(super) struct AudioCaptureStreamOpenedForAModule {
-    capture_stream: Mutex<Box<dyn AudioCaptureStream>>,
+    capture_stream: AudioStreamOnADevice<dyn AudioCaptureStream>,
     liveness_report: DeviceStreamLivenessReport,
     /// Paces the null backend's silence; the stream's own, so closing it stops
     /// a clock nothing else ticks on.
@@ -80,12 +81,25 @@ impl AudioCaptureStreamsOpenedForOneNode {
         }
     }
 
+    /// Open a capture stream on `device_id`, the default device's being `None`, after taking
+    /// the device over from a stream this node has open on it.
     pub(super) fn open(
         &self,
         node_id: &str,
         device_id: Option<String>,
         requested_stream_format: RequestedAudioStreamFormat,
     ) -> Result<(ModuleHostTableAudioStreamHandle, AudioStreamFormat), String> {
+        let taken_over: Vec<_> = locked(&self.opened_streams)
+            .iter()
+            .flatten()
+            .filter(|opened| opened.capture_stream.is_on(device_id.as_deref()))
+            .cloned()
+            .collect();
+        for opened in taken_over {
+            opened
+                .capture_stream
+                .give_its_device_up(stop_delivering_and_log_a_failure);
+        }
         let audio_device_backend = probe_audio_device_backend();
         let deviceless_pacing_clock = platform_audio_clock_for_one_stream();
         let capture_stream = open_capture_stream_in_requested_format(
@@ -110,7 +124,7 @@ impl AudioCaptureStreamsOpenedForOneNode {
         );
         let opened_stream = Arc::new(AudioCaptureStreamOpenedForAModule {
             liveness_report: capture_stream.liveness_report(),
-            capture_stream: Mutex::new(capture_stream),
+            capture_stream: AudioStreamOnADevice::opened_on(device_id, capture_stream),
             deviceless_pacing_clock,
         });
         let mut opened_streams = locked(&self.opened_streams);
@@ -154,11 +168,16 @@ impl AudioCaptureStreamsOpenedForOneNode {
     }
 }
 
+fn stop_delivering_and_log_a_failure(capture_stream: &mut (dyn AudioCaptureStream + 'static)) {
+    if let Err(stop_failure) = capture_stream.stop_delivering() {
+        tracing::warn!(error = %stop_failure, "a module's audio capture stream failed to stop");
+    }
+}
+
 impl AudioCaptureStreamOpenedForAModule {
     fn stop_delivering_and_log_a_failure(&self) {
-        if let Err(stop_failure) = locked(&self.capture_stream).stop_delivering() {
-            tracing::warn!(error = %stop_failure, "a module's audio capture stream failed to stop");
-        }
+        self.capture_stream
+            .while_it_holds_its_device(stop_delivering_and_log_a_failure);
     }
 }
 
@@ -283,17 +302,21 @@ pub(super) unsafe extern "C" fn audio_capture_stream_start(
         block_callback,
         callback_context,
     };
-    let mut capture_stream = locked(&opened_stream.capture_stream);
-    // Stopped first, so the callback being replaced is never called once this
-    // returns, whatever a backend does with a hand-off it replaces.
-    let started = capture_stream.stop_delivering().and_then(|()| {
-        capture_stream.start_delivering_to(Box::new(move |captured| {
-            module_callback.hand_over(captured);
-        }))
-    });
+    let started = opened_stream
+        .capture_stream
+        .while_it_holds_its_device(|capture_stream| {
+            // Stopped first, so the callback being replaced is never called once this
+            // returns, whatever a backend does with a hand-off it replaces.
+            capture_stream.stop_delivering().and_then(|()| {
+                capture_stream.start_delivering_to(Box::new(move |captured| {
+                    module_callback.hand_over(captured);
+                }))
+            })
+        });
     match started {
-        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
-        Err(start_failure) => unsafe { refuse(error_message, &start_failure.to_string()) },
+        Some(Ok(())) => MODULE_HOST_TABLE_STATUS_OK,
+        Some(Err(start_failure)) => unsafe { refuse(error_message, &start_failure.to_string()) },
+        None => unsafe { refuse(error_message, &refusal_of_a_stream_taken_over("capture")) },
     }
 }
 
@@ -307,8 +330,11 @@ pub(super) unsafe extern "C" fn audio_capture_stream_stop(
         .audio_capture_streams
         .opened_stream(stream)
         .and_then(|opened_stream| {
-            locked(&opened_stream.capture_stream)
-                .stop_delivering()
+            opened_stream
+                .capture_stream
+                .while_it_holds_its_device(|capture_stream| capture_stream.stop_delivering())
+                // A stream taken over is stopped already.
+                .unwrap_or(Ok(()))
                 .map_err(|stop_failure| stop_failure.to_string())
         });
     match stopped {
