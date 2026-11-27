@@ -11,22 +11,19 @@ device. `tatolab.runtime` is borrowed from the runtime unit's lend.
 import dataclasses
 import math
 import os
-from typing import Any
+import time
+from typing import Any, Iterator
 
 import numpy
 import pytest
 from helper_process_link_wiring import wire_one_link
 from parent_stream_facts_stand_in import ParentHoldingStreamFacts
-from tatolab.opus import OpusDecoder, OpusEncoder
+from tatolab.opus import OpusDecoder, OpusEncoder, _native, samples_a_loss_left_out_before
+from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
+from tatolab.runtime._node_function_running import NodeFunctionRunning
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
-from tatolab.runtime._class_node_fields import ClassNodeFields
-from tatolab.runtime._node_hosting import (
-    class_node_members_of,
-    construct_class_node_from_its_fields_and_pins,
-)
 from tatolab.runtime._node_interpreter_bootstrap import describe_one_node_class
-from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream import (
     Audio,
     StreamBuilder,
@@ -101,61 +98,65 @@ def test_the_encoder_publishes_opus_packets():
     assert the_pin_type_of(encoded_audio) == {"type": "encoded_audio", "codecs": ["opus"]}
 
 
-def test_the_encoders_settings_are_read_at_setup_and_name_what_libopus_takes():
+def test_the_encoders_inputs_take_a_wire_or_a_value_set_live_and_name_what_libopus_takes():
+    """Mental-revert: declare either one a setting read at setup again, and its port says so."""
     described = describe_one_node_class("tatolab.opus:OpusEncoder")
-    settings = {
+    value_inputs = {
         port["name"]: port
         for port in described["input_ports"]
-        if port.get("input_mode", {}).get("mode") == "setting_only"
+        if port.get("input_mode", {}).get("mode") == "wire_or_value"
     }
 
-    assert set(settings) == {"bitrate_bps", "application"}
-    assert settings["bitrate_bps"]["pin_declaration"]["annotations"]["range"] == {
+    assert set(value_inputs) == {"bitrate_bps", "application"}
+    assert value_inputs["bitrate_bps"]["pin_declaration"]["annotations"]["range"] == {
         "minimum": 1,
         "maximum": 2**31 - 1,
     }
-    assert the_pin_type_of(settings["application"]) == {
+    assert the_pin_type_of(value_inputs["application"]) == {
         "type": "menu",
         "option_names": ["audio", "voip", "lowdelay"],
     }
 
 
-def an_encoder_with_no_link(**field_values: Any) -> OpusEncoder:
-    return construct_class_node(
-        OpusEncoder,
-        field_values=field_values,
-        pins={"audio": object(), "encoded_audio": object()},
-    )
-
-
 def test_an_encoder_with_no_values_takes_libopus_own_bitrate_and_the_audio_tuning():
-    encoder = an_encoder_with_no_link()
-    assert (encoder.bitrate_bps, encoder.application) == (None, "audio")
+    described = describe_one_node_class("tatolab.opus:OpusEncoder")
+    defaults = {
+        port["name"]: port.get("pin_default")
+        for port in described["input_ports"]
+        if port["name"] in ("bitrate_bps", "application")
+    }
+    assert defaults == {"bitrate_bps": None, "application": "audio"}
 
 
 def an_opus_node_on_its_links(
-    node_class: type, input_values: "dict[str, Any]", links: Any, ctx: Any
-) -> Any:
-    """`node_class` built as its helper builds it: each field from `input_values`, each pin
-    bound to `links`."""
-    members = class_node_members_of(node_class)
-    assert members is not None
-    fields = ClassNodeFields(
-        members,
-        link_data_access=links,
-        inputs=link_input_data_reader_of(ctx),
-        node_id=node_class.__name__,
-        stored_input_values=input_values,
+    node_function: Any, input_values: "dict[str, Any]", links: Any, ctx: Any
+) -> NodeFunctionRunning:
+    """`node_function` run as its helper runs it: each value input holding `input_values`'
+    value, each pin bound to `links`, and its body run at setup."""
+    running = NodeFunctionRunning(
+        node_function,
+        values_to_build_with=input_values,
+        pins=bind_the_pins_of_a_class_node(
+            node_function.members,
+            link_data_access=links,
+            inputs=link_input_data_reader_of(ctx),
+            outputs=link_output_data_writer_of(ctx),
+            node_id=node_function.__name__,
+        ),
     )
-    return construct_class_node_from_its_fields_and_pins(
-        node_class,
-        members,
-        fields,
-        link_data_access=links,
-        inputs=link_input_data_reader_of(ctx),
-        outputs=link_output_data_writer_of(ctx),
-        node_id=node_class.__name__,
-    )
+    running.setup(ctx)
+    return running
+
+
+def frame_once_every_computed_value_is_built(
+    running: NodeFunctionRunning, frame_ctx: Any, timeout_s: float = 5.0
+) -> None:
+    """Run one frame of `running`, waiting for the builds its body declared, which run off the
+    frame thread, to give their first values."""
+    deadline = time.monotonic() + timeout_s
+    while not running._running.run_frame(lambda: running._per_frame(frame_ctx)):
+        assert time.monotonic() < deadline, "the node's computed values were never built"
+        time.sleep(0.005)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -273,11 +274,13 @@ class OpusRoundTripOnWiredLinks:
             sample_rate=OPUS_SAMPLE_RATE_HZ,
             timestamp_ns=window.timestamp_ns,
         )
-        self.encoder.process(
-            _engine.limited_access_view_of_runtime_context_for_helper_process(self.encoder_context)
+        frame_once_every_computed_value_is_built(
+            self.encoder,
+            _engine.limited_access_view_of_runtime_context_for_helper_process(self.encoder_context),
         )
-        self.decoder.process(
-            _engine.limited_access_view_of_runtime_context_for_helper_process(self.decoder_context)
+        frame_once_every_computed_value_is_built(
+            self.decoder,
+            _engine.limited_access_view_of_runtime_context_for_helper_process(self.decoder_context),
         )
 
     def decoded_blocks(self) -> "list[DecodedBlock]":
@@ -289,9 +292,17 @@ class OpusRoundTripOnWiredLinks:
         return blocks
 
 
+    def stop(self) -> None:
+        """Stop both nodes as their helpers would, closing every value their builds made."""
+        self.encoder.stop(self.encoder_context)
+        self.decoder.stop(self.decoder_context)
+
+
 @pytest.fixture
-def opus_round_trip(request) -> OpusRoundTripOnWiredLinks:
-    return OpusRoundTripOnWiredLinks(request)
+def opus_round_trip(request) -> "Iterator[OpusRoundTripOnWiredLinks]":
+    round_trip = OpusRoundTripOnWiredLinks(request)
+    yield round_trip
+    round_trip.stop()
 
 
 def test_the_encoder_states_its_ports_stream_facts_with_the_opus_head_before_the_first_packet(
@@ -352,14 +363,12 @@ def test_a_window_whose_channel_count_opus_cannot_place_is_refused_by_name_and_t
     assert opus_round_trip.decoded_blocks() == []
 
 
-def test_an_empty_message_on_the_decoders_link_is_refused_by_name(
-    opus_round_trip: OpusRoundTripOnWiredLinks,
-):
-    decoder = opus_round_trip.decoder
+def test_an_empty_message_on_the_decoders_link_is_refused_by_name():
+    decoder = _native.EncodedPacketToAudioBlockDecoder()
     with pytest.raises(ValueError, match="no Opus packet"):
-        decoder._decoder.decode_one_arriving_message(b"", 0, True, 0, None)
+        decoder.decode_one_arriving_message(b"", 0, True, 0, None)
     with pytest.raises(ValueError, match="names codec `mp4a.40.2`"):
-        decoder._decoder.decode_one_arriving_message(
+        decoder.decode_one_arriving_message(
             b"\xfc\xff\xfe",
             0,
             True,
@@ -367,7 +376,7 @@ def test_an_empty_message_on_the_decoders_link_is_refused_by_name(
             {"family": "packets", "rfc6381_codec": "mp4a.40.2", "channel_count": 2},
         )
     with pytest.raises(ValueError, match="names no codec"):
-        decoder._decoder.decode_one_arriving_message(
+        decoder.decode_one_arriving_message(
             b"\xfc\xff\xfe", 0, True, 0, {"family": "packets", "channel_count": 2}
         )
 
@@ -379,15 +388,18 @@ class DecodedBlockStandIn:
 
 
 def test_a_loss_advances_the_decoders_start_sample_by_the_samples_it_left_out():
-    decoder = OpusDecoder.__new__(OpusDecoder)
-    decoder._next_first_sample_timestamp_ns = 10 * NANOSECONDS_PER_WINDOW
+    next_first_sample_timestamp_ns = 10 * NANOSECONDS_PER_WINDOW
     contiguous_block = DecodedBlockStandIn(first_sample_timestamp_ns=10 * NANOSECONDS_PER_WINDOW)
     block_after_three_lost_windows = DecodedBlockStandIn(
         first_sample_timestamp_ns=13 * NANOSECONDS_PER_WINDOW
     )
 
-    assert decoder._samples_skipped_before(contiguous_block) == 0  # type: ignore[arg-type]
     assert (
-        decoder._samples_skipped_before(block_after_three_lost_windows)  # type: ignore[arg-type]
+        samples_a_loss_left_out_before(contiguous_block, next_first_sample_timestamp_ns)  # type: ignore[arg-type]
+        == 0
+    )
+    assert (
+        samples_a_loss_left_out_before(block_after_three_lost_windows, next_first_sample_timestamp_ns)  # type: ignore[arg-type]
         == 3 * SAMPLES_IN_ONE_WINDOW
     )
+    assert samples_a_loss_left_out_before(contiguous_block, None) == 0  # type: ignore[arg-type]

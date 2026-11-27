@@ -495,3 +495,92 @@ fn a_class_node_link_its_island_still_reads_stays_open() {
 
     assert!(is_read_at_a_hidden_input_of(&graph, &into_the_island));
 }
+
+/// A class node link read through the reader of the island it feeds, whose read that reader's
+/// helper refused, is named among the links of the reader an end refused, though the reader is
+/// no end of it, so the reader's host wires it again.
+///
+/// Mental-revert: naming only the links into or out of the reader leaves the read refused until
+/// the stream starts again, while the reader's host asks for a retry that wires nothing.
+#[test]
+fn a_class_node_link_whose_read_its_islands_reader_refused_is_named_a_link_of_that_reader() {
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let (_remap, reader, into_the_island, into_the_reader) =
+        a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+    let reader_side =
+        crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery::default();
+    graph
+        .traversal()
+        .v(&reader)
+        .first()
+        .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+        .map(|link_wiring| Arc::clone(&link_wiring.0))
+        .expect("the reader is wired out of process")
+        .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), reader_side.clone())
+        .unwrap();
+    let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+    wire_a_link_from_a_function_node_island_into_its_reader(
+        &mut graph,
+        &into_the_reader,
+        &iceoryx2_node,
+    )
+    .unwrap();
+    wire_a_link_into_a_function_node_island_through_its_reader(
+        &mut graph,
+        &into_the_island,
+        &iceoryx2_node,
+    )
+    .unwrap();
+    assert!(graph.the_links_of_a_node_an_end_refused(&reader).is_empty());
+
+    for answer in reader_side.wire_answers_owed.lock().iter() {
+        answer.note_the_far_sides_answer(
+            crate::core::nodes::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: "could not open the read".to_owned(),
+            },
+        );
+    }
+
+    assert!(
+        graph
+            .the_links_of_a_node_an_end_refused(&reader)
+            .contains(&into_the_island),
+        "{:?}",
+        graph.the_links_of_a_node_an_end_refused(&reader)
+    );
+}
+
+/// A link into an island whose read its reader never opened, as one whose retry failed before
+/// the reader opened it is, is named a link of that reader while it reads refused, so the
+/// reader's next retry wires it again.
+///
+/// Mental-revert: finding the reader through the reads it opened names no link whose retry
+/// failed, which then stays refused until the stream starts again.
+#[test]
+fn a_class_node_link_held_refused_with_no_read_open_is_named_a_link_of_its_islands_reader() {
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let (_remap, reader, into_the_island, _into_the_reader) =
+        a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+    let refusal = crate::core::nodes::OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+    refusal.note_the_far_sides_answer(
+        crate::core::nodes::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+            reason: "the read could not be written to the far side".to_owned(),
+        },
+    );
+    let link = graph
+        .traversal_mut()
+        .e(&into_the_island)
+        .first_mut()
+        .expect("the link is held");
+    link.insert(crate::core::graph::LinkStateComponent(
+        crate::core::graph::LinkState::Pending,
+    ));
+    link.insert_component_without_rendering_it(
+        crate::core::graph::OutOfProcessLinkWireRepliesComponent(vec![refusal]),
+    );
+
+    assert_eq!(
+        graph.the_links_of_a_node_an_end_refused(&reader),
+        vec![into_the_island]
+    );
+}

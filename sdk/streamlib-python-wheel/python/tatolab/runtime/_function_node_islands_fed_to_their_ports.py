@@ -21,10 +21,8 @@ from tatolab.runtime._function_node_carried_values import (
     NAMED_VALUE_TYPE,
     PART_VALUE_TYPES,
     PinValueCarried,
+    StatefulFunctionNodeInAnIsland,
     pin_value_carried,
-)
-from tatolab.runtime._function_node_body_run_as_python import (
-    FunctionNodeBodyRunAsPython,
 )
 from tatolab.runtime._function_node_preparation import (
     how_one_function_node_is_called,
@@ -37,9 +35,9 @@ class FunctionNodeIslandsFedToTheirPorts:
     """The islands a helper's input ports are fed from, kept for as long as the ports are read, and how each node runs.
 
     The native evaluator calls into what each feed prepared, so it is kept
-    here. A port fed again is fed the new island in place of the old one: a
-    node run as Python keeps its body object, so its state carries on, and the
-    native evaluator carries on each other stateful node's state.
+    here. A port fed again is fed the new island in place of the old one. An
+    island holds only stateless nodes: the runtime runs each stateful function
+    node in a helper of its own.
     """
 
     def __init__(
@@ -49,9 +47,6 @@ class FunctionNodeIslandsFedToTheirPorts:
         self._load_function_node = load_function_node
         self._prepared_by_import_path: "dict[str, FunctionNodeReadyToEvaluate]" = {}
         self._island_by_input_port: "dict[str, dict[str, Any]]" = {}
-        self._body_run_as_python_by_input_port_and_node_id: (
-            "dict[tuple[str, str], FunctionNodeBodyRunAsPython]"
-        ) = {}
 
     @property
     def function_node_types_kept_alive(self) -> "list[FunctionNodeReadyToEvaluate]":
@@ -82,11 +77,11 @@ class FunctionNodeIslandsFedToTheirPorts:
         port is fed nothing until a later feed gives each input a value.
         """
         input_port = island["input_port"]
-        self._refuse_a_stateful_node_another_port_holds(island)
         prepared_by_node_id = {
             island_node["node"]: self._prepared(island_node["import_path"])
             for island_node in island["nodes"]
         }
+        _refuse_a_stateful_node_in_an_island(input_port, prepared_by_node_id)
         inputs_waiting_for_a_value = _the_island_node_inputs_no_value_reaches(
             island["nodes"], prepared_by_node_id
         )
@@ -107,20 +102,12 @@ class FunctionNodeIslandsFedToTheirPorts:
         }
         function_nodes_handed_over: "list[Any]" = []
         how_each_node_carries_its_values: "list[dict[str, Any]]" = []
-        bodies_run_as_python: "dict[tuple[str, str], FunctionNodeBodyRunAsPython]" = {}
         for island_node in island["nodes"]:
             node_id = island_node["node"]
             prepared = prepared_by_node_id[node_id]
-            called_through, config_values, config_value_indices = (
-                self._how_one_function_node_is_called(
-                    prepared,
-                    input_port,
-                    node_id,
-                    island_node.get("config"),
-                )
+            called_through, config_values, config_value_indices = how_one_function_node_is_called(
+                prepared, node_id, island_node.get("config")
             )
-            if isinstance(called_through, FunctionNodeBodyRunAsPython):
-                bodies_run_as_python[(input_port, node_id)] = called_through
             how_each_node_carries_its_values.append(
                 {
                     **prepared.how_its_values_are_carried,
@@ -161,14 +148,11 @@ class FunctionNodeIslandsFedToTheirPorts:
             ),
             how_each_node_carries_its_values=how_each_node_carries_its_values,
         )
-        self._forget_the_bodies_run_as_python_for(input_port)
-        self._body_run_as_python_by_input_port_and_node_id.update(bodies_run_as_python)
         self._island_by_input_port[input_port] = island
 
     def stop_feeding_an_input_port(self, input_port: str) -> bool:
         """Stop feeding `input_port` from its island; whether an island fed it."""
         self._island_by_input_port.pop(input_port, None)
-        self._forget_the_bodies_run_as_python_for(input_port)
         return stop_feeding_an_input_port_from_a_function_node_island(
             link_data_access=self._link_data_access, input_port=input_port
         )
@@ -179,46 +163,6 @@ class FunctionNodeIslandsFedToTheirPorts:
                 self._load_function_node(import_path), import_path
             )
         return self._prepared_by_import_path[import_path]
-
-    def _how_one_function_node_is_called(
-        self,
-        prepared: FunctionNodeReadyToEvaluate,
-        input_port: str,
-        node_id: str,
-        config: Any,
-    ) -> "tuple[Any, list[float], list[int]]":
-        body_run_as_python = self._body_run_as_python_by_input_port_and_node_id.get(
-            (input_port, node_id)
-        )
-        if (
-            body_run_as_python is not None
-            and body_run_as_python.runs(prepared)
-        ):
-            body_run_as_python.take_the_config(config)
-            return body_run_as_python, [], []
-        return how_one_function_node_is_called(prepared, node_id, config)
-
-    def _refuse_a_stateful_node_another_port_holds(self, island: "dict[str, Any]") -> None:
-        input_port_of_the_island_holding_each_stateful_node = {
-            island_node["node"]: held_input_port
-            for held_input_port, held_island in self._island_by_input_port.items()
-            if held_input_port != island["input_port"]
-            for island_node in held_island["nodes"]
-            if self._prepared(island_node["import_path"]).is_stateful
-        }
-        for island_node in island["nodes"]:
-            if self._prepared(island_node["import_path"]).is_stateful:
-                _refuse_a_stateful_node_two_islands_hold(
-                    island_node["node"],
-                    island["input_port"],
-                    input_port_of_the_island_holding_each_stateful_node,
-                )
-
-    def _forget_the_bodies_run_as_python_for(self, input_port: str) -> None:
-        for input_port_and_node_id in [
-            key for key in self._body_run_as_python_by_input_port_and_node_id if key[0] == input_port
-        ]:
-            del self._body_run_as_python_by_input_port_and_node_id[input_port_and_node_id]
 
 
 def _is_read_through_the_reader(linked_from: "dict[str, Any]") -> bool:
@@ -247,21 +191,17 @@ def _the_inputs_read_from_links_from_outside_the_island(
     return inputs_read
 
 
-def _refuse_a_stateful_node_two_islands_hold(
-    node_id: str,
-    input_port: str,
-    input_port_of_the_island_holding_each_stateful_node: "dict[str, str]",
+def _refuse_a_stateful_node_in_an_island(
+    input_port: str, prepared_by_node_id: "dict[str, FunctionNodeReadyToEvaluate]"
 ) -> None:
-    first_input_port = input_port_of_the_island_holding_each_stateful_node.setdefault(
-        node_id, input_port
-    )
-    if first_input_port != input_port:
-        raise FunctionNodeDoesNotCompile(
-            f"stateful function node `{node_id}` feeds both `{first_input_port}` and "
-            f"`{input_port}`, and each input evaluates its own island, so the two would keep "
-            f"two state histories. A stateful node feeds one input in this release. To fix: "
-            f"give each input its own node."
-        )
+    """Refuse an island holding a stateful node: its state would be one copy per island."""
+    for node_id, prepared in prepared_by_node_id.items():
+        if prepared.is_stateful:
+            raise StatefulFunctionNodeInAnIsland(
+                f"stateful function node `{node_id}` was handed to the island feeding "
+                f"`{input_port}`, and an island evaluates only stateless function nodes: the "
+                f"runtime runs each stateful one in a helper process of its own"
+            )
 
 
 def _the_island_node_inputs_no_value_reaches(

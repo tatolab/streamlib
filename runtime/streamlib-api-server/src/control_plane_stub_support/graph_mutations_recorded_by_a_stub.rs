@@ -287,6 +287,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("only a reader's own host asks for a function node's promotion")
         }
+        fn request_each_link_of_a_node_an_end_refused_be_wired_again(
+            &self,
+            _node_run_id: &::streamlib::sdk::graph::NodeRunId,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!("only a node's own host asks for its refused links to be wired again")
+        }
     };
 }
 
@@ -307,6 +313,14 @@ impl<Stub: ::streamlib::sdk::runtime::RuntimeOperations + 'static>
         ::streamlib::sdk::error::Result<::streamlib_project_repository::StreamGraphOperation>,
     > {
         self.0.apply_a_stream_graph_operation_live(graph_operation)
+    }
+
+    fn reconcile_the_live_graph_to_the_streams_an_edit_staged<'batch>(
+        &'batch self,
+        _graph_document: ::std::option::Option<::serde_json::Value>,
+        _stream_documents_an_edit_staged: &'batch ::streamlib_project_repository::StreamDocumentsAnEditStaged,
+    ) -> ::streamlib::sdk::runtime::BoxFuture<'batch, ::streamlib::sdk::error::Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 
     fn close(

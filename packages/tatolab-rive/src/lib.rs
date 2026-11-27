@@ -23,49 +23,49 @@ use tatolab_module_sdk::ModuleHost;
 use crate::rive_source_frame_loop::{RiveSceneRefused, RiveSourceRendering, RiveSourceSettings};
 
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveSceneNotBuilt,
     PyRuntimeError,
     "A scene could not be built; each reason is its own subclass."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveSizeNotPositive,
     RiveSceneNotBuilt,
     "`width`, `height` or `frame_rate` is 0."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveFileUnreadable,
     RiveSceneNotBuilt,
     "The `.riv` file could not be read."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveFileRefused,
     RiveSceneNotBuilt,
     "rive-runtime refused the file, or it holds no artboard or state machine of the name given."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RivePortRefused,
     RiveSceneNotBuilt,
     "The `video` or `data` port the node lent could not be opened."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveDeviceRefused,
     RiveSceneNotBuilt,
     "No external-renderer device could be created on the runtime's GPU."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveSurfaceShareUnreachable,
     RiveSceneNotBuilt,
     "The surface share that output textures are checked out through is unreachable."
 );
 create_exception!(
-    _native,
+    tatolab.rive._native,
     RiveFrameThreadFailed,
     RiveSceneNotBuilt,
     "The frame thread could not start, or ended before its scene was built."

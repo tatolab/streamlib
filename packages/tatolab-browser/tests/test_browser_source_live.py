@@ -121,7 +121,11 @@ def test_a_page_that_cannot_open_leaves_the_one_before_publishing(
     monkeypatch.chdir(tmp_path)
 
     for url, why in (
-        (URL_THE_HOST_REFUSES, f"RuntimeError: the browser host did not open {URL_THE_HOST_REFUSES}"),
+        (
+            URL_THE_HOST_REFUSES,
+            "BrowserPageRefusedByTheBrowserHost: the browser host refused the page: "
+            f"{URL_THE_HOST_REFUSES}",
+        ),
         ("templates/missing_page.html", "BrowserPageFileMissing: "),
     ):
         running.write_inputs({"url": url})

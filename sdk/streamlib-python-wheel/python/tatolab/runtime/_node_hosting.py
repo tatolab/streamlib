@@ -62,8 +62,11 @@ def is_a_node_function(node: object) -> bool:
 
 
 def class_node_pin_groups_of(node_class: type) -> "tuple[ClassNodePinGroup, ...]":
-    """The `PinGroup`s of `node_class` when it is a class under bare `@node`; none for any other
-    node, and for a node declared by a `tatolab-stream` that predates pin groups."""
+    """The `PinGroup`s of `node_class` when it is a class under bare `@node` or a node function;
+    none for any other node, and for a node declared by a `tatolab-stream` that predates pin
+    groups."""
+    if is_a_node_function(node_class):
+        return getattr(node_class, "pin_groups", ())
     try:
         from tatolab.stream._class_node_construction import class_node_pin_groups
     except ImportError:

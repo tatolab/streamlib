@@ -8,6 +8,8 @@ interrupt, and a helper that imported another engine build.
 
 from __future__ import annotations
 
+import os
+import signal
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -18,10 +20,7 @@ from conftest import TatolabdUnderTest
 from helper_placement_observation import (
     StartTatolabdRunningStream,
 )
-from helper_placement_nodes import (
-    CALLS_RETURNED_BEFORE_A_CALL_HANGS,
-    COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES,
-)
+from helper_placement_nodes import CALLS_RETURNED_BEFORE_A_CALL_HANGS
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
     function_node_run_as_python_that_crashes_into_python_sink,
@@ -30,10 +29,10 @@ from helper_placement_streams import (
     one_probe_forking_a_worker_that_outlives_it,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
-    pooled_counter_beside_a_pooled_node_that_hangs,
     reaped_labelled_source_into_sink,
-    stateful_counter_into_python_sink_that_dies_once,
     stale_build_labelled_source,
+    stateful_counter_beside_a_pooled_node_that_hangs,
+    stateful_counter_read_by_one_python_sink_reporting_each_batch,
 )
 from helper_process_observation import (
     a_process_is_gone_within,
@@ -52,6 +51,9 @@ pytestmark = pytest.mark.requires_gpu
 # plus the group's grace; a helper that answers at once is far inside it. This
 # is what separates "the ladder ran" from "the thirty-second callback did".
 LADDER_BUDGET_SECONDS = 15.0
+
+#: How long a crashed helper's restart may take to log its new helper starting.
+HELPER_RESTART_BUDGET_SECONDS = 30.0
 
 HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT = "its helper process died before it finished setting up"
 
@@ -114,20 +116,20 @@ def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_tim
     assert all(level == 5 for level in levels), levels
 
 
-def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_state(
+def test_a_hung_call_in_the_pool_respawns_it_and_the_stateful_node_beside_it_counts_on(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A call that never returns ends the pool; its next process resumes every node's state.
+    """A call that never returns ends the pool; the stateful counter beside it counts on.
 
     `hanger` returns from its first calls and then never does, so the pool's
     helper is ended as stalled and `hanger` moves into a helper process of its
-    own. The pool's next process resumes `counter` from the count its board
-    last held, so the counts the sink reads never start over.
+    own. `counter` runs in a helper of its own, as every stateful function node
+    does, so the counts the sink reads never start over.
 
-    Fail-without-fix: with the state kept only in the pool's process, the
-    count starts again from one after the respawn.
+    Fail-without-fix: with the counter run in the pool and its state not carried
+    across the respawn, the count starts again from one.
     """
-    tatolabd = start_tatolabd_running_stream(pooled_counter_beside_a_pooled_node_that_hangs)
+    tatolabd = start_tatolabd_running_stream(stateful_counter_beside_a_pooled_node_that_hangs)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     tatolabd.await_marker("COUNTS_READ")
     stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
@@ -148,7 +150,7 @@ def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_s
         f"the counter ran past the hanger's first calls and on after the respawn: {counts}"
     )
     assert all(later >= earlier for earlier, later in zip(counts, counts[1:])), (
-        f"the pool's next process resumes the count, and the sink read {counts}"
+        f"the pool's respawn leaves the counter counting on, and the sink read {counts}"
     )
     hanger = next(node for node in graph["nodes"] if node["name"] == "hanger")
     promotion = hanger["components"]["metrics"]["promoted_out_of_its_readers_islands"]
@@ -254,53 +256,94 @@ def test_a_function_node_run_as_python_that_crashes_its_reader_moves_out_of_it(
     assert crasher["components"]["ran_compiled"] is False, crasher
 
 
-def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a_restart(
+def await_a_helper_started_past(
+    tatolabd: TatolabdUnderTest, helpers_started_before: "list[int]"
+) -> int:
+    """The pid of the first helper `tatolabd` logs starting past `helpers_started_before`."""
+    deadline = time.monotonic() + HELPER_RESTART_BUDGET_SECONDS
+    while time.monotonic() < deadline:
+        helpers_started = helper_process_ids_started_in(tatolabd.stderr_text)
+        if len(helpers_started) > len(helpers_started_before):
+            return helpers_started[len(helpers_started_before)]
+        time.sleep(0.05)
+    raise AssertionError(
+        f"no helper started past {helpers_started_before}:\n{tatolabd.recent_stderr()}"
+    )
+
+
+def test_a_stateful_function_node_counts_on_through_a_crash_of_its_own_helper_and_a_restart(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
     start_tatolabd: Callable[..., TatolabdUnderTest],
 ):
     """A stateful function node's state belongs to its stream, not to the
-    process that evaluates it.
+    process that runs it.
 
-    The counter starts at one in its reader's first helper, which takes itself
-    down at twenty; the reader's next helper resumes the count where the dead
-    one left it, `graph` shows the count the node holds, and a restart of the
-    runtime resumes it again.
+    The counter runs in a helper of its own, apart from its reader. Killing
+    that helper starts a new one that counts on past the count the dead one
+    reached, the reader reads on in the same process, `graph` shows the count
+    the node holds, and a restart of the runtime resumes it again.
 
-    Fail-without-fix: with the state kept only in the helper, each new helper
-    counts from one again, and its reader dies at twenty every time.
+    Fail-without-fix: with the counter run inside its reader's helper there is
+    no helper of its own to kill; with its state kept only in its helper, the
+    new helper counts from one again.
     """
-    tatolabd = start_tatolabd_running_stream(stateful_counter_into_python_sink_that_dies_once)
+    tatolabd = start_tatolabd_running_stream(
+        stateful_counter_read_by_one_python_sink_reporting_each_batch
+    )
     stream_id = tatolabd.await_the_latest_stream_loaded()
-    first_read_of_the_first_helper = tatolabd.await_marker("FIRST_COUNT_READ")
-    count_its_helper_died_at = tatolabd.await_marker("FRESH_COUNT_SINK_ABOUT_TO_DIE")["count"]
-    first_read_of_the_restarted_helper = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=2)
+    first_batch = tatolabd.await_marker("COUNT_BATCH_READ_IN_ORDER")
+    readers_pid = first_batch["pid"]
+    helpers_before_the_kill = helper_process_ids_started_in(tatolabd.stderr_text)
+    counters_helper_pids = [pid for pid in helpers_before_the_kill if pid != readers_pid]
+    assert len(counters_helper_pids) == 1, (
+        f"the counter runs in a helper of its own beside its reader's {readers_pid}, and "
+        f"tatolabd started {helpers_before_the_kill}:\n{tatolabd.recent_stderr()}"
+    )
+    highest_count_read_before_the_kill = max(
+        max(batch["counts"]) for batch in tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER")
+    )
+    os.kill(counters_helper_pids[0], signal.SIGKILL)
+    tatolabd.await_stderr_containing(f"its helper process (pid={counters_helper_pids[0]}) died")
+    tatolabd.await_stderr_containing("a new one starts in")
+    await_a_helper_started_past(tatolabd, helpers_before_the_kill)
+    batches_read_by_the_new_helpers_start = len(
+        tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER")
+    )
+    batch_read_after_the_restart = tatolabd.await_marker(
+        "COUNT_BATCH_READ_IN_ORDER", occurrence=batches_read_by_the_new_helpers_start + 2
+    )
     local_api = tatolabd.local_api_client()
     graph = local_api.call_tool("graph", {"stream": stream_id})
     counter = next(node for node in graph["nodes"] if node["name"] == "counter")
     count_the_graph_showed = counter["components"]["function_node_state"]["calls"]
+    every_count_read = [
+        count
+        for batch in tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER")
+        for count in batch["counts"]
+    ]
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     restarted_tatolabd = start_tatolabd()
-    first_read_after_the_restart = restarted_tatolabd.await_marker("FIRST_COUNT_READ")
+    first_batch_after_the_restart = restarted_tatolabd.await_marker("COUNT_BATCH_READ_IN_ORDER")
     restarted_tatolabd.interrupt()
     restarted_tatolabd.await_clean_exit()
 
-    assert first_read_of_the_first_helper["count"] == 1.0, first_read_of_the_first_helper
-    assert count_its_helper_died_at >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES
-    assert first_read_of_the_restarted_helper["pid"] != first_read_of_the_first_helper["pid"]
-    assert first_read_of_the_restarted_helper["count"] > count_its_helper_died_at, (
-        f"the reader's new helper resumes the count its dead one reached, "
-        f"{count_its_helper_died_at}, and first read {first_read_of_the_restarted_helper}"
+    assert batch_read_after_the_restart["pid"] == readers_pid, (
+        "the reader reads on in the same process through its counter's crash"
     )
-    assert count_the_graph_showed >= first_read_of_the_restarted_helper["count"], (
+    assert min(batch_read_after_the_restart["counts"]) > highest_count_read_before_the_kill, (
+        f"the counter's new helper counts on past {highest_count_read_before_the_kill}, the "
+        f"highest count read before the kill, and its reader read {batch_read_after_the_restart}"
+    )
+    assert every_count_read == sorted(every_count_read), (
+        f"no count the reader read goes back:\n{every_count_read}"
+    )
+    assert count_the_graph_showed >= max(batch_read_after_the_restart["counts"]), (
         f"`graph` shows the count the node holds: {counter['components']}"
     )
-    assert first_read_after_the_restart["count"] > count_the_graph_showed, (
+    assert min(first_batch_after_the_restart["counts"]) > count_the_graph_showed, (
         f"a runtime restart resumes the count from {count_the_graph_showed}, and the reader "
-        f"first read {first_read_after_the_restart}"
-    )
-    assert len(tatolabd.marker_payloads("FRESH_COUNT_SINK_ABOUT_TO_DIE")) == 1, (
-        f"only the fresh count reaches twenty:\n{tatolabd.recent_stderr()}"
+        f"first read {first_batch_after_the_restart}"
     )
 
 

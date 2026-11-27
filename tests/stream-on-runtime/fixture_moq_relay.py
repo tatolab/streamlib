@@ -12,6 +12,8 @@ QUIC and its certificate's fingerprint on one port.
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import subprocess
 import time
 import urllib.request
@@ -83,13 +85,14 @@ def the_relay_serves_its_fingerprint(relay_url: str) -> bool:
         return False
 
 
-@pytest.fixture
-def fixture_moq_relay_url(tmp_path: Path) -> "Iterator[str]":
-    """Start a relay for this test and yield its `http://127.0.0.1:<port>` URL."""
+@contextlib.contextmanager
+def a_fixture_relay_serving(directory: Path) -> "Iterator[FixtureRelay]":
+    """Start a relay keeping its configuration and log in `directory`, and yield it serving."""
+    directory.mkdir(parents=True, exist_ok=True)
     port = a_tcp_port_free_on_loopback()
-    configuration_path = tmp_path / "moq-relay.toml"
+    configuration_path = directory / "moq-relay.toml"
     configuration_path.write_text(fixture_relay_configuration(port))
-    relay_log_path = tmp_path / "moq-relay.log"
+    relay_log_path = directory / "moq-relay.log"
     with relay_log_path.open("w") as relay_log:
         relay = subprocess.Popen(
             [str(the_fixture_relay_executable()), str(configuration_path)],
@@ -97,20 +100,41 @@ def fixture_moq_relay_url(tmp_path: Path) -> "Iterator[str]":
             stdout=relay_log,
             stderr=subprocess.STDOUT,
         )
-    relay_url = f"http://127.0.0.1:{port}"
+    fixture_relay = FixtureRelay(url=f"http://127.0.0.1:{port}", process=relay)
     try:
         serving_deadline = time.monotonic() + FIXTURE_RELAY_SERVING_BUDGET_SECONDS
-        while not the_relay_serves_its_fingerprint(relay_url):
+        while not the_relay_serves_its_fingerprint(fixture_relay.url):
             if relay.poll() is not None or time.monotonic() > serving_deadline:
                 pytest.fail(
                     f"the fixture relay did not serve on port {port}:\n{relay_log_path.read_text()}"
                 )
             time.sleep(0.1)
-        yield relay_url
+        yield fixture_relay
     finally:
-        relay.terminate()
+        fixture_relay.stop()
+
+
+@dataclasses.dataclass(frozen=True)
+class FixtureRelay:
+    """A relay a test started: the `http://127.0.0.1:<port>` URL it serves at, and its process."""
+
+    url: str
+    process: "subprocess.Popen[bytes]"
+
+    def stop(self) -> None:
+        """End the relay, as one going away ends."""
+        if self.process.poll() is not None:
+            return
+        self.process.terminate()
         try:
-            relay.wait(timeout=5)
+            self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            relay.kill()
-            relay.wait()
+            self.process.kill()
+            self.process.wait()
+
+
+@pytest.fixture
+def fixture_moq_relay_url(tmp_path: Path) -> "Iterator[str]":
+    """Start a relay for this test and yield its `http://127.0.0.1:<port>` URL."""
+    with a_fixture_relay_serving(tmp_path / "moq-relay") as fixture_relay:
+        yield fixture_relay.url

@@ -236,6 +236,30 @@ impl ChannelEgress {
         self.send_loaned_sample(port, loaned_sample, user_header)
     }
 
+    /// Send `payload_bytes` under `user_header` again, for the readers that connected after the
+    /// port's last send, as [`Self::send_bytes`] does, but numbered as that send when it may have
+    /// reached a reader: a reader that already holds it reads the number it last received and
+    /// passes the message over, so it reads each message once.
+    pub(super) fn send_again_to_the_readers_its_last_send_missed(
+        &mut self,
+        port: &str,
+        payload_bytes: &[u8],
+        user_header: DataChannelSampleUserHeader,
+    ) -> Result<()> {
+        if self.subscribers_connected_at_the_last_send.is_empty() {
+            return self.send_bytes(port, payload_bytes, user_header);
+        }
+        let mut loaned_sample = self.admit_and_loan(payload_bytes.len())?;
+        super::payload_area_bytes_mut(&mut loaned_sample)[..payload_bytes.len()]
+            .copy_from_slice(payload_bytes);
+        *loaned_sample.user_header_mut() = DataChannelSampleUserHeader {
+            sequence_number: self.next_sequence_number.wrapping_sub(1),
+            messages_lost_upstream_before_this_one: 0,
+            ..user_header
+        };
+        self.publish_and_wake_every_destination(port, loaned_sample, false)
+    }
+
     /// Send `loaned_sample` under `user_header`, numbered as this port's next
     /// send, then wake every destination.
     pub(super) fn send_loaned_sample(
@@ -250,18 +274,40 @@ impl ChannelEgress {
                 .messages_lost_upstream_before_the_next_send,
             ..user_header
         };
+        self.publish_and_wake_every_destination(port, loaned_sample, true)
+    }
+
+    /// Publish `loaned_sample`, numbered already, then wake every destination; a send that
+    /// `takes_the_next_number` moves the numbering on when it may have delivered.
+    ///
+    /// A send that reached no reader leaves the port's last send as it was: a new send reached
+    /// none of the readers connected now, and a send again still reached the ones its first send
+    /// did, so the readers that send missed are sent it again on the next pass.
+    fn publish_and_wake_every_destination(
+        &mut self,
+        port: &str,
+        loaned_sample: ChannelDataServiceLoanedSample,
+        takes_the_next_number: bool,
+    ) -> Result<()> {
+        let readers_the_last_send_reached =
+            (!takes_the_next_number).then(|| self.subscribers_connected_at_the_last_send.clone());
         self.channel.collect_connected_subscriber_ids_into(
             &mut self.subscribers_connected_at_the_last_send,
         );
         let send_outcome = loaned_sample.send();
         let may_have_delivered = a_send_may_have_delivered(&send_outcome);
         if !may_have_delivered {
-            self.subscribers_connected_at_the_last_send.clear();
+            match readers_the_last_send_reached {
+                Some(readers) => self.subscribers_connected_at_the_last_send = readers,
+                None => self.subscribers_connected_at_the_last_send.clear(),
+            }
         }
-        self.next_sequence_number =
-            sequence_number_following_a_send(self.next_sequence_number, may_have_delivered);
-        if may_have_delivered {
-            self.messages_lost_upstream_before_the_next_send = 0;
+        if takes_the_next_number {
+            self.next_sequence_number =
+                sequence_number_following_a_send(self.next_sequence_number, may_have_delivered);
+            if may_have_delivered {
+                self.messages_lost_upstream_before_the_next_send = 0;
+            }
         }
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
         self.bag_counters.record_one_written_bag();

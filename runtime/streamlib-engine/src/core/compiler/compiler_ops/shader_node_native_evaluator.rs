@@ -6,11 +6,13 @@
 //! process in one submission on each frame the island's leading Image input
 //! takes, writing one Image frame from the evaluating node's own output pool.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::shader_node_island::{
-    ShaderNodeIslandHostedHereComponent, numbers_of_a_shader_node_input,
+    ShaderNodeIslandHandedToItsEvaluator, ShaderNodeIslandHostedHereComponent,
+    ShaderNodeIslandWithItsFusedGroup,
+    numbers_of_a_shader_node_input,
 };
 use super::shader_node_island_program::{
     ShaderNodeIslandKernel, ShaderNodeIslandMemberInput, ShaderNodeIslandProgram,
@@ -74,6 +76,7 @@ pub(crate) struct ShaderNodeNativeEvaluator {
     descriptor: NodeDescriptor,
     island: ShaderNodeIslandProgram,
     fused_group: Option<Arc<ShaderNodeFusedGroupOfAnIsland>>,
+    island_handed_over: Option<Arc<ShaderNodeIslandHandedToItsEvaluator>>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
     output_pixel_buffer_pool: Option<NodeOutputPixelBufferPoolOfOneNativeNode>,
@@ -93,40 +96,31 @@ impl ShaderNodeNativeEvaluator {
         descriptor: NodeDescriptor,
         program: ShaderNodeProgram,
     ) -> Self {
-        let (island, fused_group) = match node.get::<ShaderNodeIslandHostedHereComponent>() {
-            Some(hosted) => (hosted.island.clone(), Some(Arc::clone(&hosted.fused_group))),
-            None => (
-                ShaderNodeIslandProgram::of_one_node(
-                    node.display_name.clone(),
-                    program,
-                    |port, value_type| numbers_of_a_shader_node_input(node, port, value_type),
+        let (island, fused_group, island_handed_over) =
+            match node.get::<ShaderNodeIslandHostedHereComponent>() {
+                Some(hosted) => (
+                    hosted.island.clone(),
+                    Some(Arc::clone(&hosted.fused_group)),
+                    Some(Arc::clone(&hosted.handed_to_its_evaluator)),
                 ),
-                None,
-            ),
-        };
-        let numbers_by_input_port = island
-            .members()
-            .iter()
-            .flat_map(|member| member.inputs.iter().zip(&member.program.inputs))
-            .filter_map(|(input, signature_input)| match input {
-                ShaderNodeIslandMemberInput::NumbersReadAt {
-                    input_port,
-                    numbers_until_one_is_read,
-                } => Some((
-                    input_port.clone(),
-                    NumbersReadAtAnInputPort {
-                        value_type: signature_input.value_type.clone(),
-                        numbers: numbers_until_one_is_read.clone(),
-                    },
-                )),
-                _ => None,
-            })
-            .collect();
+                None => (
+                    ShaderNodeIslandProgram::of_one_node(
+                        node.display_name.clone(),
+                        program,
+                        |port, value_type| numbers_of_a_shader_node_input(node, port, value_type),
+                    ),
+                    None,
+                    None,
+                ),
+            };
+        let numbers_by_input_port =
+            the_numbers_each_input_port_of_an_island_reads(&island, |_| None);
         Self {
             node_name: node.id.to_string(),
             descriptor,
             island,
             fused_group,
+            island_handed_over,
             output_writer: None,
             input_mailboxes: None,
             output_pixel_buffer_pool: None,
@@ -136,6 +130,48 @@ impl ShaderNodeNativeEvaluator {
             numbers_by_input_port,
             refusal_last_logged: None,
         }
+    }
+
+    /// Take the island last handed to this evaluator, if one was, in place of the one it
+    /// evaluates: each input of numbers both read goes on reading the value it reads now, a new
+    /// one starts at the value the island was placed with, and the newest frame of an Image
+    /// input the new island no longer reads is let go.
+    fn take_the_island_handed_over(&mut self) {
+        let Some(ShaderNodeIslandWithItsFusedGroup {
+            island,
+            fused_group,
+        }) = self
+            .island_handed_over
+            .as_ref()
+            .and_then(|handed_over| handed_over.take())
+        else {
+            return;
+        };
+        let numbers_read_before = std::mem::take(&mut self.numbers_by_input_port);
+        self.numbers_by_input_port =
+            the_numbers_each_input_port_of_an_island_reads(&island, |input_port| {
+                numbers_read_before
+                    .get(input_port)
+                    .map(|read| read.numbers.clone())
+            });
+        self.island = island;
+        let image_input_ports_read: HashSet<String> = self
+            .image_input_ports_read()
+            .into_iter()
+            .map(|(input_port, _, _)| input_port)
+            .collect();
+        self.newest_image_frame_by_input_port
+            .retain(|input_port, _| image_input_ports_read.contains(input_port));
+        // Pools are kept by member index, which the new island numbers afresh.
+        self.stored_pixel_buffer_pool_by_member.clear();
+        self.fused_group = Some(fused_group);
+        self.refusal_last_logged = None;
+    }
+
+    /// The members of the island it evaluates now, by name.
+    #[cfg(test)]
+    pub(crate) fn the_members_it_evaluates(&self) -> Vec<String> {
+        self.island.member_names()
     }
 
     /// The numbers input `input_port` of the island reads now.
@@ -529,6 +565,33 @@ impl ShaderNodeNativeEvaluator {
     }
 }
 
+/// The numbers each input port of `island` that takes numbers reads: what `reading_now` gives
+/// for its port, else the value the island starts it at.
+fn the_numbers_each_input_port_of_an_island_reads(
+    island: &ShaderNodeIslandProgram,
+    reading_now: impl Fn(&str) -> Option<Vec<f32>>,
+) -> HashMap<String, NumbersReadAtAnInputPort> {
+    island
+        .members()
+        .iter()
+        .flat_map(|member| member.inputs.iter().zip(&member.program.inputs))
+        .filter_map(|(input, signature_input)| match input {
+            ShaderNodeIslandMemberInput::NumbersReadAt {
+                input_port,
+                numbers_until_one_is_read,
+            } => Some((
+                input_port.clone(),
+                NumbersReadAtAnInputPort {
+                    value_type: signature_input.value_type.clone(),
+                    numbers: reading_now(input_port)
+                        .unwrap_or_else(|| numbers_until_one_is_read.clone()),
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The refusal of an Image input frame of `format` a shader node does not
 /// take, naming what goes in front of the input.
 pub(crate) fn refusal_of_an_image_a_shader_node_does_not_take(
@@ -675,6 +738,7 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
     }
 
     fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        self.take_the_island_handed_over();
         if !self.take_every_waiting_message()? {
             return Ok(());
         }
@@ -750,11 +814,14 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
 
     /// Read each input of numbers of the island no link feeds as its value in `input_values`,
     /// keyed by the input port it is read at, and one `input_values` holds no value of its type
-    /// for as 0, as a freshly built island reads it; a linked input goes on reading its link.
+    /// for as 0, as a freshly built island reads it; a linked input goes on reading its link. An
+    /// island handed over and not yet taken is taken first, so the values reach the island it
+    /// evaluates from then on.
     fn set_unlinked_input_values(
         &mut self,
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
+        self.take_the_island_handed_over();
         let input_mailboxes = self.input_mailboxes.as_ref();
         for (input_port, read) in &mut self.numbers_by_input_port {
             if input_mailboxes

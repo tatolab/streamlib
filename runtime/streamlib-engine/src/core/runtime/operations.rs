@@ -122,6 +122,17 @@ pub trait GraphEditBatch: Send {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
+    /// Bring the stream's live graph, inside the batch, to `graph_document`, its graph document
+    /// as an edit staged it, or, with none, to itself as drawn, as a load of it would make it:
+    /// each stream fragment placing a stream `stream_documents_an_edit_staged` holds places it
+    /// as the edit staged it, and any other as its document, or its import's, is on disk now.
+    /// Refused, the batch left to be taken back, as the reconcile refuses.
+    fn reconcile_the_live_graph_to_the_streams_an_edit_staged<'batch>(
+        &'batch self,
+        graph_document: Option<serde_json::Value>,
+        stream_documents_an_edit_staged: &'batch streamlib_project_repository::StreamDocumentsAnEditStaged,
+    ) -> BoxFuture<'batch, Result<()>>;
+
     /// Close the batch: refused, and taken back, when the graph it leaves holds a reader that
     /// runs reactively fed only by function node islands, or when its one commit is refused;
     /// otherwise compiled in one commit, and each event of what stands announced. A refusal
@@ -440,6 +451,19 @@ pub trait RuntimeOperations: Send + Sync {
         reader_id: &NodeRunId,
         promotion_request_number: u64,
         reason: &str,
+    ) -> Result<()>;
+
+    /// Ask that each link into or out of `node_run_id` that an end out of process refused to
+    /// open be wired again, as a reconnect of it would be, now that the node's far side may open
+    /// it: after its helper process started again in place of one that died, or while a far
+    /// side that refused one keeps running.
+    ///
+    /// It waits for no compile, only for the graph to be free to log the links in: the
+    /// graph-change listener compiles them. A node none of whose links an end refused asks for
+    /// nothing.
+    fn request_each_link_of_a_node_an_end_refused_be_wired_again(
+        &self,
+        node_run_id: &NodeRunId,
     ) -> Result<()>;
 
     // =========================================================================

@@ -163,6 +163,12 @@ def tinted_then_inverted_pixel_at_column(column: int) -> "list[int]":
     return [255 - round(channel * TINT_AMOUNT) for channel in (red, green, blue)] + [alpha]
 
 
+def tinted_then_swapped_then_inverted_pixel_at_column(column: int) -> "list[int]":
+    """What tint, then swap_red_and_blue, then invert writes at `column`: exact in 8 bits."""
+    red, green, blue, alpha = tinted_then_inverted_pixel_at_column(column)
+    return [blue, green, red, alpha]
+
+
 def does_the_sink_read(report: "dict[str, Any]", pixel_at_column) -> bool:
     return all(
         abs(shaded_channel - expected_channel) <= ONE_STEP_OF_AN_8_BIT_CHANNEL
@@ -171,6 +177,35 @@ def does_the_sink_read(report: "dict[str, Any]", pixel_at_column) -> bool:
             report["pixels_by_column"][str(column)], pixel_at_column(column)
         )
     )
+
+
+def node_ids_by_name(graph: "dict[str, Any]") -> "dict[str, str]":
+    return {node["name"]: node["id"] for node in graph["nodes"]}
+
+
+def transact_live(local_api, operations: "list[dict[str, Any]]") -> "dict[str, Any]":
+    return local_api.call_tool("transact", {"mode": "live", "operations": operations})
+
+
+def link_operation(
+    operation: str, stream_id: str, source: "tuple[str, str]", target: "tuple[str, str]"
+) -> "dict[str, Any]":
+    return {
+        "operation": operation,
+        "stream": stream_id,
+        "source": {"node": source[0], "port": source[1]},
+        "target": {"node": target[0], "port": target[1]},
+    }
+
+
+#: What the runtime logs when it hands the evaluator already running on a host its new group.
+RUNNING_HOST_HANDED_ITS_NEW_GROUP_LOG_LINE = (
+    "the fused group of shader nodes this edit placed on it"
+)
+
+
+#: What the runtime logs when a live edit stops and builds again running nodes.
+RUNNING_NODES_RESTARTED_LOG_LINE = "running node(s) a live edit rebuilds"
 
 
 def await_a_report_after(
@@ -188,7 +223,7 @@ def await_a_report_after(
     return False
 
 
-def test_a_live_edit_splitting_a_running_island_restarts_its_shader_nodes_without_a_stop(
+def test_a_live_edit_splitting_a_running_island_hands_its_host_the_new_group_without_a_stop(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     tatolabd = start_tatolabd_running_stream(
@@ -202,27 +237,24 @@ def test_a_live_edit_splitting_a_running_island_restarts_its_shader_nodes_withou
     graph = local_api.graph(stream=stream_id)
     assert fused_group_of(graph, "invert")["members"] == ["tint", "invert"]
 
-    node_id_of = {node["name"]: node["id"] for node in graph["nodes"]}
+    node_id_of = node_ids_by_name(graph)
     reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
-    local_api.call_tool(
-        "transact",
-        {
-            "mode": "live",
-            "operations": [
-                {
-                    "operation": "disconnect",
-                    "stream": stream_id,
-                    "source": {"node": node_id_of["tint"], "port": "result"},
-                    "target": {"node": node_id_of["invert"], "port": "image"},
-                },
-                {
-                    "operation": "connect",
-                    "stream": stream_id,
-                    "source": {"node": node_id_of["source"], "port": "video"},
-                    "target": {"node": node_id_of["invert"], "port": "image"},
-                },
-            ],
-        },
+    transact_live(
+        local_api,
+        [
+            link_operation(
+                "disconnect",
+                stream_id,
+                (node_id_of["tint"], "result"),
+                (node_id_of["invert"], "image"),
+            ),
+            link_operation(
+                "connect",
+                stream_id,
+                (node_id_of["source"], "video"),
+                (node_id_of["invert"], "image"),
+            ),
+        ],
     )
 
     invert_alone_reached_the_sink = await_a_report_after(
@@ -235,9 +267,11 @@ def test_a_live_edit_splitting_a_running_island_restarts_its_shader_nodes_withou
     assert invert_alone_reached_the_sink, f"the sink never read invert alone:\n{stderr_text}"
     assert fused_group_of(graph, "invert")["members"] == ["invert"]
     assert fused_group_of(graph, "tint")["members"] == ["tint"]
+    assert node_ids_by_name(graph) == node_id_of
+    assert RUNNING_HOST_HANDED_ITS_NEW_GROUP_LOG_LINE in stderr_text, stderr_text
 
 
-def test_a_live_link_fusing_two_running_islands_restarts_their_shader_nodes_without_a_stop(
+def test_a_live_link_fusing_two_running_islands_hands_the_host_the_new_group_without_a_stop(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     tatolabd = start_tatolabd_running_stream(
@@ -252,33 +286,30 @@ def test_a_live_link_fusing_two_running_islands_restarts_their_shader_nodes_with
     assert fused_group_of(graph, "tint")["members"] == ["tint"]
     assert fused_group_of(graph, "invert")["members"] == ["invert"]
 
-    node_id_of = {node["name"]: node["id"] for node in graph["nodes"]}
+    node_id_of = node_ids_by_name(graph)
     reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
-    local_api.call_tool(
-        "transact",
-        {
-            "mode": "live",
-            "operations": [
-                {
-                    "operation": "disconnect",
-                    "stream": stream_id,
-                    "source": {"node": node_id_of["tint"], "port": "result"},
-                    "target": {"node": node_id_of["discard"], "port": "discarded"},
-                },
-                {
-                    "operation": "disconnect",
-                    "stream": stream_id,
-                    "source": {"node": node_id_of["source"], "port": "video"},
-                    "target": {"node": node_id_of["invert"], "port": "image"},
-                },
-                {
-                    "operation": "connect",
-                    "stream": stream_id,
-                    "source": {"node": node_id_of["tint"], "port": "result"},
-                    "target": {"node": node_id_of["invert"], "port": "image"},
-                },
-            ],
-        },
+    transact_live(
+        local_api,
+        [
+            link_operation(
+                "disconnect",
+                stream_id,
+                (node_id_of["tint"], "result"),
+                (node_id_of["discard"], "discarded"),
+            ),
+            link_operation(
+                "disconnect",
+                stream_id,
+                (node_id_of["source"], "video"),
+                (node_id_of["invert"], "image"),
+            ),
+            link_operation(
+                "connect",
+                stream_id,
+                (node_id_of["tint"], "result"),
+                (node_id_of["invert"], "image"),
+            ),
+        ],
     )
 
     tint_then_invert_reached_the_sink = await_a_report_after(
@@ -288,6 +319,130 @@ def test_a_live_link_fusing_two_running_islands_restarts_their_shader_nodes_with
     stderr_text = tatolabd.stderr_text
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
-    assert tint_then_invert_reached_the_sink, f"the sink never read tint then invert:\n{stderr_text}"
+    assert tint_then_invert_reached_the_sink, (
+        f"the sink never read tint then invert:\n{stderr_text}"
+    )
     assert fused_group_of(graph, "invert")["members"] == ["tint", "invert"]
     assert fused_group_of(graph, "invert")["submissions"] >= 1
+    assert node_ids_by_name(graph) == node_id_of
+    assert RUNNING_HOST_HANDED_ITS_NEW_GROUP_LOG_LINE in stderr_text, stderr_text
+
+
+def test_a_shader_node_added_inside_a_playing_group_reaches_the_next_frames_keeping_every_node(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(
+        shader_node_streams.tint_into_invert_fused_publishing_until_stopped
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_report = tatolabd.await_marker("PROBE_RESULT")
+    assert "failure" not in first_report, first_report.get("failure")
+    assert does_the_sink_read(first_report, tinted_then_inverted_pixel_at_column), first_report
+    local_api = tatolabd.local_api_client()
+    graph = local_api.graph(stream=stream_id)
+    node_id_of = node_ids_by_name(graph)
+    type_of_tint = next(node["type"] for node in graph["nodes"] if node["name"] == "tint")
+    type_of_swap_red_and_blue = type_of_tint.rpartition(":")[0] + ":swap_red_and_blue"
+
+    reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
+    transact_live(
+        local_api,
+        [
+            {
+                "operation": "add_node",
+                "stream": stream_id,
+                "type": type_of_swap_red_and_blue,
+                "name": "swap_red_and_blue",
+                "as": "added",
+            },
+            link_operation(
+                "disconnect",
+                stream_id,
+                (node_id_of["tint"], "result"),
+                (node_id_of["invert"], "image"),
+            ),
+            link_operation(
+                "connect", stream_id, (node_id_of["tint"], "result"), ("added", "image")
+            ),
+            link_operation(
+                "connect",
+                stream_id,
+                ("added", "result"),
+                (node_id_of["invert"], "image"),
+            ),
+        ],
+    )
+
+    the_added_node_reached_the_sink = await_a_report_after(
+        tatolabd,
+        reports_before_the_edit,
+        tinted_then_swapped_then_inverted_pixel_at_column,
+    )
+    graph = local_api.graph(stream=stream_id)
+    stderr_text = tatolabd.stderr_text
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert the_added_node_reached_the_sink, f"the sink never read the added node:\n{stderr_text}"
+    assert fused_group_of(graph, "invert")["members"] == [
+        "tint",
+        "swap_red_and_blue",
+        "invert",
+    ]
+    ids_after_the_edit = node_ids_by_name(graph)
+    assert {name: ids_after_the_edit[name] for name in node_id_of} == node_id_of
+    assert RUNNING_HOST_HANDED_ITS_NEW_GROUP_LOG_LINE in stderr_text, stderr_text
+    assert RUNNING_NODES_RESTARTED_LOG_LINE not in stderr_text, stderr_text
+
+
+def test_a_shader_node_removed_from_a_playing_group_leaves_the_next_frames_keeping_every_node(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(
+        shader_node_streams.tint_into_swap_into_invert_fused_publishing_until_stopped
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_report = tatolabd.await_marker("PROBE_RESULT")
+    assert "failure" not in first_report, first_report.get("failure")
+    assert does_the_sink_read(first_report, tinted_then_swapped_then_inverted_pixel_at_column), (
+        first_report
+    )
+    local_api = tatolabd.local_api_client()
+    graph = local_api.graph(stream=stream_id)
+    assert fused_group_of(graph, "invert")["members"] == [
+        "tint",
+        "swap_red_and_blue",
+        "invert",
+    ]
+    node_id_of = node_ids_by_name(graph)
+
+    reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
+    transact_live(
+        local_api,
+        [
+            {
+                "operation": "remove_node",
+                "stream": stream_id,
+                "node": node_id_of["swap_red_and_blue"],
+            },
+            link_operation(
+                "connect",
+                stream_id,
+                (node_id_of["tint"], "result"),
+                (node_id_of["invert"], "image"),
+            ),
+        ],
+    )
+
+    the_removal_reached_the_sink = await_a_report_after(
+        tatolabd, reports_before_the_edit, tinted_then_inverted_pixel_at_column
+    )
+    graph = local_api.graph(stream=stream_id)
+    stderr_text = tatolabd.stderr_text
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert the_removal_reached_the_sink, f"the sink never read the group without it:\n{stderr_text}"
+    assert fused_group_of(graph, "invert")["members"] == ["tint", "invert"]
+    del node_id_of["swap_red_and_blue"]
+    assert node_ids_by_name(graph) == node_id_of
+    assert RUNNING_HOST_HANDED_ITS_NEW_GROUP_LOG_LINE in stderr_text, stderr_text
+    assert RUNNING_NODES_RESTARTED_LOG_LINE not in stderr_text, stderr_text

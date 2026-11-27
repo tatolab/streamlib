@@ -160,7 +160,7 @@ pub(crate) fn reader_setup_command_ports(graph: &Graph, reader_id: &NodeRunId) -
         .as_setup_command_ports()
 }
 
-fn the_refusal_of_a_commit(
+pub(crate) fn the_refusal_of_a_commit(
     graph: &Graph,
     nodes_to_add: &[NodeRunId],
     nodes_to_remove: &[NodeRunId],

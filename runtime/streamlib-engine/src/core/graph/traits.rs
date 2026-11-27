@@ -32,12 +32,7 @@ pub trait GraphNodeWithComponents: GraphWeight {
     /// Insert a component, replacing any existing component of the same type.
     fn insert<C: NodeComponent>(&mut self, component: C) {
         self.components_mut().insert(component);
-        self.component_renderers_mut()
-            .push(Box::new(|map, rendered| {
-                if let Some(component) = map.get::<C>() {
-                    component.render_onto(rendered);
-                }
-            }));
+        ComponentRenderer::render_components_of_this_type_once::<C>(self.component_renderers_mut());
     }
 
     /// Insert a component that the control plane reads through something other
@@ -78,7 +73,7 @@ pub trait GraphNodeWithComponents: GraphWeight {
     fn render_components(&self) -> GraphNodeComponentsOnTheWire {
         let mut rendered = GraphNodeComponentsOnTheWire::default();
         for renderer in self.component_renderers() {
-            renderer(self.components(), &mut rendered);
+            renderer.render(self.components(), &mut rendered);
         }
         rendered
     }
@@ -103,12 +98,7 @@ pub trait GraphEdgeWithComponents: GraphWeight {
     /// Insert a component, replacing any existing component of the same type.
     fn insert<C: LinkComponent>(&mut self, component: C) {
         self.components_mut().insert(component);
-        self.component_renderers_mut()
-            .push(Box::new(|map, rendered| {
-                if let Some(component) = map.get::<C>() {
-                    component.render_onto(rendered);
-                }
-            }));
+        ComponentRenderer::render_components_of_this_type_once::<C>(self.component_renderers_mut());
     }
 
     /// Insert a component `graph` never renders, replacing any existing
@@ -141,7 +131,7 @@ pub trait GraphEdgeWithComponents: GraphWeight {
     fn render_components(&self) -> GraphLinkComponentsOnTheWire {
         let mut rendered = GraphLinkComponentsOnTheWire::default();
         for renderer in self.component_renderers() {
-            renderer(self.components(), &mut rendered);
+            renderer.render(self.components(), &mut rendered);
         }
         rendered
     }

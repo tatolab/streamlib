@@ -570,10 +570,7 @@ impl LoadedStreamInThisRuntime {
                         .v(())
                         .iter()
                         .filter(|node| {
-                            matches!(
-                                node.node_kind(),
-                                Some(crate::core::descriptors::NodeKind::Function { .. })
-                            )
+                            crate::core::compiler::compiler_ops::function_node_island::is_a_stateful_function_node(graph, node)
                         })
                         .map(|node| {
                             (
@@ -584,7 +581,6 @@ impl LoadedStreamInThisRuntime {
                                 ),
                             )
                         })
-                        .filter(|(_, state_fields)| !state_fields.is_empty())
                         .collect();
                 (
                     graph.to_graph_response(machine_name),

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A decoder node's decoder, opened as the node starts and, while the GPU
+//! A decoder session's decoder, opened as the session opens and, while the GPU
 //! refuses it for want of something another client may free, opened
 //! again once a retry interval after each refusal.
 
@@ -25,6 +25,31 @@ impl<D> VideoDecoderOpening<D> {
             decoder: None,
             retry_gate: VideoCodecRetryGate::default(),
         }
+    }
+
+    /// A decoder that opened at its first try.
+    pub(crate) fn opened(node_type_name: &'static str, decoder: D) -> Self {
+        Self {
+            node_type_name,
+            decoder: Some(decoder),
+            retry_gate: VideoCodecRetryGate::default(),
+        }
+    }
+
+    /// A decoder whose first try, at `now`, the GPU refused for now with `refusal`: tried again
+    /// once the retry interval has passed.
+    pub(crate) fn refused_for_now_at(
+        node_type_name: &'static str,
+        now: Instant,
+        refusal: &str,
+    ) -> Self {
+        let mut opening = Self::not_yet_opened(node_type_name);
+        opening.retry_gate.refused_for_now_at(now);
+        tracing::error!(
+            "{refusal}; media frames are discarded and the decoder is opened again every \
+             {VIDEO_CODEC_RETRY_INTERVAL:?} until the GPU frees what it refused"
+        );
+        opening
     }
 
     /// The decoder, opened with `open` at `now` when none is open and the

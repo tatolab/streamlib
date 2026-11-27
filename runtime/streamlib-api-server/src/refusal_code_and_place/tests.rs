@@ -245,3 +245,27 @@ fn a_node_of_a_stream_that_does_not_run_reads_back_as_node_not_running_saying_wh
         Some(NodeNotRunningBecauseOnTheWire::PlaybackPaused)
     );
 }
+
+#[test]
+fn a_fused_group_that_does_not_build_reads_back_with_its_code_naming_its_evaluating_node() {
+    let refusal = Error::ShaderNodeFusedGroupNotBuilt {
+        evaluated_by: "vignette".to_owned(),
+        why:
+            "shader node `blur` is of type `x:blur`, which this stream holds no shader program for"
+                .to_owned(),
+    };
+    let read = read_back(
+        RefusalCodeAndPlace::of_an_engine_error(&refusal)
+            .on_the_refusal_of("transact", refusal.to_string()),
+    );
+    assert_eq!(
+        read.refusal_code,
+        ControlOperationRefusalCode::ShaderNodeFusedGroupNotBuilt
+    );
+    assert_eq!(read.refused_node.as_deref(), Some("vignette"));
+    assert!(
+        !read.runtime_words.contains("stop the stream"),
+        "{}",
+        read.runtime_words
+    );
+}

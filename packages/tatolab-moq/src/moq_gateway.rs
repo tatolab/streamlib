@@ -43,6 +43,10 @@ const CONTENT_SAMPLES_A_PASS_WRITES_PER_TRACK: usize = 64;
 /// How long after a read ends a fresh one starts for the same request.
 const A_READ_THAT_ENDED_STARTS_AGAIN_AFTER: Duration = Duration::from_secs(1);
 
+/// How long a gateway of the same node this one takes over from has to close its session and
+/// end, its async runtime's shutdown included.
+const A_GATEWAY_BEFORE_ENDS_WITHIN: Duration = Duration::from_secs(3);
+
 /// How long a session that never connects is held before it is dialed afresh.
 const A_SESSION_THAT_NEVER_CONNECTS_IS_REDIALED_AFTER: Duration = Duration::from_secs(10);
 
@@ -57,24 +61,32 @@ pub struct MoqGatewayThread {
 
 impl MoqGatewayThread {
     /// Start the gateway named `gateway_node` on `ipc`, dialing what
-    /// `settings_source` hands it.
+    /// `settings_source` hands it. A gateway of the same node this process runs
+    /// already is stopped first, and its relay session closed, so this one takes
+    /// its services and dials afresh.
     pub fn spawn(
         ipc: MoqNodeIpc,
         gateway_node: String,
         settings_source: MoqGatewaySettingsSource,
     ) -> Result<Self> {
-        let async_runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("moq-gateway-relay")
-            .enable_all()
-            .build()
-            .map_err(|refusal| MoqModuleError::Relay {
-                what: format!("no async runtime builds for the gateway: {refusal}"),
-            })?;
-        let gateway = MoqGatewayPasses::open(ipc, gateway_node, settings_source, async_runtime)?;
-        let thread = MoqNodeThread::spawn("moq-gateway", move |stop_signal| {
-            gateway.run_until(stop_signal)
-        })?;
+        let holding = ipc.service_names.gateway_control(&gateway_node);
+        let thread = MoqNodeThread::spawn_holding(
+            &holding,
+            "moq-gateway",
+            A_GATEWAY_BEFORE_ENDS_WITHIN,
+            || {
+                let async_runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name("moq-gateway-relay")
+                    .enable_all()
+                    .build()
+                    .map_err(|refusal| MoqModuleError::Relay {
+                        what: format!("no async runtime builds for the gateway: {refusal}"),
+                    })?;
+                MoqGatewayPasses::open(ipc, gateway_node, settings_source, async_runtime)
+            },
+            |gateway, stop_signal| gateway.run_until(stop_signal),
+        )?;
         Ok(Self { thread })
     }
 
@@ -309,8 +321,20 @@ impl MoqGatewayPasses {
                     }
                     return;
                 }
-                if self.tracks.remove(&track_node).is_some() {
+                tracing::info!(
+                    "MoqGateway `{}`: track node `{track_node}` declares `{track}`",
+                    self.gateway_node
+                );
+                if let Some(declared) = self.tracks.get_mut(&track_node) {
+                    // Renamed: its send writes on, so the content read and the
+                    // entry its stream facts built carry over to the new name.
+                    declared.track = track;
+                    declared.catalog_entry_declared = catalog_entry;
+                    declared.last_declared_at = now;
+                    declared.writer = None;
+                    declared.writer_refused_on_this_session = false;
                     self.the_catalog_may_have_changed = true;
+                    return;
                 }
                 let content = match self.ipc.track_content_subscriber(&track_node) {
                     Ok(content) => content,
@@ -321,10 +345,6 @@ impl MoqGatewayPasses {
                         return;
                     }
                 };
-                tracing::info!(
-                    "MoqGateway `{}`: track node `{track_node}` declares `{track}`",
-                    self.gateway_node
-                );
                 self.tracks.insert(
                     track_node,
                     DeclaredTrack {

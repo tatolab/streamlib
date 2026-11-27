@@ -14,7 +14,6 @@ from typing import Any, Optional
 from tatolab.runtime._function_node_carried_values import (
     _exactly_as_f64,
     FunctionNodeDoesNotCompile,
-    FunctionNodeReadyToEvaluate,
     FunctionNodeRunAsPythonInItsReader,
     NAMED_VALUE_TYPE,
     PART_VALUE_TYPES,
@@ -83,10 +82,6 @@ class FunctionNodeBodyRunAsPython:
         """Refuse a `config` that sets anything, as a Python function node takes each value as an
         input."""
         refuse_a_config_given_a_function_node_taking_none(self._node_id, config)
-
-    def runs(self, run_as_python: FunctionNodeReadyToEvaluate) -> bool:
-        """Whether this is the body of `run_as_python`, so an island fed again can call it with its state."""
-        return self._run_as_python is run_as_python
 
     def evaluate(self, input_values: "list[Any]", now_ns: int) -> "list[Any]":
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.

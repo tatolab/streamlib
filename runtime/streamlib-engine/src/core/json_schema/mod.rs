@@ -617,9 +617,9 @@ pub(crate) fn why_the_link_is_not_wired(
 ) -> Option<WhyALinkIsNotWired> {
     match RenderedLinkState::of(link) {
         RenderedLinkState::ErrorBecause(why) => Some(why),
-        RenderedLinkState::WithoutAReason(LinkStateOutput::Error) => Some(
-            WhyALinkIsNotWired::AnEndRefused("its wiring failed, and gave no reason".to_owned()),
-        ),
+        RenderedLinkState::WithoutAReason(LinkStateOutput::Error) => {
+            Some(WhyALinkIsNotWired::ItsWiringFailed)
+        }
         RenderedLinkState::WithoutAReason(_) => None,
     }
 }
@@ -630,8 +630,11 @@ pub(crate) enum WhyALinkIsNotWired {
     /// Its two ends no longer carry types that connect, since an input choosing the type of one
     /// of them changed; it carries nothing until they connect again or it is removed.
     ItsPinTypesDiffer(crate::core::graph::LinkPinTypesDifferComponent),
-    /// An end refused to open its side of it, in that end's own words.
+    /// An end refused to open its side of it, in that end's own words; it is wired again by
+    /// itself.
     AnEndRefused(String),
+    /// Its wiring failed and gave no reason, so nothing wires it again by itself.
+    ItsWiringFailed,
 }
 
 impl WhyALinkIsNotWired {
@@ -639,7 +642,7 @@ impl WhyALinkIsNotWired {
     pub(crate) fn kind(&self) -> DiagnosticKindOnTheWire {
         match self {
             Self::ItsPinTypesDiffer(_) => DiagnosticKindOnTheWire::LinkPinTypesDiffer,
-            Self::AnEndRefused(_) => DiagnosticKindOnTheWire::LinkNotWired,
+            Self::AnEndRefused(_) | Self::ItsWiringFailed => DiagnosticKindOnTheWire::LinkNotWired,
         }
     }
 
@@ -649,7 +652,11 @@ impl WhyALinkIsNotWired {
             Self::ItsPinTypesDiffer(_) => {
                 "change the input that chose the type back, or remove the link"
             }
-            Self::AnEndRefused(_) => "stop the stream and start it again",
+            Self::AnEndRefused(_) => {
+                "nothing while the end that refused it runs, as it is wired again by itself; \
+                 reconnect it to try again now, or remove it"
+            }
+            Self::ItsWiringFailed => "reconnect it, or remove it",
         }
     }
 }
@@ -663,6 +670,7 @@ impl std::fmt::Display for WhyALinkIsNotWired {
                 differing.output_pin_type, differing.input_pin_type, differing.why
             ),
             Self::AnEndRefused(reason) => formatter.write_str(reason),
+            Self::ItsWiringFailed => formatter.write_str("its wiring failed, and gave no reason"),
         }
     }
 }

@@ -25,7 +25,7 @@ use island_edit_refusals::{
     the_refusal_of_a_reactive_reader_fed_only_by_islands,
     the_refusal_of_an_island_fed_into_the_app_process,
 };
-pub(crate) use island_placement::{the_island_feeding_a_link, the_state_fields_of_a_function_node};
+pub(crate) use island_placement::the_island_feeding_a_link;
 
 use std::collections::HashSet;
 
@@ -51,7 +51,7 @@ use super::open_iceoryx2_service_op::{
     open_a_read_of_a_link_by_the_reader_of_a_function_node_island,
 };
 use super::shader_node_island::{
-    is_a_call_inside_a_shader_node_island, where_a_link_into_a_fused_shader_node_is_read,
+    is_wired_as_a_call_inside_a_shader_node_island, where_a_link_into_a_fused_shader_node_is_read,
 };
 
 /// How the compiler wires one link, by the kinds of its two ends.
@@ -100,17 +100,46 @@ pub(crate) fn the_reader_input_port_a_link_into_a_function_node_is_read_at(
 }
 
 /// Whether `node_id` is a function node that runs inside the read of each
-/// node it feeds: every function node, until one is promoted to a process of
-/// its own.
+/// node it feeds: every stateless function node, until one is promoted to a
+/// process of its own. A stateful one never does: it runs in a helper of its
+/// own from the compile that adds it.
 pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     graph: &Graph,
     node_id: &NodeRunId,
 ) -> bool {
     graph.traversal().v(node_id).first().is_some_and(|node| {
-        node.node_kind()
-            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+        is_a_function_node_in_the_graph(node)
             && !node.has::<FunctionNodePromotedToItsOwnProcessComponent>()
+            && the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
     })
+}
+
+/// Whether `node` is a function node whose type carries a state record.
+pub(crate) fn is_a_stateful_function_node(
+    graph: &Graph,
+    node: &crate::core::graph::GraphNode,
+) -> bool {
+    is_a_function_node_in_the_graph(node)
+        && !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
+}
+
+/// Whether `node` is a function node.
+fn is_a_function_node_in_the_graph(node: &crate::core::graph::GraphNode) -> bool {
+    node.node_kind()
+        .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+}
+
+/// The state record fields a function node of `node_type` carries; none for a
+/// stateless one.
+pub(crate) fn the_state_fields_of_a_function_node(
+    graph: &Graph,
+    node_type: &crate::core::descriptors::NodeClassImportPath,
+) -> Vec<String> {
+    graph
+        .node_types_this_stream_resolves()
+        .descriptor(node_type)
+        .map(|descriptor| descriptor.function_node_state_fields)
+        .unwrap_or_default()
 }
 
 /// Whether `node_id` is a `PreviousValue` node, whose input the island reads
@@ -126,20 +155,21 @@ pub(crate) fn is_a_previous_value_node(graph: &Graph, node_id: &NodeRunId) -> bo
 /// Whether `node_id` is a function node, inside its readers' islands or
 /// promoted out of them.
 pub(crate) fn is_a_function_node(graph: &Graph, node_id: &NodeRunId) -> bool {
-    graph.traversal().v(node_id).first().is_some_and(|node| {
-        node.node_kind()
-            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
-    })
+    graph
+        .traversal()
+        .v(node_id)
+        .first()
+        .is_some_and(is_a_function_node_in_the_graph)
 }
 
-/// How `link_id` is wired, by whether each of its ends runs inside the read
-/// of each node it feeds.
+/// How `link_id` is wired: by where the shader node islands it touches were placed, else by
+/// whether each of its ends runs inside the read of each node it feeds.
 pub(crate) fn how_a_link_is_wired(
     graph: &Graph,
     link_id: &LinkUniqueId,
 ) -> Result<HowALinkIsWired> {
     let link = link_in(graph, link_id)?;
-    if is_a_call_inside_a_shader_node_island(graph, link) {
+    if is_wired_as_a_call_inside_a_shader_node_island(graph, link) {
         return Ok(HowALinkIsWired::AsACallInsideAShaderNodeIsland);
     }
     if let Some(host_input_port) = where_a_link_into_a_fused_shader_node_is_read(graph, link) {

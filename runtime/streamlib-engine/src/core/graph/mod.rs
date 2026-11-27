@@ -14,6 +14,7 @@ mod graph_readiness;
 pub mod graph_snapshot;
 pub mod graph_variable_resolution;
 pub mod input_values;
+mod links_an_end_refused;
 mod node_health_with_its_links;
 mod node_state_ecs_component;
 mod nodes;
@@ -46,6 +47,7 @@ pub(crate) use data_structure::{
     port_names_listed_for_a_refusal,
 };
 pub use graph_readiness::ObservableGraphReadiness;
+pub(crate) use links_an_end_refused::an_end_refused_the_link;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
     ALinkConnected, LinksATypeChoiceJudgedAgain, TheEndsALinkIsJudgedBy,
