@@ -3,10 +3,10 @@
 
 //! The native half of `tatolab-browser`, imported as `tatolab.browser._native`.
 //!
-//! The engine never calls anything here: the wheel's class node hands this module
-//! its module host table, and the page opens as a tab in the machine's browser
-//! host, whose paints, audio and published objects this module's threads
-//! publish through the table with no Python attached.
+//! The engine never calls anything here: the node's body hands this module its
+//! module host table, and each build opens the page as a tab in the machine's
+//! browser host, whose paints, audio and published objects this module's
+//! threads publish through the table with no Python attached.
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("tatolab-browser runs on Linux and macOS");

@@ -61,6 +61,79 @@ pub struct RiveSourceSettings {
     pub output_pool_rotation_depth: u32,
 }
 
+/// Why a scene could not be built, each refusal its own kind; each displays as its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RiveSceneRefused {
+    /// `width`, `height` or `frame_rate` is 0.
+    SizeNotPositive(String),
+    /// The `.riv` file could not be read.
+    FileUnreadable(String),
+    /// rive-runtime refused the file, or it holds no artboard or state machine of the name given.
+    SceneRefusedByRive(String),
+    /// The `video` or `data` port the node lent could not be opened.
+    PortRefused(String),
+    /// No external-renderer device could be created on the runtime's GPU.
+    DeviceRefused(String),
+    /// The surface share that output textures are checked out through is unreachable.
+    SurfaceShareUnreachable(String),
+    /// The frame thread could not start, or ended before its scene was built.
+    FrameThreadFailed(String),
+}
+
+impl std::fmt::Display for RiveSceneRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RiveSceneRefused::SizeNotPositive(why)
+            | RiveSceneRefused::FileUnreadable(why)
+            | RiveSceneRefused::SceneRefusedByRive(why)
+            | RiveSceneRefused::PortRefused(why)
+            | RiveSceneRefused::DeviceRefused(why)
+            | RiveSceneRefused::SurfaceShareUnreachable(why)
+            | RiveSceneRefused::FrameThreadFailed(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Start a thread named `name` that builds with `build` and then runs what it built with
+/// `run`. Returns once the build went: with the thread, or with why it could not build, the
+/// thread joined.
+fn start_a_thread_once_it_builds<B>(
+    name: &str,
+    build: impl FnOnce() -> Result<B, RiveSceneRefused> + Send + 'static,
+    run: impl FnOnce(B) + Send + 'static,
+) -> Result<JoinHandle<()>, RiveSceneRefused> {
+    let (built, how_the_build_went) = std::sync::mpsc::sync_channel(1);
+    let thread = std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || match build() {
+            Ok(what_it_built) => {
+                let _ = built.send(Ok(()));
+                run(what_it_built);
+            }
+            Err(refusal) => {
+                let _ = built.send(Err(refusal));
+            }
+        })
+        .map_err(|spawn_failure| {
+            RiveSceneRefused::FrameThreadFailed(format!(
+                "RiveSource: the frame thread could not start: {spawn_failure}"
+            ))
+        })?;
+    match how_the_build_went.recv() {
+        Ok(Ok(())) => Ok(thread),
+        Ok(Err(refusal)) => {
+            let _ = thread.join();
+            Err(refusal)
+        }
+        Err(_) => {
+            let _ = thread.join();
+            Err(RiveSceneRefused::FrameThreadFailed(
+                "RiveSource: the frame thread ended before its scene was built".to_owned(),
+            ))
+        }
+    }
+}
+
 /// A `RiveSource` rendering on its own thread until stopped.
 pub struct RiveSourceRendering {
     stop_requested: Arc<AtomicBool>,
@@ -70,59 +143,52 @@ pub struct RiveSourceRendering {
 impl RiveSourceRendering {
     /// Read the `.riv` and open the ports, then build the device and the scene
     /// on a new thread, which publishes on `video_output_port_name` and reads
-    /// view-model updates from `data_input_port_name`. The thread logs what it
-    /// plays, or why it cannot, to the node's log.
+    /// view-model updates from `data_input_port_name` until closed. Returns once
+    /// the scene is built, refused by the kind of why it could not be; the
+    /// thread logs what it plays to the node's log.
     pub fn start(
         module_host: ModuleHost,
         video_output_port_name: &str,
         data_input_port_name: &str,
         settings: RiveSourceSettings,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RiveSceneRefused> {
         if settings.width == 0 || settings.height == 0 || settings.frame_rate == 0 {
-            return Err(format!(
+            return Err(RiveSceneRefused::SizeNotPositive(format!(
                 "RiveSource: width, height and frame_rate must be positive; got {}x{} at {} fps",
                 settings.width, settings.height, settings.frame_rate
-            ));
+            )));
         }
         let riv_bytes = std::fs::read(&settings.riv_path).map_err(|read_failure| {
-            format!(
+            RiveSceneRefused::FileUnreadable(format!(
                 "RiveSource: could not read {:?}: {read_failure}",
                 settings.riv_path
-            )
+            ))
         })?;
         let video_output_port = module_host
             .open_output_port(video_output_port_name)
-            .map_err(|refusal| refusal.to_string())?;
+            .map_err(|refusal| RiveSceneRefused::PortRefused(refusal.to_string()))?;
         let data_input_port = module_host
             .open_input_port(data_input_port_name)
-            .map_err(|refusal| refusal.to_string())?;
+            .map_err(|refusal| RiveSceneRefused::PortRefused(refusal.to_string()))?;
         let stop_requested = Arc::new(AtomicBool::new(false));
         let frame_thread = {
             let stop_requested = Arc::clone(&stop_requested);
-            std::thread::Builder::new()
-                .name("tatolab-rive-frames".to_owned())
-                .spawn(move || {
-                    match RiveSourceFrameLoop::build(
-                        module_host.clone(),
+            start_a_thread_once_it_builds(
+                "tatolab-rive-frames",
+                move || {
+                    RiveSourceFrameLoop::build(
+                        module_host,
                         video_output_port,
                         data_input_port,
                         settings,
                         &riv_bytes,
-                    ) {
-                        Ok(frame_loop) => {
-                            frame_loop.log_what_plays();
-                            frame_loop.run_until_stopped(&stop_requested);
-                        }
-                        Err(refusal) => module_host.log(
-                            ModuleHostLogLevel::Error,
-                            RIVE_LOG_TARGET,
-                            &format!("{refusal}; nothing is published"),
-                        ),
-                    }
-                })
-                .map_err(|spawn_failure| {
-                    format!("RiveSource: the frame thread could not start: {spawn_failure}")
-                })?
+                    )
+                },
+                move |frame_loop| {
+                    frame_loop.log_what_plays();
+                    frame_loop.run_until_stopped(&stop_requested);
+                },
+            )?
         };
         Ok(Self {
             stop_requested,
@@ -130,8 +196,9 @@ impl RiveSourceRendering {
         })
     }
 
-    /// Stop rendering and release the device. Idempotent.
-    pub fn stop(&mut self) {
+    /// Stop rendering and release the device, the scene and every render
+    /// target. Idempotent.
+    pub fn close(&mut self) {
         self.stop_requested.store(true, Ordering::Release);
         if let Some(frame_thread) = self.frame_thread.take() {
             let _ = frame_thread.join();
@@ -141,7 +208,7 @@ impl RiveSourceRendering {
 
 impl Drop for RiveSourceRendering {
     fn drop(&mut self) {
-        self.stop();
+        self.close();
     }
 }
 
@@ -181,30 +248,31 @@ impl RiveSourceFrameLoop {
         data_input_port: ModuleHostInputPort,
         settings: RiveSourceSettings,
         riv_bytes: &[u8],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RiveSceneRefused> {
         let runtime_vulkan_device_uuid = runtime_vulkan_device_uuid_named_at_spawn()
-            .map_err(|refusal| format!("RiveSource: {refusal}"))?;
+            .map_err(|refusal| RiveSceneRefused::DeviceRefused(format!("RiveSource: {refusal}")))?;
         let device = ConsumerVulkanDeviceForExternalRenderer::new_on_the_device_the_runtime_named(
             runtime_vulkan_device_uuid,
         )
         .map_err(|refusal| {
-            format!("RiveSource: the external-renderer device was refused: {refusal}")
+            RiveSceneRefused::DeviceRefused(format!(
+                "RiveSource: the external-renderer device was refused: {refusal}"
+            ))
         })?;
         let surface_share_socket_path = std::env::var_os(SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE)
             .ok_or_else(|| {
-                format!(
+                RiveSceneRefused::SurfaceShareUnreachable(format!(
                     "RiveSource: {SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE} is not set, so no \
                      output texture can be checked out"
-                )
+                ))
             })?;
         let surface_share_connection = connect_to_surface_share_socket(Path::new(
             &surface_share_socket_path,
         ))
         .map_err(|connect_failure| {
-            format!(
-                "RiveSource: the surface-share socket refused a connection: \
-                         {connect_failure}"
-            )
+            RiveSceneRefused::SurfaceShareUnreachable(format!(
+                "RiveSource: the surface-share socket refused a connection: {connect_failure}"
+            ))
         })?;
         let scene = RiveSceneOnExternalRendererDevice::create(
             &device.raw_vulkan_handles_for_the_external_renderer(),
@@ -212,7 +280,12 @@ impl RiveSourceFrameLoop {
             settings.artboard.as_deref(),
             settings.state_machine.as_deref(),
         )
-        .map_err(|refusal| format!("RiveSource: {:?}: {refusal}", settings.riv_path))?;
+        .map_err(|refusal| {
+            RiveSceneRefused::SceneRefusedByRive(format!(
+                "RiveSource: {:?}: {refusal}",
+                settings.riv_path
+            ))
+        })?;
         Ok(Self {
             render_targets_by_pool_slot: HashMap::new(),
             scene,
@@ -454,5 +527,55 @@ mod tests {
         assert_eq!(pool_slot_of_a_published_frame_id("one-off"), "one-off");
         assert_eq!(pool_slot_of_a_published_frame_id("odd#name"), "odd#name");
         assert_eq!(pool_slot_of_a_published_frame_id("#7"), "#7");
+    }
+
+    /// Mental-revert: return as soon as the thread starts, and a scene rive-runtime refuses
+    /// replaces the one before with a thread that publishes nothing.
+    #[test]
+    fn a_refused_build_is_returned_by_its_kind_with_the_thread_joined() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_by_the_thread = Arc::clone(&ran);
+        let refused = start_a_thread_once_it_builds(
+            "refused-build",
+            || -> Result<(), RiveSceneRefused> {
+                Err(RiveSceneRefused::SceneRefusedByRive(
+                    "not a .riv file".to_owned(),
+                ))
+            },
+            move |()| ran_by_the_thread.store(true, Ordering::Release),
+        );
+        assert_eq!(
+            refused.err(),
+            Some(RiveSceneRefused::SceneRefusedByRive(
+                "not a .riv file".to_owned()
+            ))
+        );
+        assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_build_that_panics_is_a_frame_thread_failure() {
+        let failed = start_a_thread_once_it_builds(
+            "panicking-build",
+            || -> Result<(), RiveSceneRefused> { panic!("the build panicked") },
+            |()| {},
+        );
+        assert!(matches!(
+            failed,
+            Err(RiveSceneRefused::FrameThreadFailed(_))
+        ));
+    }
+
+    #[test]
+    fn a_build_that_lands_runs_what_it_built_on_its_thread() {
+        let (ran, ran_on) = std::sync::mpsc::channel();
+        let thread = start_a_thread_once_it_builds(
+            "landing-build",
+            || Ok(7_u32),
+            move |built| ran.send(built).unwrap(),
+        )
+        .expect("the build lands");
+        assert_eq!(ran_on.recv().unwrap(), 7);
+        thread.join().unwrap();
     }
 }

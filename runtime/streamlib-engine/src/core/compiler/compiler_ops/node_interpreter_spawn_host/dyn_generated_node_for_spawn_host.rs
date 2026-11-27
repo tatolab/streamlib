@@ -10,6 +10,7 @@ use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess
 use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::BuildsOfItsComputedValues;
 use crate::core::media_clock::MediaClock;
 use crate::core::nodes::{
     DynGeneratedNode, FunctionNodeCallUnderWayInTheFarSide,
@@ -24,6 +25,14 @@ use super::{
 
 impl DynGeneratedNode for NodeInterpreterSpawnHost {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        ctx.host_base()
+            .report_the_builds_of_the_computed_values_from(
+                BuildsOfItsComputedValues::AsItsHelperReports(Arc::clone(
+                    &self
+                        .what_the_node_reaches
+                        .computed_value_builds_its_helper_reports,
+                )),
+            );
         self.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
             host.start_the_helper_process_and_await_its_registration(ctx)
         })
@@ -291,6 +300,9 @@ impl DynGeneratedNode for NodeInterpreterSpawnHost {
         self.what_the_node_reaches
             .node_not_ready_reports
             .record(None);
+        self.what_the_node_reaches
+            .computed_value_builds_its_helper_reports
+            .record(Vec::new());
         self.child_is_gone = false;
         self.shutdown_was_already_asked_of_this_helper = false;
         self.child_standard_error_tail = None;

@@ -20,6 +20,7 @@ from tatolab.stream._node_declaration import (
 )
 
 from tatolab.runtime._engine import (
+    BuildsOfANodeScopeComputedValue,
     not_ready_report_on_runtime_context,
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
@@ -73,6 +74,26 @@ if sys.platform == "darwin":
 RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS = 1.0
 
 
+def computed_value_builds_on_the_escalate_wire(
+    builds: BuildsOfANodeScopeComputedValue,
+) -> "dict[str, Any]":
+    """How the builds of one computed value stand, as `set_computed_value_builds`
+    carries them: its latest build's failure by its own kind, `None` while none
+    failed."""
+    last_build = builds.last_build
+    latest_build_failed: "Optional[dict[str, Any]]" = None
+    if last_build.state == "failed":
+        latest_build_failed = {"kind": last_build.failure}
+        if last_build.failure != "read_a_computed_value_not_yet_built":
+            latest_build_failed["why"] = last_build.why
+    return {
+        "declared": builds.declared,
+        "has_a_value": builds.has_a_value,
+        "building_again": builds.building_again,
+        "latest_build_failed": latest_build_failed,
+    }
+
+
 class HelperProcessLifecycle:
 
     def __init__(
@@ -106,6 +127,7 @@ class HelperProcessLifecycle:
         self._the_parent_holds_the_last_not_ready_report = True
         self._transparent_frames_while_not_ready: "Optional[TransparentFramesOnTheImageOutputsOfANodeNotReady]" = None
         self._not_ready_warnings_already_logged: "set[str]" = set()
+        self._computed_value_builds_the_parent_last_took: "Optional[list[dict[str, Any]]]" = []
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -165,10 +187,12 @@ class HelperProcessLifecycle:
 
     def _tell_the_parent_whether_the_node_is_ready(self) -> None:
         """Send the parent why the node is not ready when that changes, and
-        `None` once it is ready again. After a report the parent refused or did
-        not answer, what it holds is unknown, so the next call sends it again."""
+        `None` once it is ready again, then how the builds of a node function's
+        computed values stand. After a report the parent refused or did not
+        answer, what it holds is unknown, so the next call sends it again."""
         if self._hosted is None:
             return
+        self._tell_the_parent_how_the_computed_value_builds_stand()
         not_ready_report = not_ready_report_on_runtime_context(self._hosted.full_access_context)
         not_ready_because = None if not_ready_report is None else not_ready_report[0]
         if (
@@ -192,6 +216,31 @@ class HelperProcessLifecycle:
             log.warn("this node is not ready", reason=not_ready_because)
         self._not_ready_reason_the_parent_last_took = not_ready_because
         self._the_parent_holds_the_last_not_ready_report = True
+
+    def _tell_the_parent_how_the_computed_value_builds_stand(self) -> None:
+        """Send the parent how the builds of each computed value of a node
+        function stand when that changes, so the graph shows a build still
+        running or failed on the node."""
+        assert self._hosted is not None
+        if not self._hosted.a_node_function:
+            return
+        builds = [
+            computed_value_builds_on_the_escalate_wire(of_one)
+            for of_one in self._hosted.instance.builds_of_each_computed_value()
+        ]
+        if builds == self._computed_value_builds_the_parent_last_took:
+            return
+        try:
+            self._bridge.request_from_parent({"op": "set_computed_value_builds", "builds": builds})
+        except EscalateRequestError as refusal:
+            log.error(
+                "the parent did not take how this node's computed values build; the next hook "
+                "tells it again",
+                error=str(refusal),
+            )
+            self._computed_value_builds_the_parent_last_took = None
+            return
+        self._computed_value_builds_the_parent_last_took = builds
 
     def _send_transparent_frames_while_the_node_is_not_ready(self) -> None:
         """Send a transparent frame on each of the node's Image outputs, while

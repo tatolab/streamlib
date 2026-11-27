@@ -10,10 +10,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
     HelperProcessRestartsOnTheWire, NodeHealthOnTheWire,
 };
-use streamlib_scope::BuildsOfAScope;
 
 use super::GraphRenders;
-use super::computed_value_build_diagnostics::the_diagnostics_of_the_builds_of;
+use super::computed_value_build_diagnostics::{
+    BuildsOfItsComputedValues, the_diagnostics_of_the_builds_of,
+};
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
 use crate::core::graph::NodeRunId;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
@@ -36,8 +37,9 @@ pub struct ObservableNodeState {
     /// so; the runtime keeps its outputs flowing meanwhile.
     not_ready_because: Mutex<Option<String>>,
     /// How the builds of the computed values of the node's body stand, for a node written as one
-    /// function whose body ran; read whenever its health is, so it shows with no frame run.
-    builds_of_its_computed_values: Mutex<Option<BuildsOfAScope>>,
+    /// function whose body ran, here or in its helper; read whenever its health is, so it shows
+    /// with no frame run.
+    builds_of_its_computed_values: Mutex<Option<BuildsOfItsComputedValues>>,
     state_changes_published_as: Mutex<Option<NodeStateChangesPublishedOnItsStreamsTopic>>,
 }
 
@@ -129,7 +131,10 @@ impl ObservableNodeState {
 
     /// Read how the builds of the computed values its body declared stand from `builds`, in
     /// place of the body that ran before.
-    pub fn read_the_builds_of_its_computed_values_from(&self, builds: BuildsOfAScope) {
+    pub(crate) fn read_the_builds_of_its_computed_values_from(
+        &self,
+        builds: BuildsOfItsComputedValues,
+    ) {
         *self.builds_of_its_computed_values.lock() = Some(builds);
     }
 

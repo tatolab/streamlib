@@ -3,6 +3,7 @@
 
 mod acquisition;
 mod compute;
+mod computed_value_builds_reports;
 mod device_idle;
 mod export_staging;
 pub(crate) mod failure_the_node_reported_of_itself;
@@ -93,6 +94,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::SetFunctionNodeRaisingBecause(p) => Some(&p.request_id),
         EscalateRequest::SetProcessRaisingBecause(p) => Some(&p.request_id),
         EscalateRequest::SetNotReadyBecause(p) => Some(&p.request_id),
+        EscalateRequest::SetComputedValueBuilds(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
@@ -192,6 +194,13 @@ pub(crate) fn handle_escalate_op(
         ),
         EscalateRequest::SetNotReadyBecause(req) => Some(
             node_not_ready_reports::handle_set_not_ready_because(what_the_node_reaches, rid, req),
+        ),
+        EscalateRequest::SetComputedValueBuilds(req) => Some(
+            computed_value_builds_reports::handle_set_computed_value_builds(
+                what_the_node_reaches,
+                rid,
+                req,
+            ),
         ),
         EscalateRequest::AcquireSharedNativeServiceLease(req) => Some(
             shared_native_service_lease::handle_acquire_shared_native_service_lease(
