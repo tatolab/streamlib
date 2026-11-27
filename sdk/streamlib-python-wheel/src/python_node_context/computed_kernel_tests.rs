@@ -12,6 +12,7 @@ use pyo3::types::{PyDict, PyModule};
 
 use super::ComputeKernelReleased;
 use super::gpu_context::PythonGpuContextLimitedAccess;
+use super::kernels::PythonKernelDispatchBatch;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_node_scope::add_the_node_scope_to;
 
@@ -30,7 +31,9 @@ def escalate_request_to_parent(op):
     return {
         "result": "ok",
         "handle_id": f"kernel-of:{op['source']}",
-        "bindings": [{"name": "filled_image", "kind": "storage_image"}],
+        "bindings": []
+        if op["source"].startswith("unbound")
+        else [{"name": "filled_image", "kind": "storage_image"}],
     }
 
 def release_to_parent_without_waiting(release_op):
@@ -47,8 +50,9 @@ def run_frames_until(scope, done, timeout_seconds=5.0):
         time.sleep(0.002)
 "#;
 
-/// Run `source` with the node scope's names, `ComputeKernelReleased`, the stand-in parent's names
-/// and `gpu`, a limited GPU capability whose exchange client reaches that parent, in its globals.
+/// Run `source` with the node scope's names, `ComputeKernelReleased`, the stand-in parent's names,
+/// `gpu`, a limited GPU capability whose exchange client reaches that parent, and `batch`, an
+/// entered dispatch batch on the same client, in its globals.
 fn run_against_a_stand_in_parent(source: &str) {
     Python::initialize();
     Python::attach(|python| {
@@ -84,12 +88,24 @@ fn run_against_a_stand_in_parent(source: &str) {
             Ok([0; 16]),
             "helper:computed-kernel-test".to_string(),
         );
+        let exchange_client = Arc::new(exchange_client);
         let gpu = Bound::new(
             python,
-            PythonGpuContextLimitedAccess::new_for_helper_process(Some(Arc::new(exchange_client))),
+            PythonGpuContextLimitedAccess::new_for_helper_process(Some(Arc::clone(
+                &exchange_client,
+            ))),
         )
         .unwrap();
         globals.set_item("gpu", gpu).unwrap();
+        let batch = Bound::new(
+            python,
+            PythonKernelDispatchBatch {
+                helper_process_exchange_client: Some(exchange_client),
+                recording: Default::default(),
+            },
+        )
+        .unwrap();
+        globals.set_item("batch", batch).unwrap();
         if let Err(raised) = python.run(&CString::new(source).unwrap(), Some(&globals), None) {
             raised.print(python);
             panic!("the Python under test raised: {raised}");
@@ -148,6 +164,24 @@ fn a_kernel_nothing_closed_is_released_when_its_last_reference_goes() {
 kernel = gpu.create_compute_kernel(source="dropped")
 del kernel
 assert released == [{"op": "release_handle", "handle_id": "kernel-of:dropped"}], released
+"#,
+    );
+}
+
+#[test]
+fn a_kernel_closed_after_a_batch_recorded_it_refuses_the_batch_as_released() {
+    run_against_a_stand_in_parent(
+        r#"
+kernel = gpu.create_compute_kernel(source="unbound closed in a batch")
+try:
+    with batch:
+        batch.dispatch(kernel, bindings={}, group_count=(1, 1, 1))
+        kernel.close()
+except ComputeKernelReleased:
+    pass
+else:
+    raise AssertionError("a batch ran a kernel closed after it was recorded")
+assert released == [{"op": "release_handle", "handle_id": "kernel-of:unbound closed in a batch"}], released
 "#,
     );
 }

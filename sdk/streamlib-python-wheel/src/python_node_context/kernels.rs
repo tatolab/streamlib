@@ -229,12 +229,14 @@ impl PythonComputeKernel {
 /// One recorded dispatch: the wire entry to send, and the kernel it names.
 struct RecordedKernelDispatch {
     /// Kept beside the entry rather than read back out of it, so refusing a
-    /// repeated kernel cannot drift from the entry it refuses against.
+    /// repeated kernel cannot drift from the entry it refuses against; held
+    /// so the kernel cannot be released by its last reference going before
+    /// the batch runs, and checked again when it runs.
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "macos")),
         expect(dead_code, reason = "only the Linux and macOS builds use it")
     )]
-    kernel_id: String,
+    kernel: Py<PythonComputeKernel>,
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "macos")),
         expect(dead_code, reason = "only the Linux and macOS builds use it")
@@ -330,13 +332,15 @@ impl PythonKernelDispatchBatch {
     fn dispatch(
         &self,
         python: Python<'_>,
-        kernel: &PythonComputeKernel,
+        kernel: &Bound<'_, PythonComputeKernel>,
         bindings: &Bound<'_, PyDict>,
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
+            let recorded_kernel = kernel;
+            let kernel = recorded_kernel.get();
             // Scope state first, and the lock dropped before validation: a
             // batch nobody entered or already ran collects nothing, so a
             // binding mistake must not mask either — and validation calls back
@@ -377,7 +381,7 @@ impl PythonKernelDispatchBatch {
             if let Some(earlier) = recording
                 .dispatches
                 .iter()
-                .position(|already| already.kernel_id == kernel.kernel_id)
+                .position(|already| already.kernel.get().kernel_id == kernel.kernel_id)
             {
                 return Err(PyValueError::new_err(format!(
                     "this kernel is already dispatch {earlier} of this batch; a recording \
@@ -395,7 +399,7 @@ impl PythonKernelDispatchBatch {
                     group_count,
                 )?;
             recording.dispatches.push(RecordedKernelDispatch {
-                kernel_id: kernel.kernel_id.clone(),
+                kernel: recorded_kernel.clone().unbind(),
                 wire_entry: wire_entry.unbind(),
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 bound_surface_handles: bound_surface_handles(bindings),
@@ -415,6 +419,10 @@ impl PythonKernelDispatchBatch {
     fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            for entry in &recorded {
+                entry.kernel.get().refuse_if_released()?;
+            }
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             for entry in &recorded {
                 order_tensor_device_writes_ahead_of_the_kernel(
