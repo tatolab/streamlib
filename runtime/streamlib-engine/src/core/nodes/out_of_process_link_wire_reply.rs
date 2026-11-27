@@ -52,6 +52,14 @@ impl OutOfProcessLinkWireReply {
     pub fn the_far_sides_answer(&self) -> Option<OutOfProcessLinkWireOutcome> {
         self.answer.get().cloned()
     }
+
+    /// Whether the far side answered that it refused the link.
+    pub fn the_far_side_refused(&self) -> bool {
+        matches!(
+            self.answer.get(),
+            Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { .. })
+        )
+    }
 }
 
 #[derive(Debug, Default)]

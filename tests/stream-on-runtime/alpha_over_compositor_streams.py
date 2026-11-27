@@ -79,8 +79,21 @@ LAYERS_BY_SCENARIO: "dict[str, list[CompositedLayerUnderTest]]" = {
 }
 
 
-def _wire_the_scenario(stream_builder: StreamBuilder, scenario: str) -> None:
-    layers = LAYERS_BY_SCENARIO[scenario]
+#: The layer wired into a playing two-layer compositor's empty slot, over grey and red.
+BLUE_LAYER_WIRED_WHILE_PLAYING = LAYERS_BY_SCENARIO["red_on_layer_1_blue_on_layer_2"][2]
+
+#: How often the probe of the stream a layer joins while playing reports the newest composite.
+REPORT_EVERY_SECONDS_WHILE_A_LAYER_JOINS = 0.5
+
+
+def _wire_the_scenario(
+    stream_builder: StreamBuilder,
+    scenario: str,
+    *,
+    layers: "list[CompositedLayerUnderTest] | None" = None,
+    report_every_seconds: float = 0.0,
+) -> None:
+    layers = LAYERS_BY_SCENARIO[scenario] if layers is None else layers
     compositor = stream_builder.add(
         AlphaOverCompositor,
         input_values={
@@ -106,7 +119,9 @@ def _wire_the_scenario(stream_builder: StreamBuilder, scenario: str) -> None:
                 },
             )
         stream_builder.connect(source.output("video"), compositor.input(f"layers.{layer_index}.picture"))
-    probe = stream_builder.add(AlphaOverCompositeProbe)
+    probe = stream_builder.add(
+        AlphaOverCompositeProbe, input_values={"report_every_seconds": report_every_seconds}
+    )
     stream_builder.connect(compositor.output("video"), probe.input("composite_from_upstream"))
 
 
@@ -138,6 +153,18 @@ def a_layer_0_that_never_sends_into_the_compositor(stream_builder: StreamBuilder
 @graph_generator
 def ten_layers_into_the_compositor(stream_builder: StreamBuilder) -> None:
     _wire_the_scenario(stream_builder, "ten_layers")
+
+
+@graph_generator
+def grey_and_red_into_the_compositor_reporting_until_stopped(stream_builder: StreamBuilder) -> None:
+    """The first two layers of `red_on_layer_1_blue_on_layer_2`, its blue layer left to wire
+    while the stream plays, the probe reporting the newest composite over and over."""
+    _wire_the_scenario(
+        stream_builder,
+        "red_on_layer_1_blue_on_layer_2",
+        layers=LAYERS_BY_SCENARIO["red_on_layer_1_blue_on_layer_2"][:2],
+        report_every_seconds=REPORT_EVERY_SECONDS_WHILE_A_LAYER_JOINS,
+    )
 
 
 STREAM_BY_SCENARIO = {

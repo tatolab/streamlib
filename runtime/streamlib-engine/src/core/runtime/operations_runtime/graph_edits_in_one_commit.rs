@@ -171,9 +171,9 @@ impl LoadedStreamInThisRuntime {
             node_names_the_graph_only_nodes_held_before: self
                 .compiler
                 .scope_reading(|graph| graph.node_names_the_graph_only_nodes_hold().clone()),
-            pin_group_slot_counts_before: self
-                .compiler
-                .scope_reading(|graph| graph.the_pin_group_slot_counts_of_each_node()),
+            pin_group_slot_counts_before: self.compiler.scope_reading(|graph| {
+                graph.the_pin_group_slot_counts_of_each_node_built_for_them()
+            }),
             names_before_each_rename: Mutex::new(Vec::new()),
         })
     }
@@ -285,7 +285,7 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Leave each node that held a pin group before `held` and holds another number of its
-    /// slots now to rebuild: a node is built for the slots its pin groups hold. Run once the
+    /// slots now to rebuild: such a node is built for the slots its pin groups hold. Run once the
     /// edits stand, and once a commit that failed after it changed what runs is taken back as
     /// far as it can be, since the links it leaves wired may have changed a node's slots.
     fn leave_each_node_whose_pin_group_slots_changed_to_rebuild(
@@ -294,7 +294,7 @@ impl LoadedStreamInThisRuntime {
     ) {
         let slot_counts_now = self
             .compiler
-            .scope_reading(|graph| graph.the_pin_group_slot_counts_of_each_node());
+            .scope_reading(|graph| graph.the_pin_group_slot_counts_of_each_node_built_for_them());
         for (node_run_id, slot_counts) in &slot_counts_now {
             if held
                 .pin_group_slot_counts_before

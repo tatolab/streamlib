@@ -93,6 +93,8 @@ impl OpenedSourceSideOfALink {
         // the component below, which the end fills from its bridge's reader
         // thread.
         if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
+            // Answers left from an earlier wiring of it no longer speak for it.
+            link.remove::<OutOfProcessLinkWireRepliesComponent>();
             link.insert(LinkStateComponent(LinkState::Wired));
             tracing::info!(
                 channel = %self.channel_service_name,

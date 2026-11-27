@@ -25,6 +25,11 @@ use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::{NodeRunId, ObservableNodeState, StepProgressOfOneNode};
 use crate::core::nodes::{NodeInstance, NodeState};
 
+mod links_an_end_refused_wired_again;
+use links_an_end_refused_wired_again::{
+    RetriesOfTheLinksARunningFarSideRefused, ask_for_each_link_an_end_refused_to_be_wired_again,
+};
+
 #[tracing::instrument(name = "node.lifecycle", skip(node, shutdown_rx, shutdown_wake_fd, state, pause_gate, step_progress, exec_config, runtime_ctx), fields(node_run_id = %id, isolation_tier = isolation_tier.as_str()))]
 pub fn run_node_loop(
     id: NodeRunId,
@@ -301,6 +306,8 @@ fn run_manual_mode(
     let mut current_helper_process_started_at = Instant::now();
     let mut next_helper_process_restart_at: Option<Instant> = None;
     let mut helper_process_stopped_answering_at: Option<Instant> = None;
+    let mut retries_of_the_links_a_running_far_side_refused =
+        RetriesOfTheLinksARunningFarSideRefused::new();
     let output_writer = node.lock().iceoryx2_output_writer_inner();
 
     loop {
@@ -343,6 +350,11 @@ fn run_manual_mode(
                         state.note_a_helper_process_restart();
                         current_helper_process_started_at = Instant::now();
                         helper_process_stopped_answering_at = None;
+                        // The links the helper that died never opened are refused; the new
+                        // one is set up, so each is wired again now.
+                        ask_for_each_link_an_end_refused_to_be_wired_again(id, runtime_ctx);
+                        retries_of_the_links_a_running_far_side_refused =
+                            RetriesOfTheLinksARunningFarSideRefused::new();
                         if pause_gate.load(Ordering::Acquire) {
                             dispatch_on_pause(id, node, runtime_ctx);
                             was_paused = true;
@@ -392,16 +404,20 @@ fn run_manual_mode(
                 why_process_is_raising_as_its_helper_reports,
                 why_the_node_is_not_ready_as_its_helper_reports,
                 its_helper_reports_whether_the_node_is_ready,
+                its_far_side_holds_a_link_it_refused,
             ) = {
                 let mut node = node.lock();
                 node.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+                let link_wiring = node.out_of_process_link_wiring();
                 (
                     node.failure_the_node_reported_of_itself(),
                     node.has_failed_unrecoverably(),
                     node.why_the_out_of_process_helper_died_on_its_own(),
                     node.why_process_is_raising_as_its_helper_reports(),
                     node.why_the_node_is_not_ready_as_its_helper_reports(),
-                    node.out_of_process_link_wiring().is_some(),
+                    link_wiring.is_some(),
+                    link_wiring
+                        .is_some_and(|link_wiring| link_wiring.holds_a_link_its_far_side_refused()),
                 )
             };
             state.note_why_process_is_raising(why_process_is_raising_as_its_helper_reports);
@@ -447,7 +463,13 @@ fn run_manual_mode(
                         already_reported_failure = true;
                     }
                 }
-                (None, false, None) => {}
+                (None, false, None) => {
+                    if retries_of_the_links_a_running_far_side_refused
+                        .a_retry_is_due(its_far_side_holds_a_link_it_refused, Instant::now())
+                    {
+                        ask_for_each_link_an_end_refused_to_be_wired_again(id, runtime_ctx);
+                    }
+                }
             }
         }
 

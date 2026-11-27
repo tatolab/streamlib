@@ -67,7 +67,8 @@ fn a_reader_whose_links_wire_reads_as_its_state_says() {
 }
 
 /// Mental-revert: health read from the reader's state alone answers healthy, while its input
-/// reads nothing.
+/// reads nothing; naming a restart of the stream as the fix asks for a stop the link recovers
+/// from by itself.
 #[test]
 fn a_reader_whose_link_its_helper_refused_reads_not_ready_with_the_refusal_at_the_link() {
     let (mut graph, reader, link) = a_source_linked_into_a_running_reader();
@@ -107,6 +108,17 @@ fn a_reader_whose_link_its_helper_refused_reads_not_ready_with_the_refusal_at_th
         "{}",
         diagnostic.words
     );
+    assert_eq!(
+        diagnostic.recovery,
+        streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticRecoveryOnTheWire::FixTheLink,
+        "a link not wired is recovered on the link, never by a restart of the playback"
+    );
+    assert!(
+        diagnostic.words.contains("wired again by itself")
+            && !diagnostic.words.contains("stop the stream"),
+        "{}",
+        diagnostic.words
+    );
 }
 
 #[test]
@@ -140,6 +152,13 @@ fn a_failed_reader_with_a_link_not_wired_stays_failed() {
             DiagnosticKindOnTheWire::NodeFailed,
             DiagnosticKindOnTheWire::LinkNotWired
         ]
+    );
+    let link_not_wired = &diagnostics[1];
+    assert!(
+        link_not_wired.words.contains("its wiring failed")
+            && !link_not_wired.words.contains("wired again by itself"),
+        "a link whose wiring failed outright is wired again by nothing, so its words say so: {}",
+        link_not_wired.words
     );
 }
 

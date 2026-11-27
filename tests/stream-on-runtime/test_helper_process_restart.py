@@ -149,3 +149,147 @@ def test_a_helper_dying_soon_after_every_start_is_restarted_four_times_then_left
     assert node_named(graph(), "exits-soon")["components"]["state"] == "Error", (
         "a node past its crash-loop limit stays down"
     )
+
+
+DIES_IN_ITS_SECOND_SETUP_NODES_SOURCE = '''\
+"""A reader whose helper dies a moment after its first start, then again in its second setup,
+then keeps running, beside a source that keeps running."""
+
+import json
+import os
+import time
+from pathlib import Path
+
+from tatolab.stream import (
+    InputPin,
+    OutputPin,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    Trigger,
+    log,
+    node,
+)
+
+STARTS_COUNTED_IN = Path(__file__).with_name("reader_starts")
+
+
+@node(execution="continuous", interval_ms=10)
+class KeepsRunning:
+    """Does nothing, for as long as the stream runs."""
+
+    ticks: OutputPin[Trigger]
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        pass
+
+
+@node(execution="continuous", interval_ms=10)
+class DiesInItsSecondSetup:
+    """Ends its first process on its tenth callback, and its second in its setup."""
+
+    def __init__(self) -> None:
+        self._callbacks = 0
+        self._start = 0
+
+    ticks_from_upstream: InputPin[Trigger]
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self._start = (
+            int(STARTS_COUNTED_IN.read_text()) if STARTS_COUNTED_IN.exists() else 0
+        ) + 1
+        STARTS_COUNTED_IN.write_text(str(self._start))
+        log.info("MARKER:READER_SETTING_UP " + json.dumps({"start": self._start}))
+        if self._start == 2:
+            time.sleep(4.0)
+            os._exit(18)
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        self._callbacks += 1
+        if self._start == 1 and self._callbacks == 10:
+            os._exit(17)
+'''
+
+DIES_IN_ITS_SECOND_SETUP_STREAM_SOURCE = '''\
+from tatolab.stream import StreamBuilder, graph_generator
+
+from nodes.dying_reader import DiesInItsSecondSetup, KeepsRunning
+
+
+@graph_generator
+def main(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(KeepsRunning, name="source")
+    stream_builder.add(DiesInItsSecondSetup, name="reader")
+'''
+
+#: The second start's setup, the death that ends it, the two-second wait before the third start,
+#: a cold spawn and import, and the wait before the link is wired again, with room for a loaded rig.
+REFUSED_LINK_WIRED_AGAIN_TIMEOUT_SECONDS = 45.0
+
+
+def test_a_link_its_reader_refused_by_dying_in_setup_is_wired_again_once_its_next_helper_runs(
+    make_tatolab_project: "Callable[..., Any]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """A link connected live while its reader's helper is still setting up is refused when that
+    helper dies before answering, and is wired by itself once the next helper is running, with
+    no stop of the stream.
+
+    Fail-without-fix: the link reads `error` for good, and its diagnostic asks for the stream to
+    be stopped and started again.
+    """
+    project_directory = make_tatolab_project(
+        {
+            "nodes/__init__.py": "",
+            "nodes/dying_reader.py": DIES_IN_ITS_SECOND_SETUP_NODES_SOURCE,
+            "stream.py": DIES_IN_ITS_SECOND_SETUP_STREAM_SOURCE,
+        }
+    )
+    tatolabd = start_tatolabd()
+    stream_id = tatolabd.run_stream(
+        TatolabRunOfAProject(working_directory=project_directory)
+    ).await_loaded()["stream_id"]
+    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
+    local_api = tatolabd.local_api_client()
+
+    def graph() -> "dict[str, Any]":
+        return local_api.call_tool("graph", {"stream": stream_id})
+
+    tatolabd.await_marker(
+        "READER_SETTING_UP", occurrence=2, timeout=REFUSED_LINK_WIRED_AGAIN_TIMEOUT_SECONDS
+    )
+    nodes = graph()
+    source, reader = node_named(nodes, "source"), node_named(nodes, "reader")
+    local_api.call_tool(
+        "connect",
+        {
+            "stream": stream_id,
+            "source": {"node": source["id"], "port": "ticks"},
+            "target": {"node": reader["id"], "port": "ticks_from_upstream"},
+            "mode": "live",
+        },
+    )
+
+    tatolabd.await_marker(
+        "READER_SETTING_UP", occurrence=3, timeout=REFUSED_LINK_WIRED_AGAIN_TIMEOUT_SECONDS
+    )
+    states_read: "list[str]" = []
+    deadline = time.monotonic() + REFUSED_LINK_WIRED_AGAIN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        (link,) = graph()["links"]
+        if not states_read or states_read[-1] != link["state"]:
+            states_read.append(link["state"])
+        if link["state"] == "wired":
+            break
+        time.sleep(0.1)
+
+    assert states_read[-1] == "wired", (
+        f"the link read {states_read}, last as {link}\n{tatolabd.recent_stderr()}"
+    )
+    after = graph()
+    assert node_named(after, "reader")["components"]["state"] == "Running", after
+    assert node_named(after, "source")["components"]["state"] == "Running", after
+    restarts = node_named(after, "reader")["components"]["helper_process_restarts"]
+    # A restart counts once its helper is set up, so the second start, dying in its setup,
+    # is none.
+    assert restarts["restart_count"] == 1, restarts
+    assert "before it finished setting up" in restarts["last_exit_reason"], restarts

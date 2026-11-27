@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The four nodes as a stream names them: their types, ports, connections and
-the settings each refuses. Nothing here needs a runtime or a relay; the native
+the inputs each refuses. Nothing here needs a runtime or a relay; the native
 half's round trip through a relay is the crate's own test."""
 
 from typing import Annotated, Any
@@ -10,13 +10,17 @@ from typing import Annotated, Any
 import pytest
 from tatolab.moq import (
     MoqCatalogEntry,
-    MoqConnection,
     MoqGateway,
     MoqRecord,
     MoqRelaySettings,
     MoqTrack,
     MoqTrackReceive,
     MoqTrackSend,
+    _catalog_entry_read_from,
+    _gateway_settings_stated,
+    _set_or_refused,
+    _track_name_declared,
+    _what_a_receive_carries,
 )
 from tatolab.stream import (
     EncodedCodecs,
@@ -28,7 +32,6 @@ from tatolab.stream import (
     graph_generator,
     run_graph_generator,
 )
-from tatolab.stream._class_node_construction import class_node_members, construct_class_node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -64,7 +67,7 @@ def a_track_sent_through_a_variable_and_read_back(stream_builder: StreamBuilder)
     stream_builder.connect(gateway.output("connection"), receive.input("gateway"))
 
 
-def the_port(node_class: type, ports_stamp: str, port_name: str) -> "dict[str, Any]":
+def the_port(node_class: Any, ports_stamp: str, port_name: str) -> "dict[str, Any]":
     (port,) = [port for port in getattr(node_class, ports_stamp) if port["name"] == port_name]
     return port
 
@@ -135,27 +138,31 @@ def test_a_receive_writes_the_type_its_choice_holds_a_moq_record_by_default():
     }
 
 
-def a_node_built(node_class: type, **field_values: Any) -> Any:
-    members = class_node_members(node_class)
-    assert members is not None
-    pins = {member.port: object() for member in members if member.form != "field"}
-    return construct_class_node(node_class, field_values=field_values, pins=pins)
+def test_each_node_is_one_function_whose_every_input_is_live():
+    """Mental-revert: keep an input `SettingOnly()`, and a set of it rebuilds the node."""
+    for node_function in (MoqGateway, MoqTrack, MoqTrackSend, MoqTrackReceive):
+        assert not isinstance(node_function, type)
+        for port in getattr(node_function, NODE_DECLARATION_INPUT_PORTS_STAMP):
+            assert port.get("input_mode", {}).get("mode") != "setting_only", (node_function, port)
 
 
 def test_a_receive_hands_its_native_half_what_it_carries_and_the_codec_its_choice_holds():
-    by_default = a_node_built(MoqTrackReceive)
-    assert (by_default._carries, by_default._codec) == ("named", None)
-    h264 = a_node_built(MoqTrackReceive, content_type=PinTypeChoice(Annotated[EncodedVideo, EncodedCodecs("h264")]))
-    assert (h264._carries, h264._codec) == ("encoded", "h264")
+    assert _what_a_receive_carries(PinTypeChoice(MoqRecord)) == ("named", None)
+    h264 = PinTypeChoice(Annotated[EncodedVideo, EncodedCodecs("h264")])
+    assert _what_a_receive_carries(h264) == ("encoded", "h264")
 
 
-def test_the_names_a_gateway_and_a_track_give_are_cast_and_a_receive_reads_its_names_as_written():
-    gateway = a_node_built(MoqGateway, kind="moq-relay", broadcast="Studio A")
-    track = a_node_built(MoqTrack, gateway=MoqConnection("gateway"), track="Camera 1")
-    assert gateway.settings_stated() == {"kind": "moq-relay", "broadcast": "studio-a"}
-    assert track._track_name == "camera-1"
-    receive = a_node_built(MoqTrackReceive, broadcast="Studio A.hang", track="Camera 1")
-    assert (receive.broadcast, receive.track) == ("Studio A.hang", "Camera 1")
+def test_the_names_a_gateway_and_a_track_give_are_cast():
+    assert _gateway_settings_stated({"kind": "moq-relay", "broadcast": "Studio A", "token": None}) == {
+        "kind": "moq-relay",
+        "broadcast": "studio-a",
+    }
+    assert _track_name_declared("Camera 1") == "camera-1"
+
+
+def test_a_gateway_refuses_a_setting_that_holds_no_text():
+    with pytest.raises(ValueError, match="`token`"):
+        _gateway_settings_stated({"kind": "moq-relay", "token": ""})
 
 
 def test_a_record_and_relay_settings_travel_as_json_text():
@@ -175,36 +182,24 @@ def test_relay_settings_refuse_a_key_no_gateway_takes_and_a_value_that_is_no_tex
         MoqRelaySettings({"token": ""})
 
 
-def test_a_track_refuses_a_catalog_track_name_and_a_catalog_entry_that_is_no_json_object():
+def test_a_track_refuses_an_empty_or_catalog_track_name_and_a_catalog_entry_that_is_no_json_object():
+    with pytest.raises(ValueError, match="`track` is not set"):
+        _track_name_declared("")
     with pytest.raises(ValueError, match="writes its catalog on"):
-        a_node_built(MoqTrack, track="Catalog.json")
+        _track_name_declared("Catalog.json")
     with pytest.raises(ValueError, match="no JSON text"):
-        a_node_built(MoqTrack, track="camera", catalog=MoqCatalogEntry(section="video", entry="{"))
+        _catalog_entry_read_from(MoqCatalogEntry(section="video", entry="{"))
     with pytest.raises(ValueError, match="one JSON object"):
-        a_node_built(MoqTrack, track="camera", catalog=MoqCatalogEntry(section="video", entry="[]"))
+        _catalog_entry_read_from(MoqCatalogEntry(section="video", entry="[]"))
+    assert _catalog_entry_read_from(MoqCatalogEntry(section="video", entry='{"codec": "avc1"}')) == {
+        "section": "video",
+        "entry": {"codec": "avc1"},
+    }
 
 
-@pytest.mark.parametrize(
-    ("node_class", "field_values", "refusal"),
-    [
-        (MoqTrack, {"track": "camera"}, "`gateway`"),
-        (MoqTrack, {"gateway": MoqConnection("gateway")}, "`track`"),
-        (MoqTrackReceive, {"gateway": MoqConnection("gateway"), "track": "camera"}, "`broadcast`"),
-        (MoqTrackReceive, {"broadcast": "studio.hang", "track": "camera"}, "`gateway`"),
-        (MoqTrackSend, {}, "`track`"),
-    ],
-)
-def test_a_node_missing_what_it_needs_fails_at_setup_naming_it(
-    node_class: type, field_values: "dict[str, Any]", refusal: str
-):
-    built = a_node_built(node_class, **field_values)
-
-    class _Context:
-        def open_module_host_table(self) -> None:
-            raise AssertionError("refused before it reaches its native half")
-
-    with pytest.raises(ValueError, match=refusal):
-        built.setup(_Context())
+def test_a_connection_not_wired_is_refused_naming_its_input():
+    with pytest.raises(ValueError, match="`gateway` is not set"):
+        _set_or_refused("MoqTrack", "gateway", None, "a `MoqGateway`'s connection")
 
 
 def test_the_runtime_holds_a_gateway_to_its_relay_kinds_a_catalog_to_its_sections_and_max_age_above_zero():

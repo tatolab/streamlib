@@ -183,6 +183,15 @@ impl ShaderNodeIslandProgram {
         &self.members
     }
 
+    /// The name of each member, in the order they are evaluated.
+    #[cfg(test)]
+    pub(crate) fn member_names(&self) -> Vec<String> {
+        self.members
+            .iter()
+            .map(|member| member.node_name.clone())
+            .collect()
+    }
+
     /// The member that writes the island's output.
     pub(crate) fn output_member(&self) -> &ShaderNodeIslandMember {
         &self.members[self.members.len() - 1]

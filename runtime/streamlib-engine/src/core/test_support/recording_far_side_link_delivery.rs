@@ -52,6 +52,9 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     /// Whether the far side refuses the function node islands handed over, as a helper that died
     /// does.
     pub(crate) refuses_function_node_islands: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the handover of a link to the far side fails, as one to a helper whose pipe
+    /// broke does.
+    pub(crate) refuses_links: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
@@ -63,6 +66,11 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         link_wiring: &serde_json::Value,
         answer_cell: Arc<crate::core::nodes::OutOfProcessLinkWireReply>,
     ) -> crate::core::Result<()> {
+        if self.refuses_links.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(crate::core::Error::Runtime(
+                "the link could not be written to the far side".to_owned(),
+            ));
+        }
         self.late_wired_links
             .lock()
             .push((port_direction, link_wiring.clone()));

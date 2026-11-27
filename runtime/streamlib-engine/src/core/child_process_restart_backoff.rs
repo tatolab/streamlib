@@ -3,7 +3,8 @@
 
 //! The one restart policy every child process the runtime keeps alive runs
 //! under: how long to wait before starting it again, and when a child running
-//! user code has died soon after its start often enough to be given up on.
+//! user code has died soon after its start often enough to be given up on. Its
+//! doubling wait also paces the retries of a link a running helper refused.
 
 use std::time::Duration;
 
@@ -21,10 +22,39 @@ pub const CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF: Duration = Duration
 /// user code is given up on.
 pub const CRASH_LOOP_LIMIT_OF_A_CHILD_PROCESS_RUNNING_USER_CODE: u32 = 5;
 
+/// A wait that starts at [`FIRST_CHILD_PROCESS_RESTART_WAIT`] and doubles each time it is
+/// taken, up to [`LONGEST_CHILD_PROCESS_RESTART_WAIT`].
+#[derive(Debug, Clone)]
+pub struct DoublingWait {
+    next: Duration,
+}
+
+impl Default for DoublingWait {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DoublingWait {
+    /// A wait not taken yet, so the first taken is the first wait.
+    pub fn new() -> Self {
+        Self {
+            next: FIRST_CHILD_PROCESS_RESTART_WAIT,
+        }
+    }
+
+    /// The wait to take now, doubling the one after it.
+    pub fn take(&mut self) -> Duration {
+        let wait = self.next;
+        self.next = (wait * 2).min(LONGEST_CHILD_PROCESS_RESTART_WAIT);
+        wait
+    }
+}
+
 /// One child process's restart backoff, fed each death as it happens.
 #[derive(Debug, Clone)]
 pub struct ChildProcessRestartBackoff {
-    wait_before_the_next_start: Duration,
+    wait_before_the_next_start: DoublingWait,
     deaths_in_a_row_before_a_healthy_run: u32,
 }
 
@@ -38,7 +68,7 @@ impl ChildProcessRestartBackoff {
     /// A backoff for a child that has not died yet.
     pub fn new() -> Self {
         Self {
-            wait_before_the_next_start: FIRST_CHILD_PROCESS_RESTART_WAIT,
+            wait_before_the_next_start: DoublingWait::new(),
             deaths_in_a_row_before_a_healthy_run: 0,
         }
     }
@@ -50,14 +80,12 @@ impl ChildProcessRestartBackoff {
         run_before_the_death: Duration,
     ) -> Duration {
         if run_before_the_death >= CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF {
-            self.wait_before_the_next_start = FIRST_CHILD_PROCESS_RESTART_WAIT;
+            self.wait_before_the_next_start = DoublingWait::new();
             self.deaths_in_a_row_before_a_healthy_run = 0;
         } else {
             self.deaths_in_a_row_before_a_healthy_run += 1;
         }
-        let wait = self.wait_before_the_next_start;
-        self.wait_before_the_next_start = (wait * 2).min(LONGEST_CHILD_PROCESS_RESTART_WAIT);
-        wait
+        self.wait_before_the_next_start.take()
     }
 
     /// The deaths in a row so far, each before a healthy run.

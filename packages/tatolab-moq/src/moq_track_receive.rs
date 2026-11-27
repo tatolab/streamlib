@@ -7,6 +7,10 @@
 
 use std::time::{Duration, Instant};
 
+use iceoryx2::port::listener::Listener;
+use iceoryx2::port::notifier::Notifier;
+use iceoryx2::prelude::ipc_threadsafe;
+
 use crate::error::{MoqModuleError, Result};
 use crate::moq_catalog::{
     packets_stream_facts_read_from_hang_catalog_entry,
@@ -14,8 +18,8 @@ use crate::moq_catalog::{
 };
 use crate::moq_hang_legacy_container::read_hang_legacy_container_media_frame;
 use crate::moq_node_ipc::{
-    MoqGatewayControlMessage, MoqNodeIpc, MoqReceivedContentSampleKind,
-    MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
+    MoqGatewayControlMessage, MoqNodeIpc, MoqNodeSlicePublisher, MoqNodeSliceSubscriber,
+    MoqReceivedContentSampleKind, MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
 };
 use crate::moq_node_thread::MoqNodeThread;
 
@@ -29,6 +33,46 @@ const THE_RECEIVE_WAKES_AT_LEAST_EVERY: Duration = Duration::from_millis(50);
 /// The most samples a pass writes before it sends its request again or sees
 /// a stop.
 const CONTENT_SAMPLES_A_PASS_WRITES: usize = 64;
+
+/// How long a receive of the same node this one takes over from has to end.
+const A_RECEIVE_BEFORE_ENDS_WITHIN: Duration = Duration::from_secs(2);
+
+/// What a receive node's thread holds while it reads.
+struct MoqTrackReceiveOpened {
+    _ipc: MoqNodeIpc,
+    control: MoqNodeSlicePublisher<()>,
+    gateway_wake: Notifier<ipc_threadsafe::Service>,
+    content: MoqNodeSliceSubscriber<MoqTrackContentReceivedFromTheGatewayHeader>,
+    wake: Listener<ipc_threadsafe::Service>,
+    request: Vec<u8>,
+}
+
+impl MoqTrackReceiveOpened {
+    /// Open what asks `asked`'s gateway for its track and what that gateway writes it on.
+    fn open(ipc: MoqNodeIpc, asked: &MoqTrackReceiveAsked) -> Result<Self> {
+        let control = ipc.gateway_control_publisher(&asked.gateway_node)?;
+        let gateway_wake = ipc.notifier(&ipc.service_names.gateway_wake(&asked.gateway_node))?;
+        let content = ipc.receive_content_subscriber(&asked.receive_node)?;
+        let wake = ipc.listener(&ipc.service_names.receive_wake(&asked.receive_node))?;
+        let request = serde_json::to_vec(&MoqGatewayControlMessage::TrackReceiveRequested {
+            receive_node: asked.receive_node.clone(),
+            broadcast: asked.broadcast.clone(),
+            track: asked.track.clone(),
+            max_age_milliseconds: u64::try_from(asked.max_age.as_millis()).unwrap_or(u64::MAX),
+        })
+        .map_err(|refusal| MoqModuleError::Refused {
+            what: format!("the receive request does not serialize: {refusal}"),
+        })?;
+        Ok(Self {
+            _ipc: ipc,
+            control,
+            gateway_wake,
+            content,
+            wake,
+            request,
+        })
+    }
+}
 
 /// What a receive node's `content` output carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,68 +116,69 @@ pub struct MoqTrackReceiveThread {
 }
 
 impl MoqTrackReceiveThread {
-    /// Ask for `asked` on `ipc` and write what arrives to `output`.
+    /// Ask for `asked` on `ipc` and write what arrives to `output`. A receive of
+    /// the same node this process runs already is stopped first, so one asking
+    /// for another track takes its content and wake services from it.
     pub fn spawn(
         ipc: MoqNodeIpc,
         asked: MoqTrackReceiveAsked,
         mut output: Box<dyn MoqReceivedTrackOutput>,
     ) -> Result<Self> {
-        let control = ipc.gateway_control_publisher(&asked.gateway_node)?;
-        let gateway_wake = ipc.notifier(&ipc.service_names.gateway_wake(&asked.gateway_node))?;
-        let content = ipc.receive_content_subscriber(&asked.receive_node)?;
-        let wake = ipc.listener(&ipc.service_names.receive_wake(&asked.receive_node))?;
-        let request = serde_json::to_vec(&MoqGatewayControlMessage::TrackReceiveRequested {
-            receive_node: asked.receive_node.clone(),
-            broadcast: asked.broadcast.clone(),
-            track: asked.track.clone(),
-            max_age_milliseconds: u64::try_from(asked.max_age.as_millis()).unwrap_or(u64::MAX),
-        })
-        .map_err(|refusal| MoqModuleError::Refused {
-            what: format!("the receive request does not serialize: {refusal}"),
-        })?;
-        let thread = MoqNodeThread::spawn("moq-track-receive", move |stop_signal| {
-            let _ipc_held_while_the_thread_runs = ipc;
-            let mut writing = MoqReceivedContentWriting::default();
-            let mut request_last_sent_at: Option<Instant> = None;
-            while !stop_signal.is_requested() {
-                let now = Instant::now();
-                if request_last_sent_at
-                    .is_none_or(|sent_at| now >= sent_at + A_RECEIVE_REQUEST_IS_SENT_AGAIN_EVERY)
-                {
-                    match publish_slice(&control, (), &request) {
-                        Ok(()) => {
-                            let _ = gateway_wake.notify();
+        let holding = ipc.service_names.receive_content(&asked.receive_node);
+        let thread = MoqNodeThread::spawn_holding(
+            &holding,
+            "moq-track-receive",
+            A_RECEIVE_BEFORE_ENDS_WITHIN,
+            || MoqTrackReceiveOpened::open(ipc, &asked),
+            move |opened, stop_signal| {
+                let mut writing = MoqReceivedContentWriting::default();
+                let mut request_last_sent_at: Option<Instant> = None;
+                while !stop_signal.is_requested() {
+                    let now = Instant::now();
+                    if request_last_sent_at.is_none_or(|sent_at| {
+                        now >= sent_at + A_RECEIVE_REQUEST_IS_SENT_AGAIN_EVERY
+                    }) {
+                        match publish_slice(&opened.control, (), &opened.request) {
+                            Ok(()) => {
+                                let _ = opened.gateway_wake.notify();
+                            }
+                            Err(refusal) => {
+                                tracing::debug!(
+                                    "MoqTrackReceive: the request was not sent: {refusal}"
+                                )
+                            }
                         }
-                        Err(refusal) => {
-                            tracing::debug!("MoqTrackReceive: the request was not sent: {refusal}")
+                        request_last_sent_at = Some(now);
+                    }
+                    let mut content_is_left_to_write = true;
+                    for _ in 0..CONTENT_SAMPLES_A_PASS_WRITES {
+                        match opened.content.receive() {
+                            Ok(Some(sample)) => writing.write_the_sample(
+                                *sample.user_header(),
+                                sample.payload(),
+                                output.as_mut(),
+                            ),
+                            Ok(None) => {
+                                content_is_left_to_write = false;
+                                break;
+                            }
+                            Err(refusal) => {
+                                tracing::debug!(
+                                    "MoqTrackReceive: content did not read: {refusal:?}"
+                                );
+                                content_is_left_to_write = false;
+                                break;
+                            }
                         }
                     }
-                    request_last_sent_at = Some(now);
-                }
-                let mut content_is_left_to_write = true;
-                for _ in 0..CONTENT_SAMPLES_A_PASS_WRITES {
-                    match content.receive() {
-                        Ok(Some(sample)) => writing.write_the_sample(
-                            *sample.user_header(),
-                            sample.payload(),
-                            output.as_mut(),
-                        ),
-                        Ok(None) => {
-                            content_is_left_to_write = false;
-                            break;
-                        }
-                        Err(refusal) => {
-                            tracing::debug!("MoqTrackReceive: content did not read: {refusal:?}");
-                            content_is_left_to_write = false;
-                            break;
-                        }
+                    if !content_is_left_to_write {
+                        let _ = opened
+                            .wake
+                            .timed_wait(|_| {}, THE_RECEIVE_WAKES_AT_LEAST_EVERY);
                     }
                 }
-                if !content_is_left_to_write {
-                    let _ = wake.timed_wait(|_| {}, THE_RECEIVE_WAKES_AT_LEAST_EVERY);
-                }
-            }
-        })?;
+            },
+        )?;
         Ok(Self { thread })
     }
 

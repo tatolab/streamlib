@@ -9,7 +9,7 @@ environment, so the variables are set where the runtime starts.
 """
 
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from tatolab.stream import RuntimeContextLimitedAccess, computed, node
 from tatolab.webrtc import PublishedTracks, WhipSessionPublishing
@@ -41,19 +41,18 @@ def whip_session_publishing_to_the_runtime_environments_endpoint() -> WhipSessio
 def WhipPublisherToTheRuntimeEnvironmentsEndpoint(
     *, tracks: PublishedTracks
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """A `WhipPublisher` session at `STREAMLIB_WHIP_URL`, sent `STREAMLIB_WHIP_BEARER_TOKEN`, with no input."""
+    """A `WhipPublisher` session at `STREAMLIB_WHIP_URL`, sent `STREAMLIB_WHIP_BEARER_TOKEN`, with no setting."""
+    inbound_links = tracks.inbound_link_names()
 
-    def set_up_publishing() -> WhipSessionPublishing:
+    def publishing_set_up() -> WhipSessionPublishing:
         publishing = whip_session_publishing_to_the_runtime_environments_endpoint()
-        publishing.set_up(tracks)
+        publishing.set_up(inbound_links)
         return publishing
 
-    # A computed value reading no input: built once, and closed, ending the session, when the
-    # node stops.
-    session = computed(set_up_publishing)
+    publishing = computed(publishing_set_up)
 
-    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+    def publish_the_next_message(ctx: RuntimeContextLimitedAccess) -> None:
         del ctx
-        session.get().publish_the_next_message(tracks)
+        publishing.get().publish_the_next_message(tracks)
 
-    return each_frame
+    return publish_the_next_message

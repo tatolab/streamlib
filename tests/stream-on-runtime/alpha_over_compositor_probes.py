@@ -125,18 +125,29 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
 def AlphaOverCompositeProbe(
     *,
     composite_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    report_every_seconds: Input[float] = Input(0.0),
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """Holds the newest composite and reports its pixels, or reports that none arrived."""
+    """Holds the newest composite and reports its pixels, or reports that none arrived; with
+    `report_every_seconds` above 0, reports the newest composite again that often after."""
 
     reported = False
+    reported_at_ns: "int | None" = None
     started_at_ns: "int | None" = None
     first_composite_at_ns: "int | None" = None
     composites_received = 0
     _newest_composite: "Texture | None" = None
 
-    def report(observe: "Callable[[], dict[str, Any]]") -> None:
-        nonlocal reported
+    def reports_again_now(now_ns: int) -> bool:
+        return (
+            report_every_seconds.get() > 0
+            and reported_at_ns is not None
+            and now_ns - reported_at_ns >= report_every_seconds.get() * 1e9
+        )
+
+    def report(now_ns: int, observe: "Callable[[], dict[str, Any]]") -> None:
+        nonlocal reported, reported_at_ns
         reported = True
+        reported_at_ns = now_ns
         try:
             observation = observe()
         except BaseException:  # noqa: BLE001 — re-raised by the asserting test
@@ -145,7 +156,7 @@ def AlphaOverCompositeProbe(
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         nonlocal _newest_composite, composites_received, first_composite_at_ns, started_at_ns
-        if reported:
+        if reported and not reports_again_now(ctx.time):
             return
         if started_at_ns is None:
             started_at_ns = ctx.time
@@ -158,7 +169,7 @@ def AlphaOverCompositeProbe(
 
         if first_composite_at_ns is None:
             if ctx.time - started_at_ns >= FIRST_COMPOSITE_DEADLINE_SECONDS * 1e9:
-                report(lambda: {"composites_received": 0})
+                report(ctx.time, lambda: {"composites_received": 0})
             return
         if ctx.time - first_composite_at_ns < SETTLING_SECONDS_AFTER_THE_FIRST_COMPOSITE * 1e9:
             return
@@ -166,11 +177,12 @@ def AlphaOverCompositeProbe(
         assert newest_composite is not None
         gpu = ctx.gpu_limited_access
         report(
+            ctx.time,
             lambda: {
                 "composites_received": composites_received,
                 "extent": [newest_composite.width, newest_composite.height],
                 "pixels": _pixels_of(gpu, newest_composite.surface_id),
-            }
+            },
         )
 
     return each_frame

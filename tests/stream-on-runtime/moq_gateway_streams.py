@@ -20,6 +20,8 @@ FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE = "STREAMLIB_FIXTURE_RELAY_URL"
 SENDING_BROADCAST = "suite-gateway-sender"
 RECEIVING_BROADCAST = "suite-gateway-receiver"
 COUNT_TRACK = "counts"
+#: The name a test renames `count_track`'s track to while the stream plays.
+RENAMED_COUNT_TRACK = "recounts"
 
 
 @graph_generator
@@ -53,3 +55,23 @@ def counting_records_sent_to_the_relay_and_read_back(stream_builder: StreamBuild
 
     stream_builder.connect(source.output("records_to_downstream"), send.input("content"))
     stream_builder.connect(receive.output("content"), sink.input("records_from_upstream"))
+
+
+#: The receive node of `a_receive_reading_the_count_track_alone`, its `content` linked to nothing.
+UNLINKED_RECEIVE = "receive_alone"
+
+
+@graph_generator
+def a_receive_reading_the_count_track_alone(stream_builder: StreamBuilder) -> None:
+    relay_url = os.environ[FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE]
+    receiving_gateway = stream_builder.add(
+        MoqGateway,
+        name="receiving_gateway",
+        input_values={"kind": "moq-relay", "relay_url": relay_url, "broadcast": RECEIVING_BROADCAST},
+    )
+    receive = stream_builder.add(
+        MoqTrackReceive,
+        name=UNLINKED_RECEIVE,
+        input_values={"broadcast": f"{SENDING_BROADCAST}.hang", "track": COUNT_TRACK},
+    )
+    stream_builder.connect(receiving_gateway.output("connection"), receive.input("gateway"))
