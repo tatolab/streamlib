@@ -284,4 +284,7 @@ def test_a_link_its_reader_refused_by_dying_in_setup_is_wired_again_once_its_nex
     assert node_named(after, "reader")["components"]["state"] == "Running", after
     assert node_named(after, "source")["components"]["state"] == "Running", after
     restarts = node_named(after, "reader")["components"]["helper_process_restarts"]
-    assert restarts["restart_count"] == 2, restarts
+    # A restart counts once its helper is set up, so the second start, dying in its setup,
+    # is none.
+    assert restarts["restart_count"] == 1, restarts
+    assert "before it finished setting up" in restarts["last_exit_reason"], restarts
