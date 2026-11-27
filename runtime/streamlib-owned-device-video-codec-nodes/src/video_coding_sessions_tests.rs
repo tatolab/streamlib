@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::video_coding_sessions::{
     VideoCodingSessionCommand, VideoCodingSessionNotOpened, VideoCodingSessionsOfTheThread,
@@ -318,4 +318,128 @@ fn a_refused_first_open_still_counts_as_asked_for() {
     ));
     assert!(sessions.a_session_was_asked_for());
     assert_eq!(newest_bitrate(&mut sessions), None);
+}
+
+/// An encoder's sessions, each encoding a frame unless its bitrate is above what the device
+/// does, as a session minted from its first frame refuses it.
+struct EncoderSessions {
+    commands: mpsc::Sender<VideoCodingSessionCommand<u32>>,
+    received: mpsc::Receiver<VideoCodingSessionCommand<u32>>,
+    sessions: VideoCodingSessionsOfTheThread<SessionStandIn>,
+}
+
+const HIGHEST_BITRATE_THE_DEVICE_DOES: u32 = 100_000_000;
+const RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+impl EncoderSessions {
+    fn new() -> Self {
+        let (commands, received) = mpsc::channel();
+        Self {
+            commands,
+            received,
+            sessions: VideoCodingSessionsOfTheThread::default(),
+        }
+    }
+
+    fn open(&mut self, number: u64, bitrate_bps: u32) {
+        let answer = open(&self.commands, number, bitrate_bps);
+        self.take();
+        assert_eq!(answer.try_recv(), Ok(Ok(())));
+    }
+
+    fn close(&mut self, number: u64) {
+        close(&self.commands, number);
+        self.take();
+    }
+
+    fn take(&mut self) {
+        self.sessions
+            .take_the_commands(&self.received, Duration::ZERO, |_| true, open_unless_zero);
+    }
+
+    /// The bitrate the frame at `now` was encoded at, and the refusal of the newest session if
+    /// it was tried and refused.
+    fn encode(&mut self, now: Instant) -> (Option<u32>, Option<String>) {
+        let mut encoded_at = None;
+        let encoded = self
+            .sessions
+            .encode_a_frame(now, RETRY_INTERVAL, |session| {
+                if session.bitrate_bps > HIGHEST_BITRATE_THE_DEVICE_DOES {
+                    return Err(format!(
+                        "bitrate_bps {} is beyond the device",
+                        session.bitrate_bps
+                    ));
+                }
+                encoded_at = Some(session.bitrate_bps);
+                Ok(())
+            });
+        (encoded_at, encoded.newest_refused)
+    }
+}
+
+#[test]
+fn a_new_session_that_encodes_takes_over_and_the_one_let_go_is_dropped() {
+    let mut encoder = EncoderSessions::new();
+    let now = Instant::now();
+    encoder.open(1, 2_000_000);
+    assert_eq!(encoder.encode(now), (Some(2_000_000), None));
+    encoder.open(2, 6_000_000);
+    encoder.close(1);
+    assert!(
+        encoder.sessions.is_open(1),
+        "kept until the newer one encodes"
+    );
+    assert_eq!(encoder.encode(now), (Some(6_000_000), None));
+    assert!(!encoder.sessions.is_open(1));
+}
+
+#[test]
+fn a_new_session_that_refuses_to_encode_leaves_the_one_before_it_encoding() {
+    let mut encoder = EncoderSessions::new();
+    let now = Instant::now();
+    encoder.open(1, 2_000_000);
+    assert_eq!(encoder.encode(now), (Some(2_000_000), None));
+    encoder.open(2, 4_000_000_000);
+    encoder.close(1);
+
+    let (encoded_at, refused) = encoder.encode(now);
+    assert_eq!(encoded_at, Some(2_000_000));
+    assert!(refused.is_some_and(|refusal| refusal.contains("beyond the device")));
+    assert_eq!(
+        encoder.encode(now + Duration::from_millis(500)),
+        (Some(2_000_000), None),
+        "the newest is not tried again within the retry interval"
+    );
+    let (encoded_at, refused) = encoder.encode(now + RETRY_INTERVAL);
+    assert_eq!(encoded_at, Some(2_000_000));
+    assert!(refused.is_some(), "tried again once the interval passed");
+    assert!(encoder.sessions.is_open(1));
+}
+
+#[test]
+fn a_refused_session_replaced_by_one_that_encodes_hands_over_to_it() {
+    let mut encoder = EncoderSessions::new();
+    let now = Instant::now();
+    encoder.open(1, 2_000_000);
+    assert_eq!(encoder.encode(now), (Some(2_000_000), None));
+    encoder.open(2, 4_000_000_000);
+    encoder.close(1);
+    assert_eq!(encoder.encode(now).0, Some(2_000_000));
+
+    encoder.open(3, 8_000_000);
+    encoder.close(2);
+    assert!(!encoder.sessions.is_open(2));
+    assert_eq!(encoder.encode(now), (Some(8_000_000), None));
+    assert!(!encoder.sessions.is_open(1));
+}
+
+#[test]
+fn the_first_session_refusing_has_no_session_to_fall_back_on() {
+    let mut encoder = EncoderSessions::new();
+    encoder.open(1, 4_000_000_000);
+    let encoded = encoder
+        .sessions
+        .encode_a_frame(Instant::now(), RETRY_INTERVAL, |_| Err("refused"));
+    assert_eq!(encoded.taken, Some(Err("refused")));
+    assert_eq!(encoded.newest_refused, None);
 }

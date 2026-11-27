@@ -165,8 +165,10 @@ def H264Encoder(
     coding thread, which owns the device, so frames wait on `video` while it
     opens and are encoded once it has. A session
     the codec refuses raises `VideoCodingSessionRefused` on the node, and the
-    one before keeps encoding; while no session is open, every frame is
-    discarded with no exception reaching Python.
+    one before keeps encoding. A session the device refuses to encode with,
+    its first frame failing, is tried again each second while the one before
+    encodes on, and takes over once it encodes a frame. While no session is
+    open, every frame is discarded with no exception reaching Python.
     """
     del video, encoded_video
     # Both ports go to the thread, which creates the owned device itself, so its start-up

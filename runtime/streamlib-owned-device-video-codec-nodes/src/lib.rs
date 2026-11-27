@@ -81,6 +81,9 @@ const INPUT_PORT_WAIT: Duration = Duration::from_millis(100);
 /// How long a coding thread leaves its input unread for the node's first build to ask for a
 /// session; a first build that raises asks for none, and the input is drained after this.
 const FIRST_BUILD_WAIT: Duration = Duration::from_secs(5);
+/// How often an encoder tries a newer session that refused a frame, while the one before it
+/// encodes on.
+const NEWER_SESSION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Why an encoder did not encode a frame.
 #[derive(Debug, PartialEq, Eq)]
@@ -94,6 +97,14 @@ pub enum VideoFrameNotEncoded {
 
 /// A refusal written as a plain message is for this frame only; a refusal that fails the node
 /// names [`VideoFrameNotEncoded::EveryFrameOfItsProducer`] where it is made.
+impl VideoFrameNotEncoded {
+    fn message(&self) -> &str {
+        match self {
+            Self::ThisFrame(refusal) | Self::EveryFrameOfItsProducer(refusal) => refusal,
+        }
+    }
+}
+
 impl From<String> for VideoFrameNotEncoded {
     fn from(refusal: String) -> Self {
         Self::ThisFrame(refusal)
@@ -421,7 +432,8 @@ fn open_the_encoder(
     ))
 }
 
-/// Read, encode and write until the node stops, with the newest session open. Until the node's
+/// Read, encode and write until the node stops, each frame with the session
+/// [`VideoCodingSessionsOfTheThread::encode_a_frame`] names. Until the node's
 /// first build asks for a session, for up to [`FIRST_BUILD_WAIT`], `video` is left unread;
 /// after, while none is open, it is still drained, so upstream sees a live consumer.
 fn encode_until_stopped(
@@ -459,6 +471,7 @@ fn encode_until_stopped(
     };
     let mut its_producer_was_refused = false;
     let mut frames_refused: u64 = 0;
+    let mut frames_the_newest_session_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         take_the_commands(&mut sessions);
         // Frames wait on `video` for the node's first build, so the stream's first frame
@@ -483,12 +496,33 @@ fn encode_until_stopped(
             if its_producer_was_refused {
                 continue;
             }
-            let Some(encoder) = sessions.newest_mut() else {
+            let frame = match ImageFrameReadByTheEncoder::of_the_video_message(&message) {
+                Ok(frame) => frame,
+                Err(refusal) => {
+                    frames_refused += 1;
+                    if frames_refused.is_power_of_two() {
+                        tracing::error!(frames_refused, "{refusal}");
+                    }
+                    continue;
+                }
+            };
+            let encoded =
+                sessions.encode_a_frame(Instant::now(), NEWER_SESSION_RETRY_INTERVAL, |encoder| {
+                    encoder.encode_and_publish(&frame, &encoded_video)
+                });
+            if let Some(refusal) = encoded.newest_refused {
+                frames_the_newest_session_refused += 1;
+                if frames_the_newest_session_refused.is_power_of_two() {
+                    tracing::error!(
+                        frames_the_newest_session_refused,
+                        "{}; the session before it encodes on",
+                        refusal.message()
+                    );
+                }
+            }
+            let Some(encoded) = encoded.taken else {
                 continue;
             };
-            let encoded = ImageFrameReadByTheEncoder::of_the_video_message(&message)
-                .map_err(VideoFrameNotEncoded::ThisFrame)
-                .and_then(|frame| encoder.encode_and_publish(&frame, &encoded_video));
             match encoded {
                 Ok(()) => {}
                 Err(VideoFrameNotEncoded::ThisFrame(refusal)) => {

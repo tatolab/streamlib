@@ -8,7 +8,7 @@
 
 use std::fmt;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Why a session a build asked for did not open.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,27 +64,39 @@ pub(crate) enum VideoCodingSessionCommand<Settings> {
 }
 
 /// The sessions open on one coding thread, oldest first, each by the number it was opened
-/// under, which one the last media frame was decoded with, and whether a build has asked for a
-/// session yet.
+/// under, which one the last frame was coded with, and whether a build has asked for a session
+/// yet.
 pub(crate) struct VideoCodingSessionsOfTheThread<Session> {
     open: Vec<SessionOfTheThread<Session>>,
-    decoding_with: Option<u64>,
+    coding_with: Option<u64>,
     a_session_was_asked_for: bool,
 }
 
 struct SessionOfTheThread<Session> {
     number: u64,
     session: Session,
-    /// Its build let it go while it decoded and a newer session had yet to take a group start,
-    /// so it decodes on until one does.
+    /// Its build let it go while it coded and a newer session had yet to take over, so it
+    /// codes on until one does.
     let_go: bool,
+    /// When an encoder tries this session again, after it refused a frame beside an older one
+    /// that encodes.
+    next_try: Option<Instant>,
+}
+
+/// How the sessions took one frame to encode.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FrameEncodedWithTheSessions<Refusal> {
+    /// What the session that took the frame answered; `None` with no session open.
+    pub(crate) taken: Option<Result<(), Refusal>>,
+    /// The newest session's refusal, when it was tried, refused, and an older one took the frame.
+    pub(crate) newest_refused: Option<Refusal>,
 }
 
 impl<Session> Default for VideoCodingSessionsOfTheThread<Session> {
     fn default() -> Self {
         Self {
             open: Vec::new(),
-            decoding_with: None,
+            coding_with: None,
             a_session_was_asked_for: false,
         }
     }
@@ -97,8 +109,8 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
     /// Until a build has asked for a session, it waits up to `wait_for_the_first` for one, so
     /// the thread can hold its input unread until the node's first build has run.
     ///
-    /// A decoder's session let go before a newer one has taken a group start decodes on until
-    /// one does, since a node's build lets the old value go as soon as the new one is built.
+    /// A session let go while it codes, before a newer one has taken over, codes on until one
+    /// does, since a node's build lets the old value go as soon as the new one is built.
     pub(crate) fn take_the_commands<Settings>(
         &mut self,
         commands: &mpsc::Receiver<VideoCodingSessionCommand<Settings>>,
@@ -128,6 +140,7 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
                             number,
                             session,
                             let_go: false,
+                            next_try: None,
                         });
                     });
                     // A build that stopped waiting closes what it asked for, so its close
@@ -140,7 +153,7 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
                         continue;
                     };
                     let a_newer_one_waits = self.open[index + 1..].iter().any(|open| !open.let_go);
-                    if self.decoding_with == Some(number) && a_newer_one_waits {
+                    if self.coding_with == Some(number) && a_newer_one_waits {
                         self.open[index].let_go = true;
                     } else {
                         self.open.remove(index);
@@ -165,9 +178,73 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
         self.a_session_was_asked_for
     }
 
-    /// The newest session open, which an encoder codes every frame with.
+    /// The newest session open.
+    #[cfg(test)]
     pub(crate) fn newest_mut(&mut self) -> Option<&mut Session> {
         self.open.last_mut().map(|open| &mut open.session)
+    }
+
+    /// Encode one frame at `now` with `encode`.
+    ///
+    /// The newest session takes it once it has encoded a frame. Until then, while an older
+    /// session encoded the last frame, the newest is tried at most once every `retry_interval`,
+    /// and the older one encodes each frame the newest does not, so a new session that refuses
+    /// to encode, its settings beyond what the device does say, leaves the stream encoding as
+    /// before. Once the newest encodes a frame, the sessions let go before it are dropped.
+    pub(crate) fn encode_a_frame<Refusal>(
+        &mut self,
+        now: Instant,
+        retry_interval: Duration,
+        mut encode: impl FnMut(&mut Session) -> Result<(), Refusal>,
+    ) -> FrameEncodedWithTheSessions<Refusal> {
+        let Some(newest) = self.open.len().checked_sub(1) else {
+            return FrameEncodedWithTheSessions {
+                taken: None,
+                newest_refused: None,
+            };
+        };
+        let older_encoding = self
+            .coding_with
+            .and_then(|number| self.open.iter().position(|open| open.number == number))
+            .filter(|&index| index != newest);
+        let Some(older_encoding) = older_encoding else {
+            let taken = encode(&mut self.open[newest].session);
+            if taken.is_ok() {
+                self.take_over_with_the_newest();
+            }
+            return FrameEncodedWithTheSessions {
+                taken: Some(taken),
+                newest_refused: None,
+            };
+        };
+        let mut newest_refused = None;
+        if self.open[newest]
+            .next_try
+            .is_none_or(|next_try| now >= next_try)
+        {
+            match encode(&mut self.open[newest].session) {
+                Ok(()) => {
+                    self.take_over_with_the_newest();
+                    return FrameEncodedWithTheSessions {
+                        taken: Some(Ok(())),
+                        newest_refused: None,
+                    };
+                }
+                Err(refusal) => {
+                    self.open[newest].next_try = Some(now + retry_interval);
+                    newest_refused = Some(refusal);
+                }
+            }
+        }
+        FrameEncodedWithTheSessions {
+            taken: Some(encode(&mut self.open[older_encoding].session)),
+            newest_refused,
+        }
+    }
+
+    fn take_over_with_the_newest(&mut self) {
+        self.open.retain(|open| !open.let_go);
+        self.coding_with = self.open.last().map(|open| open.number);
     }
 
     /// Whether a session numbered `number` is open, let go or not.
@@ -188,20 +265,20 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
         starts_group: bool,
         mut takes_frames: impl FnMut(&mut Session) -> bool,
     ) -> Option<&mut Session> {
-        if let Some(number) = self.decoding_with
+        if let Some(number) = self.coding_with
             && !self.is_open(number)
         {
-            self.decoding_with = None;
+            self.coding_with = None;
         }
-        let may_move = starts_group || self.decoding_with.is_none();
-        let decoding_with = self.decoding_with;
+        let may_move = starts_group || self.coding_with.is_none();
+        let coding_with = self.coding_with;
         let index = self.open.iter_mut().rposition(|open| {
-            Some(open.number) == decoding_with
+            Some(open.number) == coding_with
                 || (may_move && !open.let_go && takes_frames(&mut open.session))
         })?;
         let number = self.open[index].number;
-        if Some(number) != decoding_with {
-            self.decoding_with = Some(number);
+        if Some(number) != coding_with {
+            self.coding_with = Some(number);
             let dropped_before = self.open[..index].iter().filter(|open| open.let_go).count();
             self.open.retain(|open| !open.let_go);
             return self
