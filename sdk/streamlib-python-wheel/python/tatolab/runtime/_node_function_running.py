@@ -8,7 +8,8 @@ Each value input is an input of the node's scope, holding its set value or its d
 pin is bound before the body runs. The body declares its computed values into the scope, which
 builds them on its worker from then on; a value set or wired after is written to the scope, and
 rebuilds only what read it. A frame runs once every computed value has its first value; a node
-that paces itself returns no per-frame function, and its computed values publish on their own. Stopping
+that paces itself returns no per-frame function, and its computed values publish on their own.
+Stopping
 the node closes the scope, and with it every value a build made.
 """
 
@@ -19,6 +20,7 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from tatolab.stream._node_declaration import NODE_DECLARATION_EXECUTION_STAMP
 from tatolab.stream._pin_declaration import NO_DEFAULT
 
 from tatolab.runtime._engine import NodeScopeBeingDeclared, NodeScopeInput, RunningNodeScope
@@ -30,6 +32,7 @@ __all__ = [
     "NodeFunctionBodyRanAgain",
     "NodeFunctionBodyReturnedNoPerFrameFunction",
     "NodeFunctionInputNotDeclared",
+    "NodeFunctionPacingItselfReturnedAPerFrameFunction",
     "NodeFunctionRunning",
     "NodeFunctionValueInputHasNoValue",
 ]
@@ -49,6 +52,11 @@ class NodeFunctionInputNotDeclared(ValueError):
 
 class NodeFunctionBodyReturnedNoPerFrameFunction(TypeError):
     """A node function's body returned something that is neither a function nor `None`."""
+
+
+class NodeFunctionPacingItselfReturnedAPerFrameFunction(TypeError):
+    """The body of a node function that paces itself (`execution="manual"`) returned a function,
+    which nothing would call: such a node runs no frame."""
 
 
 class NodeFunctionValueInputHasNoValue(ValueError):
@@ -111,11 +119,22 @@ class NodeFunctionRunning:
                 f"function's body returns the function the node calls each frame, or `None` "
                 f"when a computed value publishes on its own"
             )
+        if returned is not None and self._paces_itself():
+            raise NodeFunctionPacingItselfReturnedAPerFrameFunction(
+                f"`{self._node_function.__qualname__}` paces itself (`execution=\"manual\"`) and "
+                f"its body returned {returned!r}, which would never be called: a node that paces "
+                f"itself runs no frame, and its computed values publish on their own. To fix: "
+                f"return `None`."
+            )
         self._per_frame = returned
         self._declaring = None
         self._running = declaring.start()
         written, self._written_before_the_scope_started = self._written_before_the_scope_started, {}
         self.write_inputs(written)
+
+    def _paces_itself(self) -> bool:
+        execution = getattr(self._node_function, NODE_DECLARATION_EXECUTION_STAMP, None)
+        return isinstance(execution, dict) and execution.get("mode") == "manual"
 
     def process(self, ctx: Any) -> None:
         """Call the per-frame function with `ctx`, once every computed value has its first

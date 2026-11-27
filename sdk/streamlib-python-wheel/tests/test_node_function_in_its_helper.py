@@ -115,6 +115,10 @@ def test_stopping_the_node_closes_every_value_its_builds_made(stand_in_parent: A
     [
         ("ReadsItsLevelInItsBodyProbe", "NodeScopeReadOutsideABuildOrAFrame"),
         ("ReturnsANumberProbe", "NodeFunctionBodyReturnedNoPerFrameFunction"),
+        (
+            "PacesItselfAndReturnsAFunctionProbe",
+            "NodeFunctionPacingItselfReturnedAPerFrameFunction",
+        ),
     ],
 )
 def test_a_body_that_reads_an_input_or_returns_no_function_fails_its_setup(

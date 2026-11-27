@@ -5,7 +5,7 @@
 //! value set on its input while the stream plays opens a publishing of it and closes the one it
 //! replaces, with its body run once; and a set never waits on a build.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use serial_test::serial;
@@ -78,6 +78,22 @@ fn a_value_set_while_the_stream_plays_replaces_the_publishing_and_runs_the_body_
     assert_eq!(stopped.gains_closed, [1, 5], "{stopped:?}");
 }
 
+/// Set the gain on a thread of its own, failing the test, its builds let go as it unwinds, when
+/// the set has not returned within `A_SET_RETURNS_WITHIN`, rather than waiting on it forever.
+fn set_the_gain_or_fail_if_it_waits(played: &AStreamOfOneNode, gain: i32) {
+    let (returned, set_returned) = std::sync::mpsc::channel();
+    let stream = std::sync::Arc::clone(&played.stream);
+    let node = played.node;
+    std::thread::spawn(move || {
+        set_the_input(&stream, node, "gain", json!(gain));
+        let _ = returned.send(());
+    });
+    assert!(
+        set_returned.recv_timeout(A_SET_RETURNS_WITHIN).is_ok(),
+        "a set of {gain} while a build is held returns at once, not after the build"
+    );
+}
+
 /// Mental-revert: a write to the scope that waited for the build it starts would hold the node
 /// until the held build is let go, so the second set would wait on it.
 #[test]
@@ -91,7 +107,7 @@ fn a_set_never_waits_on_a_build_of_a_node_pacing_itself() {
     let played = a_started_stream_of_a_node_pacing_itself(project_directory.path());
     what_the_node_did_once_it_holds(|did| did.gains_opened == [1]);
     let builds_held = hold_the_publishing_builds();
-    set_the_gain(&played, 7);
+    set_the_gain_or_fail_if_it_waits(&played, 7);
     let building_7 = what_the_node_did_once_it_holds(|did| did.builds_started == 2);
     assert_eq!(
         building_7.builds_started, 2,
@@ -99,13 +115,7 @@ fn a_set_never_waits_on_a_build_of_a_node_pacing_itself() {
     );
     std::thread::sleep(Duration::from_millis(300));
 
-    let setting_9 = Instant::now();
-    set_the_gain(&played, 9);
-    let set_in = setting_9.elapsed();
-    assert!(
-        set_in < A_SET_RETURNS_WITHIN,
-        "a set while a build is held returns at once, not after the build: {set_in:?}"
-    );
+    set_the_gain_or_fail_if_it_waits(&played, 9);
     played
         .stream
         .wait_until_every_node_is_running(Duration::from_secs(1))

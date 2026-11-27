@@ -81,3 +81,9 @@ def LevelPublishingProbe(*, level: Input[float] = Input(0.25)) -> None:
     """Paces itself: opens a publishing of its level, which publishes on its own, and returns no
     per-frame function."""
     computed(lambda: PublishingOfALevel(level.get()))
+
+
+@node(execution="manual")
+def PacesItselfAndReturnsAFunctionProbe(*, level: Input[float] = Input(0.25)) -> None:
+    """Paces itself, and returns a per-frame function nothing would call."""
+    return lambda frame_ctx: None  # type: ignore[return-value]

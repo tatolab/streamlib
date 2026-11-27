@@ -132,28 +132,28 @@ class HelperProcessLifecycle:
         self,
     ) -> "Optional[dict[str, Any]]":
         """The next lifecycle command. While a manual node runs, the wait ticks
-        on a steady beat: each tick takes the values a node function's wires
-        gave since the last, as a frame of any other node does; tells the parent whether
-        the node is ready, since a node's own thread may report either; and
-        while it is not ready and not paused sends a transparent frame on each
-        of its Image outputs."""
+        on a steady beat: each tick tells the parent whether the node is ready,
+        since a node's own thread may report either; and while it is not paused
+        takes the values a node function's wires gave since the last, as a
+        frame of any other node does, and, while it is not ready, sends a
+        transparent frame on each of its Image outputs."""
         tick_seconds = 1.0 / PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE
         while self._a_manual_node_runs():
             self._bridge.clear_lifecycle_command_arrivals()
             was_waiting, command = self._bridge.next_lifecycle_command_if_waiting()
             if was_waiting:
                 return command
-            self._take_the_new_values_at_a_tick()
             self._tell_the_parent_whether_the_node_is_ready()
             if not self._paused:
+                self._take_the_new_values_at_a_tick()
                 self._send_transparent_frames_while_the_node_is_not_ready()
             select.select([self._bridge.lifecycle_command_arrival_fd()], [], [], tick_seconds)
         return self._bridge.next_lifecycle_command()
 
     def _take_the_new_values_at_a_tick(self) -> None:
         """Give each value input of a node written as one function that a wire feeds the newest
-        value its wire gave, written to its scope as a frame of any other node does. Never waits
-        on a build."""
+        value its wire gave, written to its scope as a frame of any other node does; a paused node
+        reads no wire, as a paused frame-driven node does. Never waits on a build."""
         assert self._hosted is not None
         if self._hosted.a_node_function:
             self._take_each_new_value_a_wire_gives_a_field()
