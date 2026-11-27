@@ -34,6 +34,9 @@ impl InputMailboxesInner {
     /// windowed port queues a copy, because its stage may hold more blocks than
     /// a link may borrow.
     ///
+    /// A sample numbered as the one its link received last is that message sent
+    /// again for a reader that connected after it, and is passed over, counted taken.
+    ///
     /// Every loss this pass can see is counted on the link it happened to: the
     /// bags a jump in the sequence number says the ring overwrote, on an
     /// `ordered` port — a `newest` port passing over bags is the profile working
@@ -66,6 +69,13 @@ impl InputMailboxesInner {
                     }
                 };
                 let mut channel_user_header = *sample.user_header();
+                if bound.bags_the_ring_overwrote.is_the_last_number_received(
+                    sample.origin(),
+                    channel_user_header.sequence_number,
+                ) {
+                    bound.dropped_bag_counter.record_one_bag_received_again();
+                    continue;
+                }
                 let bags_the_ring_overwrote =
                     bound.bags_the_ring_overwrote.how_many_were_lost_before(
                         sample.origin(),

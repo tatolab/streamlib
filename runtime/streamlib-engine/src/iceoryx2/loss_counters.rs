@@ -212,6 +212,12 @@ impl InboundLinkDroppedBagCounter {
         self.record_one_bag_lost_ahead_of_every_bag_still_queued();
     }
 
+    /// Record one bag of this link's that arrived again, numbered as the bag it
+    /// received last: its reader holds it already, so it is taken, never a loss.
+    pub(super) fn record_one_bag_received_again(&self) {
+        self.0.bags_off_the_mailbox_for_its_reader.add(1);
+    }
+
     /// Record one bag of this link's that a port which may pass bags over
     /// evicted to make room: its reader's to skip, never a loss.
     pub(super) fn record_one_bag_passed_over_on_eviction(&self) {

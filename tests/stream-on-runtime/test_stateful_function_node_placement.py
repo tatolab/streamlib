@@ -140,7 +140,7 @@ def test_a_second_reader_wired_to_a_playing_stateful_function_node_reads_it_and_
         first_readers_counts[0] + offset for offset in range(len(first_readers_counts))
     ], (
         f"the first reader reads each count once, in order, across the edit: {first_readers_counts}; "
-        f"batches {batches}; helpers {helper_pids}:\n{tatolabd.stderr_text}"
+        f"batches {batches}; helpers {helper_pids}"
     )
     second_readers_counts = second_readers_batch["counts"]
     assert second_readers_counts == [
