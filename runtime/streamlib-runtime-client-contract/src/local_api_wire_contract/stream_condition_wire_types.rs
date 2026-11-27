@@ -215,10 +215,12 @@ impl DiagnosticKindOnTheWire {
             | Self::NodeRaising
             | Self::ComputedValueBuildPanicked
             | Self::ComputedValueComparisonPanicked => DiagnosticRecoveryOnTheWire::FixTheCode,
-            Self::StartRefused | Self::NodeFailed | Self::EditNotLive | Self::LinkNotWired => {
+            Self::StartRefused | Self::NodeFailed | Self::EditNotLive => {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
-            Self::LinkRefused | Self::LinkPinTypesDiffer => DiagnosticRecoveryOnTheWire::FixTheLink,
+            Self::LinkRefused | Self::LinkNotWired | Self::LinkPinTypesDiffer => {
+                DiagnosticRecoveryOnTheWire::FixTheLink
+            }
             Self::KeepsCrashingTheRuntime | Self::Other => {
                 DiagnosticRecoveryOnTheWire::RetryTheLoad
             }

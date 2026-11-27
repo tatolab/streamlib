@@ -64,6 +64,8 @@ use nodes_set_up_after_the_sources_of_their_wired_settings::{
 };
 
 mod commit_of_the_logged_operations;
+mod links_a_plan_adds_wired;
+mod links_an_end_refused_wired_again;
 mod links_whose_pin_types_differ;
 mod nodes_set_up_after_the_sources_of_their_wired_settings;
 mod transaction_held_for_one_commit;
@@ -244,7 +246,8 @@ impl Compiler {
             &plan.links_to_remove,
         )?;
         // A link this commit starts holding unwired for its pin types is no link a restart
-        // wires again; one already held so changes nothing here, so restarts nothing again.
+        // wires again; one already held so changes nothing here, so restarts nothing again. A
+        // link an end refused is only opened again, which changes the shape of no island.
         let links_changed: Vec<LinkUniqueId> = {
             let graph = graph_arc.read();
             [
@@ -253,6 +256,7 @@ impl Compiler {
             ]
             .concat()
             .into_iter()
+            .filter(|link_id| !plan.links_to_wire_again.contains(link_id))
             .chain(
                 plan.links_judged_again
                     .differing
@@ -469,11 +473,19 @@ impl Compiler {
         if let Some(carries) = &carries_handed_to_the_running_pool {
             hand_the_running_function_node_pool_its_carries(&graph_arc, carries)?;
         }
+        // A link an end refused is closed only once the plan's links to add are final, so none
+        // is closed that this compile then leaves unwired.
+        links_an_end_refused_wired_again::unwire_each_link_an_end_refused_keeping_it(
+            &mut graph_arc.write(),
+            &plan,
+            &nodes_restarted.links,
+        )?;
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
-            result.links_wired += wire_every_link_a_plan_adds(
+            result.links_wired += links_a_plan_adds_wired::wire_every_link_a_plan_adds(
                 &graph_arc,
                 &plan.links_to_add,
+                &plan.links_to_wire_again,
                 runtime_ctx.iceoryx2_node(),
                 the_stream_the_compile_belongs_to,
             )?;
@@ -606,106 +618,6 @@ fn the_restarted_nodes_an_abandoned_thread_still_runs(
         }
     }
     still_running
-}
-
-/// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
-/// before and after; how many were wired. A link whose ends no longer carry
-/// types that connect stays unwired, in error; one that cannot be wired fails
-/// the phase.
-fn wire_every_link_a_plan_adds(
-    graph_arc: &RwLock<Graph>,
-    links_to_add: &[LinkUniqueId],
-    iceoryx2_node: &Iceoryx2Node,
-    the_stream_the_compile_belongs_to: &LoadedStreamIdentity,
-) -> Result<usize> {
-    let mut links_wired = 0;
-    for link_id in links_to_add {
-        if graph_arc.read().the_pin_types_of_the_link_differ(link_id) {
-            links_whose_pin_types_differ::stamp_the_link_in_error(&mut graph_arc.write(), link_id);
-            continue;
-        }
-        let (from_port, to_port) = {
-            let graph = graph_arc.read();
-            let link = graph
-                .traversal()
-                .e(link_id)
-                .first()
-                .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found", link_id)))?;
-            (link.source().to_string(), link.to_port().to_string())
-        };
-
-        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-            RuntimeEvent::CompilerWillWireLink {
-                link_id: link_id.to_string(),
-                from_port: from_port.clone(),
-                to_port: to_port.clone(),
-            },
-        );
-        let how_the_link_is_wired = how_a_link_is_wired(&graph_arc.read(), link_id)?;
-        match how_the_link_is_wired {
-            HowALinkIsWired::ThroughAChannel => {
-                tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
-                super::compiler_ops::open_iceoryx2_service(
-                    &mut graph_arc.write(),
-                    link_id,
-                    iceoryx2_node,
-                )?;
-            }
-            HowALinkIsWired::AsACallInsideAFunctionNodeIsland => {
-                wire_a_call_inside_a_function_node_island(&mut graph_arc.write(), link_id)?;
-            }
-            HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead => {
-                tracing::info!(
-                    "[{}] Carrying the function node island of {} to its reader",
-                    CompilePhase::Wire,
-                    link_id
-                );
-                wire_a_link_from_a_function_node_island_into_its_reader(
-                    &mut graph_arc.write(),
-                    link_id,
-                    iceoryx2_node,
-                )?;
-            }
-            HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland => {
-                wire_a_link_into_a_function_node_island_through_its_reader(
-                    &mut graph_arc.write(),
-                    link_id,
-                    iceoryx2_node,
-                )?;
-            }
-            HowALinkIsWired::AsACallInsideAShaderNodeIsland => {
-                let mut graph = graph_arc.write();
-                if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-                    link.insert(LinkStateComponent(LinkState::Wired));
-                }
-            }
-            HowALinkIsWired::ThroughAChannelIntoTheHostOfItsShaderNodeIsland(host_input_port) => {
-                tracing::info!(
-                    "[{}] Opening service {} into {}",
-                    CompilePhase::Wire,
-                    link_id,
-                    host_input_port
-                );
-                super::compiler_ops::open_iceoryx2_service_into_the_host_of_a_shader_node_island(
-                    &mut graph_arc.write(),
-                    link_id,
-                    &host_input_port,
-                    iceoryx2_node,
-                )?;
-            }
-        }
-
-        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-            RuntimeEvent::CompilerDidWireLink {
-                link_id: link_id.to_string(),
-                from_port,
-                to_port,
-            },
-        );
-
-        links_wired += 1;
-    }
-    Ok(links_wired)
 }
 
 /// Unwire link `link_id` while the graph holds it, telling the stream's topic
@@ -842,6 +754,8 @@ fn the_plan_these_operations_make(
                 let exists = link.is_some();
                 let already_wired_or_awaiting_an_answer =
                     link.is_some_and(this_link_is_already_wired_or_awaiting_its_helpers_answer);
+                let refused_by_a_far_side =
+                    link.is_some_and(crate::core::graph::an_end_refused_the_link);
                 let pending_deletion = link
                     .map(|l| l.has::<PendingDeletionComponent>())
                     .unwrap_or(false);
@@ -851,6 +765,11 @@ fn the_plan_these_operations_make(
                     tracing::debug!("AddLink({}): pending deletion, skipping add", id);
                 } else if links_queued_in_this_batch.contains(&id) {
                     tracing::debug!("AddLink({}): already queued in this batch, skipping", id);
+                } else if refused_by_a_far_side {
+                    tracing::info!("AddLink({}): an end refused it, so it is wired again", id);
+                    links_queued_in_this_batch.insert(id.clone());
+                    plan.links_to_wire_again.push(id.clone());
+                    plan.links_to_add.push(id);
                 } else if exists && !already_wired_or_awaiting_an_answer {
                     links_queued_in_this_batch.insert(id.clone());
                     plan.links_to_add.push(id);
@@ -988,6 +907,9 @@ fn this_link_is_already_wired_or_awaiting_its_helpers_answer(link: &Link) -> boo
 
 #[cfg(test)]
 mod already_wired_tests;
+
+#[cfg(test)]
+mod links_an_end_refused_wired_again_tests;
 
 #[cfg(test)]
 mod abandoned_shader_node_restart_tests;

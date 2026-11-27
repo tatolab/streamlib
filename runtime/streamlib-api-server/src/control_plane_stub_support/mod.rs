@@ -281,6 +281,12 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("only a reader's own host asks for a function node's promotion")
         }
+        fn request_each_link_of_a_node_an_end_refused_be_wired_again(
+            &self,
+            _node_run_id: &::streamlib::sdk::graph::NodeRunId,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!("only a node's own host asks for its refused links to be wired again")
+        }
     };
 }
 

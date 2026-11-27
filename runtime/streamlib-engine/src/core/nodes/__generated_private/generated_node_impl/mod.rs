@@ -17,6 +17,8 @@ use crate::core::runtime::FunctionNodeStatesCarriedForOneStream;
 use crate::iceoryx2::{HelperPlacedNodeLossCounts, Iceoryx2Node};
 use serde_json::Value as JsonValue;
 
+mod links_its_far_side_refused;
+
 /// How a link wired after a far side's setup command reaches that far side,
 /// which opens its own port for it — implemented by the far side's transport,
 /// the helper bridge in production.
@@ -652,6 +654,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     &function_node_island,
                     Arc::clone(&answer_cell),
                 )?;
+                recorded.keep_the_answer_owed_for(island_link_id, Arc::clone(&answer_cell));
                 Ok(Some(answer_cell))
             }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
@@ -1009,6 +1012,7 @@ impl OutOfProcessLinkWiringEnvelope {
         recorded
             .function_node_islands_feeding_its_input_ports
             .retain(|island| link_id_of(island).as_deref() != Some(link_id));
+        recorded.forget_the_answer_owed_for(Some(link_id));
         if let (HowALinkReachesTheFarSide::HandedOverTo(delivery), Some(input_port)) = (
             &recorded.how_a_link_reaches_the_far_side,
             &input_port_it_fed,
@@ -1187,7 +1191,13 @@ impl OutOfProcessLinkWiringEnvelope {
                     waiting_link.link_wiring,
                     waiting_link.answer_cell,
                 ),
-                Err(handover_failure) => waiting_link.refuse_because(&handover_failure.to_string()),
+                Err(handover_failure) => {
+                    recorded.keep_the_answer_owed_for(
+                        link_id_of(&waiting_link.link_wiring),
+                        Arc::clone(&waiting_link.answer_cell),
+                    );
+                    waiting_link.refuse_because(&handover_failure.to_string());
+                }
             }
         }
         recorded.how_a_link_reaches_the_far_side =

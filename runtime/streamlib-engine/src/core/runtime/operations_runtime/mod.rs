@@ -869,6 +869,20 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Ok(())
     }
 
+    fn request_each_link_of_a_node_an_end_refused_be_wired_again(
+        &self,
+        node_run_id: &NodeRunId,
+    ) -> Result<()> {
+        if self
+            .compiler
+            .log_each_link_of_a_node_an_end_refused_to_wire_it_again(node_run_id)
+        {
+            self.loaded_stream_identity()
+                .publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        }
+        Ok(())
+    }
+
     fn to_json(&self) -> Result<serde_json::Value> {
         LoadedStreamInThisRuntime::to_json(self)
     }
