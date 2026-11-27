@@ -8,11 +8,11 @@ use streamlib::sdk::context::{
     RgbaOrBgraImageFrameToPooledRgbaConversionStage, RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
 };
-use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::error::Result;
 use streamlib::sdk::iceoryx2::{
     DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody,
+    InputMailboxes, OutputWriter,
 };
-use streamlib::sdk::nodes::ReactiveNode;
 
 use super::messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 
@@ -47,36 +47,27 @@ const RGBA_IMAGE_OUTPUT_PORT: &str = "rgba_image";
                    sampling, and any other format has no such kernel, so `image` takes neither, \
                    and one that arrives is refused and writes nothing."
 )]
-pub struct TextureFormatConvert {
-    conversion_stage: Option<RgbaOrBgraImageFrameToPooledRgbaConversionStage>,
-}
-
-impl ReactiveNode for TextureFormatConvert::Node {
-    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let node_run_id_of_this_node = ctx
-            .node_run_id()
-            .unwrap_or_else(|| "TextureFormatConvert".to_string());
-        self.conversion_stage = Some(RgbaOrBgraImageFrameToPooledRgbaConversionStage::create(
-            ctx.gpu_full_access(),
-            &node_run_id_of_this_node,
-        )?);
-        Ok(())
-    }
-
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let Some(conversion_stage) = self.conversion_stage.as_mut() else {
-            return Err(Error::Runtime(
-                "TextureFormatConvert: process ran before setup".to_string(),
-            ));
-        };
+pub fn texture_format_convert(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+    ctx: &RuntimeContextFullAccess<'_>,
+) -> Result<impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>> {
+    let node_run_id_of_this_node = ctx
+        .node_run_id()
+        .unwrap_or_else(|| "TextureFormatConvert".to_string());
+    let mut conversion_stage = RgbaOrBgraImageFrameToPooledRgbaConversionStage::create(
+        ctx.gpu_full_access(),
+        &node_run_id_of_this_node,
+    )?;
+    Ok(move |ctx: &RuntimeContextLimitedAccess<'_>| {
         let gpu = ctx.gpu_limited_access();
-        while let Some(message) = self.inputs.read_raw(IMAGE_INPUT_PORT)? {
+        while let Some(message) = inputs.read_raw(IMAGE_INPUT_PORT)? {
             let converted =
                 the_image_frame_a_message_carries(message.payload_descriptor).and_then(|image| {
                     conversion_stage.convert_into_the_next_pooled_pixel_buffer(gpu, &image)
                 });
             match converted {
-                Ok(rgba_image) => self.outputs.write_bytes_described_by(
+                Ok(rgba_image) => outputs.write_bytes_described_by(
                     RGBA_IMAGE_OUTPUT_PORT,
                     &[],
                     message.timestamp_ns,
@@ -89,7 +80,7 @@ impl ReactiveNode for TextureFormatConvert::Node {
             }
         }
         Ok(())
-    }
+    })
 }
 
 /// The Image frame `payload_descriptor` names, refused when it names no Image frame.

@@ -26,7 +26,7 @@ use super::port_marker_module::generate_port_marker_module;
 use super::{NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema};
 use crate::grammar::{
     ParsedNodeAttr, ParsedPort, ParsedValueInput, PinTypeChosenBy, PortDirection,
-    declared_description_str_expression,
+    ValueInputChosenFrom, declared_description_str_expression,
 };
 
 /// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase,
@@ -420,11 +420,26 @@ impl ValueInputsEmitted<'_> {
             let name = &value_input.cast_name;
             let description = declared_description_str_expression(value_input.description.as_ref());
             let default = Self::default_value(value_input);
+            let pin_type = match &value_input.chosen_from {
+                ValueInputChosenFrom::AnyValueOfItsType => quote! {
+                    <#value_type as __streamlib_sdk::descriptors::SettingPinType>::setting_pin_type()
+                },
+                ValueInputChosenFrom::Options(option_names) => quote! {
+                    __streamlib_sdk::descriptors::the_menu_of_a_setting::<#value_type>(
+                        &[#(#option_names),*],
+                    )
+                },
+                ValueInputChosenFrom::TheBundlesItsStreamDeclares => quote! {
+                    __streamlib_sdk::descriptors::the_choice_among_the_bundles_its_stream_declares::<
+                        #value_type,
+                    >()
+                },
+            };
             quote! {
                 .with_input(__streamlib_sdk::descriptors::the_input_taking_no_wire(
                     #name,
                     #description,
-                    <#value_type as __streamlib_sdk::descriptors::SettingPinType>::setting_pin_type(),
+                    #pin_type,
                     __streamlib_sdk::serde_json::to_value(#default)
                         .expect("a value input's default serializes, as every value an input holds does"),
                     __streamlib_sdk::descriptors::SettingReadTime::EachRun,
