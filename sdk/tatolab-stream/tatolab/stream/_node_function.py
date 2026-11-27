@@ -5,10 +5,10 @@
 
 The function is the node's body. Its parameters are keyword-only: each value input
 `level: Input[float] = Input(0.25)`, each Stream or Trigger input `video: InputPin[Texture]`,
-each output `result: OutputPin[Texture]`, and the context `ctx: RuntimeContextFullAccess`,
-found by its type. The body runs once, when the node is set up, declares its computed values
-with `computed(build)`, and returns the function the node calls each frame, or `None` when a
-computed value publishes on its own.
+each output `result: OutputPin[Texture]`, each pin group `layers: PinGroup[Layer]`, and the
+context `ctx: RuntimeContextFullAccess`, found by its type. The body runs once, when the node
+is set up, declares its computed values with `computed(build)`, and returns the function the
+node calls each frame, or `None` when a computed value publishes on its own.
 
 An input is read with `.get()` only in a build or in the per-frame function. A build's reads are
 what it depends on: a set or a wire of an input rebuilds, off the frame thread, each computed
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Protocol, TypeVar
 
-from ._class_node_declaration import ClassNodeMember
+from ._class_node_declaration import ClassNodeMember, ClassNodePinGroup
 from ._node_function_input import Input, InputReadOffItsDeclaration
 from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
@@ -76,6 +76,9 @@ class NodeFunction:
     members: "tuple[ClassNodeMember, ...]"
     """The value input or pin behind each port, each parameter by its name as `attribute`."""
 
+    pin_groups: "tuple[ClassNodePinGroup, ...]"
+    """Each `PinGroup` it takes, in the order of its parameters, each by its name as `attribute`."""
+
     full_access_context_parameter: Optional[str]
     """The parameter the runtime context is handed in; `None` for a body that takes none."""
 
@@ -84,6 +87,7 @@ class NodeFunction:
         function: Callable[..., Any],
         *,
         members: "tuple[ClassNodeMember, ...]",
+        pin_groups: "tuple[ClassNodePinGroup, ...]",
         full_access_context_parameter: Optional[str],
     ) -> None:
         self.__wrapped__ = function
@@ -92,6 +96,7 @@ class NodeFunction:
         self.__qualname__ = function.__qualname__
         self.__doc__ = function.__doc__
         self.members = members
+        self.pin_groups = pin_groups
         self.full_access_context_parameter = full_access_context_parameter
 
     def __repr__(self) -> str:

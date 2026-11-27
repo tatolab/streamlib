@@ -18,7 +18,9 @@ use syn::{Item, ItemFn, ItemStruct, parse_macro_input};
 /// On a function, the node is written as one function: its body runs once, when the node is set
 /// up, declares the node's `computed(…)` values and returns its per-frame function. Its
 /// parameters are the node's value inputs as `Input<T>` handles, each declared with
-/// `input("name", value = T, default = …)` and named after its input, its `InputMailboxes`, its
+/// `input("name", value = T, default = …)`, a String chosen from a list stating `options = ["…",
+/// …]` and an `Option<PinType>` choosing a bundle its stream declares stating
+/// `among_the_bundles_its_stream_declares = true`, and named after its input, its `InputMailboxes`, its
 /// `OutputWriter` and the `&RuntimeContextFullAccess<'_>` the body runs with.
 #[proc_macro_attribute]
 pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -78,8 +80,8 @@ fn node_struct(attr: TokenStream, mut item_struct: ItemStruct) -> TokenStream {
 }
 
 /// Declares a struct as a node type's settings: each field an input read once, when the node is
-/// set up, from its value or from a Value wire into it, described by `#[description = "…"]` and, for a String chosen
-/// from a list, `#[options("…", …)]`. A node takes it with `#[node(settings = …)]`.
+/// set up, from its value or from a Value wire into it, described by `#[description = "…"]`. A
+/// node takes it with `#[node(settings = …)]`.
 #[proc_macro_attribute]
 pub fn node_settings(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);

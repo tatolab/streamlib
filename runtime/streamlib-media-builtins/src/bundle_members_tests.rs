@@ -26,14 +26,14 @@ fn the_port<'descriptor>(
         .unwrap_or_else(|| panic!("`{name}` is declared"))
 }
 
-/// Each node carries the bundle its `bundle_type` setting chooses on its one input and its one
-/// output, and that setting chooses one of the bundles its stream's node types declare, holds
-/// none until it is set, and is read at setup.
+/// Each node carries the bundle its `bundle_type` input chooses on its one input and its one
+/// output, and that input chooses one of the bundles its stream's node types declare, holds
+/// none until it is set, and is read each run.
 ///
 /// Mental-revert: a port stating a type of its own would carry it whatever `bundle_type` holds,
-/// and a setting unmarked chooses among any pin type.
+/// and an input unmarked chooses among any pin type.
 #[test]
-fn both_nodes_carry_the_bundle_their_bundle_type_setting_chooses() {
+fn both_nodes_carry_the_bundle_their_bundle_type_input_chooses() {
     for (descriptor, input, output) in [
         (
             the_registered(&MakeBundle::node_class_import_path()),
@@ -72,7 +72,7 @@ fn both_nodes_carry_the_bundle_their_bundle_type_setting_chooses() {
         assert_eq!(
             setting.input_mode,
             Some(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup
+                read: SettingReadTime::EachRun
             })
         );
     }

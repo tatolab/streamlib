@@ -10,6 +10,7 @@ use streamlib_scope::{FrameView, Scope, ScopeBeingDeclared, Writes};
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::{Error, Result};
+use crate::core::graph::BuildsOfItsComputedValues;
 
 /// How long a frame waits when a computed value has no first value yet.
 const UNBUILT_FRAME_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1);
@@ -50,7 +51,9 @@ impl NodeFunctionRunning {
                     why,
                 })?;
         ctx.host_base()
-            .report_the_builds_of_the_computed_values_from(scope.builds());
+            .report_the_builds_of_the_computed_values_from(BuildsOfItsComputedValues::OfItsScope(
+                scope.builds(),
+            ));
         Ok(Self {
             per_frame,
             view,

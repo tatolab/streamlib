@@ -5,7 +5,7 @@
     "version": "4",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 4,
-    "x-contract-revision": 3
+    "x-contract-revision": 4
   },
   "methods": [
     {
@@ -7688,6 +7688,11 @@
             "type": "string",
             "const": "extension_sdk_not_found",
             "description": "A check of the project's views and controls found no extension SDK kit to check them\nagainst; the runtime's words name each place it looked."
+          },
+          {
+            "type": "string",
+            "const": "shader_node_fused_group_not_built",
+            "description": "A fused group of shader nodes cannot be built into the one island a node evaluates: a\nlive edit leaving it was refused whole, and a group already running goes on running as it\nwas; `refused_node` names the node that would evaluate it, and the runtime's words say\nwhy it does not build."
           },
           {
             "type": "string",

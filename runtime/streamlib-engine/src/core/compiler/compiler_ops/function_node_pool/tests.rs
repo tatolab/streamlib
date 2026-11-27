@@ -10,7 +10,12 @@ use crate::core::compiler::compiler_ops::function_node_island::tests::{
 use crate::core::compiler::compiler_ops::function_node_island::{
     HowALinkIsWired, how_a_link_is_wired, wire_a_link_from_a_function_node_island_into_its_reader,
 };
-use crate::core::compiler::compiler_ops::shader_node_island::the_host_input_port_a_fused_shader_node_input_is_read_at;
+use crate::core::compiler::compiler_ops::running_node_restart::forget_the_build_of_each_node_restarted;
+use crate::core::compiler::compiler_ops::shader_node_island::{
+    place_each_shader_node_island_on_its_host,
+    the_host_input_port_a_fused_shader_node_input_is_read_at,
+    the_shader_node_islands_a_live_edit_places_anew,
+};
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
 use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
@@ -293,6 +298,7 @@ fn an_island_a_shader_node_reads_is_carried_through_the_pool_to_its_islands_host
         &mut links_to_add,
     )
     .unwrap();
+    place_each_shader_node_island_on_its_host(&mut graph, &nodes_to_add).unwrap();
 
     let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
     let how_the_link_out_of_the_pool_is_wired = |carried_link_id: &LinkUniqueId| {
@@ -322,6 +328,78 @@ fn an_island_a_shader_node_reads_is_carried_through_the_pool_to_its_islands_host
     );
     assert_eq!(
         how_the_link_out_of_the_pool_is_wired(&lfo_into_the_host),
+        HowALinkIsWired::ThroughAChannel
+    );
+}
+
+/// A running function node carried through the pool into a fused shader node goes on feeding
+/// it once a live edit makes that node a host: the link out of the pool is wired anew between
+/// its own ends, and is not carried again.
+///
+/// Mental-revert: leaving the link out of the pool wired into the old host's port starves the
+/// node that now evaluates its own island.
+#[test]
+fn a_running_carry_into_a_fused_shader_node_is_wired_anew_when_that_node_becomes_a_host() {
+    let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
+    register_a_tint_shader_node_type(&graph);
+    let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+    let fused_tint = add_a_node(&mut graph, "test_shaders:tint", JsonValue::Null);
+    let host_tint = add_a_node(&mut graph, "test_shaders:tint", JsonValue::Null);
+    let lfo_into_the_fused_tint = link(&mut graph, (&lfo, "result"), (&fused_tint, "amount"));
+    link(&mut graph, (&fused_tint, "result"), (&host_tint, "image"));
+    let mut nodes_to_add = vec![lfo, fused_tint.clone(), host_tint.clone()];
+    let mut links_to_add = vec![lfo_into_the_fused_tint.clone()];
+    carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+        &mut graph,
+        &mut nodes_to_add,
+        &mut links_to_add,
+    )
+    .unwrap();
+    place_each_shader_node_island_on_its_host(&mut graph, &nodes_to_add).unwrap();
+    let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
+    let out_of_the_pool = the_links_a_link_is_wired_as(&graph, &lfo_into_the_fused_tint)
+        .into_iter()
+        .find(|link_id| {
+            graph
+                .traversal()
+                .e(link_id)
+                .first()
+                .is_some_and(|link| link.source().node_run_id() == &pool)
+        })
+        .expect("one of the two links leaves the pool");
+
+    let second_reader = add_a_node(&mut graph, "test_shaders:tint", JsonValue::Null);
+    let a_second_read = link(
+        &mut graph,
+        (&fused_tint, "result"),
+        (&second_reader, "image"),
+    );
+    let placed_anew = the_shader_node_islands_a_live_edit_places_anew(
+        &graph,
+        std::slice::from_ref(&second_reader),
+        &[],
+        std::slice::from_ref(&a_second_read),
+    )
+    .unwrap();
+    assert_eq!(
+        placed_anew.nodes_whose_place_changes,
+        vec![fused_tint.clone()]
+    );
+    assert!(
+        placed_anew.links_wired_anew.contains(&out_of_the_pool),
+        "{placed_anew:?}"
+    );
+    assert!(!needs_the_function_node_pool(&graph, &out_of_the_pool));
+
+    forget_the_build_of_each_node_restarted(&mut graph, &placed_anew.nodes_whose_place_changes);
+    let to_place = [
+        vec![second_reader.clone()],
+        placed_anew.the_running_nodes_placed_anew(),
+    ]
+    .concat();
+    place_each_shader_node_island_on_its_host(&mut graph, &to_place).unwrap();
+    assert_eq!(
+        how_a_link_is_wired(&graph, &out_of_the_pool).unwrap(),
         HowALinkIsWired::ThroughAChannel
     );
 }

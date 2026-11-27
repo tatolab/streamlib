@@ -20,10 +20,9 @@ pub mod pin_type_conversion;
 pub mod video_frame;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
-pub use bundle_members::{BreakBundle, BundleTypeSettings, MakeBundle};
+pub use bundle_members::{BreakBundle, MakeBundle};
 pub use pin_type_conversion::{
-    AudioToTensor, TensorToAudio, TensorToAudioSettings, TensorToTexture, TensorToTextureSettings,
-    TextureToTensor,
+    AudioToTensor, TensorToAudio, TensorToAudioInputs, TensorToTexture, TextureToTensor,
 };
 pub use video_frame::VideoFrame;
 
@@ -133,7 +132,7 @@ pub fn register_the_conversion_node_types() {
         pin_type_conversion::TensorToTexture::Node,
     >(PinConversionOutputPick {
         picked_for: pin_type_conversion::tensor_to_texture::the_format_picked_for_the_input,
-        given_under: pin_type_conversion::tensor_to_texture::the_texture_written_under_the_settings,
+        given_under: pin_type_conversion::tensor_to_texture::the_texture_written_under_the_input_values,
     });
 }
 

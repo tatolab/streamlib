@@ -718,6 +718,7 @@ pub(crate) fn spawn_host_for_graph_node(
             how_its_islands_ran_each_function_node: link_wiring
                 .how_its_far_side_ran_each_function_node(),
             node_not_ready_reports: Default::default(),
+            computed_value_builds_its_helper_reports: Default::default(),
             output_frames_kept_by_its_output_links: link_wiring
                 .output_frames_kept_by_its_output_links(),
             store_of_the_node: None,

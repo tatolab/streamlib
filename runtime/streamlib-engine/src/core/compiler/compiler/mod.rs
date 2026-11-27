@@ -37,7 +37,8 @@ use crate::core::compiler::compiler_ops::running_node_restart::{
     unwire_each_link_of_the_nodes_restarted,
 };
 use crate::core::compiler::compiler_ops::shader_node_island::{
-    place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
+    hand_each_running_host_the_island_placed_on_it, place_each_shader_node_island_on_its_host,
+    the_shader_node_islands_a_live_edit_places_anew,
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
@@ -266,21 +267,24 @@ impl Compiler {
             )
             .collect()
         };
-        let nodes_restarted = {
+        let (shader_node_islands_placed_anew, nodes_restarted) = {
             let graph = graph_arc.read();
-            the_running_shader_nodes_a_live_edit_restarts(
+            let shader_node_islands_placed_anew = the_shader_node_islands_a_live_edit_places_anew(
                 &graph,
                 &plan.nodes_to_add,
                 &node_ids_to_remove,
                 &links_changed,
-            )?
-            .joined_with(the_running_nodes_a_rebuild_restarts(
-                &graph,
-                &plan.nodes_to_rebuild,
-                &plan.nodes_to_add,
-                &node_ids_to_remove,
-                &links_changed,
-            )?)
+            )?;
+            let nodes_restarted = shader_node_islands_placed_anew
+                .the_nodes_and_links_built_again_in_their_new_place()
+                .joined_with(the_running_nodes_a_rebuild_restarts(
+                    &graph,
+                    &plan.nodes_to_rebuild,
+                    &plan.nodes_to_add,
+                    &node_ids_to_remove,
+                    &links_changed,
+                )?);
+            (shader_node_islands_placed_anew, nodes_restarted)
         };
         plan.add_each_node_and_link_restarted(&nodes_restarted);
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
@@ -377,8 +381,20 @@ impl Compiler {
         let mut barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)> = vec![];
         let function_nodes_run_inside_their_readers =
             the_function_nodes_among(&graph_arc.read(), &plan.nodes_to_add);
-        let shader_nodes_placed =
-            place_each_shader_node_island_on_its_host(&mut graph_arc.write(), &plan.nodes_to_add)?;
+        let shader_nodes_placed = {
+            // A node whose place changes is among the nodes to add already, restarted, unless
+            // its old thread was abandoned, which leaves it unbuilt and unplaced.
+            let shader_nodes_to_place = [
+                plan.nodes_to_add.as_slice(),
+                &shader_node_islands_placed_anew.hosts_handed_their_island_anew,
+                &shader_node_islands_placed_anew.fused_nodes_placed_anew,
+            ]
+            .concat();
+            place_each_shader_node_island_on_its_host(
+                &mut graph_arc.write(),
+                &shader_nodes_to_place,
+            )?
+        };
         plan.leave_unbuilt_each_node_and_unwired_each_of_its_links(
             &graph_arc.read(),
             &shader_nodes_placed.in_a_cycle_no_node_evaluates,
@@ -475,6 +491,10 @@ impl Compiler {
             )?;
             tracing::debug!("[{}] Completed", CompilePhase::Wire);
         }
+        hand_each_running_host_the_island_placed_on_it(
+            &graph_arc.read(),
+            &shader_node_islands_placed_anew.hosts_handed_their_island_anew,
+        );
         open_the_channels_each_island_newly_reads(
             &mut graph_arc.write(),
             runtime_ctx.iceoryx2_node(),
@@ -531,8 +551,8 @@ impl Compiler {
 }
 
 /// Unwire every link of the nodes a live edit restarts, stop their threads, and
-/// forget their builds, so the compile builds them again, a shader node with
-/// its island placed anew; the nodes an abandoned thread still runs. Such a
+/// forget their builds, so the compile builds them again, a shader node in the
+/// place it takes in the islands now; the nodes an abandoned thread still runs. Such a
 /// node, abandoned by this stop or an earlier one, is left unbuilt, its links
 /// with it, since that thread still writes the node's state.
 fn stop_each_node_restarted(
@@ -545,10 +565,12 @@ fn stop_each_node_restarted(
     if nodes_restarted.is_empty() {
         return Ok(Vec::new());
     }
-    tracing::info!(
-        "Restarting {} running node(s) a live edit rebuilds",
-        nodes_restarted.nodes.len()
-    );
+    if !nodes_restarted.nodes.is_empty() {
+        tracing::info!(
+            "Restarting {} running node(s) a live edit rebuilds",
+            nodes_restarted.nodes.len()
+        );
+    }
     unwire_each_link_of_the_nodes_restarted(&mut graph_arc.write(), nodes_restarted)?;
     stop_node_threads_signalling_every_thread_before_joining_any(
         graph_arc,

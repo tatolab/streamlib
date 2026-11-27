@@ -3,7 +3,8 @@
 
 use super::handle_lifecycle::EscalateHandleRegistry;
 use super::{
-    ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_REQUEST_RPC, envelope_response, parse_op_for_tests,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_OP_BUILDING_A_KERNEL, ESCALATE_REQUEST_RPC,
+    envelope_request, envelope_response, handle_id_of_an_enveloped_ok_response, parse_op_for_tests,
     request_id, try_parse_escalate_request, *,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
@@ -146,6 +147,62 @@ fn log_frame_parses_as_escalate_request_log_variant() {
         Err(e) => panic!("log frame must decode: {}", e.message),
     };
     assert!(matches!(parsed, EscalateRequest::Log(_)));
+}
+
+/// The `op` tag the bridge answers on its kernel build worker decodes as
+/// [`EscalateRequest::RegisterComputeKernel`]. Fail-without-fix: rename the
+/// variant's serde tag alone and every build queues ahead of the frames'
+/// dispatches again, unnoticed.
+#[test]
+fn the_op_built_on_the_kernel_build_worker_parses_as_a_compute_kernel_registration() {
+    let build_frame = serde_json::json!({
+        "rpc": ESCALATE_REQUEST_RPC,
+        "op": ESCALATE_OP_BUILDING_A_KERNEL,
+        "request_id": "r-build",
+        "source": "[numthreads(1, 1, 1)] void main() {}",
+        "bindings": [],
+        "push_constant_size": 0,
+    });
+    let parsed = match try_parse_escalate_request(&build_frame).expect("escalate-shaped") {
+        Ok(op) => op,
+        Err(e) => panic!("a kernel build frame must decode: {}", e.message),
+    };
+    assert!(matches!(parsed, EscalateRequest::RegisterComputeKernel(_)));
+}
+
+/// A request the bridge makes of its own dispatch decodes as the op it was
+/// built from. Fail-without-fix: leave the `rpc` tag off and the dispatch
+/// passes the frame over as no escalate request at all.
+#[test]
+fn an_enveloped_request_decodes_as_the_request_it_wraps() {
+    let release = EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+        handle_id: "kernel-1".to_string(),
+        request_id: "r-release".to_string(),
+    });
+    let enveloped = envelope_request(release.clone());
+    let parsed = match try_parse_escalate_request(&enveloped).expect("escalate-shaped") {
+        Ok(op) => op,
+        Err(e) => panic!("an enveloped request must decode: {}", e.message),
+    };
+    assert_eq!(parsed, release);
+}
+
+#[test]
+fn an_enveloped_ok_response_names_its_handle_and_an_err_names_none() {
+    let ok = envelope_response(EscalateResponse::Ok(EscalateResponseOk {
+        request_id: "r-1".to_string(),
+        handle_id: "kernel-1".to_string(),
+        ..Default::default()
+    }));
+    assert_eq!(
+        handle_id_of_an_enveloped_ok_response(&ok).as_deref(),
+        Some("kernel-1")
+    );
+    let err = envelope_response(EscalateResponse::Err(EscalateResponseErr {
+        request_id: "r-2".to_string(),
+        message: "refused".to_string(),
+    }));
+    assert_eq!(handle_id_of_an_enveloped_ok_response(&err), None);
 }
 
 #[test]

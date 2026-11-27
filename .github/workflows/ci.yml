@@ -655,6 +655,14 @@ jobs:
           VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install pillow
           "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v
 
+      # The Browser and Rive sources on the wheel's node scope, each with its
+      # native half stood in for, so they need no browser host and no GPU.
+      - name: tatolab-browser and tatolab-rive suites
+        run: |
+          for module in tatolab-browser tatolab-rive; do
+            (cd "packages/$module" && "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v)
+          done
+
       - name: Driver-search tests against the lend
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream

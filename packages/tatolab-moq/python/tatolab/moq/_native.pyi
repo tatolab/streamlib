@@ -12,11 +12,20 @@ from typing import Any, final
 
 # pyo3 builds this from what the module registers, so the stub carries it too.
 __all__ = [
+    "MoqGatewaySettingsInput",
     "MoqGatewayThread",
     "MoqTrackDeclarationThread",
     "MoqTrackReceiveThread",
     "MoqTrackSendPublisher",
 ]
+
+@final
+class MoqGatewaySettingsInput:
+    """A gateway's `settings` input, opened once and read by each gateway it starts, so the
+    settings its last message set outlive the gateway that read them."""
+
+    def __new__(cls, module_host_table: object) -> MoqGatewaySettingsInput:
+        """Open the `settings` input the module host table lends."""
 
 @final
 class MoqGatewayThread:
@@ -25,17 +34,19 @@ class MoqGatewayThread:
     def __new__(
         cls,
         module_host_table: object,
+        settings_input: MoqGatewaySettingsInput,
         *,
         runtime_id: str,
         stream_id: str,
         gateway_node: str,
         config_settings: dict[str, Any],
     ) -> MoqGatewayThread:
-        """Start the gateway, dialing `config_settings` and each set of settings
-        its `settings` input receives after."""
+        """Start the gateway, dialing `config_settings` with what `settings_input` received laid
+        over them, and each set of settings it receives after; a gateway of the same node
+        started before is closed first."""
 
-    def stop_and_join(self, timeout_seconds: float) -> bool:
-        """Ask the thread to stop and wait up to `timeout_seconds`: `True` when it ended."""
+    def close(self) -> None:
+        """Close the relay session and stop the thread, waiting for it."""
 
 @final
 class MoqTrackDeclarationThread:
@@ -52,9 +63,10 @@ class MoqTrackDeclarationThread:
         track: str,
         catalog_entry: dict[str, Any] | None = None,
     ) -> MoqTrackDeclarationThread:
-        """Declare `track` on `gateway_node` for `track_node`, again every second."""
+        """Declare `track` on `gateway_node` for `track_node`, again every second; a declaration
+        of the same track node started before is closed first."""
 
-    def stop_and_join(self) -> None:
+    def close(self) -> None:
         """Stop declaring the track."""
 
 @final
@@ -70,6 +82,9 @@ class MoqTrackSendPublisher:
         track_node: str,
     ) -> MoqTrackSendPublisher:
         """Write to the track `track_node` declares."""
+
+    def close(self) -> None:
+        """Give up the track's content service; a send after it is refused."""
 
     def send_message(
         self,
@@ -104,8 +119,8 @@ class MoqTrackReceiveThread:
         carries: str,
         codec: str | None = None,
     ) -> MoqTrackReceiveThread:
-        """Ask `gateway_node` for `track` of `broadcast`; a `carries` other than
-        `encoded` or `named` raises `ValueError`."""
+        """Ask `gateway_node` for `track` of `broadcast`, a receive of the same node started
+        before closed first; a `carries` other than `encoded` or `named` raises `ValueError`."""
 
-    def stop_and_join(self, timeout_seconds: float) -> bool:
-        """Ask the thread to stop and wait up to `timeout_seconds`: `True` when it ended."""
+    def close(self) -> None:
+        """Stop the thread and wait for it."""

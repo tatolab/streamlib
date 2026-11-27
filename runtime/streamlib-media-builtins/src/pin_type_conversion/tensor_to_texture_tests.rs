@@ -115,16 +115,12 @@ fn a_frame_without_the_attribute_is_refused_naming_what_it_has() {
 }
 
 #[test]
-fn a_format_with_no_one_tensor_layout_is_refused_at_setup() {
+fn a_format_with_no_one_tensor_layout_is_refused_by_the_build_of_the_image_format() {
     for format in ["nv12", "rgb8", ""] {
-        let settings = TensorToTextureSettings {
-            format: format.to_string(),
-            ..TensorToTextureSettings::default()
-        };
-        assert!(image_format_of_the_settings(&settings).is_err(), "{format}");
+        assert!(image_format_named(format).is_err(), "{format}");
     }
     assert_eq!(
-        image_format_of_the_settings(&TensorToTextureSettings::default()).ok(),
+        image_format_named("rgba8_unorm").ok(),
         Some(TextureFormat::Rgba8Unorm)
     );
 }
@@ -188,66 +184,57 @@ fn the_texture_written_is_of_the_format_the_node_holds() {
     };
 
     assert_eq!(
-        the_texture_written_under_the_settings(&Map::new()),
+        the_texture_written_under_the_input_values(&Map::new()),
         Some(texture_of(TexturePixelFormat::Rgba8Unorm))
     );
     assert_eq!(
-        the_texture_written_under_the_settings(&held(json!({ "format": "bgra8_unorm" }))),
+        the_texture_written_under_the_input_values(&held(json!({ "format": "bgra8_unorm" }))),
         Some(texture_of(TexturePixelFormat::Bgra8Unorm))
     );
     assert_eq!(
-        the_texture_written_under_the_settings(&held(json!({ "format": "nv12" }))),
+        the_texture_written_under_the_input_values(&held(json!({ "format": "nv12" }))),
         None
     );
     assert_eq!(
-        the_texture_written_under_the_settings(&held(json!({ "format": 3 }))),
+        the_texture_written_under_the_input_values(&held(json!({ "format": 3 }))),
         None
     );
 }
 
-/// A `TensorToTexture` handed the values its inputs hold before it is set up writes the format
-/// they name, each setting they name no value for keeping its default; a value its setting does
-/// not take is refused, naming the node.
+/// A `TensorToTexture` handed the values its inputs hold before it is set up takes those its
+/// inputs take; a value its input does not take is refused, naming the node.
 ///
-/// Mental-revert: settings left at their defaults keep writing `rgba8_unorm` after the inputs
-/// hold `bgra8_unorm`.
+/// Mental-revert: a `format` taken as any JSON value would hand the build of the image format a
+/// number.
 #[test]
-fn the_settings_held_before_setup_are_the_ones_it_writes_with() {
+fn the_values_handed_before_setup_are_taken_and_one_its_input_does_not_take_is_refused() {
     use streamlib::sdk::nodes::GeneratedNode;
     let mut node = <TensorToTexture::Node as GeneratedNode>::from_config(Default::default())
         .expect("a TensorToTexture");
-    assert_eq!(
-        node.image_format_it_writes().unwrap(),
-        TextureFormat::Rgba8Unorm
-    );
-
     let held = |values: streamlib::sdk::serde_json::Value| {
         values.as_object().cloned().expect("an object of values")
     };
-    node.set_unlinked_input_values(&held(streamlib::sdk::serde_json::json!({
+
+    node.write_the_value_inputs_the_input_values_hold(&held(streamlib::sdk::serde_json::json!({
         "format": "bgra8_unorm",
         "array": null,
     })))
-    .expect("the settings are taken");
-
-    assert_eq!(
-        node.image_format_it_writes().unwrap(),
-        TextureFormat::Bgra8Unorm
-    );
-    assert_eq!(node.settings.attribute, "image");
+    .expect("the values are taken");
 
     let refusal = node
-        .set_unlinked_input_values(&held(streamlib::sdk::serde_json::json!({ "format": 3 })))
+        .write_the_value_inputs_the_input_values_hold(&held(
+            streamlib::sdk::serde_json::json!({ "format": 3 }),
+        ))
         .expect_err("a number is no format");
     assert!(refusal.to_string().contains("TensorToTexture"), "{refusal}");
 }
 
-/// The node catalog lists `TensorToTexture`'s settings after its `array` port, `format` a Menu
-/// of the formats one tensor holds, each read at setup, and no config.
+/// The node catalog lists `TensorToTexture`'s value inputs after its `array` port, `format` a
+/// Menu of the formats one tensor holds, each read each run, and no config.
 ///
 /// Mental-revert: a `format` declared as a String lists no options to choose from.
 #[test]
-fn the_catalog_lists_its_format_as_a_menu_read_at_setup() {
+fn the_catalog_lists_its_format_as_a_menu_read_each_run() {
     crate::register_media_builtin_node_types();
     let descriptor = streamlib::sdk::nodes::NODE_REGISTRY
         .descriptor(&TensorToTexture::node_class_import_path())
@@ -284,9 +271,16 @@ fn the_catalog_lists_its_format_as_a_menu_read_at_setup() {
     assert_eq!(format["default_value"], serde_json::json!("rgba8_unorm"));
     assert_eq!(
         format["input_mode"],
-        serde_json::json!({"mode": "setting_only", "read": "at_setup"})
+        serde_json::json!({"mode": "setting_only", "read": "each_run"})
     );
-    assert!(descriptor.config_schema.is_none(), "{rendered}");
+    assert!(
+        descriptor
+            .config_schema
+            .as_ref()
+            .and_then(|config_schema| config_schema.get("properties"))
+            .is_none(),
+        "it takes no config: {rendered}"
+    );
 }
 
 /// The formats `image` states are those one `[h, w, c]` tensor holds, each a `format` the node

@@ -68,6 +68,9 @@ pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 pub(crate) use values_port_facts_read::the_values_port_facts_read;
 
+pub(crate) use components::{
+    BuildsOfAComputedValueShown, BuildsOfItsComputedValues, ComputedValueBuildsItsHelperReports,
+};
 pub use components::{
     ComponentMap, ComponentRenderer, DeviceMatchedAudioWindowContractsComponent,
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,

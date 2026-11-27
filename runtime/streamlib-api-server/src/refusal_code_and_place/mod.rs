@@ -178,6 +178,7 @@ impl RefusalCodeAndPlace {
             InputTakesNoWire, InputValueNotValid, LinkAlreadyExists, LinkNeedsAModuleConversion,
             LinkPinTypesDoNotConnect, LinkStreamsIntoASetting, NodeNameTaken, NodeNotFound,
             NodeNotRunning, NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
+            ShaderNodeFusedGroupNotBuilt,
         };
         match refusal {
             Error::NodeOfAStreamIsNotRunning {
@@ -232,6 +233,10 @@ impl RefusalCodeAndPlace {
                 ..Self::coded(InputValueNotValid)
             },
             Error::LinkAlreadyExists(_) => Self::coded(LinkAlreadyExists),
+            Error::ShaderNodeFusedGroupNotBuilt { evaluated_by, .. } => Self {
+                refused_node: Some(evaluated_by.clone()),
+                ..Self::coded(ShaderNodeFusedGroupNotBuilt)
+            },
             Error::PinLinkRefused(refusal) => match refusal.as_ref() {
                 PinLinkRefusal::InputTakesNoWire {
                     node_name,
