@@ -96,6 +96,7 @@ pub(crate) fn the_http_status_mapped_to_a_refusal_code(refusal_code: &str) -> Op
         | LinkNeedsAModuleConversion
         | InputTakesNoWire
         | LinkStreamsIntoASetting
+        | ShaderNodeFusedGroupNotBuilt
         | Refused => Some(422),
         RuntimeFailed | CheckRanOutOfTime | ExtensionSdkNotFound => Some(500),
         _ => None,

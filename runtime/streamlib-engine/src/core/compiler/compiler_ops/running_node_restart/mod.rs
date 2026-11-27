@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Restarting running nodes inside a live edit's compile: a shader node whose island the edit
-//! changes, and a node whose setting read at setup the edit changes. Each is stopped, its links
+//! Restarting running nodes inside a live edit's compile: a node whose setting read at setup the
+//! edit changes, and a shader node whose place in the islands the edit changes, a host now fused
+//! into another's island or a fused node now evaluating its own. Each is stopped, its links
 //! unwired and its build forgotten, then built and wired again by the same compile, while every
 //! other node keeps running.
 
@@ -14,8 +15,6 @@ use super::open_iceoryx2_service_op::{
 };
 use super::shader_node_island::{
     ShaderNodeFusedIntoTheIslandOfAnotherComponent, ShaderNodeIslandHostedHereComponent,
-    the_host_input_port_a_fused_shader_node_input_is_read_at,
-    the_host_the_island_of_a_fused_node_was_placed_on,
 };
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
@@ -37,7 +36,7 @@ pub(crate) struct RunningNodesALiveEditRestarts {
 
 impl RunningNodesALiveEditRestarts {
     pub(crate) fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.nodes.is_empty() && self.links.is_empty()
     }
 
     /// The nodes and links either restarts, each once, in sorted order.
@@ -178,49 +177,30 @@ pub(crate) fn unwire_each_link_of_the_nodes_restarted(
 /// [`unwire_each_link_of_the_nodes_restarted`] does for the links of a node restarted.
 pub(crate) fn unwire_each_link_keeping_it(graph: &mut Graph, links: &[LinkUniqueId]) -> Result<()> {
     for link_id in links {
-        let Some((source_id, reader_id, reader_port)) =
-            graph.traversal().e(link_id).first().map(|link| {
-                (
-                    link.source().node_run_id().clone(),
-                    link.to_port().node_run_id().clone(),
-                    link.to_port().port_name().to_string(),
-                )
-            })
-        else {
-            continue;
-        };
-        if how_a_link_is_wired(graph, link_id)
-            .is_ok_and(|how| how == HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead)
-        {
-            unwire_a_link_from_a_function_node_island_into_its_reader(graph, link_id)?;
+        if graph.traversal().e(link_id).first().is_none() {
             continue;
         }
-        let was_placed_fused_into_another =
-            |node_id: &NodeRunId| {
-                graph.traversal().v(node_id).first().is_some_and(|node| {
-                    node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
-                })
-            };
-        if was_placed_fused_into_another(&source_id) {
-            if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-                link.insert(LinkStateComponent(LinkState::Disconnected));
+        match how_a_link_is_wired(graph, link_id)? {
+            HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead => {
+                unwire_a_link_from_a_function_node_island_into_its_reader(graph, link_id)?;
             }
-            continue;
-        }
-        let host_it_was_read_at = was_placed_fused_into_another(&reader_id)
-            .then(|| the_host_the_island_of_a_fused_node_was_placed_on(graph, &reader_id))
-            .flatten();
-        match host_it_was_read_at {
-            Some(host_id) => close_iceoryx2_service_into_the_host_of_a_shader_node_island(
-                graph,
-                link_id,
-                &the_host_input_port_a_fused_shader_node_input_is_read_at(
-                    &host_id,
-                    &reader_id,
-                    &reader_port,
-                ),
-            )?,
-            None => close_iceoryx2_service(graph, link_id)?,
+            HowALinkIsWired::AsACallInsideAShaderNodeIsland => {
+                if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+                    link.insert(LinkStateComponent(LinkState::Disconnected));
+                }
+            }
+            HowALinkIsWired::ThroughAChannelIntoTheHostOfItsShaderNodeIsland(host_input_port) => {
+                close_iceoryx2_service_into_the_host_of_a_shader_node_island(
+                    graph,
+                    link_id,
+                    &host_input_port,
+                )?;
+            }
+            HowALinkIsWired::ThroughAChannel
+            | HowALinkIsWired::AsACallInsideAFunctionNodeIsland
+            | HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland => {
+                close_iceoryx2_service(graph, link_id)?;
+            }
         }
     }
     Ok(())

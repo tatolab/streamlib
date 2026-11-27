@@ -340,6 +340,12 @@ pub enum Error {
         why: String,
     },
 
+    /// The fused group of shader nodes `evaluated_by` one shader node cannot be built into the
+    /// one island that node evaluates: a stream holding it does not start, and a live edit
+    /// leaving it is refused whole while a group already running goes on running as it was.
+    #[error("the fused group of shader nodes evaluated by `{evaluated_by}` does not build: {why}")]
+    ShaderNodeFusedGroupNotBuilt { evaluated_by: String, why: String },
+
     /// A node's per-frame function made a call too slow to run every frame: it creates a kernel,
     /// opens a device or starts a session. The words show the call wrapped in a computed value.
     #[error(transparent)]

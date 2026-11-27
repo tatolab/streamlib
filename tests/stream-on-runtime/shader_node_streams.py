@@ -102,6 +102,28 @@ def tint_into_invert_fused_publishing_until_stopped(stream_builder: StreamBuilde
 
 
 @graph_generator
+def tint_into_swap_into_invert_fused_publishing_until_stopped(
+    stream_builder: StreamBuilder,
+) -> None:
+    source = stream_builder.add(
+        KnownPixelsVideoSource,
+        name="source",
+        input_values={
+            "texture_format": "rgba8_unorm",
+            "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
+        },
+    )
+    tinted = stream_builder.add(tint, name="tint")
+    swapped = stream_builder.add(swap_red_and_blue, name="swap_red_and_blue")
+    inverted = stream_builder.add(invert, name="invert")
+    sink = stream_builder.add(ShadedFramePixelReadingSink, name="sink")
+    stream_builder.connect(source.output("video"), tinted.input("image"))
+    stream_builder.connect(tinted.output("result"), swapped.input("image"))
+    stream_builder.connect(swapped.output("result"), inverted.input("image"))
+    stream_builder.connect(inverted.output("result"), sink.input("shaded"))
+
+
+@graph_generator
 def tint_and_invert_each_an_island_of_its_own_publishing_until_stopped(
     stream_builder: StreamBuilder,
 ) -> None:
