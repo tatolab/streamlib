@@ -12,52 +12,39 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Description,
     InputPin,
     NumberRange,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
+    Input,
     StreamDelivery,
     Texture,
+    computed,
     log,
     node,
 )
 
 
-@node.meta(
-    category="Gulf Stream Neon",
-    description="An ordered sink: every frame it receives, read back and piped into ffmpeg, so a stepped take records frame-exact.",
-)
-@node
-class FrameRecorder:
-    """An ordered sink that pipes frames into ffmpeg."""
+class TakeBeingRecorded:
+    """One take: an ffmpeg encoder writing to one file, started on its first frame and closed
+    with the take."""
 
-    output_path: Annotated[
-        str, SettingOnly(), Description("Where the take goes, relative to the project.")
-    ] = "capture/take.mkv"
-    frames_per_second: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The take's frame rate.")
-    ] = 30
-    program: InputPin[
-        Annotated[Texture, StreamDelivery("ordered"), Description("The frames to record")]
-    ]
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        path = Path(self.output_path)
+    def __init__(self, output_path: str, frames_per_second: int) -> None:
+        path = Path(output_path)
         if not path.is_absolute():
             path = Path(__file__).resolve().parent.parent / path
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.frames_per_second = frames_per_second
         self.encoder: subprocess.Popen | None = None
         self.frames_written = 0
 
-    def _start_encoder(self, width: int, height: int) -> None:
-        self.encoder = subprocess.Popen(
+    def _start_encoder(self, width: int, height: int) -> subprocess.Popen:
+        return subprocess.Popen(
             [
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{width}x{height}",
@@ -68,12 +55,9 @@ class FrameRecorder:
             stdin=subprocess.PIPE,
         )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.program.read()
-        if frame is None:
-            return
+    def write(self, frame: Texture) -> None:
         if self.encoder is None:
-            self._start_encoder(frame.width, frame.height)
+            self.encoder = self._start_encoder(frame.width, frame.height)
         with frame.cpu() as pixels:
             if pixels.dtype.kind == "f":
                 # An HDR frame: a quick Reinhard curve and sRGB-ish gamma, enough to look at it.
@@ -89,8 +73,37 @@ class FrameRecorder:
         if self.frames_written % 30 == 0:
             log.info("recorded", frames=self.frames_written, path=str(self.path))
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
+    def close(self) -> None:
         if self.encoder is not None:
             self.encoder.stdin.close()
             self.encoder.wait(timeout=120)
             log.info("take closed", frames=self.frames_written, path=str(self.path))
+
+
+@node.meta(
+    category="Gulf Stream Neon",
+    description="An ordered sink: every frame it receives, read back and piped into ffmpeg, so a stepped take records frame-exact.",
+)
+@node(execution="reactive")
+def FrameRecorder(
+    *,
+    output_path: Input[
+        Annotated[str, Description("Where the take goes, relative to the project.")]
+    ] = Input("capture/take.mkv"),
+    frames_per_second: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The take's frame rate.")]
+    ] = Input(30),
+    program: InputPin[
+        Annotated[Texture, StreamDelivery("ordered"), Description("The frames to record")]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """An ordered sink that pipes frames into ffmpeg; a new path or rate starts a new take."""
+    take = computed(lambda: TakeBeingRecorded(output_path.get(), frames_per_second.get()))
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = program.read()
+        if frame is None:
+            return
+        take.get().write(frame)
+
+    return each_frame

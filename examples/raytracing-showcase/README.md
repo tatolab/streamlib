@@ -13,9 +13,9 @@ like a loop, and it is unmistakably running rather than pre-rendered.
 
 **Three kernel kinds, one stream, and every one of them an object.** Each node
 lives in its own module under `nodes/` and runs in its own child interpreter.
-Each kernel is built once in `setup()`, the compute kernel on the limited
+Each kernel is built once in the node's body, the compute kernel on the limited
 capability and the graphics and ray-tracing kernels on the full one, and used
-per frame in `process()`:
+each frame:
 
 | Node | Kernel | What it does |
 | --- | --- | --- |
@@ -103,7 +103,7 @@ share one camera function and one lighting function, and the sky runs
 continuously across the divider because both sides ask the same
 `sky_colour_towards` for the same view ray. None of that is possible with an
 ahead-of-time `slangc` step: it works because a kernel's shader is a Python
-string the runtime compiles at `setup()`, and there is no toolchain to install.
+string the runtime compiles in the node's body, and there is no toolchain to install.
 
 ### The labels are generated into the shader too
 
@@ -115,10 +115,10 @@ one bit per pixel, scales it to the frame, and draws white ink over a black
 outline sampled at eight offsets — legible over a bright sky and a dark floor
 alike.
 
-This is also the one place the stream builds a shader out of its own settings:
+This is also the one place the stream builds a shader out of its own inputs:
 the kernel source is a function of `left_label` and `right_label`, not a module
 constant, so changing `splitscreencompositor`'s `left_label` changes the Slang the runtime
-compiles at `setup()`. It is why the project depends on nothing but
+compiles when the labels are set. It is why the project depends on nothing but
 `tatolab-stream`.
 
 ### What the rasterized half cannot do, and why
@@ -159,26 +159,26 @@ despite that is the section below: one clock, not one cadence.
 
 Nothing here needs a camera, a microphone, or any other device. It needs a GPU
 with `VK_KHR_ray_tracing_pipeline` (an RTX-class or RDNA2+ card) — so Linux
-only, since MoltenVK exposes no ray tracing — and says so by refusing at
-`setup()` rather than pretending. `tatolab dev` and `tatolab start` print the
+only, since MoltenVK exposes no ray tracing — and says so by refusing in
+the node's body rather than pretending. `tatolab dev` and `tatolab start` print the
 cross-floor check's warning for the three ray-tracing constructors; the stream
 starts anyway.
 
 ## Why the boxes do not move
 
 `build_tlas` is a method on the **Full** capability, and the capability split
-is on the phase axis: `setup()` holds Full, `process()` holds Limited. A
+is on the phase axis: the node's body holds Full, each frame holds Limited. A
 scene's geometry lives in an acceleration structure, so the scene is built once
 and what animates is the camera and the light — two floats of push constant.
 Moving geometry would mean rebuilding the top-level structure every frame, and
-a Python node cannot reach that from `process()` at all: its limited context's
+a Python node cannot reach that from a frame at all: its limited context's
 `escalate` is a refusal, because the callback's one atomic privileged scope
 cannot cross the node's process boundary.
 
 ### The two halves are the same instant, and that is not free
 
 Both renderers are separate processes reaching their first frame at their own
-moment — the ray tracer's `setup()` is the longer one, with four shader modules
+moment — the ray tracer's body is the longer one, with four shader modules
 and two acceleration structures to build. A phase counted from each node's own
 first frame would leave the two cameras degrees apart and break every box
 crossing the divider. So the orbit angles are a pure function of `ctx.time`,
@@ -212,7 +212,7 @@ Studio's viewer.
 
 ## Editing it
 
-Everything is a Python string the runtime compiles at `setup()`; save a file
+Everything is a Python string the runtime compiles as the node is set up; save a file
 while `tatolab dev` runs and the stream loads again with it.
 
 - **The scene** is `SHOWCASE_BOXES` in `nodes/showcase_box_scene.py`. Add a
@@ -233,7 +233,7 @@ while `tatolab dev` runs and the stream loads again with it.
 One edit worth making on purpose, because it fails in an instructive way:
 rename a binding in the ray-generation Slang but not in `DECLARED_BINDINGS`.
 The declaration is asserted against the shaders' own reflection when the kernel
-is built, so the refusal lands at `setup()`, before a single frame.
+is built, so the refusal lands in the node's body, before a single frame.
 
 ## Observing it
 
@@ -250,13 +250,13 @@ The nodes are `rasterizedscenerenderer`, `raytracedscenerenderer` and
 
 ## Knobs
 
-Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Each knob is an input of its node, stored in `streams/main.graph.json`. Change it in Tato
 Studio's inspector, which records the edit in the project's history and applies it to the
-running stream. `split_fraction` is read on every frame; the extents and the labels are settings, so
-changing one rebuilds its node.
+running stream. `split_fraction` and the extents are read on every frame; a new label builds the
+compositor's kernel again.
 
 | Knob | Node | Effect |
 | --- | --- | --- |
 | `width` / `height` | `rasterizedscenerenderer`, `raytracedscenerenderer` | The extent both halves render at, and so the extent of the cut. Keep the two equal. |
 | `split_fraction` | `splitscreencompositor` | Where the cut falls; 0.0 is all ray traced, 1.0 all rasterized. |
-| `left_label` / `right_label` | `splitscreencompositor` | The text over each half; generated into the compositor's kernel at `setup()`. |
+| `left_label` / `right_label` | `splitscreencompositor` | The text over each half; generated into the compositor's kernel, built again when one changes. |

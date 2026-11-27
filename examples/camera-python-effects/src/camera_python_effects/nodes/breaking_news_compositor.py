@@ -12,19 +12,19 @@ third of the camera's rate shows its last frame rather than a gap.
 from __future__ import annotations
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    Texture,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
+    Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -72,85 +72,87 @@ def pip_slide_progress_at(elapsed_seconds: float) -> float:
 
 
 @node.meta(description="Three-layer compositor with a sliding picture-in-picture")
-@node
-class BreakingNewsCompositor:
-    """Video underneath, overlay over it, the android's stage inside the PiP."""
-
+@node(execution="reactive")
+def BreakingNewsCompositor(
+    *,
     video_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("The graded camera video")]
-    ]
+    ],
     overlay_from_neon_source: InputPin[
         Annotated[
             Texture, StreamDelivery("newest"), Description("The premultiplied skia overlay")
         ]
-    ]
+    ],
     avatar_from_pose_scene: InputPin[
         Annotated[
             Texture,
             StreamDelivery("newest"),
             Description("The android's stage, for the picture-in-picture"),
         ]
-    ]
+    ],
     video_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The three layers composited"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Video underneath, overlay over it, the android's stage inside the PiP."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
-            color_attachment_formats=[TEXTURE_FORMAT],
-            vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),
-            fragment_source=read_shader_source("breaking_news_composite_fragment.slang"),
-            bindings={
-                VIDEO_FROM_UPSTREAM: ("sampled_texture", ["fragment"]),
-                OVERLAY_FROM_NEON_SOURCE: ("sampled_texture", ["fragment"]),
-                AVATAR_FROM_POSE_SCENE: ("sampled_texture", ["fragment"]),
-            },
-            push_constant_size=COMPOSITE_PUSH_CONSTANT_SIZE,
-            label="BreakingNewsCompositor",
-        )
-        # Held across ticks: the two side layers pace themselves, and a frame
-        # that has not been replaced is still the newest one there is.
-        self.latest_overlay: Texture | None = None
-        self.latest_avatar_scene: Texture | None = None
-        self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
-        )
+    graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
+        color_attachment_formats=[TEXTURE_FORMAT],
+        vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),
+        fragment_source=read_shader_source("breaking_news_composite_fragment.slang"),
+        bindings={
+            VIDEO_FROM_UPSTREAM: ("sampled_texture", ["fragment"]),
+            OVERLAY_FROM_NEON_SOURCE: ("sampled_texture", ["fragment"]),
+            AVATAR_FROM_POSE_SCENE: ("sampled_texture", ["fragment"]),
+        },
+        push_constant_size=COMPOSITE_PUSH_CONSTANT_SIZE,
+        label="BreakingNewsCompositor",
+    )
+    # Held across ticks: the two side layers pace themselves, and a frame
+    # that has not been replaced is still the newest one there is.
+    latest_overlay: Texture | None = None
+    latest_avatar_scene: Texture | None = None
+    elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
+    output_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        video = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal latest_avatar_scene, latest_overlay
+        video = video_from_upstream.read()
         if video is None:
             return
-        elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
+        elapsed_seconds = elapsed_seconds_since_first_process.seconds_at(ctx.time)
 
-        newer_overlay = self.overlay_from_neon_source.read()
+        newer_overlay = overlay_from_neon_source.read()
         if newer_overlay is not None:
-            self.latest_overlay = newer_overlay
-        newer_avatar_scene = self.avatar_from_pose_scene.read()
+            latest_overlay = newer_overlay
+        newer_avatar_scene = avatar_from_pose_scene.read()
         if newer_avatar_scene is not None:
-            self.latest_avatar_scene = newer_avatar_scene
+            latest_avatar_scene = newer_avatar_scene
 
         # Every declared binding is supplied on every draw — the kernel holds
         # no binding state — so a layer that has not arrived binds the video
         # and is masked out of the blend instead.
         present_layer_mask = VIDEO_LAYER_BIT
         overlay_surface_id = video.surface_id
-        if self.latest_overlay is not None:
+        if latest_overlay is not None:
             present_layer_mask |= OVERLAY_LAYER_BIT
-            overlay_surface_id = self.latest_overlay.surface_id
+            overlay_surface_id = latest_overlay.surface_id
         avatar_surface_id = video.surface_id
-        if self.latest_avatar_scene is not None:
+        if latest_avatar_scene is not None:
             present_layer_mask |= POSE_LAYER_BIT
-            avatar_surface_id = self.latest_avatar_scene.surface_id
+            avatar_surface_id = latest_avatar_scene.surface_id
 
-        composited = self.output_ring.next_texture_for_this_frame(
+        composited = output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, video.width, video.height
         )
-        self.graphics_kernel.draw(
+        graphics_kernel.draw(
             bindings={
                 VIDEO_FROM_UPSTREAM: video.surface_id,
                 OVERLAY_FROM_NEON_SOURCE: overlay_surface_id,
@@ -168,7 +170,9 @@ class BreakingNewsCompositor:
                 elapsed_seconds,
             ),
         )
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(composited, video.colour),
             timestamp_ns=video.timestamp_ns,
         )
+
+    return each_frame

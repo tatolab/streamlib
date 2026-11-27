@@ -8,7 +8,7 @@ fan-out in its own child interpreter, so nothing it does can slow the picture â€
 swap the mean for a call to a model server and the app keeps its frame rate.
 """
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
@@ -24,21 +24,22 @@ from tatolab.stream import (
 BRIGHTNESS_REPORT_INTERVAL_NS = 1_000_000_000
 
 
-@node
-class BrightnessMeter:
-    """Logs the mean brightness of the frames it sees, once a second."""
-
+@node(execution="reactive")
+def BrightnessMeter(
+    *,
     video_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames to measure")]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Logs the mean brightness of the frames it sees, once a second."""
 
-    def __init__(self) -> None:
-        self._next_brightness_report_at_ns = 0
+    next_brightness_report_at_ns = 0
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal next_brightness_report_at_ns
+        frame = video_from_upstream.read()
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
-        if frame is None or ctx.time < self._next_brightness_report_at_ns:
+        if frame is None or ctx.time < next_brightness_report_at_ns:
             return
         # `frame.cpu()` is the slow door, named so: the frame lives on the GPU
         # and this reads it back into host memory. Once a second is cheap;
@@ -52,4 +53,6 @@ class BrightnessMeter:
             width=frame.width,
             height=frame.height,
         )
-        self._next_brightness_report_at_ns = ctx.time + BRIGHTNESS_REPORT_INTERVAL_NS
+        next_brightness_report_at_ns = ctx.time + BRIGHTNESS_REPORT_INTERVAL_NS
+
+    return each_frame

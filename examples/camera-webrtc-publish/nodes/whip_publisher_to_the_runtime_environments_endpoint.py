@@ -9,8 +9,9 @@ environment, so the variables are set where the runtime starts.
 """
 
 import os
+from typing import Callable
 
-from tatolab.stream import RuntimeContextFullAccess, RuntimeContextLimitedAccess, node
+from tatolab.stream import RuntimeContextLimitedAccess, computed, node
 from tatolab.webrtc import PublishedTracks, WhipSessionPublishing
 
 WHIP_URL_ENVIRONMENT_VARIABLE = "STREAMLIB_WHIP_URL"
@@ -37,22 +38,22 @@ def whip_session_publishing_to_the_runtime_environments_endpoint() -> WhipSessio
     description="Publishes encoded video and audio to the WHIP endpoint the runtime's environment names",
 )
 @node(paced_by_real_time=True)
-class WhipPublisherToTheRuntimeEnvironmentsEndpoint:
-    """A `WhipPublisher` session at `STREAMLIB_WHIP_URL`, sent `STREAMLIB_WHIP_BEARER_TOKEN`, with no setting."""
+def WhipPublisherToTheRuntimeEnvironmentsEndpoint(
+    *, tracks: PublishedTracks
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """A `WhipPublisher` session at `STREAMLIB_WHIP_URL`, sent `STREAMLIB_WHIP_BEARER_TOKEN`, with no input."""
 
-    tracks: PublishedTracks
+    def set_up_publishing() -> WhipSessionPublishing:
+        publishing = whip_session_publishing_to_the_runtime_environments_endpoint()
+        publishing.set_up(tracks)
+        return publishing
 
-    def __init__(self) -> None:
-        self._publishing = whip_session_publishing_to_the_runtime_environments_endpoint()
+    # A computed value reading no input: built once, and closed, ending the session, when the
+    # node stops.
+    session = computed(set_up_publishing)
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         del ctx
-        self._publishing.set_up(self.tracks)
+        session.get().publish_the_next_message(tracks)
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        del ctx
-        self._publishing.publish_the_next_message(self.tracks)
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._publishing.close()
+    return each_frame

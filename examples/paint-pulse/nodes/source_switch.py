@@ -13,13 +13,14 @@ unbroken sample count across switches, so the listener downstream never sees a g
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
     Description,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
@@ -37,48 +38,53 @@ SOURCE_NAMES = ("song", "computer", "mic")
     category="Paint Pulse",
     description="Pass on one of three sounds, the song, the computer's audio or a mic, chosen by `source`.",
 )
-@node
-class SourceSwitch:
-    """Three sounds in, the chosen one out."""
-
-    source: Annotated[
-        int,
-        NumberRange(minimum=0, maximum=len(SOURCE_NAMES) - 1),
-        Description("Which source plays: 0 the song, 1 the computer's audio, 2 the mic."),
-    ] = 0
-    song: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 0")]]
-    computer: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 1")]]
-    mic: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 2")]]
-    audio: OutputPin[Annotated[Audio, Description("The chosen source, for listening to")]]
+@node(execution="reactive")
+def SourceSwitch(
+    *,
+    source: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=0, maximum=len(SOURCE_NAMES) - 1),
+            Description("Which source plays: 0 the song, 1 the computer's audio, 2 the mic."),
+        ]
+    ] = Input(0),
+    song: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 0")]],
+    computer: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 1")]],
+    mic: InputPin[Annotated[Audio, StreamDelivery("ordered"), BLOCK, Description("Source 2")]],
+    audio: OutputPin[Annotated[Audio, Description("The chosen source, for listening to")]],
     monitor: OutputPin[
         Annotated[Audio, Description("The chosen source to play out loud: the song only")]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Three sounds in, the chosen one out."""
+    samples_written = 0
+    samples_monitored = 0
 
-    def __init__(self) -> None:
-        self.samples_written = 0
-        self.samples_monitored = 0
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        for index, pin in enumerate((self.song, self.computer, self.mic)):
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal samples_written, samples_monitored
+        chosen = source.get()
+        for index, pin in enumerate((song, computer, mic)):
             while True:
                 block = pin.read()
                 if block is None:
                     break
-                if index != self.source:
+                if index != chosen:
                     continue
                 samples = numpy.ascontiguousarray(numpy.from_dlpack(block), dtype=numpy.float32)
-                self.audio.write(
+                audio.write(
                     samples,
-                    start_sample=self.samples_written,
+                    start_sample=samples_written,
                     timestamp_ns=block.timestamp_ns,
                     sample_rate=SAMPLE_RATE,
                 )
-                self.samples_written += samples.shape[1]
+                samples_written += samples.shape[1]
                 if index == 0:
-                    self.monitor.write(
+                    monitor.write(
                         samples,
-                        start_sample=self.samples_monitored,
+                        start_sample=samples_monitored,
                         timestamp_ns=block.timestamp_ns,
                         sample_rate=SAMPLE_RATE,
                     )
-                    self.samples_monitored += samples.shape[1]
+                    samples_monitored += samples.shape[1]
+
+    return each_frame

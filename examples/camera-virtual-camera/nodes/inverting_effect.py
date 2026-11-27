@@ -12,20 +12,19 @@ frame it was handed: it publishes the inverted picture from a texture ring of
 its own.
 """
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Description,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -34,32 +33,32 @@ INVERTED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 INVERTED_FRAME_TEXTURE_USAGE = ["texture_binding"]
 
 
-@node
-class InvertingEffect:
-    """Reads each camera frame on the CPU and publishes its colour-inverted twin."""
-
+@node(execution="reactive")
+def InvertingEffect(
+    *,
     video_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
-    ]
+    ],
     video_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(INVERTED_FRAME_TEXTURE_FORMAT),
             Description("The same frames, colour-inverted"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Reads each camera frame on the CPU and publishes its colour-inverted twin."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.inverted_frame_texture_ring = NodeOutputTextureRing(
-            INVERTED_FRAME_TEXTURE_FORMAT, INVERTED_FRAME_TEXTURE_USAGE
-        )
+    inverted_frame_texture_ring = NodeOutputTextureRing(
+        INVERTED_FRAME_TEXTURE_FORMAT, INVERTED_FRAME_TEXTURE_USAGE
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        camera_frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        camera_frame = video_from_upstream.read()
         if camera_frame is None:
             return
 
-        inverted_texture = self.inverted_frame_texture_ring.next_texture_for_this_frame(
+        inverted_texture = inverted_frame_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, camera_frame.width, camera_frame.height
         )
         # A read-only host view: the passthrough camera is showing these pixels.
@@ -79,7 +78,9 @@ class InvertingEffect:
         # The capture stamp is what consumers order by, and a `VirtualCameraSink`
         # sets the device's colorimetry from the frame's colour, so the two
         # cameras present the same picture under the same time and colour.
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(inverted_texture, camera_frame.colour),
             timestamp_ns=camera_frame.timestamp_ns,
         )
+
+    return each_frame

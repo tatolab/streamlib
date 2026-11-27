@@ -20,14 +20,15 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 from tatolab.stream import (
     Description,
+    Input,
     NumberRange,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    computed,
     log,
     node,
 )
@@ -96,83 +97,94 @@ def fetch_latest() -> dict:
     return reading
 
 
-@node.meta(
-    category="Gulf Stream Neon",
-    description="Real readings from NOAA tide station 8723214 Virginia Key, Miami: water level, wind, temperatures. Live from the CO-OPS API, or replayed from a logged snapshot.",
-)
-@node(execution="continuous", interval_ms=16)
-class NoaaStationFeed:
-    """NOAA CO-OPS station 8723214, live or replayed."""
+class LiveStationPoller:
+    """A thread that asks NOAA for the station's newest reading every `poll_seconds`, and
+    stops when closed."""
 
-    mode: Annotated[
-        Literal["replay", "live"],
-        Description("`live` polls NOAA; `replay` plays the logged snapshot."),
-    ] = "replay"
-    poll_seconds: Annotated[
-        float, NumberRange(minimum=1.0), Description("How often `live` asks NOAA, in seconds.")
-    ] = 360.0
-    replay_hours_per_take: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=24.0),
-        Description("How many of the snapshot's last hours one take replays."),
-    ] = 24.0
-    take_seconds: Annotated[
-        float, NumberRange(minimum=0.1), Description("How long one take is, in seconds.")
-    ] = 24.0
-    station: OutputPin[Annotated[StationReading, Description("The station's newest reading")]]
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.take_clock = TakeClock()
-        snapshot = json.loads((DATA_FOLDER / "virginia_key_snapshot.json").read_text())
-        responses = {product: block["response"] for product, block in snapshot["last_24h"].items()}
-        self.timeline = _timeline_of(responses)
-        self.latest_live: dict | None = None
-        self.stop = threading.Event()
-        self.poller: threading.Thread | None = None
-        self._follow_the_mode()
-        log.info(
-            "station feed",
-            mode=self.mode,
-            readings=len(self.timeline),
-            snapshot_fetched_at=snapshot["fetched_at_utc"],
-        )
-
-    def _follow_the_mode(self) -> None:
-        """Switched live: start polling NOAA; switched to replay: the poller stops."""
-        if self.mode == "live" and (self.poller is None or not self.poller.is_alive()):
-            self.stop = threading.Event()
-            self.poller = threading.Thread(target=self._poll, daemon=True)
-            self.poller.start()
-        elif self.mode != "live":
-            self.stop.set()
+    def __init__(self, poll_seconds: float) -> None:
+        self.latest: dict | None = None
+        self._poll_seconds = poll_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+        self._thread.start()
 
     def _poll(self) -> None:
         log_path = DATA_FOLDER / "station_log.jsonl"
-        while not self.stop.is_set():
+        while not self._stop.is_set():
             try:
                 reading = fetch_latest()
-                self.latest_live = reading
+                self.latest = reading
                 with log_path.open("a") as station_log:
                     station_log.write(json.dumps({"fetched_at_unix": time.time(), **reading}) + "\n")
                 log.info("station reading", **reading)
             except Exception as failure:  # noqa: BLE001 - a feed that is down keeps the last reading
                 log.warn("station unreachable, holding the last reading", reason=str(failure))
-            self.stop.wait(self.poll_seconds)
+            self._stop.wait(self._poll_seconds)
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self._follow_the_mode()
-        if self.mode == "live" and self.latest_live is not None:
-            reading, live = self.latest_live, 1.0
+    def close(self) -> None:
+        self._stop.set()
+
+
+@node.meta(
+    category="Gulf Stream Neon",
+    description="Real readings from NOAA tide station 8723214 Virginia Key, Miami: water level, wind, temperatures. Live from the CO-OPS API, or replayed from a logged snapshot.",
+)
+@node(execution="continuous", interval_ms=16)
+def NoaaStationFeed(
+    *,
+    mode: Input[
+        Annotated[
+            Literal["replay", "live"],
+            Description("`live` polls NOAA; `replay` plays the logged snapshot."),
+        ]
+    ] = Input("replay"),
+    poll_seconds: Input[
+        Annotated[
+            float, NumberRange(minimum=1.0), Description("How often `live` asks NOAA, in seconds.")
+        ]
+    ] = Input(360.0),
+    replay_hours_per_take: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=24.0),
+            Description("How many of the snapshot's last hours one take replays."),
+        ]
+    ] = Input(24.0),
+    take_seconds: Input[
+        Annotated[float, NumberRange(minimum=0.1), Description("How long one take is, in seconds.")]
+    ] = Input(24.0),
+    station: OutputPin[Annotated[StationReading, Description("The station's newest reading")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """NOAA CO-OPS station 8723214, live or replayed.
+
+    Switched live, a poller starts asking NOAA; switched to replay, it stops.
+    """
+    take_clock = TakeClock()
+    snapshot = json.loads((DATA_FOLDER / "virginia_key_snapshot.json").read_text())
+    responses = {product: block["response"] for product, block in snapshot["last_24h"].items()}
+    timeline = _timeline_of(responses)
+    poller = computed(
+        lambda: LiveStationPoller(poll_seconds.get()) if mode.get() == "live" else None
+    )
+    log.info(
+        "station feed",
+        readings=len(timeline),
+        snapshot_fetched_at=snapshot["fetched_at_utc"],
+    )
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        live_poller = poller.get()
+        if live_poller is not None and live_poller.latest is not None:
+            reading, live = live_poller.latest, 1.0
         else:
-            seconds = self.take_clock.seconds_at(ctx)
-            fraction = (max(seconds, 0.0) / self.take_seconds) % 1.0
-            span = self.replay_hours_per_take / 24.0
+            seconds = take_clock.seconds_at(ctx)
+            fraction = (max(seconds, 0.0) / take_seconds.get()) % 1.0
+            span = replay_hours_per_take.get() / 24.0
             start = 1.0 - span
-            index = int((start + fraction * span) * (len(self.timeline) - 1))
-            reading, live = self.timeline[index], 0.0
+            index = int((start + fraction * span) * (len(timeline) - 1))
+            reading, live = timeline[index], 0.0
         values = {k: float(v) for k, v in reading.items() if k in STATION_READING_NAMES}
         values.update(station=float(STATION_ID), live=live)
-        self.station.write(StationReading(**values), timestamp_ns=ctx.time)
+        station.write(StationReading(**values), timestamp_ns=ctx.time)
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        self.stop.set()
+    return each_frame

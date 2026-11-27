@@ -31,7 +31,7 @@ root_voice_from_upstream: InputPin[
 ```
 
 so the engine resamples each voice to 48 kHz, averages the stereo one down to
-mono, and frames all three into exactly-512-sample blocks **before** `process()`
+mono, and frames all three into exactly-512-sample blocks **before** a frame
 runs. What the mixer reads with `self.root_voice_from_upstream.read()` is
 three windows of identical shape, and mixing them is one `+`. There is no
 resampler, no ring buffer and no format negotiation in this stream, because none
@@ -52,7 +52,7 @@ Further things it teaches:
   `start_sample`; a read hands back an `Audio` block that `numpy.from_dlpack`
   views the same way. A voice's rate comes from its `sample_rate` setting, which its class
   cannot state, so each `write` names it with `sample_rate=`. The mixer copies each window out of
-  its block, because a read's borrow ends with the `process()` that made it and
+  its block, because a read's borrow ends with the frame that made it and
   a window may wait several calls for its partners.
 - **Every timestamp is the machine's monotonic clock.** Each voice stamps a
   block with its run anchor plus an integer sample offset, never an accumulated
@@ -130,10 +130,10 @@ lockstep.
 
 ## Knobs
 
-Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Each knob is an input of its node, stored in `streams/main.graph.json`. Change it in Tato
 Studio's inspector, which records the edit in the project's history and applies it to the
-running stream. A pitch, a peak or the mixer's gain is read as the stream plays; a voice's
-rate, channel count or block size is a setting, so changing one rebuilds that voice.
+running stream. A pitch, a peak or the mixer's gain is read as the stream plays, and so are a
+voice's rate, channel count and block size: a new rate starts the voice on a new run.
 
 | Knob | Node | Effect |
 | --- | --- | --- |

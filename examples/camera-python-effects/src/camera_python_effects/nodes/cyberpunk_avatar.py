@@ -12,22 +12,22 @@ nobody in frame the android glides into an idle sway.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Description,
-    Texture,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
+    Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     log,
     node,
 )
@@ -62,86 +62,120 @@ CAMERA_DECIMATION_STRIDE = 2
 TRACKING_ACCOUNTING_EVERY_FRAMES = 300
 
 
-@node.meta(description="3D android on a neon stage, dancing your pose")
-@node
-class CyberpunkAvatar:
-    """Camera frame in, rendered avatar stage out.
+def pose_tracker_or_none(
+    detection_confidence: float, pose_model_path: str | None
+) -> PoseTracker | None:
+    """A pose tracker, or `None` when it could not start.
 
-    Each setting is read at setup, where the tracker and the stage are built, so a change
-    builds them again.
+    The one step that can touch the network (the model fetch, on a cold cache).
+    An idle android beats a dead node, so a failure here leaves the tracker out
+    and the stage swaying.
     """
+    try:
+        return PoseTracker(detection_confidence, pose_model_path)
+    except Exception as tracker_failure:  # noqa: BLE001 — degrade, see above
+        log.warn(
+            "the pose tracker could not start, so the android holds its idle sway",
+            failure=str(tracker_failure),
+        )
+        return None
 
-    scene_width: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The stage's width in pixels.")
-    ] = 960
-    scene_height: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The stage's height in pixels.")
-    ] = 675
-    detection_confidence: Annotated[
-        float,
-        SettingOnly(),
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("How sure the pose detector must be before it reports a person."),
-    ] = 0.35
-    pose_model_path: Annotated[
-        str | None,
-        SettingOnly(),
-        Description("A MediaPipe pose model to load; the default model, fetched once, when unset."),
-    ] = None
+
+@node.meta(description="3D android on a neon stage, dancing your pose")
+@node(execution="reactive")
+def CyberpunkAvatar(
+    *,
+    scene_width: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The stage's width in pixels.")]
+    ] = Input(960),
+    scene_height: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The stage's height in pixels.")]
+    ] = Input(675),
+    detection_confidence: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("How sure the pose detector must be before it reports a person."),
+        ]
+    ] = Input(0.35),
+    pose_model_path: Input[
+        Annotated[
+            str | None,
+            Description("A MediaPipe pose model to load; the default model, fetched once, when unset."),
+        ]
+    ] = Input(None),
     video_from_camera: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
-    ]
+    ],
     scene_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The android's rendered stage"),
         ]
-    ]
+    ],
     pose_to_downstream: OutputPin[
         Annotated[
             SolvedPose,
             Description("The resolved pose as data: joints, visibility, provenance"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Camera frame in, rendered avatar stage out.
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # The one setup step that can touch the network (the model fetch, on
-        # a cold cache). An idle android beats a dead node, so a failure
-        # here leaves the tracker out and the stage swaying.
-        self.pose_tracker: PoseTracker | None
+    The tracker is built from the detector's inputs and the stage from its size, each again
+    when an input it read changes, while frames go on with the ones already built.
+    """
+    pose_tracker = computed(
+        lambda: pose_tracker_or_none(detection_confidence.get(), pose_model_path.get())
+    )
+    scene_renderer = computed(
+        lambda: AvatarSceneRenderer(scene_width.get(), scene_height.get())
+    )
+    smoothed_pose = SmoothedPose()
+    pose_memory = PoseMemory(hold_seconds=1.5)
+    frames_detected = 0
+    frames_held = 0
+    frames_idled = 0
+    output_ring = NodeOutputTextureRing(TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE)
+    elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
+    previous_elapsed_seconds = 0.0
+    a_tracker_failure_has_been_reported = False
+
+    def detect_joints_in(frame: Texture) -> PoseSample | None:
+        """The tracker's answer, with a failure degrading to the idle stage."""
+        nonlocal a_tracker_failure_has_been_reported
+        tracker = pose_tracker.get()
+        if tracker is None:
+            return None
         try:
-            self.pose_tracker = PoseTracker(
-                self.detection_confidence, self.pose_model_path
+            decimated_rgb = numpy.from_dlpack(frame, device="cpu")[
+                ::CAMERA_DECIMATION_STRIDE, ::CAMERA_DECIMATION_STRIDE, :3
+            ]
+            return tracker.world_joints(
+                decimated_rgb, frame.timestamp_ns // NANOSECONDS_PER_MILLISECOND
             )
-        except Exception as tracker_failure:  # noqa: BLE001 — degrade, see above
-            self.pose_tracker = None
-            log.warn(
-                "the pose tracker could not start, so the android holds its idle sway",
-                failure=str(tracker_failure),
-            )
-        self.scene_renderer = AvatarSceneRenderer(self.scene_width, self.scene_height)
-        self.smoothed_pose = SmoothedPose()
-        self.pose_memory = PoseMemory(hold_seconds=1.5)
-        self.frames_detected = 0
-        self.frames_held = 0
-        self.frames_idled = 0
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
-        )
-        self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
-        self.previous_elapsed_seconds = 0.0
-        self.a_tracker_failure_has_been_reported = False
+        except Exception as failure:  # noqa: BLE001 — the stage must not go down
+            if not a_tracker_failure_has_been_reported:
+                a_tracker_failure_has_been_reported = True
+                log.warn(
+                    "pose tracking failed, so the android holds its idle sway; "
+                    "the rest of the pipeline is unaffected. Not reported again "
+                    "in this process.",
+                    failure=str(failure),
+                )
+            return None
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_camera.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal previous_elapsed_seconds, frames_detected, frames_held, frames_idled
+        frame = video_from_camera.read()
         if frame is None:
             return
-        elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
-        dt_seconds = max(elapsed_seconds - self.previous_elapsed_seconds, 1e-3)
-        self.previous_elapsed_seconds = elapsed_seconds
+        elapsed_seconds = elapsed_seconds_since_first_process.seconds_at(ctx.time)
+        dt_seconds = max(elapsed_seconds - previous_elapsed_seconds, 1e-3)
+        previous_elapsed_seconds = elapsed_seconds
 
-        sample = self.detect_joints_in(frame)
+        sample = detect_joints_in(frame)
         # Unseen joints stand in a neutral pose anchored to the live torso —
         # a desk camera drives the upper body without buckling the legs. A
         # dropout holds the last good pose for a grace window rather than
@@ -152,29 +186,29 @@ class CyberpunkAvatar:
             if sample is not None
             else None
         )
-        remembered = self.pose_memory.target_for(resolved, elapsed_seconds)
+        remembered = pose_memory.target_for(resolved, elapsed_seconds)
         target_joints = (
             remembered if remembered is not None else idle_joints(elapsed_seconds)
         )
         if resolved is not None:
-            self.frames_detected += 1
+            frames_detected += 1
             pose_provenance: PoseProvenance = "detected"
         elif remembered is not None:
-            self.frames_held += 1
+            frames_held += 1
             pose_provenance = "held"
         else:
-            self.frames_idled += 1
+            frames_idled += 1
             pose_provenance = "idle"
 
-        total_frames = self.frames_detected + self.frames_held + self.frames_idled
+        total_frames = frames_detected + frames_held + frames_idled
         if total_frames % TRACKING_ACCOUNTING_EVERY_FRAMES == 0:
             log.info(
                 "tracking accounting",
-                detected=self.frames_detected,
-                held_through_dropouts=self.frames_held,
-                idled=self.frames_idled,
+                detected=frames_detected,
+                held_through_dropouts=frames_held,
+                idled=frames_idled,
             )
-        settled = self.smoothed_pose.settle(target_joints, dt_seconds)
+        settled = smoothed_pose.settle(target_joints, dt_seconds)
 
         # The pose as a record, keyed to the exact camera frame it was lifted
         # from — what joins the streams downstream. The joints published are
@@ -191,42 +225,23 @@ class CyberpunkAvatar:
                 else {}
             ),
         }
-        self.pose_to_downstream.write(
+        pose_to_downstream.write(
             SolvedPose(solved_pose_record), timestamp_ns=frame.timestamp_ns
         )
 
-        scene_pixels = self.scene_renderer.render(
+        stage = scene_renderer.get()
+        scene_pixels = stage.render(
             solve_segment_placements(settled), elapsed_seconds
         )
 
-        scene_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.scene_width, self.scene_height
+        scene_texture = output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, stage.width, stage.height
         )
         copy_host_pixels_into_ring_texture(scene_texture, scene_pixels)
 
-        self.scene_to_downstream.write(
+        scene_to_downstream.write(
             TextureToWrite.of_texture(scene_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=frame.timestamp_ns,
         )
 
-    def detect_joints_in(self, frame: Texture) -> PoseSample | None:
-        """The tracker's answer, with a failure degrading to the idle stage."""
-        if self.pose_tracker is None:
-            return None
-        try:
-            decimated_rgb = numpy.from_dlpack(frame, device="cpu")[
-                ::CAMERA_DECIMATION_STRIDE, ::CAMERA_DECIMATION_STRIDE, :3
-            ]
-            return self.pose_tracker.world_joints(
-                decimated_rgb, frame.timestamp_ns // NANOSECONDS_PER_MILLISECOND
-            )
-        except Exception as failure:  # noqa: BLE001 — the stage must not go down
-            if not self.a_tracker_failure_has_been_reported:
-                self.a_tracker_failure_has_been_reported = True
-                log.warn(
-                    "pose tracking failed, so the android holds its idle sway; "
-                    "the rest of the pipeline is unaffected. Not reported again "
-                    "in this process.",
-                    failure=str(failure),
-                )
-            return None
+    return each_frame

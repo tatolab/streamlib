@@ -10,12 +10,13 @@ intro, a build, a drop, a break and a second drop, so every part of the spectrum
 from __future__ import annotations
 
 import math
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Audio,
     Description,
+    Input,
     NumberRange,
     OutputPin,
     RuntimeContextLimitedAccess,
@@ -198,51 +199,58 @@ def render_the_loop() -> numpy.ndarray:
     description="An original 32-second dance loop with an intro, build, drop and break, played on repeat.",
 )
 @node(execution="continuous", interval_ms=5)
-class SynthSong:
+def SynthSong(
+    *,
+    volume: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=1.0), Description("How loud the loop plays.")
+        ]
+    ] = Input(0.13),
+    audio: OutputPin[Annotated[Audio, Description("The song, in stereo")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The loop, streamed in real time and wrapped at its end."""
 
-    volume: Annotated[
-        float, NumberRange(minimum=0.0, maximum=1.0), Description("How loud the loop plays.")
-    ] = 0.13
-    audio: OutputPin[Annotated[Audio, Description("The song, in stereo")]]
+    loop = render_the_loop()
+    run_anchor_timestamp_ns: int | None = None
+    start_sample_of_this_run = 0
+    samples_emitted_in_this_run = 0
+    position_in_the_loop = 0
+    log.info("rendered the loop", seconds=loop.shape[1] / SAMPLE_RATE)
 
-    def __init__(self) -> None:
-        self.loop = render_the_loop()
-        self.run_anchor_timestamp_ns: int | None = None
-        self.start_sample_of_this_run = 0
-        self.samples_emitted_in_this_run = 0
-        self.position_in_the_loop = 0
-        log.info("rendered the loop", seconds=self.loop.shape[1] / SAMPLE_RATE)
+    def next_block() -> numpy.ndarray:
+        nonlocal position_in_the_loop
+        length = loop.shape[1]
+        indices = (position_in_the_loop + numpy.arange(BLOCK_SIZE)) % length
+        position_in_the_loop = (position_in_the_loop + BLOCK_SIZE) % length
+        return numpy.ascontiguousarray(loop[:, indices] * numpy.float32(volume.get()))
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        now_ns = ctx.time
-        if self.run_anchor_timestamp_ns is None:
-            self.run_anchor_timestamp_ns = now_ns
-        samples_owed = ((now_ns - self.run_anchor_timestamp_ns) * SAMPLE_RATE) // NANOSECONDS_PER_SECOND
-        if samples_owed - self.samples_emitted_in_this_run > MAXIMUM_BLOCKS_OF_CATCH_UP * BLOCK_SIZE:
-            self.start_sample_of_this_run += samples_owed
-            self.run_anchor_timestamp_ns = now_ns
-            self.samples_emitted_in_this_run = 0
-            samples_owed = 0
-        while self.samples_emitted_in_this_run + BLOCK_SIZE <= samples_owed:
-            self._publish_one_block()
-
-    def _next_block(self) -> numpy.ndarray:
-        length = self.loop.shape[1]
-        indices = (self.position_in_the_loop + numpy.arange(BLOCK_SIZE)) % length
-        self.position_in_the_loop = (self.position_in_the_loop + BLOCK_SIZE) % length
-        return numpy.ascontiguousarray(self.loop[:, indices] * numpy.float32(self.volume))
-
-    def _publish_one_block(self) -> None:
-        assert self.run_anchor_timestamp_ns is not None
+    def publish_one_block() -> None:
+        nonlocal samples_emitted_in_this_run
+        assert run_anchor_timestamp_ns is not None
         timestamp_ns = (
-            self.run_anchor_timestamp_ns
-            + (self.samples_emitted_in_this_run * NANOSECONDS_PER_SECOND) // SAMPLE_RATE
+            run_anchor_timestamp_ns
+            + (samples_emitted_in_this_run * NANOSECONDS_PER_SECOND) // SAMPLE_RATE
         )
-        self.audio.write(
-            self._next_block(),
-            start_sample=self.start_sample_of_this_run + self.samples_emitted_in_this_run,
+        audio.write(
+            next_block(),
+            start_sample=start_sample_of_this_run + samples_emitted_in_this_run,
             timestamp_ns=timestamp_ns,
             sample_rate=SAMPLE_RATE,
         )
-        self.samples_emitted_in_this_run += BLOCK_SIZE
+        samples_emitted_in_this_run += BLOCK_SIZE
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal run_anchor_timestamp_ns, samples_emitted_in_this_run, start_sample_of_this_run
+        now_ns = ctx.time
+        if run_anchor_timestamp_ns is None:
+            run_anchor_timestamp_ns = now_ns
+        samples_owed = ((now_ns - run_anchor_timestamp_ns) * SAMPLE_RATE) // NANOSECONDS_PER_SECOND
+        if samples_owed - samples_emitted_in_this_run > MAXIMUM_BLOCKS_OF_CATCH_UP * BLOCK_SIZE:
+            start_sample_of_this_run += samples_owed
+            run_anchor_timestamp_ns = now_ns
+            samples_emitted_in_this_run = 0
+            samples_owed = 0
+        while samples_emitted_in_this_run + BLOCK_SIZE <= samples_owed:
+            publish_one_block()
+
+    return each_frame

@@ -3,7 +3,7 @@
 
 """The current: a million GPU particles riding the real Gulf Stream north, with trails.
 
-Importable as `nodes.gulf_stream_current:GulfStreamCurrent`. `setup()` uploads
+Importable as `nodes.gulf_stream_current:GulfStreamCurrent`. Its body uploads
 a HYCOM surface-current snapshot of the map's square into a held texture; the
 particles live in a storage buffer this node holds for its whole life. Each
 frame one kernel fades the trail texture and a second advects every particle
@@ -15,21 +15,23 @@ from __future__ import annotations
 
 import math
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    GpuContextLimitedAccess,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     log,
     node,
 )
@@ -207,185 +209,213 @@ def workgroups(items: int, size: int) -> int:
     return (items + size - 1) // size
 
 
+class ParticleBuffer:
+    """The storage buffer that holds `count` particles."""
+
+    def __init__(self, gpu: GpuContextLimitedAccess, count: int) -> None:
+        self.count = count
+        self.buffer = gpu.acquire_storage_buffer((count, 4), "float32")
+        log.info("particle buffer acquired", particles=count)
+
+
 @node.meta(
     category="Gulf Stream Neon",
     description="A million GPU particles advected through a real HYCOM surface-current snapshot, with curl-noise eddies, the station's wind and streak trails.",
 )
-@node
-class GulfStreamCurrent:
-    """Particles riding the real Florida Current north, with trails."""
-
-    particle_count: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=1024, maximum=4_194_304),
-        Description("How many particles the buffer holds; a change rebuilds the node."),
-    ] = 2_097_152
-    trail_decay: Annotated[
-        float, NumberRange(minimum=0.0, maximum=0.99), Description("How much of a trail each step keeps.")
-    ] = 0.9273
-    turbulence: Annotated[
-        float, NumberRange(minimum=0.0, maximum=5.0), Description("How hard the curl-noise eddies stir.")
-    ] = 1.0
-    time_lapse: Annotated[
-        float, NumberRange(minimum=0.0, maximum=40000.0), Description("How many times faster than life the current runs.")
-    ] = 9000.0
-    brightness: Annotated[
-        float, NumberRange(minimum=0.0, maximum=4.0), Description("How bright the trails glow.")
-    ] = 1.0
-    active_particles: Annotated[
-        int,
-        NumberRange(minimum=1024, maximum=4_194_304),
-        Description("How many of the particles move, at most `particle_count`."),
-    ] = 2_097_152
-    step_seconds: Annotated[
-        float, NumberRange(minimum=0.0), Description("The seconds one step advances the particles.")
-    ] = 1.0 / 60.0
+@node(execution="reactive")
+def GulfStreamCurrent(
+    *,
+    particle_count: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1024, maximum=4_194_304),
+            Description("How many particles the buffer holds; a change builds the buffer again."),
+        ]
+    ] = Input(2_097_152),
+    trail_decay: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=0.99), Description("How much of a trail each step keeps.")
+        ]
+    ] = Input(0.9273),
+    turbulence: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=5.0), Description("How hard the curl-noise eddies stir.")
+        ]
+    ] = Input(1.0),
+    time_lapse: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=40000.0), Description("How many times faster than life the current runs.")
+        ]
+    ] = Input(9000.0),
+    brightness: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=4.0), Description("How bright the trails glow.")
+        ]
+    ] = Input(1.0),
+    active_particles: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1024, maximum=4_194_304),
+            Description("How many of the particles move, at most `particle_count`."),
+        ]
+    ] = Input(2_097_152),
+    step_seconds: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0), Description("The seconds one step advances the particles.")
+        ]
+    ] = Input(1.0 / 60.0),
     soundtrack: InputPin[
         Annotated[
             SoundtrackPulseReading,
             StreamDelivery("newest"),
             Description("beat, energy: from SoundtrackPulse"),
         ]
-    ]
+    ],
     station: InputPin[
         Annotated[
             StationReading,
             StreamDelivery("newest"),
             Description("wind_speed_mps, wind_from_degrees: from NoaaStationFeed"),
         ]
-    ]
+    ],
     stage: InputPin[
         Annotated[
             StageCamera,
             StreamDelivery("newest"),
             Description("The stage view: its camera, and where it was clicked to drop an eddy"),
         ]
-    ]
+    ],
     look: InputPin[
         Annotated[
             StageLookReading,
             StreamDelivery("newest"),
             Description("The stage's smoothed look: current_speed scales the time-lapse"),
         ]
-    ]
+    ],
     trails: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(HDR_LAYER_FORMAT),
             Description("The particle trails in world space, HDR"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Particles riding the real Florida Current north, with trails."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.take_clock = TakeClock()
-        gpu = ctx.gpu_full_access
-        size = WORLD_TEXTURE_SIZE
-        self.fade_kernel = ctx.gpu_limited_access.create_compute_kernel(source=FADE_SLANG, push_constant_size=FADE_DIALS.size)
-        self.current_kernel = ctx.gpu_limited_access.create_compute_kernel(source=CURRENT_SLANG, push_constant_size=CURRENT_DIALS.size)
-        self.field = gpu.acquire_texture(size, size, FIELD_FORMAT, LAYER_USAGE)
-        self.field.lock(read_only=False)
-        self.field.as_numpy().reshape(size * size, 4)[:] = baked_currents(size)
-        self.field.unlock()
-        self.particles = gpu.acquire_storage_buffer((self.particle_count, 4), "float32")
-        self.trail_texture = gpu.acquire_texture(size, size, HDR_LAYER_FORMAT, LAYER_USAGE)
-        self.output_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
-        self.frame_index = 0
-        self.latest_soundtrack = SoundtrackPulseReading()
-        self.latest_station: StationReading | None = None
-        self.latest_stage: StageCamera | None = None
-        self.latest_look = StageLookReading()
-        self.bursts_seen: int | None = None
-        self.eddy = (0.0, 0.0)
-        self.eddy_age = 99.0
-        self.eddy_strength = 0.0
-        self.field_on_cpu = baked_currents(size).reshape(size, size, 4)
-        log.info("current snapshot uploaded", particles=self.particle_count)
+    take_clock = TakeClock()
+    gpu = ctx.gpu_full_access
+    size = WORLD_TEXTURE_SIZE
+    fade_kernel = ctx.gpu_limited_access.create_compute_kernel(source=FADE_SLANG, push_constant_size=FADE_DIALS.size)
+    current_kernel = ctx.gpu_limited_access.create_compute_kernel(source=CURRENT_SLANG, push_constant_size=CURRENT_DIALS.size)
+    field = gpu.acquire_texture(size, size, FIELD_FORMAT, LAYER_USAGE)
+    field.lock(read_only=False)
+    field.as_numpy().reshape(size * size, 4)[:] = baked_currents(size)
+    field.unlock()
+    gpu_limited = ctx.gpu_limited_access
+    particles = computed(lambda: ParticleBuffer(gpu_limited, particle_count.get()))
+    trail_texture = gpu.acquire_texture(size, size, HDR_LAYER_FORMAT, LAYER_USAGE)
+    output_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
+    frame_index = 0
+    latest_soundtrack = SoundtrackPulseReading()
+    latest_station: StationReading | None = None
+    latest_stage: StageCamera | None = None
+    latest_look = StageLookReading()
+    bursts_seen: int | None = None
+    eddy = (0.0, 0.0)
+    eddy_age = 99.0
+    eddy_strength = 0.0
+    field_on_cpu = baked_currents(size).reshape(size, size, 4)
+    log.info("current snapshot uploaded")
 
-    def _active(self) -> int:
-        return max(1024, min(self.active_particles, self.particle_count))
+    def active() -> int:
+        return max(1024, min(active_particles.get(), particles.get().count))
 
-    def _follow_the_eddy(self) -> bool:
+    def follow_the_eddy() -> bool:
         """Start an eddy where the stage was last clicked, and carry the one there is north on the real current."""
-        step = self.step_seconds
-        stage = self.latest_stage
+        nonlocal bursts_seen, eddy, eddy_age, eddy_strength
+        step = step_seconds.get()
+        newest_stage = latest_stage
         started = False
-        if stage is not None and self.bursts_seen is not None and stage.bursts > self.bursts_seen:
-            self.eddy = (stage.burst_x, stage.burst_y)
-            self.eddy_age = 0.0
-            self.eddy_strength = 1.0
+        if newest_stage is not None and bursts_seen is not None and newest_stage.bursts > bursts_seen:
+            eddy = (newest_stage.burst_x, newest_stage.burst_y)
+            eddy_age = 0.0
+            eddy_strength = 1.0
             started = True
-        if stage is not None:
-            self.bursts_seen = stage.bursts
-        size = self.field_on_cpu.shape[0]
-        column = int(min(max((self.eddy[0] / 2.5 * 0.5 + 0.5) * size, 0), size - 1))
-        row = int(min(max((0.5 - self.eddy[1] / 2.5 * 0.5) * size, 0), size - 1))
-        east, north = self.field_on_cpu[row, column, 0], self.field_on_cpu[row, column, 1]
-        scale = self.time_lapse / METRES_PER_WORLD_UNIT
-        self.eddy = (self.eddy[0] + float(east) * scale * step, self.eddy[1] + float(north) * scale * step)
-        self.eddy_age += step
+        if newest_stage is not None:
+            bursts_seen = newest_stage.bursts
+        size = field_on_cpu.shape[0]
+        column = int(min(max((eddy[0] / 2.5 * 0.5 + 0.5) * size, 0), size - 1))
+        row = int(min(max((0.5 - eddy[1] / 2.5 * 0.5) * size, 0), size - 1))
+        east, north = field_on_cpu[row, column, 0], field_on_cpu[row, column, 1]
+        scale = time_lapse.get() / METRES_PER_WORLD_UNIT
+        eddy = (eddy[0] + float(east) * scale * step, eddy[1] + float(north) * scale * step)
+        eddy_age += step
         return started
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        soundtrack = self.soundtrack.read()
-        if soundtrack is not None:
-            self.latest_soundtrack = soundtrack
-        station = self.station.read()
-        if station is not None:
-            self.latest_station = station
-        stage = self.stage.read()
-        if stage is not None:
-            self.latest_stage = stage
-        look = self.look.read()
-        if look is not None:
-            self.latest_look = look
-        burst_now = self._follow_the_eddy()
-        seconds = self.take_clock.seconds_at(ctx)
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frame_index, latest_look, latest_soundtrack, latest_stage, latest_station
+        newest_soundtrack = soundtrack.read()
+        if newest_soundtrack is not None:
+            latest_soundtrack = newest_soundtrack
+        newest_station = station.read()
+        if newest_station is not None:
+            latest_station = newest_station
+        newest_stage = stage.read()
+        if newest_stage is not None:
+            latest_stage = newest_stage
+        newest_look = look.read()
+        if newest_look is not None:
+            latest_look = newest_look
+        burst_now = follow_the_eddy()
+        seconds = take_clock.seconds_at(ctx)
         moment = take_moment_at(seconds)
-        beat = self.latest_soundtrack.beat
-        energy = self.latest_soundtrack.energy
+        beat = latest_soundtrack.beat
+        energy = latest_soundtrack.energy
         speed = moment.current_speed * (1.0 + 0.3 * energy)
         # Wind is reported as where it blows from; the drift goes the other way.
-        station = self.latest_station or StationReading()
-        wind_speed = station.wind_speed_mps
-        wind_from = math.radians(station.wind_from_degrees)
+        newest_station = latest_station or StationReading()
+        wind_speed = newest_station.wind_speed_mps
+        wind_from = math.radians(newest_station.wind_from_degrees)
         wind_east = -wind_speed * math.sin(wind_from)
         wind_north = -wind_speed * math.cos(wind_from)
         size = WORLD_TEXTURE_SIZE
         gpu = ctx.gpu_limited_access
-        self.fade_kernel.dispatch(
-            bindings={"trails": self.trail_texture},
+        fade_kernel.dispatch(
+            bindings={"trails": trail_texture},
             group_count=(workgroups(size, 8), workgroups(size, 8), 1),
-            push_constants=FADE_DIALS.pack(size, self.trail_decay if self.frame_index else 0.0),
+            push_constants=FADE_DIALS.pack(size, trail_decay.get() if frame_index else 0.0),
         )
-        self.current_kernel.dispatch(
-            bindings={"particles": self.particles, "trails": self.trail_texture, "field": self.field},
-            group_count=(workgroups(self._active(), 256), 1, 1),
+        current_kernel.dispatch(
+            bindings={"particles": particles.get().buffer, "trails": trail_texture, "field": field},
+            group_count=(workgroups(active(), 256), 1, 1),
             push_constants=CURRENT_DIALS.pack(
                 size,
-                self._active(),
+                active(),
                 seconds,
-                self.step_seconds,
+                step_seconds.get(),
                 speed,
-                self.turbulence,
+                turbulence.get(),
                 beat,
-                self.frame_index,
-                self.time_lapse * self.latest_look.current_speed / METRES_PER_WORLD_UNIT,
+                frame_index,
+                time_lapse.get() * latest_look.current_speed / METRES_PER_WORLD_UNIT,
                 wind_east,
                 wind_north,
                 # Light per step, so the trails glow the same at any frame rate.
-                self.brightness * self.step_seconds * 30.0,
-                self.eddy[0],
-                self.eddy[1],
-                self.eddy_age,
-                self.eddy_strength,
+                brightness.get() * step_seconds.get() * 30.0,
+                eddy[0],
+                eddy[1],
+                eddy_age,
+                eddy_strength,
                 1.0 if burst_now else 0.0,
             ),
         )
-        self.frame_index += 1
-        texture = self.output_textures.next_texture_for_this_frame(gpu, size, size)
-        gpu.copy_surface_to_surface(self.trail_texture.surface_id, texture)
-        self.trails.write(
+        frame_index += 1
+        texture = output_textures.next_texture_for_this_frame(gpu, size, size)
+        gpu.copy_surface_to_surface(trail_texture.surface_id, texture)
+        trails.write(
             TextureToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )
+
+    return each_frame

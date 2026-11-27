@@ -70,8 +70,8 @@ names stand in for them here.
 
 ## A kernel is an object
 
-Built once in `setup()`, on the limited capability every node holds, and
-dispatched per frame in `process()`. No handle string, fence, timeline or slot number ever reaches
+Built once in the node's body, on the limited capability every node holds, and
+dispatched each frame by the function the body returns. No handle string, fence, timeline or slot number ever reaches
 Python — the object is the handle:
 
 ```python
@@ -100,7 +100,7 @@ self.halftone_kernel.dispatch(
 - **Bindings are passed at dispatch, by name, and never persist.** The names
   are the shader's own, read off it by reflection; the `bindings=` mapping at
   construction merely *asserts* that reflection, so renaming `camera_frame` in
-  the Slang and forgetting the Python is refused at `setup()` rather than
+  the Slang and forgetting the Python is refused in the node's body rather than
   producing a wrong picture. Every dispatch supplies every binding, and an
   unknown or omitted name raises before any GPU work is submitted.
 - **Dispatch is synchronous.** It returns when the work has retired and the
@@ -237,8 +237,8 @@ Four edits worth making, in rising order of how much they teach:
 Two edits that fail on purpose, because each failure is the contract stating
 itself:
 
-- Rename a binding in the Slang but not in the Python. The refusal lands at
-  `setup()`, before a single frame, and names the shader's own bindings.
+- Rename a binding in the Slang but not in the Python. The refusal lands in
+  the node's body, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
   `camera_frame_landing_texture` — and skip the landing copy. The dispatch
   refuses it, because the camera's frame is a buffer, not a texture. That

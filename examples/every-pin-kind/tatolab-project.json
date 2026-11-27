@@ -1,6 +1,6 @@
 {
   "dependencies": [],
-  "description": "One node for each kind of pin the runtime has: typed function and shader nodes, a Graph Input, one node not yet typed, with a setting, and two whose pictures are of different formats.",
+  "description": "One node for each kind of pin the runtime has: typed function and shader nodes, a Graph Input, one node not yet typed, one with a value input, and two whose pictures are of different formats.",
   "name": "Every pin kind",
   "project": "14e4b227-737d-45d2-b993-16579259650e"
 }

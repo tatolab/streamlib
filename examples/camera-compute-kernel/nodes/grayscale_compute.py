@@ -4,8 +4,8 @@
 """Grayscale, as a Slang compute kernel the runtime compiles and dispatches.
 
 Importable as `nodes.grayscale_compute:GrayscaleCompute`. The kernel is an
-object: built once in `setup()` on the limited capability, and dispatched
-per frame in `process()` with its bindings passed by name.
+object: built once in the node's body on the limited capability, and
+dispatched each frame with its bindings passed by name.
 
 `CameraSource` publishes a buffer-backed frame and a dispatch binds
 texture-backed surfaces only, so each frame is first copied device-to-device
@@ -16,11 +16,11 @@ touch the host and no GPU array package is involved.
 from __future__ import annotations
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -30,6 +30,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -95,49 +96,52 @@ def _workgroups_covering(pixels: int) -> int:
 
 
 @node.meta(description="Grades each frame toward its luma with a compute kernel")
-@node
-class GrayscaleCompute:
-    """Camera frame in, the same picture in black and white out."""
-
-    strength: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("How far each frame is graded toward its luma: 0.0 untouched, 1.0 full."),
-    ] = 1.0
+@node(execution="reactive")
+def GrayscaleCompute(
+    *,
+    strength: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("How far each frame is graded toward its luma: 0.0 untouched, 1.0 full."),
+        ]
+    ] = Input(1.0),
     camera_frame_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
-    ]
+    ],
     grayscale_frame_to_downstream: OutputPin[
         Annotated[Texture, TexturePixelFormats(TEXTURE_FORMAT), Description("The same frames graded toward their luma by the kernel")]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Camera frame in, the same picture in black and white out."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # Depth 1: `dispatch` returns with the GPU work retired, and nothing
-        # outside this node names the landing texture.
-        self.camera_frame_landing_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
-        )
-        self.grayscale_frame_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
-        )
-        self.grayscale_kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=GRAYSCALE_COMPUTE_SLANG,
-            push_constant_size=GRAYSCALE_STRENGTH_SIZE,
-            # Asserted against the shader's reflection, so a binding renamed on
-            # one side of this file is refused here rather than at dispatch.
-            bindings={
-                CAMERA_FRAME_BINDING: "sampled_texture",
-                GRAYSCALE_FRAME_BINDING: "storage_image",
-            },
-        )
+    # Depth 1: `dispatch` returns with the GPU work retired, and nothing
+    # outside this node names the landing texture.
+    camera_frame_landing_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
+    )
+    grayscale_frame_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
+    )
+    grayscale_kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=GRAYSCALE_COMPUTE_SLANG,
+        push_constant_size=GRAYSCALE_STRENGTH_SIZE,
+        # Asserted against the shader's reflection, so a binding renamed on
+        # one side of this file is refused here rather than at dispatch.
+        bindings={
+            CAMERA_FRAME_BINDING: "sampled_texture",
+            GRAYSCALE_FRAME_BINDING: "storage_image",
+        },
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.camera_frame_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = camera_frame_from_upstream.read()
         if frame is None:
             return
 
         camera_frame_landing_texture = (
-            self.camera_frame_landing_ring.next_texture_for_this_frame(
+            camera_frame_landing_ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, frame.width, frame.height
             )
         )
@@ -147,10 +151,10 @@ class GrayscaleCompute:
             frame.surface_id, camera_frame_landing_texture
         )
 
-        grayscale_frame_texture = self.grayscale_frame_ring.next_texture_for_this_frame(
+        grayscale_frame_texture = grayscale_frame_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        self.grayscale_kernel.dispatch(
+        grayscale_kernel.dispatch(
             bindings={
                 CAMERA_FRAME_BINDING: camera_frame_landing_texture,
                 GRAYSCALE_FRAME_BINDING: grayscale_frame_texture,
@@ -162,11 +166,13 @@ class GrayscaleCompute:
             ),
             # Push constants travel with a dispatch and never persist on the
             # kernel, so the dial's value as it stands now goes with each one.
-            push_constants=struct.pack(GRAYSCALE_STRENGTH_FORMAT, self.strength),
+            push_constants=struct.pack(GRAYSCALE_STRENGTH_FORMAT, strength.get()),
         )
 
         # The capture's timestamp, not the effect's: downstream orders frames by it.
-        self.grayscale_frame_to_downstream.write(
+        grayscale_frame_to_downstream.write(
             TextureToWrite.of_texture(grayscale_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
+
+    return each_frame

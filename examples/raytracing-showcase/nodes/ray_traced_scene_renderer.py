@@ -5,7 +5,7 @@
 
 Importable as `nodes.ray_traced_scene_renderer:RayTracedSceneRenderer`, which
 is the name the runtime spawns this node's child interpreter with. The kernel and
-both acceleration structures are objects built once in `setup()`; a trace binds
+both acceleration structures are objects built once in the node's body; a trace binds
 them by name.
 """
 
@@ -13,19 +13,19 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Sequence
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -250,71 +250,74 @@ MAX_RECURSION_DEPTH = 2
 
 @node.meta(description="The showcase scene with ray-traced shadows and a mirror floor")
 @node(execution="continuous", interval_ms=16)
-class RayTracedSceneRenderer:
-    """Ray tracing on: hard shadows that track the light, and reflections."""
-
-    width: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The traced frame's width in pixels.")
-    ] = 1280
-    height: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The traced frame's height in pixels.")
-    ] = 720
+def RayTracedSceneRenderer(
+    *,
+    width: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The traced frame's width in pixels.")]
+    ] = Input(1280),
+    height: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The traced frame's height in pixels.")]
+    ] = Input(720),
     ray_traced_frame_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The scene with ray-traced shadows and a mirror floor"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Ray tracing on: hard shadows that track the light, and reflections."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        gpu_full_access = ctx.gpu_full_access
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
-        )
-        # Built here because `build_tlas` is on the full capability, which only
-        # `setup()` holds — so the geometry is fixed and the camera and the
-        # light are what move.
-        self.cube_structure = gpu_full_access.build_triangles_blas(
-            vertices=list(UNIT_CUBE_CORNER_POSITIONS),
-            indices=list(UNIT_CUBE_TRIANGLE_INDICES),
-            label="showcase-unit-cube",
-        )
-        self.scene_structure = gpu_full_access.build_tlas(
-            instances=showcase_tlas_instances(self.cube_structure),
-            label="showcase-scene",
-        )
-        self.trace_kernel = gpu_full_access.create_ray_tracing_kernel(
-            stages=RAY_TRACING_STAGES,
-            groups=RAY_TRACING_GROUPS,
-            max_recursion_depth=MAX_RECURSION_DEPTH,
-            push_constant_size=SCENE_PUSH_CONSTANT_SIZE,
-            bindings=DECLARED_BINDINGS,
-            label="showcase-ray-tracer",
-        )
+    gpu_full_access = ctx.gpu_full_access
+    output_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
+    )
+    # Built here because `build_tlas` is on the full capability, which only
+    # the body holds — so the geometry is fixed and the camera and the
+    # light are what move.
+    cube_structure = gpu_full_access.build_triangles_blas(
+        vertices=list(UNIT_CUBE_CORNER_POSITIONS),
+        indices=list(UNIT_CUBE_TRIANGLE_INDICES),
+        label="showcase-unit-cube",
+    )
+    scene_structure = gpu_full_access.build_tlas(
+        instances=showcase_tlas_instances(cube_structure),
+        label="showcase-scene",
+    )
+    trace_kernel = gpu_full_access.create_ray_tracing_kernel(
+        stages=RAY_TRACING_STAGES,
+        groups=RAY_TRACING_GROUPS,
+        max_recursion_depth=MAX_RECURSION_DEPTH,
+        push_constant_size=SCENE_PUSH_CONSTANT_SIZE,
+        bindings=DECLARED_BINDINGS,
+        label="showcase-ray-tracer",
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         frame_time_ns = ctx.time
         camera_azimuth, light_azimuth = orbit_azimuths_at(frame_time_ns)
 
-        traced_frame_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.width, self.height
+        traced_frame_texture = output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, width.get(), height.get()
         )
-        self.trace_kernel.trace(
+        trace_kernel.trace(
             bindings={
-                SCENE_STRUCTURE_BINDING: self.scene_structure,
+                SCENE_STRUCTURE_BINDING: scene_structure,
                 TRACED_FRAME_BINDING: traced_frame_texture,
             },
-            grid=(self.width, self.height, 1),
+            grid=(width.get(), height.get(), 1),
             push_constants=struct.pack(
                 SCENE_PUSH_CONSTANT_FORMAT,
                 camera_azimuth,
                 light_azimuth,
-                self.width / self.height,
+                width.get() / height.get(),
             ),
         )
 
-        self.ray_traced_frame_to_downstream.write(
+        ray_traced_frame_to_downstream.write(
             TextureToWrite.of_texture(traced_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR),
             timestamp_ns=frame_time_ns,
         )
+
+    return each_frame

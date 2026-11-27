@@ -87,8 +87,8 @@ whatever the effect costs. An effect that stays on the GPU does not pay that —
 ## One host, many looks
 
 `nodes/shader_effect.py` is an effect written once. It takes a Slang function
-as its `effect_slang` setting, and the function *is* the look: the effect wraps it in a compute
-kernel at `setup()` and runs it over every frame on the GPU, so the pixels
+as its `effect_slang` input, and the function *is* the look: the effect wraps it in a compute
+kernel when it is set and runs it over every frame on the GPU, so the pixels
 never leave it. Three looks ship in `nodes/looks/` to start from:
 `grayscale.slang`, `vignette.slang` and `pixelate.slang`.
 
@@ -109,10 +109,10 @@ float4 effect(float4 source, int2 at) {
 }
 ```
 
-A look that does not compile never gets as far as a frame: the effect is
-refused at `setup()` with the compiler's own diagnostic, naming the line of the
-look, in `tatolab logs`. That node never reaches `Running`; the rest of the
-stream keeps going.
+A look that does not compile never gets as far as a frame: its kernel's build
+fails with the compiler's own diagnostic, naming the line of the look, in
+`tatolab logs`, and the effect goes on with the last look that compiled, or
+runs no frame until one does; the rest of the stream keeps going.
 
 The ports are the inverting effect's, so a look takes its place without
 touching anything else. **Into the running stream, over MCP**, that is one

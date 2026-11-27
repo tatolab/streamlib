@@ -14,11 +14,11 @@ come out HDR, for the lens nodes to composite.
 from __future__ import annotations
 
 import struct
-from typing import Annotated
+from typing import Annotated, Any, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -28,6 +28,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -168,113 +169,123 @@ def groups(width: int, height: int) -> tuple[int, int, int]:
     category="Gulf Stream Neon",
     description="AAA HDR bloom: soft-knee threshold, Karis average, a 13-tap downsample through six mips and a tent upsample back, plus an anamorphic streak chain.",
 )
-@node
-class HdrBloomPyramid:
-    """The bloom pyramid and the anamorphic streak of an HDR picture."""
-
-    threshold: Annotated[
-        float, NumberRange(minimum=0.0), Description("The brightness the glow starts at.")
-    ] = 1.6
-    knee: Annotated[
-        float, NumberRange(minimum=0.0), Description("How softly the glow starts past the threshold.")
-    ] = 0.8
-    radius: Annotated[
-        float, NumberRange(minimum=0.0), Description("How wide the bloom spreads.")
-    ] = 1.0
-    streak_radius: Annotated[
-        float, NumberRange(minimum=0.0), Description("How wide the streak spreads.")
-    ] = 1.6
-    scene: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("The HDR picture")]]
+@node(execution="reactive")
+def HdrBloomPyramid(
+    *,
+    threshold: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0), Description("The brightness the glow starts at.")
+        ]
+    ] = Input(1.6),
+    knee: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0), Description("How softly the glow starts past the threshold.")
+        ]
+    ] = Input(0.8),
+    radius: Input[
+        Annotated[float, NumberRange(minimum=0.0), Description("How wide the bloom spreads.")]
+    ] = Input(1.0),
+    streak_radius: Input[
+        Annotated[float, NumberRange(minimum=0.0), Description("How wide the streak spreads.")]
+    ] = Input(1.6),
+    scene: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("The HDR picture")]],
     bloom: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(HDR_LAYER_FORMAT),
             Description("The bloom, HDR, at half the picture's size"),
         ]
-    ]
+    ],
     streak: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(HDR_LAYER_FORMAT),
             Description("The anamorphic streak, HDR, at half the picture's size"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The bloom pyramid and the anamorphic streak of an HDR picture."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        gpu = ctx.gpu_full_access
-        self.down = ctx.gpu_limited_access.create_compute_kernel(source=DOWNSAMPLE_SLANG, push_constant_size=DOWN_DIALS.size)
-        self.up = ctx.gpu_limited_access.create_compute_kernel(source=UPSAMPLE_SLANG, push_constant_size=UP_DIALS.size)
-        self.bloom_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
-        self.streak_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
-        self.extent: tuple[int, int] | None = None
-        self.gpu_full = gpu
+    gpu = ctx.gpu_full_access
+    down = ctx.gpu_limited_access.create_compute_kernel(source=DOWNSAMPLE_SLANG, push_constant_size=DOWN_DIALS.size)
+    up = ctx.gpu_limited_access.create_compute_kernel(source=UPSAMPLE_SLANG, push_constant_size=UP_DIALS.size)
+    bloom_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
+    streak_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
+    extent: tuple[int, int] | None = None
+    mips: list[tuple[Any, int, int]] = []
+    streaks: list[tuple[Any, int, int]] = []
+    gpu_full = gpu
 
-    def _allocate(self, gpu, width: int, height: int) -> None:
-        self.extent = (width, height)
-        self.mips = []
+    def allocate(gpu, width: int, height: int) -> None:
+        nonlocal extent, mips, streaks
+        extent = (width, height)
+        mips = []
         w, h = width, height
         for _ in range(BLOOM_LEVELS):
             w, h = max(1, w // 2), max(1, h // 2)
-            self.mips.append((gpu.acquire_texture(w, h, HDR_LAYER_FORMAT, LAYER_USAGE), w, h))
-        self.streaks = []
+            mips.append((gpu.acquire_texture(w, h, HDR_LAYER_FORMAT, LAYER_USAGE), w, h))
+        streaks = []
         w, h = width // 2, height // 4
-        self.streaks.append((gpu.acquire_texture(w, h, HDR_LAYER_FORMAT, LAYER_USAGE), w, h))
+        streaks.append((gpu.acquire_texture(w, h, HDR_LAYER_FORMAT, LAYER_USAGE), w, h))
         for _ in range(STREAK_LEVELS - 1):
             w = max(1, w // 2)
-            self.streaks.append((gpu.acquire_texture(w, h, HDR_LAYER_FORMAT, LAYER_USAGE), w, h))
+            streaks.append((gpu.acquire_texture(w, h, HDR_LAYER_FORMAT, LAYER_USAGE), w, h))
 
-    def _down(self, source, source_width, source_height, destination, width, height, first, horizontal, threshold):
-        self.down.dispatch(
+    def _down(source, source_width, source_height, destination, width, height, first, horizontal, bright_threshold):
+        down.dispatch(
             bindings={"source": source, "destination": destination},
             group_count=groups(width, height),
             push_constants=DOWN_DIALS.pack(
                 width, height, 1.0 / source_width, 1.0 / source_height,
-                threshold, self.knee, 1.0 if first else 0.0, 1.0 if horizontal else 0.0,
+                bright_threshold, knee.get(), 1.0 if first else 0.0, 1.0 if horizontal else 0.0,
             ),
         )
 
-    def _up(self, lower, lower_width, lower_height, destination, width, height, radius, keep, horizontal):
-        self.up.dispatch(
+    def _up(lower, lower_width, lower_height, destination, width, height, spread_radius, keep, horizontal):
+        up.dispatch(
             bindings={"lower": lower, "destination": destination},
             group_count=groups(width, height),
             push_constants=UP_DIALS.pack(
-                width, height, 1.0 / lower_width, 1.0 / lower_height, radius, keep, 1.0 if horizontal else 0.0, 0.0,
+                width, height, 1.0 / lower_width, 1.0 / lower_height, spread_radius, keep, 1.0 if horizontal else 0.0, 0.0,
             ),
         )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        scene = self.scene.read()
-        if scene is None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        newest_scene = scene.read()
+        if newest_scene is None:
             return
-        width, height = scene.width, scene.height
-        if self.extent != (width, height):
-            self._allocate(self.gpu_full, width, height)
-        threshold = self.threshold
+        width, height = newest_scene.width, newest_scene.height
+        if extent != (width, height):
+            allocate(gpu_full, width, height)
+        bright_threshold = threshold.get()
         gpu = ctx.gpu_limited_access
 
-        source, sw, sh = scene.surface_id, width, height
-        for level, (texture, w, h) in enumerate(self.mips):
-            self._down(source, sw, sh, texture, w, h, level == 0, False, threshold)
+        source, sw, sh = newest_scene.surface_id, width, height
+        for level, (texture, w, h) in enumerate(mips):
+            _down(source, sw, sh, texture, w, h, level == 0, False, bright_threshold)
             source, sw, sh = texture, w, h
         for level in range(BLOOM_LEVELS - 1, 0, -1):
-            lower, lw, lh = self.mips[level]
-            upper, uw, uh = self.mips[level - 1]
-            self._up(lower, lw, lh, upper, uw, uh, self.radius, 1.0, False)
+            lower, lw, lh = mips[level]
+            upper, uw, uh = mips[level - 1]
+            _up(lower, lw, lh, upper, uw, uh, radius.get(), 1.0, False)
 
-        source, sw, sh = scene.surface_id, width, height
-        for level, (texture, w, h) in enumerate(self.streaks):
-            self._down(source, sw, sh, texture, w, h, level == 0, level > 0, threshold * 1.4)
+        source, sw, sh = newest_scene.surface_id, width, height
+        for level, (texture, w, h) in enumerate(streaks):
+            _down(source, sw, sh, texture, w, h, level == 0, level > 0, bright_threshold * 1.4)
             source, sw, sh = texture, w, h
         for level in range(STREAK_LEVELS - 1, 0, -1):
-            lower, lw, lh = self.streaks[level]
-            upper, uw, uh = self.streaks[level - 1]
-            self._up(lower, lw, lh, upper, uw, uh, self.streak_radius, 1.0, True)
+            lower, lw, lh = streaks[level]
+            upper, uw, uh = streaks[level - 1]
+            _up(lower, lw, lh, upper, uw, uh, streak_radius.get(), 1.0, True)
 
-        top, tw, th = self.mips[0]
-        bloom_out = self.bloom_ring.next_texture_for_this_frame(gpu, tw, th)
+        top, tw, th = mips[0]
+        bloom_out = bloom_ring.next_texture_for_this_frame(gpu, tw, th)
         gpu.copy_surface_to_surface(top.surface_id, bloom_out)
-        streak_top, stw, sth = self.streaks[0]
-        streak_out = self.streak_ring.next_texture_for_this_frame(gpu, stw, sth)
+        streak_top, stw, sth = streaks[0]
+        streak_out = streak_ring.next_texture_for_this_frame(gpu, stw, sth)
         gpu.copy_surface_to_surface(streak_top.surface_id, streak_out)
-        self.bloom.write(TextureToWrite.of_texture(bloom_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
-        self.streak.write(TextureToWrite.of_texture(streak_out, RENDERED_FRAME_COLOUR), timestamp_ns=scene.timestamp_ns)
+        bloom.write(TextureToWrite.of_texture(bloom_out, RENDERED_FRAME_COLOUR), timestamp_ns=newest_scene.timestamp_ns)
+        streak.write(TextureToWrite.of_texture(streak_out, RENDERED_FRAME_COLOUR), timestamp_ns=newest_scene.timestamp_ns)
+
+    return each_frame

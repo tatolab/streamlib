@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`ClickTrack`: a class node that plays a click on every beat it is cued, higher on a bar's
+"""`ClickTrack`: a node that plays a click on every beat it is cued, higher on a bar's
 first beat, as stereo audio in real time.
 
 It reads the newest cue from `ClickCue` and starts a click each time the cue's count moves
@@ -10,12 +10,13 @@ on, so what you hear follows the same beat the picture pulses to.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Audio,
     Description,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
@@ -43,81 +44,89 @@ MOST_BLOCKS_OF_CATCH_UP = 8
     description="A click on every beat it is cued, higher on the first beat of a bar, played as stereo audio.",
 )
 @node(execution="continuous", interval_ms=5)
-class ClickTrack:
-    """Stereo blocks of silence, with a short decaying tone from each new beat."""
-
-    volume: Annotated[
-        float, NumberRange(minimum=0.0, maximum=1.0), Description("How loud the click plays.")
-    ] = 0.4
+def ClickTrack(
+    *,
+    volume: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=1.0), Description("How loud the click plays.")
+        ]
+    ] = Input(0.4),
     cue: InputPin[
         Annotated[BeatCue, StreamDelivery("newest"), Description("count and downbeat, from ClickCue")]
-    ]
-    audio: OutputPin[Annotated[Audio, Description("The click, in stereo")]]
+    ],
+    audio: OutputPin[Annotated[Audio, Description("The click, in stereo")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Stereo blocks of silence, with a short decaying tone from each new beat."""
 
-    def __init__(self) -> None:
-        self.last_count: int | None = None
-        self.click_hertz = BEAT_HERTZ
-        self.samples_into_the_click = int(CLICK_SECONDS * SAMPLE_RATE)
-        self.anchor_ns: int | None = None
-        self.samples_written = 0
-        self.first_sample = 0
+    last_count: int | None = None
+    click_hertz = BEAT_HERTZ
+    samples_into_the_click = int(CLICK_SECONDS * SAMPLE_RATE)
+    anchor_ns: int | None = None
+    samples_written = 0
+    first_sample = 0
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self._take_the_newest_cue()
-        if self.anchor_ns is None:
-            self.anchor_ns = ctx.time
-        samples_owed = (
-            (ctx.time - self.anchor_ns) * SAMPLE_RATE
-        ) // NANOSECONDS_PER_SECOND
-        if samples_owed - self.samples_written > MOST_BLOCKS_OF_CATCH_UP * BLOCK_SIZE:
-            log.warn(
-                "ClickTrack fell behind and starts again at now",
-                blocks_behind=(samples_owed - self.samples_written) // BLOCK_SIZE,
-            )
-            self.first_sample += self.samples_written
-            self.anchor_ns = ctx.time
-            self.samples_written = 0
-            samples_owed = 0
-        while self.samples_written + BLOCK_SIZE <= samples_owed:
-            self._write_one_block()
-
-    def _take_the_newest_cue(self) -> None:
-        cue = self.cue.read()
-        if cue is None:
+    def take_the_newest_cue() -> None:
+        nonlocal click_hertz, last_count, samples_into_the_click
+        newest_cue = cue.read()
+        if newest_cue is None:
             return
-        count = cue.count
-        if count == self.last_count:
+        count = newest_cue.count
+        if count == last_count:
             return
-        self.last_count = count
-        self.click_hertz = DOWNBEAT_HERTZ if cue.downbeat else BEAT_HERTZ
-        self.samples_into_the_click = 0
-        if cue.downbeat:
+        last_count = count
+        click_hertz = DOWNBEAT_HERTZ if newest_cue.downbeat else BEAT_HERTZ
+        samples_into_the_click = 0
+        if newest_cue.downbeat:
             log.info("bar", beat=count)
 
-    def _next_block(self) -> numpy.ndarray:
-        sample_indices = self.samples_into_the_click + numpy.arange(BLOCK_SIZE)
+    def next_block() -> numpy.ndarray:
+        nonlocal samples_into_the_click
+        sample_indices = samples_into_the_click + numpy.arange(BLOCK_SIZE)
         seconds = sample_indices / SAMPLE_RATE
         envelope = numpy.where(seconds < CLICK_SECONDS, numpy.exp(-seconds * 60.0), 0.0)
         tone = (
-            numpy.sin(2.0 * numpy.pi * self.click_hertz * seconds)
+            numpy.sin(2.0 * numpy.pi * click_hertz * seconds)
             * envelope
-            * self.volume
+            * volume.get()
         )
-        self.samples_into_the_click += BLOCK_SIZE
+        samples_into_the_click += BLOCK_SIZE
         return numpy.ascontiguousarray(
             numpy.tile(tone.astype(numpy.float32), (CHANNEL_COUNT, 1))
         )
 
-    def _write_one_block(self) -> None:
-        assert self.anchor_ns is not None
+    def write_one_block() -> None:
+        nonlocal samples_written
+        assert anchor_ns is not None
         timestamp_ns = (
-            self.anchor_ns
-            + (self.samples_written * NANOSECONDS_PER_SECOND) // SAMPLE_RATE
+            anchor_ns
+            + (samples_written * NANOSECONDS_PER_SECOND) // SAMPLE_RATE
         )
-        self.audio.write(
-            self._next_block(),
-            start_sample=self.first_sample + self.samples_written,
+        audio.write(
+            next_block(),
+            start_sample=first_sample + samples_written,
             timestamp_ns=timestamp_ns,
             sample_rate=SAMPLE_RATE,
         )
-        self.samples_written += BLOCK_SIZE
+        samples_written += BLOCK_SIZE
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal anchor_ns, first_sample, samples_written
+        take_the_newest_cue()
+        if anchor_ns is None:
+            anchor_ns = ctx.time
+        samples_owed = (
+            (ctx.time - anchor_ns) * SAMPLE_RATE
+        ) // NANOSECONDS_PER_SECOND
+        if samples_owed - samples_written > MOST_BLOCKS_OF_CATCH_UP * BLOCK_SIZE:
+            log.warn(
+                "ClickTrack fell behind and starts again at now",
+                blocks_behind=(samples_owed - samples_written) // BLOCK_SIZE,
+            )
+            first_sample += samples_written
+            anchor_ns = ctx.time
+            samples_written = 0
+            samples_owed = 0
+        while samples_written + BLOCK_SIZE <= samples_owed:
+            write_one_block()
+
+    return each_frame

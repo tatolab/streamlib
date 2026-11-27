@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 from tatolab.browser import PageMessage
-from tatolab.stream._class_node_construction import construct_class_node
 
 from lower_third.lower_third_template import (
     DEMO_RUNDOWN,
@@ -44,11 +43,9 @@ class MessagesWritten:
 def test_each_rundown_message_carries_every_key_the_page_reads() -> None:
     page = LOWER_THIRD_PAGE.read_text()
     written = MessagesWritten()
-    rundown = construct_class_node(
-        LowerThirdRundown, field_values={}, pins={"lower_third_to_page": written}
-    )
+    each_frame = LowerThirdRundown.__wrapped__(lower_third_to_page=written)
 
-    rundown.process(None)  # type: ignore[arg-type]
+    each_frame(None)
 
     [message] = written.messages
     assert isinstance(message, PageMessage)

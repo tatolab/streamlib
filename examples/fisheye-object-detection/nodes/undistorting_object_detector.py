@@ -14,12 +14,12 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable
 
 import torch
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     ModelInputTensorGeometry,
     ModelInputTensorKernel,
@@ -28,10 +28,11 @@ from tatolab.stream import (
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     log,
     node,
 )
@@ -169,89 +170,27 @@ class DetectedObject:
     bottom: int
 
 
-@node.meta(
-    description="Rectifies the fisheye frame, detects objects in it, and draws their boxes on",
-)
-@node
-class UndistortingObjectDetector:
-    """Fisheye frame in; the rectified frame with its boxes drawn on, and the detections, out."""
+def lens_coefficient_push_constants(
+    radial_distortion_k1: float, radial_distortion_k2: float
+) -> bytes:
+    """The rectify kernel's push constants for a lens of these coefficients.
 
-    radial_distortion_k1: Annotated[
-        float, SettingOnly(), Description("The first radial coefficient of the lens to undo.")
-    ] = DEFAULT_RADIAL_DISTORTION_K1
-    radial_distortion_k2: Annotated[
-        float, SettingOnly(), Description("The second radial coefficient of the lens to undo.")
-    ] = DEFAULT_RADIAL_DISTORTION_K2
-    detection_confidence_threshold: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("The least confidence a detection is kept at."),
-    ] = 0.35
-    detection_model_weights: Annotated[
-        str,
-        SettingOnly(),
-        Description(
-            "An ultralytics detection checkpoint; a relative path resolves against the project "
-            "directory, where a missing known checkpoint is downloaded."
-        ),
-    ] = "yolov8n.pt"
-    fisheye_frame_from_upstream: InputPin[
-        Annotated[
-            Texture, StreamDelivery("newest"), Description("Barrelled frames from the lens")
-        ]
-    ]
-    annotated_frame_to_downstream: OutputPin[
-        Annotated[
-            Texture,
-            TexturePixelFormats(FRAME_TEXTURE_FORMAT),
-            Description("The rectified frames with their boxes drawn on"),
-        ]
-    ]
-    detections_to_downstream: OutputPin[
-        Annotated[
-            list[DetectedObject],
-            Description("The detections in the latest annotated frame, boxes in frame pixels"),
-        ]
-    ]
+    Push constants travel with each dispatch and never persist on the kernel,
+    so these are handed to every one.
+    """
+    return struct.pack(
+        LENS_COEFFICIENT_AND_RECOVERY_LIMIT_FORMAT,
+        radial_distortion_k1,
+        radial_distortion_k2,
+        largest_recoverable_normalised_radius(radial_distortion_k1, radial_distortion_k2),
+    )
 
-    def __init__(self) -> None:
-        self._largest_recoverable_radius = largest_recoverable_normalised_radius(
-            self.radial_distortion_k1, self.radial_distortion_k2
-        )
-        # Push constants travel with each dispatch and never persist on the
-        # kernel, so this is handed to every one.
-        self._lens_coefficient_push_constants = struct.pack(
-            LENS_COEFFICIENT_AND_RECOVERY_LIMIT_FORMAT,
-            self.radial_distortion_k1,
-            self.radial_distortion_k2,
-            self._largest_recoverable_radius,
-        )
-        self._detection_model_weights_path = PROJECT_DIRECTORY / self.detection_model_weights
-        self._next_detection_report_at_ns = 0
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.undistorted_frame_ring = NodeOutputTextureRing(
-            FRAME_TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
-        )
-        self.fisheye_rectify_kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=FISHEYE_RECTIFY_SLANG,
-            push_constant_size=LENS_COEFFICIENT_AND_RECOVERY_LIMIT_SIZE,
-            bindings={
-                FISHEYE_FRAME_BINDING: "sampled_texture",
-                UNDISTORTED_FRAME_BINDING: "storage_image",
-            },
-        )
-        # Padded at the right and bottom rather than resized, so a box the
-        # model reports is already in frame coordinates.
-        self.detector_input_kernel = ModelInputTensorKernel.compile(
-            ctx.gpu_limited_access,
-            fit="pad_bottom_right",
-            pad_to_multiple_of=DETECTOR_INPUT_STRIDE,
-            channel_order="rgb",
-            layout="nchw",
-            dtype="float32",
-            scale=1.0 / 255.0,
-        )
+class LoadedDetector:
+    """A detection model loaded onto the accelerator, and the colours its boxes are drawn in."""
+
+    def __init__(self, detection_model_weights: str) -> None:
+        weights_path = PROJECT_DIRECTORY / detection_model_weights
         # A frame's DLPack capsule imports onto the accelerator this torch
         # build drives, so the model and the box colours go there too.
         detection_device = torch.accelerator.current_accelerator(check_available=True)
@@ -261,75 +200,108 @@ class UndistortingObjectDetector:
                 "build sees no usable GPU, and the detector reads the frame "
                 "where the engine left it, on the GPU"
             )
-        self.detection_model = YOLO(str(self._detection_model_weights_path))
-        self.detection_model.to(detection_device)
+        self.model = YOLO(str(weights_path))
+        self.model.to(detection_device)
         self.box_colours = [
             torch.tensor(colour, dtype=torch.uint8, device=detection_device)
             for colour in BOX_COLOUR_PALETTE_RGBA
         ]
-        log.info(
-            "rectifier and detector ready",
-            detection_model_weights=str(self._detection_model_weights_path),
-            largest_recoverable_radius=round(self._largest_recoverable_radius, 4),
-            detection_confidence_threshold=self.detection_confidence_threshold,
-        )
+        log.info("detector ready", detection_model_weights=str(weights_path))
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.fisheye_frame_from_upstream.read()
-        if frame is None:
-            return
 
-        undistorted_frame_texture = (
-            self.undistorted_frame_ring.next_texture_for_this_frame(
-                ctx.gpu_limited_access, frame.width, frame.height
-            )
-        )
-        # The lens published a kernel's texture-backed output, so its surface
-        # id binds straight into this dispatch with no landing copy.
-        self.fisheye_rectify_kernel.dispatch(
-            bindings={
-                FISHEYE_FRAME_BINDING: frame.surface_id,
-                UNDISTORTED_FRAME_BINDING: undistorted_frame_texture,
-            },
-            group_count=(
-                workgroups_covering(frame.width),
-                workgroups_covering(frame.height),
-                1,
+@node.meta(
+    description="Rectifies the fisheye frame, detects objects in it, and draws their boxes on",
+)
+@node(execution="reactive")
+def UndistortingObjectDetector(
+    *,
+    radial_distortion_k1: Input[
+        Annotated[float, Description("The first radial coefficient of the lens to undo.")]
+    ] = Input(DEFAULT_RADIAL_DISTORTION_K1),
+    radial_distortion_k2: Input[
+        Annotated[float, Description("The second radial coefficient of the lens to undo.")]
+    ] = Input(DEFAULT_RADIAL_DISTORTION_K2),
+    detection_confidence_threshold: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("The least confidence a detection is kept at."),
+        ]
+    ] = Input(0.35),
+    detection_model_weights: Input[
+        Annotated[
+            str,
+            Description(
+                "An ultralytics detection checkpoint; a relative path resolves against the project "
+                "directory, where a missing known checkpoint is downloaded."
             ),
-            push_constants=self._lens_coefficient_push_constants,
+        ]
+    ] = Input("yolov8n.pt"),
+    fisheye_frame_from_upstream: InputPin[
+        Annotated[
+            Texture, StreamDelivery("newest"), Description("Barrelled frames from the lens")
+        ]
+    ],
+    annotated_frame_to_downstream: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(FRAME_TEXTURE_FORMAT),
+            Description("The rectified frames with their boxes drawn on"),
+        ]
+    ],
+    detections_to_downstream: OutputPin[
+        Annotated[
+            list[DetectedObject],
+            Description("The detections in the latest annotated frame, boxes in frame pixels"),
+        ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Fisheye frame in; the rectified frame with its boxes drawn on, and the detections, out."""
+
+    lens_push_constants = computed(
+        lambda: lens_coefficient_push_constants(
+            radial_distortion_k1.get(), radial_distortion_k2.get()
         )
+    )
+    loaded_detector = computed(lambda: LoadedDetector(detection_model_weights.get()))
+    next_detection_report_at_ns = 0
 
-        detector_model_input = self.detector_input_kernel.apply_to_surface(
-            ctx.gpu_limited_access, undistorted_frame_texture
-        )
-        with detector_model_input.tensor_surface as detector_input_tensor_surface:
-            detections = self._detections_in(
-                torch.from_dlpack(detector_input_tensor_surface),
-                detector_model_input.geometry,
-            )
+    undistorted_frame_ring = NodeOutputTextureRing(
+        FRAME_TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
+    )
+    fisheye_rectify_kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=FISHEYE_RECTIFY_SLANG,
+        push_constant_size=LENS_COEFFICIENT_AND_RECOVERY_LIMIT_SIZE,
+        bindings={
+            FISHEYE_FRAME_BINDING: "sampled_texture",
+            UNDISTORTED_FRAME_BINDING: "storage_image",
+        },
+    )
+    # Padded at the right and bottom rather than resized, so a box the
+    # model reports is already in frame coordinates.
+    detector_input_kernel = ModelInputTensorKernel.compile(
+        ctx.gpu_limited_access,
+        fit="pad_bottom_right",
+        pad_to_multiple_of=DETECTOR_INPUT_STRIDE,
+        channel_order="rgb",
+        layout="nchw",
+        dtype="float32",
+        scale=1.0 / 255.0,
+    )
+    log.info("rectifier ready")
 
-        with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
-            self._draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
-
-        self._report_detections(ctx.time, detections)
-        # Stamped with the capture's timestamp: downstream orders by it.
-        self.annotated_frame_to_downstream.write(
-            TextureToWrite.of_texture(undistorted_frame_texture, frame.colour),
-            timestamp_ns=frame.timestamp_ns,
-        )
-        self.detections_to_downstream.write(detections)
-
-    def _detections_in(
-        self,
+    def detections_in(
         detector_input_batch: torch.Tensor,
         detector_input_geometry: ModelInputTensorGeometry,
     ) -> list[DetectedObject]:
         """Run the detector over the prepared input on the GPU; boxes come back in frame pixels."""
         width = detector_input_geometry.source_width
         height = detector_input_geometry.source_height
-        (detection_result,) = self.detection_model.predict(
+        detector = loaded_detector.get()
+        (detection_result,) = detector.model.predict(
             source=detector_input_batch,
-            conf=self.detection_confidence_threshold,
+            conf=detection_confidence_threshold.get(),
             verbose=False,
         )
         assert isinstance(detection_result, Results)
@@ -350,7 +322,7 @@ class UndistortingObjectDetector:
         return [
             DetectedObject(
                 class_index=class_index,
-                class_name=self.detection_model.names[class_index],
+                class_name=detector.model.names[class_index],
                 confidence=round(confidence, 4),
                 left=max(0, min(int(left), width - 1)),
                 top=max(0, min(int(top), height - 1)),
@@ -362,9 +334,7 @@ class UndistortingObjectDetector:
             )
         ]
 
-    def _draw_boxes_into(
-        self, rectified_frame: torch.Tensor, detections: list[DetectedObject]
-    ) -> None:
+    def draw_boxes_into(rectified_frame: torch.Tensor, detections: list[DetectedObject]) -> None:
         """Outline each detection in the frame itself, on the GPU, four slice assignments an edge."""
         height, _, _ = rectified_frame.shape
         # Scaled with the frame, with a floor so an edge stays visible at small
@@ -375,19 +345,19 @@ class UndistortingObjectDetector:
             right, bottom = detection.right, detection.bottom
             if right - left < edge or bottom - top < edge:
                 continue
-            colour = self.box_colours[detection.class_index % len(self.box_colours)]
+            box_colours = loaded_detector.get().box_colours
+            colour = box_colours[detection.class_index % len(box_colours)]
             rectified_frame[top : top + edge, left:right] = colour
             rectified_frame[bottom - edge : bottom, left:right] = colour
             rectified_frame[top:bottom, left : left + edge] = colour
             rectified_frame[top:bottom, right - edge : right] = colour
 
-    def _report_detections(
-        self, monotonic_now_ns: int, detections: list[DetectedObject]
-    ) -> None:
+    def report_detections(monotonic_now_ns: int, detections: list[DetectedObject]) -> None:
         """Log a summary of the detections, at most once a second."""
-        if monotonic_now_ns < self._next_detection_report_at_ns:
+        nonlocal next_detection_report_at_ns
+        if monotonic_now_ns < next_detection_report_at_ns:
             return
-        self._next_detection_report_at_ns = (
+        next_detection_report_at_ns = (
             monotonic_now_ns + DETECTION_REPORT_INTERVAL_NS
         )
         log.info(
@@ -395,3 +365,50 @@ class UndistortingObjectDetector:
             detection_count=len(detections),
             class_names=sorted({detection.class_name for detection in detections}),
         )
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = fisheye_frame_from_upstream.read()
+        if frame is None:
+            return
+
+        undistorted_frame_texture = (
+            undistorted_frame_ring.next_texture_for_this_frame(
+                ctx.gpu_limited_access, frame.width, frame.height
+            )
+        )
+        # The lens published a kernel's texture-backed output, so its surface
+        # id binds straight into this dispatch with no landing copy.
+        fisheye_rectify_kernel.dispatch(
+            bindings={
+                FISHEYE_FRAME_BINDING: frame.surface_id,
+                UNDISTORTED_FRAME_BINDING: undistorted_frame_texture,
+            },
+            group_count=(
+                workgroups_covering(frame.width),
+                workgroups_covering(frame.height),
+                1,
+            ),
+            push_constants=lens_push_constants.get(),
+        )
+
+        detector_model_input = detector_input_kernel.apply_to_surface(
+            ctx.gpu_limited_access, undistorted_frame_texture
+        )
+        with detector_model_input.tensor_surface as detector_input_tensor_surface:
+            detections = detections_in(
+                torch.from_dlpack(detector_input_tensor_surface),
+                detector_model_input.geometry,
+            )
+
+        with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
+            draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
+
+        report_detections(ctx.time, detections)
+        # Stamped with the capture's timestamp: downstream orders by it.
+        annotated_frame_to_downstream.write(
+            TextureToWrite.of_texture(undistorted_frame_texture, frame.colour),
+            timestamp_ns=frame.timestamp_ns,
+        )
+        detections_to_downstream.write(detections)
+
+    return each_frame

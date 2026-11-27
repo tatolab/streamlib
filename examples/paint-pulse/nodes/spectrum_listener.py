@@ -12,13 +12,14 @@ onset throws it outward at once and it falls back within a beat, so hits read as
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
     Description,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
@@ -83,34 +84,9 @@ class BandState:
     punch: float = 0.0
 
 
-@node.meta(
-    category="Paint Pulse",
-    description="The one analysis step the runtime has no built-in for: an FFT into 24 bands, each with a scatter clock that onsets throw outward.",
-)
-@node
-class SpectrumListener:
-    """Music in, one `MusicMotion` per window out."""
-
-    sensitivity: Annotated[
-        float, NumberRange(minimum=0.1), Description("How strongly the music moves the ball.")
-    ] = 0.5
-    spread: Annotated[
-        float, NumberRange(minimum=0.0), Description("How far a hit scatters the ball.")
-    ] = 0.65
-    music: InputPin[
-        Annotated[
-            Audio,
-            StreamDelivery("ordered"),
-            LISTENING_WINDOW,
-            Description("The music to listen to, mixed to mono"),
-        ]
-    ]
-    motion: OutputPin[
-        Annotated[
-            MusicMotion,
-            Description("Per-band clocks and levels, the beat, the energy, and the bass and highs levels"),
-        ]
-    ]
+class SpectrumListening:
+    """What `SpectrumListener` remembers from one window to the next: the band edges, the
+    window's history, and each band's level, peak and scatter clock."""
 
     def __init__(self) -> None:
         edges = LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ) ** (numpy.arange(BAND_COUNT + 1) / BAND_COUNT)
@@ -131,14 +107,8 @@ class SpectrumListener:
         self.energy = 0.0
         self.loudness = 0.0
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while True:
-            block = self.music.read()
-            if block is None:
-                return
-            self.listen_to_one_window(block)
-
-    def listen_to_one_window(self, block: Audio) -> None:
+    def listen_to_one_window(self, block: Audio, sensitivity: float, spread: float) -> MusicMotion:
+        """The motion one window of `block` moves the ball by, at `sensitivity` and `spread`."""
         samples = numpy.from_dlpack(block)[0]
         hop = samples.shape[0]
         self.history = numpy.roll(self.history, -hop)
@@ -167,12 +137,12 @@ class SpectrumListener:
             kick = onset.hear(float(numpy.mean(rise[first:last])), dt)
             # The ball stays whole between hits: a hit throws its band outward at once, and the
             # throw dies away within a beat, so every onset reads as its own explosion.
-            drive = (0.15 * section + 0.55 * shown * shown) * (0.4 + 0.6 * section) * self.sensitivity
+            drive = (0.15 * section + 0.55 * shown * shown) * (0.4 + 0.6 * section) * sensitivity
             if kick > 0.0:
                 loud = smoothstep(0.08, 0.5, drive)
-                band.punch = max(band.punch, min(1.0, (0.45 + 0.55 * kick) * loud * min(1.6, self.sensitivity)))
+                band.punch = max(band.punch, min(1.0, (0.45 + 0.55 * kick) * loud * min(1.6, sensitivity)))
             band.punch *= numpy.exp(-dt / PUNCH_SECONDS)
-            target = min(CLOCK_MAX, CLOCK_MAX * self.spread * (0.8 * band.punch + 0.08 * smoothstep(0.2, 1.0, drive)))
+            target = min(CLOCK_MAX, CLOCK_MAX * spread * (0.8 * band.punch + 0.08 * smoothstep(0.2, 1.0, drive)))
             rate = 24.0 if target > band.clock else 5.0
             band.clock += max(-rate * dt, min(rate * dt, target - band.clock))
             band.clock = min(CLOCK_MAX, max(0.0, band.clock))
@@ -190,16 +160,55 @@ class SpectrumListener:
         levels = [
             (band.envelope / band.peak) * smoothstep(0.03, 0.12, band.envelope) for band in self.bands
         ]
-        self.motion.write(
-            MusicMotion(
-                clocks=[round(float(c), 4) for c in clocks],
-                levels=[round(float(min(1.0, lv)), 4) for lv in levels],
-                beat=round(float(self.beat), 4),
-                energy=round(float(self.energy), 4),
-                bass=round(float(sum(levels[:6])) / 6.0, 4),
-                highs=round(float(sum(levels[16:])) / 8.0, 4),
-            ),
-            timestamp_ns=block.timestamp_ns,
+        return MusicMotion(
+            clocks=[round(float(c), 4) for c in clocks],
+            levels=[round(float(min(1.0, lv)), 4) for lv in levels],
+            beat=round(float(self.beat), 4),
+            energy=round(float(self.energy), 4),
+            bass=round(float(sum(levels[:6])) / 6.0, 4),
+            highs=round(float(sum(levels[16:])) / 8.0, 4),
         )
 
 
+@node.meta(
+    category="Paint Pulse",
+    description="The one analysis step the runtime has no built-in for: an FFT into 24 bands, each with a scatter clock that onsets throw outward.",
+)
+@node(execution="reactive")
+def SpectrumListener(
+    *,
+    sensitivity: Input[
+        Annotated[float, NumberRange(minimum=0.1), Description("How strongly the music moves the ball.")]
+    ] = Input(0.5),
+    spread: Input[
+        Annotated[float, NumberRange(minimum=0.0), Description("How far a hit scatters the ball.")]
+    ] = Input(0.65),
+    music: InputPin[
+        Annotated[
+            Audio,
+            StreamDelivery("ordered"),
+            LISTENING_WINDOW,
+            Description("The music to listen to, mixed to mono"),
+        ]
+    ],
+    motion: OutputPin[
+        Annotated[
+            MusicMotion,
+            Description("Per-band clocks and levels, the beat, the energy, and the bass and highs levels"),
+        ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Music in, one `MusicMotion` per window out."""
+    listening = SpectrumListening()
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        while True:
+            block = music.read()
+            if block is None:
+                return
+            motion.write(
+                listening.listen_to_one_window(block, sensitivity.get(), spread.get()),
+                timestamp_ns=block.timestamp_ns,
+            )
+
+    return each_frame
