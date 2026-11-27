@@ -25,6 +25,7 @@ pub(crate) use inputs_and_settings_of_a_node::{
     the_values_held_on_no_input_of,
 };
 pub use streamlib_node_schema::NodeClassImportPath;
+use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticKindOnTheWire;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
     GraphLinkComponentsOnTheWire, GraphLinkOnTheWire, GraphLinkPortRefOnTheWire,
@@ -635,13 +636,20 @@ pub(crate) enum WhyALinkIsNotWired {
 
 impl WhyALinkIsNotWired {
     /// The kind of problem it is.
-    pub(crate) fn kind(
-        &self,
-    ) -> streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticKindOnTheWire {
-        use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticKindOnTheWire;
+    pub(crate) fn kind(&self) -> DiagnosticKindOnTheWire {
         match self {
             Self::ItsPinTypesDiffer(_) => DiagnosticKindOnTheWire::LinkPinTypesDiffer,
             Self::AnEndRefused(_) => DiagnosticKindOnTheWire::LinkNotWired,
+        }
+    }
+
+    /// What fixes it, in words.
+    pub(crate) fn fix(&self) -> &'static str {
+        match self {
+            Self::ItsPinTypesDiffer(_) => {
+                "change the input that chose the type back, or remove the link"
+            }
+            Self::AnEndRefused(_) => "stop the stream and start it again",
         }
     }
 }

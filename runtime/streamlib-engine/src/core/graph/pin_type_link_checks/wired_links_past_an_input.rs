@@ -15,7 +15,7 @@ use super::bundle_frames_into_an_untyped_input::{
 use super::named_type_at_an_untyped_end::the_named_type_among;
 use super::{TypedEnd, is_typed, verdict_between, what_the_input_end_of_a_link_carries};
 use crate::core::PortDirection;
-use crate::core::descriptors::{DeclaredPinType, PinConversion};
+use crate::core::descriptors::PinConversion;
 
 /// Why the first wired link an output following input `input_name` of `node` feeds, or an
 /// output following an input such a link feeds, on downstream, is refused once `carried` is what
@@ -30,14 +30,7 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
     let mut inputs_passed = HashSet::from([(node.id.clone(), input_name.to_owned())]);
     let mut inputs_to_pass = vec![(node, input_name.to_owned(), carried.clone())];
     while let Some((node, input_name, carried)) = inputs_to_pass.pop() {
-        let outputs_following_the_input = node.ports.outputs.iter().filter(|output| {
-            matches!(
-                output.declared_pin_type.as_ref().map(|declared| &declared.pin_type),
-                Some(DeclaredPinType::SameAsInput { input_port_name })
-                    if *input_port_name == input_name
-            )
-        });
-        for following_output in outputs_following_the_input {
+        for following_output in node.the_outputs_following_the_input(&input_name) {
             for link_out in the_wired_links_out_of(graph, node, &following_output.name) {
                 let Some(downstream_node) = graph
                     .traversal()

@@ -11,7 +11,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use super::{Graph, GraphNode};
-use crate::core::json_schema::{WhyALinkIsNotWired, why_the_link_is_not_wired};
+use crate::core::json_schema::why_the_link_is_not_wired;
 
 impl Graph {
     /// The health of `node` and each diagnostic behind it, read from its state and from each
@@ -52,12 +52,6 @@ impl Graph {
             .iter()
             .filter_map(|link| {
                 let why = why_the_link_is_not_wired(link)?;
-                let fix = match why {
-                    WhyALinkIsNotWired::ItsPinTypesDiffer(_) => {
-                        "change the input that chose the type back, or remove the link"
-                    }
-                    WhyALinkIsNotWired::AnEndRefused(_) => "stop the stream and start it again",
-                };
                 Some(DiagnosticOnTheWire::of(
                     why.kind(),
                     DiagnosticPlaceOnTheWire::Link {
@@ -68,8 +62,9 @@ impl Graph {
                     },
                     format!(
                         "its input `{}` reads nothing: the link into it is not wired: {why}. To \
-                         fix: {fix}",
-                        link.to_port().port_name()
+                         fix: {}",
+                        link.to_port().port_name(),
+                        why.fix()
                     ),
                 ))
             })

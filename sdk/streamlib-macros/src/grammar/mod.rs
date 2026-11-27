@@ -261,7 +261,7 @@ pub(crate) struct ParsedPort {
     /// What an output states of its stream as the annotations of its pin: a Texture's
     /// `frame_rate`, an Audio's `rate` and `dtype`, a Tensor's `residency`.
     pub annotations: PinAnnotations,
-    /// The pin type the port declares with `pin_type = …`; `None` when a setting chooses it.
+    /// The pin type the port declares with `pin_type = …`; `None` when an input chooses it.
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
     /// The input whose chosen pin type the port carries, as `pin_type = from_setting("…")` or
     /// `pin_type = from_input(…)` names it; `None` when the port states its type itself.

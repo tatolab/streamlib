@@ -89,7 +89,7 @@ pub(super) fn parse_port(
     let mut borrow_quota = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
-    let mut pin_type_from_setting: Option<(proc_macro2::Span, PinTypeChosenBy)> = None;
+    let mut pin_type_chosen_by_an_input: Option<(proc_macro2::Span, PinTypeChosenBy)> = None;
     let mut lifetime = NodeValueLifetime::Kept;
     let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
     let mut former_names: Option<(proc_macro2::Span, Vec<String>)> = None;
@@ -195,7 +195,7 @@ pub(super) fn parse_port(
                          from_setting(\"<setting>\")`"
                     )
                 })?;
-                pin_type_from_setting = Some((key_span, chosen_by));
+                pin_type_chosen_by_an_input = Some((key_span, chosen_by));
             }
             "pin_type" => {
                 let pin_type_ident: Ident = content.parse()?;
@@ -281,10 +281,10 @@ pub(super) fn parse_port(
         }));
     }
 
-    let stated_pin_type = match (pin_type, pin_type_from_setting) {
-        (Some(_), Some((from_setting_span, chosen_by))) => {
+    let stated_pin_type = match (pin_type, pin_type_chosen_by_an_input) {
+        (Some(_), Some((chosen_by_span, chosen_by))) => {
             return Err(syn::Error::new(
-                from_setting_span,
+                chosen_by_span,
                 format!(
                     "port `{name}` states `pin_type` twice — once a type, once `{chosen_by}`; \
                      keep one"
@@ -292,7 +292,7 @@ pub(super) fn parse_port(
             ));
         }
         (Some((pin_type_span, pin_type)), None) => StatedPinType::Exactly(pin_type_span, pin_type),
-        (None, Some((_, chosen_by))) => StatedPinType::FromSetting(chosen_by),
+        (None, Some((_, chosen_by))) => StatedPinType::ChosenBy(chosen_by),
         (None, None) => {
             return Err(syn::Error::new(
                 name_lit.span(),
@@ -310,7 +310,7 @@ pub(super) fn parse_port(
         direction,
         match &stated_pin_type {
             StatedPinType::Exactly(_, pin_type) => Some(pin_type),
-            StatedPinType::FromSetting(_) => None,
+            StatedPinType::ChosenBy(_) => None,
         },
     ) {
         return Err(syn::Error::new(name_lit.span(), refusal));
@@ -326,8 +326,8 @@ pub(super) fn parse_port(
             let pin = declared_pin(pin_type.clone(), flow, &name)?;
             (Some(pin_type), pin, None)
         }
-        StatedPinType::FromSetting(chosen_by) => {
-            let pin = pin_typed_by_a_setting(chosen_by.input_name(), flow);
+        StatedPinType::ChosenBy(chosen_by) => {
+            let pin = pin_typed_by_the_input_choosing_it(chosen_by.input_name(), flow);
             (None, pin, Some(chosen_by))
         }
     };
@@ -467,15 +467,16 @@ fn declared_pin(
     }
 }
 
-/// The pin of a port typed by the setting `setting_name`, as `pin_type = from_setting("…")`
-/// states it: a value, or of the flow it states, of the type the setting chooses.
-fn pin_typed_by_a_setting(
-    setting_name: &str,
+/// The pin of a port typed by the input `input_name`, as `pin_type = from_setting("…")` or
+/// `pin_type = from_input(…)` states it: a value, or of the flow it states, of the type the input
+/// chooses.
+fn pin_typed_by_the_input_choosing_it(
+    input_name: &str,
     flow: Option<(proc_macro2::Span, PinFlow)>,
 ) -> PinDeclaration {
     PinDeclaration {
         pin_type: DeclaredPinType::SetByInput {
-            input_name: setting_name.to_owned(),
+            input_name: input_name.to_owned(),
         },
         flow: flow.map_or(PinFlow::Value, |(_, flow)| flow),
         annotations: PinAnnotations::default(),
@@ -487,7 +488,7 @@ fn pin_typed_by_a_setting(
 /// How a port states its pin type: exactly, at its span, or by the input it names.
 enum StatedPinType {
     Exactly(proc_macro2::Span, PinType),
-    FromSetting(PinTypeChosenBy),
+    ChosenBy(PinTypeChosenBy),
 }
 
 /// The input whose chosen pin type a port carries, as the port names it.
@@ -525,22 +526,17 @@ fn parse_the_input_choosing_a_pin_type(
     content: ParseStream<'_>,
     refusal: impl FnOnce(&Ident) -> String,
 ) -> syn::Result<PinTypeChosenBy> {
-    let function: Ident = content.parse()?;
+    if !content.peek(Ident) || content.fork().parse::<Ident>()? != "from_input" {
+        return parse_from_setting(content, refusal).map(PinTypeChosenBy::Setting);
+    }
+    content.parse::<Ident>()?;
     let arguments;
-    if function == "from_input" {
-        parenthesized!(arguments in content);
-        let named: Ident = arguments.parse()?;
-        let cast_name = cast_exposed_name_to_url_safe(&named.to_string())
-            .map_err(|casts_to_nothing| syn::Error::new(named.span(), casts_to_nothing))?
-            .into_owned();
-        return Ok(PinTypeChosenBy::ValueInput { named, cast_name });
-    }
-    if function != "from_setting" {
-        return Err(syn::Error::new(function.span(), refusal(&function)));
-    }
     parenthesized!(arguments in content);
-    let setting_name: LitStr = arguments.parse()?;
-    Ok(PinTypeChosenBy::Setting(setting_name.value()))
+    let named: Ident = arguments.parse()?;
+    let cast_name = cast_exposed_name_to_url_safe(&named.to_string())
+        .map_err(|casts_to_nothing| syn::Error::new(named.span(), casts_to_nothing))?
+        .into_owned();
+    Ok(PinTypeChosenBy::ValueInput { named, cast_name })
 }
 
 /// Parse `from_setting("<setting>")` into the setting it names, refusing any other call with

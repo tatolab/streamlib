@@ -13,3 +13,18 @@ pub(crate) struct LinkPinTypesDifferComponent {
     /// Why the two do not connect, in the words of the verdict on them.
     pub(crate) why: String,
 }
+
+impl crate::core::graph::Graph {
+    /// Whether link `link_id` is marked as differing: its two ends no longer carry types that
+    /// connect.
+    pub(crate) fn the_pin_types_of_the_link_differ(
+        &self,
+        link_id: &crate::core::graph::LinkUniqueId,
+    ) -> bool {
+        use crate::core::graph::GraphEdgeWithComponents;
+        self.traversal()
+            .e(link_id)
+            .first()
+            .is_some_and(|link| link.has::<LinkPinTypesDifferComponent>())
+    }
+}

@@ -21,10 +21,10 @@ use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, HelperProcessRestartsComponent,
-    LinkPinTypesDifferComponent, LinkState, LinkStateComponent, LinkUniqueId,
-    NodeInstanceComponent, NodeMetrics, NodePauseGateComponent, NodeRunId,
-    OutOfProcessLinkWiringComponent, ShaderNodeFusedGroupComponent, ShutdownChannelComponent,
-    StateComponent, StepProgressOfOneNodeComponent,
+    LinkState, LinkStateComponent, LinkUniqueId, NodeInstanceComponent, NodeMetrics,
+    NodePauseGateComponent, NodeRunId, OutOfProcessLinkWiringComponent,
+    ShaderNodeFusedGroupComponent, ShutdownChannelComponent, StateComponent,
+    StepProgressOfOneNodeComponent,
 };
 use crate::core::nodes::NodeState;
 
@@ -117,11 +117,7 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
             .collect();
         for (link_id, source_id, reader_id) in links_of_the_node {
             if links_changed.contains(&link_id)
-                || graph
-                    .traversal()
-                    .e(&link_id)
-                    .first()
-                    .is_some_and(|link| link.has::<LinkPinTypesDifferComponent>())
+                || graph.the_pin_types_of_the_link_differ(&link_id)
                 || nodes_to_remove.contains(&source_id)
                 || nodes_to_remove.contains(&reader_id)
             {

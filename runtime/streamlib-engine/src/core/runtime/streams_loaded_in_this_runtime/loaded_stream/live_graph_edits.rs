@@ -171,10 +171,14 @@ impl LoadedStreamInThisRuntime {
                     return Ok(());
                 }
                 self.compiler.scope_reading(|graph| {
-                    refuse_input_values_naming_a_node_the_graph_does_not_hold(
+                    let Some(node) = graph.traversal().v(node_run_id).first() else {
+                        return Ok(());
+                    };
+                    crate::core::graph::refuse_input_values_naming_a_node_the_graph_does_not_hold(
                         graph,
                         &self.node_types_this_stream_resolves,
                         node_run_id,
+                        &node.input_values,
                     )
                 })
             });
@@ -858,22 +862,4 @@ fn set_the_saved_value(
         saved_value_before,
         live_value_before,
     })
-}
-
-/// Refuse the input values the node `node_run_id` of `graph` holds when one names a node the
-/// graph does not hold.
-fn refuse_input_values_naming_a_node_the_graph_does_not_hold(
-    graph: &Graph,
-    node_types: &crate::core::nodes::NodeTypesOneStreamResolves,
-    node_run_id: &NodeRunId,
-) -> Result<()> {
-    let Some(node) = graph.traversal().v(node_run_id).first() else {
-        return Ok(());
-    };
-    crate::core::graph::refuse_input_values_naming_a_node_the_graph_does_not_hold(
-        graph,
-        node_types,
-        node_run_id,
-        &node.input_values,
-    )
 }

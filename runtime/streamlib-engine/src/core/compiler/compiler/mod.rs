@@ -586,10 +586,8 @@ fn wire_every_link_a_plan_adds(
 ) -> Result<usize> {
     let mut links_wired = 0;
     for link_id in links_to_add {
-        if links_whose_pin_types_differ::stays_unwired_while_its_pin_types_differ(
-            &mut graph_arc.write(),
-            link_id,
-        ) {
+        if graph_arc.read().the_pin_types_of_the_link_differ(link_id) {
+            links_whose_pin_types_differ::stamp_the_link_in_error(&mut graph_arc.write(), link_id);
             continue;
         }
         let (from_port, to_port) = {

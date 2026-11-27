@@ -11,8 +11,7 @@ use super::{CompilationPlan, this_link_is_already_wired_or_awaiting_its_helpers_
 use crate::core::compiler::compiler_ops::running_node_restart::unwire_each_link_keeping_it;
 use crate::core::error::Result;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, LinkPinTypesDifferComponent, LinkState, LinkStateComponent,
-    LinkUniqueId,
+    Graph, GraphEdgeWithComponents, LinkState, LinkStateComponent, LinkUniqueId,
 };
 
 /// Judge again each link the type choices of each node `plan` names reach, and queue on `plan`
@@ -22,8 +21,7 @@ pub(super) fn judge_the_links_each_type_choice_reaches(
     graph: &mut Graph,
     plan: &mut CompilationPlan,
 ) {
-    let nodes = std::mem::take(&mut plan.nodes_whose_type_choices_are_judged_again);
-    for node_run_id in &nodes {
+    for node_run_id in &plan.nodes_whose_type_choices_are_judged_again {
         let judged_again =
             graph.judge_again_each_link_the_type_choices_of_the_node_reach(node_run_id);
         for link_id in judged_again.differing {
@@ -45,7 +43,6 @@ pub(super) fn judge_the_links_each_type_choice_reaches(
             }
         }
     }
-    plan.nodes_whose_type_choices_are_judged_again = nodes;
 }
 
 /// Close the channel of each of `links`, whose ends no longer carry types that connect, keeping
@@ -64,24 +61,9 @@ pub(super) fn hold_each_link_unwired(graph: &mut Graph, links: &[LinkUniqueId]) 
     Ok(())
 }
 
-/// Whether `link_id` is held unwired since its ends no longer carry types that connect, stamping
-/// it in error when it is, so no wiring opens it.
-pub(super) fn stays_unwired_while_its_pin_types_differ(
-    graph: &mut Graph,
-    link_id: &LinkUniqueId,
-) -> bool {
-    let differs = graph
-        .traversal()
-        .e(link_id)
-        .first()
-        .is_some_and(|link| link.has::<LinkPinTypesDifferComponent>());
-    if differs {
-        stamp_the_link_in_error(graph, link_id);
-    }
-    differs
-}
-
-fn stamp_the_link_in_error(graph: &mut Graph, link_id: &LinkUniqueId) {
+/// Stamp `link_id` in error, its ends no longer carrying types that connect, so it reads as
+/// held unwired.
+pub(super) fn stamp_the_link_in_error(graph: &mut Graph, link_id: &LinkUniqueId) {
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.insert(LinkStateComponent(LinkState::Error));
     }
