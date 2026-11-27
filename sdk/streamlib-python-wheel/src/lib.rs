@@ -91,6 +91,12 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_node_context::PythonOpaqueFdAllocationExport>()?;
     module.add_class::<python_node_context::PythonIOSurfaceMachPortExport>()?;
     module.add_class::<python_node_context::PythonComputeKernel>()?;
+    module.add(
+        "ComputeKernelReleased",
+        module
+            .py()
+            .get_type::<python_node_context::ComputeKernelReleased>(),
+    )?;
     module.add_class::<python_node_context::PythonGraphicsKernel>()?;
     module.add_class::<python_node_context::PythonRayTracingKernel>()?;
     module.add_class::<python_node_context::PythonAccelerationStructureHandle>()?;

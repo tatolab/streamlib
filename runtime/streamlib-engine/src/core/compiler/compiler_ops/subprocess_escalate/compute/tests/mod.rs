@@ -5,6 +5,7 @@
 //!
 //! The fixtures the child files share.
 
+use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::run_frames_with_the_escalate_gate_held;
 use super::linux_and_macos::{
@@ -33,6 +34,7 @@ use crate::host_rhi::HostTextureExt;
 mod batched_compute_dispatch_layout_and_refusal_tests;
 mod batched_compute_dispatch_ordering_and_cost_tests;
 mod compute_kernel_registration_and_binding_plan_tests;
+mod compute_kernel_release_tests;
 mod concurrent_stream_dispatch_tests;
 mod single_compute_dispatch_tests;
 mod tensor_storage_buffer_dispatch_tests;
@@ -94,6 +96,7 @@ fn read_one_write_another_spv_hex() -> String {
 fn register_read_one_write_another(sandbox: &GpuContextLimitedAccess) -> EscalateResponseOk {
     let response = handle_register_compute_kernel(
         sandbox,
+        &EscalateHandleRegistry::default(),
         "reg".to_string(),
         EscalateRequestRegisterComputeKernel {
             entry_point: "".to_string(),
@@ -143,6 +146,7 @@ const CHAIN_DOUBLED_RGBA: [u8; 4] = [100, 120, 140, 255];
 fn register_slang_kernel(sandbox: &GpuContextLimitedAccess, source: &str) -> String {
     let response = handle_register_compute_kernel(
         sandbox,
+        &EscalateHandleRegistry::default(),
         "reg-chain".to_string(),
         register_from_slang(source, "compute"),
     );

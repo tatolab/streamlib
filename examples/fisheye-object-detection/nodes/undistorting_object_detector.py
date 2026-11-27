@@ -233,7 +233,7 @@ class UndistortingObjectDetector:
         self.undistorted_frame_ring = NodeOutputTextureRing(
             FRAME_TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
-        self.fisheye_rectify_kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.fisheye_rectify_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=FISHEYE_RECTIFY_SLANG,
             push_constant_size=LENS_COEFFICIENT_AND_RECOVERY_LIMIT_SIZE,
             bindings={
@@ -244,7 +244,7 @@ class UndistortingObjectDetector:
         # Padded at the right and bottom rather than resized, so a box the
         # model reports is already in frame coordinates.
         self.detector_input_kernel = ModelInputTensorKernel.compile(
-            ctx.gpu_full_access,
+            ctx.gpu_limited_access,
             fit="pad_bottom_right",
             pad_to_multiple_of=DETECTOR_INPUT_STRIDE,
             channel_order="rgb",

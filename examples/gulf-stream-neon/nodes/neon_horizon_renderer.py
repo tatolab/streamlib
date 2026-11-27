@@ -530,7 +530,7 @@ class NeonHorizonRenderer:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.take_clock = TakeClock()
-        self.kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=RENDERER_SLANG, push_constant_size=RENDERER_DIALS.size
         )
         self.scene_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)

@@ -200,7 +200,7 @@ def test_nine_layers_build_one_kernel_for_eight_textures_and_one_for_two():
     gpu = _RecordingGpu()
     compositor = _a_compositor_of(9, frames_on={0})
 
-    compositor.setup(SimpleNamespace(gpu_full_access=gpu))  # type: ignore[arg-type]
+    compositor.setup(SimpleNamespace(gpu_limited_access=gpu))  # type: ignore[arg-type]
 
     assert gpu.kernels == [
         {"texture_count": 8, "push_constant_size": 128},
@@ -215,7 +215,7 @@ def test_a_ninth_layer_is_laid_over_the_composite_of_the_first_eight_and_publish
     compositor.video = SimpleNamespace(  # type: ignore[assignment]
         write=lambda frame, timestamp_ns: written.append((frame, timestamp_ns))
     )
-    compositor.setup(SimpleNamespace(gpu_full_access=gpu))  # type: ignore[arg-type]
+    compositor.setup(SimpleNamespace(gpu_limited_access=gpu))  # type: ignore[arg-type]
 
     compositor.process(SimpleNamespace(gpu_limited_access=gpu))  # type: ignore[arg-type]
 
@@ -237,7 +237,7 @@ def test_a_ninth_layer_is_laid_over_the_composite_of_the_first_eight_and_publish
 def test_a_compositor_with_no_layer_wired_writes_nothing():
     gpu = _RecordingGpu()
     compositor = _a_compositor_of(0, frames_on=set())
-    compositor.setup(SimpleNamespace(gpu_full_access=gpu))  # type: ignore[arg-type]
+    compositor.setup(SimpleNamespace(gpu_limited_access=gpu))  # type: ignore[arg-type]
 
     compositor.process(SimpleNamespace(gpu_limited_access=gpu))  # type: ignore[arg-type]
 

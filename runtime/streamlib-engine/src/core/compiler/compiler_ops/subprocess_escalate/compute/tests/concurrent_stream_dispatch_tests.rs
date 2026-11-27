@@ -50,6 +50,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 fn register_the_shaded_kernel(sandbox: &GpuContextLimitedAccess) -> String {
     match handle_register_compute_kernel(
         sandbox,
+        &EscalateHandleRegistry::default(),
         "reg-shaded".to_string(),
         EscalateRequestRegisterComputeKernel {
             push_constant_size: 4,

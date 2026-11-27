@@ -224,10 +224,11 @@ pub struct GpuContext {
     /// Compute dispatch is a capability every caller reaches, so this is
     /// always present — there is nothing to install and no absent case.
     ///
-    /// Entries live for this context's lifetime: bounded by distinct SPIR-V
-    /// blobs, never evicted, so a kernel survives its registering helper.
+    /// Each entry counts the registrations that hold it, and goes once the
+    /// last of them is released: a kernel every helper let go of frees its
+    /// pipeline, and one another registration still holds lives on.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
+    compute_kernel_cache: Arc<Mutex<HashMap<String, kernels::ComputeKernelHeldByItsRegistrations>>>,
     /// The engine's Slang compiler and the SPIR-V it has already produced.
     ///
     /// Slang text is the kernel source contract, so compilation happens here at

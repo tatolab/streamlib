@@ -168,7 +168,7 @@ class BathymetryRelief:
         self.take_clock = TakeClock()
         gpu = ctx.gpu_full_access
         size = WORLD_TEXTURE_SIZE
-        self.contour_kernel = gpu.create_compute_kernel(source=CONTOUR_SLANG, push_constant_size=CONTOUR_DIALS.size)
+        self.contour_kernel = ctx.gpu_limited_access.create_compute_kernel(source=CONTOUR_SLANG, push_constant_size=CONTOUR_DIALS.size)
         baked = baked_relief(size)
         # The relief is held at full float precision: elevations of a few metres matter on the banks.
         self.held_relief = gpu.acquire_texture(size, size, RELIEF_FORMAT, LAYER_USAGE)

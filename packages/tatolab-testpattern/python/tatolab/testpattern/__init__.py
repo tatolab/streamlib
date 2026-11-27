@@ -247,7 +247,7 @@ class TestPatternSource:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu_full_access = ctx.gpu_full_access
-        self._compute_kernel = gpu_full_access.create_compute_kernel(
+        self._compute_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=compute_kernel_slang_rendering_a_test_pattern_frame(),
             push_constant_size=_PUSH_CONSTANT_BLOCK_STRUCT.size,
             bindings={

@@ -96,7 +96,7 @@ class FrameLandingProbe:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu = ctx.gpu_full_access
-        self._kernel = gpu.create_compute_kernel(
+        self._kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=INVERT_SLANG,
             bindings={"landed_frame": "storage_image", "inverted_frame": "storage_image"},
         )

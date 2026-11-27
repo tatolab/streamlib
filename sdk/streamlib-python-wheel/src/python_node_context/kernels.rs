@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
+use pyo3::create_exception;
+use pyo3::exceptions::PyRuntimeError;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -45,11 +48,19 @@ pub(super) fn reflected_binding_names(reflected: &[ReflectedKernelBinding]) -> V
         .collect()
 }
 
+create_exception!(
+    tatolab.runtime._engine,
+    ComputeKernelReleased,
+    PyRuntimeError,
+    "The compute kernel was released: its `close()` ran, so it dispatches nothing."
+);
+
 /// A compute kernel the engine built and holds, dispatched by name.
 ///
-/// Constructed in `setup()` where the capability is Full; dispatched per frame
-/// in `process()`. No kernel handle string, fence, timeline or slot number
-/// reaches Python — the object is the handle.
+/// Built in a node's body or in a computed value's build, dispatched per
+/// frame. No kernel handle string, fence, timeline or slot number reaches
+/// Python — the object is the handle. `close()` releases the engine's kernel,
+/// and dropping the object releases it if nothing closed it first.
 ///
 /// Defined on every platform so the stub's surface is honest everywhere;
 /// off Linux it is unconstructible, because `create_compute_kernel` refuses
@@ -74,6 +85,62 @@ pub(crate) struct PythonComputeKernel {
         expect(dead_code, reason = "only the Linux and macOS builds use it")
     )]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    /// Whether this kernel's registration was handed back, by `close()` or by
+    /// the drop; set once, so the engine is released at most once.
+    released: AtomicBool,
+}
+
+impl PythonComputeKernel {
+    /// The kernel the engine registered under `kernel_id`, held until it is
+    /// closed or dropped.
+    pub(super) fn registered(
+        kernel_id: String,
+        push_constant_size: u32,
+        reflected_binding_kinds: Vec<ReflectedKernelBinding>,
+        helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    ) -> Self {
+        Self {
+            kernel_id,
+            push_constant_size,
+            reflected_binding_kinds,
+            helper_process_exchange_client,
+            released: AtomicBool::new(false),
+        }
+    }
+
+    /// Hand the kernel's registration back to the engine, unless it already
+    /// was.
+    fn release_once(&self, python: Python<'_>) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.helper_process_exchange_client
+            .release_compute_kernel(python, &self.kernel_id);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let _ = python;
+    }
+
+    /// Refuse a kernel whose registration was handed back.
+    fn refuse_if_released(&self) -> PyResult<()> {
+        if self.released.load(Ordering::Acquire) {
+            return Err(ComputeKernelReleased::new_err(
+                "this compute kernel was closed, so the engine no longer holds it; dispatch the \
+                 kernel that replaced it, or create a new one",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PythonComputeKernel {
+    /// A kernel nothing closed is released when the last reference to it goes.
+    fn drop(&mut self) {
+        if self.released.load(Ordering::Acquire) {
+            return;
+        }
+        Python::attach(|python| self.release_once(python));
+    }
 }
 
 #[pymethods]
@@ -82,6 +149,14 @@ impl PythonComputeKernel {
     #[getter]
     fn binding_names(&self) -> Vec<String> {
         reflected_binding_names(&self.reflected_binding_kinds)
+    }
+
+    /// Release the engine's kernel; its pipeline goes once no other kernel
+    /// built from the same shader holds it. A node's scope closes a kernel a
+    /// build replaced. A dispatch after this raises `ComputeKernelReleased`;
+    /// closing again does nothing.
+    fn close(&self, python: Python<'_>) {
+        self.release_once(python);
     }
 
     /// Dispatch this kernel, binding each of the shader's declared resources
@@ -99,6 +174,7 @@ impl PythonComputeKernel {
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
+        self.refuse_if_released()?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let (wire_bindings, push_constants_hex) =
@@ -153,12 +229,14 @@ impl PythonComputeKernel {
 /// One recorded dispatch: the wire entry to send, and the kernel it names.
 struct RecordedKernelDispatch {
     /// Kept beside the entry rather than read back out of it, so refusing a
-    /// repeated kernel cannot drift from the entry it refuses against.
+    /// repeated kernel cannot drift from the entry it refuses against; held
+    /// so the kernel cannot be released by its last reference going before
+    /// the batch runs, and checked again when it runs.
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "macos")),
         expect(dead_code, reason = "only the Linux and macOS builds use it")
     )]
-    kernel_id: String,
+    kernel: Py<PythonComputeKernel>,
     #[cfg_attr(
         not(any(target_os = "linux", target_os = "macos")),
         expect(dead_code, reason = "only the Linux and macOS builds use it")
@@ -254,13 +332,15 @@ impl PythonKernelDispatchBatch {
     fn dispatch(
         &self,
         python: Python<'_>,
-        kernel: &PythonComputeKernel,
+        kernel: &Bound<'_, PythonComputeKernel>,
         bindings: &Bound<'_, PyDict>,
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
+            let recorded_kernel = kernel;
+            let kernel = recorded_kernel.get();
             // Scope state first, and the lock dropped before validation: a
             // batch nobody entered or already ran collects nothing, so a
             // binding mistake must not mask either — and validation calls back
@@ -282,6 +362,7 @@ impl PythonKernelDispatchBatch {
                 }
             }
 
+            kernel.refuse_if_released()?;
             let (wire_bindings, push_constants_hex) =
                 kernel.validated_wire_dispatch(python, bindings, push_constants)?;
 
@@ -300,7 +381,7 @@ impl PythonKernelDispatchBatch {
             if let Some(earlier) = recording
                 .dispatches
                 .iter()
-                .position(|already| already.kernel_id == kernel.kernel_id)
+                .position(|already| already.kernel.get().kernel_id == kernel.kernel_id)
             {
                 return Err(PyValueError::new_err(format!(
                     "this kernel is already dispatch {earlier} of this batch; a recording \
@@ -318,7 +399,7 @@ impl PythonKernelDispatchBatch {
                     group_count,
                 )?;
             recording.dispatches.push(RecordedKernelDispatch {
-                kernel_id: kernel.kernel_id.clone(),
+                kernel: recorded_kernel.clone().unbind(),
                 wire_entry: wire_entry.unbind(),
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 bound_surface_handles: bound_surface_handles(bindings),
@@ -338,6 +419,9 @@ impl PythonKernelDispatchBatch {
     fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
+            for entry in &recorded {
+                entry.kernel.get().refuse_if_released()?;
+            }
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             for entry in &recorded {
                 order_tensor_device_writes_ahead_of_the_kernel(

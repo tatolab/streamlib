@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-from ._gpu_protocols import ComputeKernel, GpuContextFullAccess
+from ._gpu_protocols import ComputeKernel, GpuContextLimitedAccess
 from ._gpu_surface_protocols import GpuSurfaceHandle
 from ._sampled_source_landing import (
     SAMPLED_SOURCE_BINDING_NAME,
@@ -417,7 +417,7 @@ class ModelInputTensorKernel:
     @classmethod
     def compile(
         cls,
-        gpu_full_access: GpuContextFullAccess,
+        gpu_limited_access: GpuContextLimitedAccess,
         width: "int | None" = None,
         height: "int | None" = None,
         fit: ModelInputTensorFit = "stretch",
@@ -429,7 +429,7 @@ class ModelInputTensorKernel:
         mean: "Sequence[float]" = (0.0, 0.0, 0.0),
         std: "Sequence[float]" = (1.0, 1.0, 1.0),
     ) -> "ModelInputTensorKernel":
-        """Build the kernel for one model's input, in `setup()`.
+        """Build the kernel for one model's input, in the node's body or a build.
 
         `stretch` fills the model's `width` x `height` and `letterbox` keeps
         the aspect and pads both sides evenly. `pad_bottom_right` takes no
@@ -482,7 +482,7 @@ class ModelInputTensorKernel:
                 f"ModelInputTensorKernel.compile: std {std!r} holds a zero, which "
                 f"every element of that channel would be divided by"
             )
-        compute_kernel = gpu_full_access.create_compute_kernel(
+        compute_kernel = gpu_limited_access.create_compute_kernel(
             source=_compute_kernel_slang(
                 layout, dtype, channel_order, float(scale), mean_by_channel, std_by_channel
             ),

@@ -28,6 +28,15 @@ pub(super) fn compute_kernel_cache_key(
     format!("{:x}", hasher.finalize())
 }
 
+/// A compute kernel the context's cache holds, with how many registrations
+/// hold it: each `create_or_reuse_compute_kernel` is one, and each
+/// `release_compute_kernel` lets one go.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) struct ComputeKernelHeldByItsRegistrations {
+    kernel: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
+    registrations: usize,
+}
+
 /// Digest a variable-length part of a cache key.
 ///
 /// The length prefix is what keeps two different splits of the same
@@ -411,7 +420,10 @@ impl GpuContext {
     /// the key, because then the engine is what produces the bytes.
     ///
     /// Returns the cache key as the kernel id: a caller re-registering the same
-    /// kernel gets the same id back, and pays no compilation for it.
+    /// kernel gets the same id back, and pays no compilation for it. Each call
+    /// is one registration of the kernel, held until
+    /// [`Self::release_compute_kernel`] lets it go; a caller that never lets it
+    /// go holds the kernel for the context's life.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_compute_kernel(
         &self,
@@ -425,7 +437,7 @@ impl GpuContext {
             .compute_kernel_cache
             .lock()
             .get(&kernel_id)
-            .map(Arc::clone);
+            .map(|held| Arc::clone(&held.kernel));
         if let Some(cached) = cached_kernel {
             // The declaration is checked on the hit path too: the cache key
             // covers the blob, not the caller's assertion, and a wrong
@@ -440,7 +452,8 @@ impl GpuContext {
                 kernel_id,
                 "GpuContext::create_or_reuse_compute_kernel — cache hit"
             );
-            return Ok((kernel_id, Arc::clone(&cached)));
+            let held = self.hold_one_more_registration_of(&kernel_id, cached);
+            return Ok((kernel_id, held));
         }
 
         // Reflection is the source of truth for the binding shape; a caller's
@@ -465,19 +478,61 @@ impl GpuContext {
             },
         )?);
 
-        Ok((
-            kernel_id.clone(),
-            Arc::clone(
-                self.compute_kernel_cache
-                    .lock()
-                    .entry(kernel_id)
-                    .or_insert(kernel),
-            ),
-        ))
+        let held = self.hold_one_more_registration_of(&kernel_id, kernel);
+        Ok((kernel_id, held))
+    }
+
+    /// Count one more registration of the kernel cached under `kernel_id`,
+    /// caching `built` there when no registration holds one, and answer the
+    /// kernel the cache holds.
+    ///
+    /// A registration that built a kernel while another built the same one
+    /// takes whichever reached the cache first, so every holder of an id holds
+    /// one kernel.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn hold_one_more_registration_of(
+        &self,
+        kernel_id: &str,
+        built: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
+    ) -> Arc<crate::vulkan::rhi::VulkanComputeKernel> {
+        let mut cache = self.compute_kernel_cache.lock();
+        let held =
+            cache
+                .entry(kernel_id.to_string())
+                .or_insert(ComputeKernelHeldByItsRegistrations {
+                    kernel: built,
+                    registrations: 0,
+                });
+        held.registrations += 1;
+        Arc::clone(&held.kernel)
+    }
+
+    /// Let one registration of the compute kernel `kernel_id` go, answering
+    /// whether one held it.
+    ///
+    /// Once the last registration goes the cache drops the kernel, and its
+    /// pipeline is destroyed when a dispatch already holding it returns. The
+    /// SPIR-V the engine compiled for it stays cached, so registering it again
+    /// builds a pipeline but compiles nothing.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn release_compute_kernel(&self, kernel_id: &str) -> bool {
+        let mut cache = self.compute_kernel_cache.lock();
+        let Some(held) = cache.get_mut(kernel_id) else {
+            return false;
+        };
+        held.registrations -= 1;
+        if held.registrations == 0 {
+            let released = cache.remove(kernel_id);
+            // Dropped once the lock is let go: the kernel's own drop waits for
+            // the device to go idle.
+            drop(cache);
+            drop(released);
+        }
+        true
     }
 
     /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
-    /// returned.
+    /// returned, while a registration still holds it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compute_kernel_by_id(
         &self,
@@ -486,7 +541,7 @@ impl GpuContext {
         self.compute_kernel_cache
             .lock()
             .get(kernel_id)
-            .map(Arc::clone)
+            .map(|held| Arc::clone(&held.kernel))
     }
 
     /// Build a graphics kernel for the `register_graphics_kernel` escalate op,
