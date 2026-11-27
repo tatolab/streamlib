@@ -38,7 +38,12 @@ from ._input_declaration_annotations import (
     WireOnly,
 )
 from ._bundle_pin_type import dataclass_a_bundle_pin_is_written_as
-from ._class_node_pin_group import ClassNodePinGroup, a_pin_group_written_in, read_a_pin_group
+from ._class_node_pin_group import (
+    PIN_GROUP_SLOT_PORT_NAME_SEPARATOR,
+    ClassNodePinGroup,
+    a_pin_group_written_in,
+    read_a_pin_group,
+)
 from ._pin_declaration import (
     NO_DEFAULT,
     DeclaredPin,
@@ -141,15 +146,27 @@ def read_class_node_ports_members_and_pin_groups(
 
 def read_node_function_ports_and_members(
     function: Callable[..., Any],
-) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...], Optional[str]]:
+) -> tuple[
+    list[DeclaredPort],
+    list[DeclaredPort],
+    tuple[ClassNodeMember, ...],
+    tuple[ClassNodePinGroup, ...],
+    Optional[str],
+]:
     """The input and output ports a node function's parameters declare, as the engine reads them,
-    the value input or pin behind each, and the parameter the runtime context is handed in,
-    `None` for a body that takes none; refused, as a `NodeDeclarationRefusal`, as a class's
-    fields and pins are, and for a parameter that is not keyword-only, not typed, or neither an
-    `Input`, a pin nor the context."""
+    the value input or pin behind each, each `PinGroup` it takes, and the parameter the runtime
+    context is handed in, `None` for a body that takes none; refused, as a
+    `NodeDeclarationRefusal`, as a class's fields, pins and groups are, and for a parameter that
+    is not keyword-only, not typed, or neither an `Input`, a pin, a group nor the context."""
     reading = _NodeFunctionReading(function)
     input_ports, output_ports, members = reading.ports(constructed_in_python=True)
-    return input_ports, output_ports, members, reading.full_access_context_parameter
+    return (
+        input_ports,
+        output_ports,
+        members,
+        tuple(reading.pin_groups),
+        reading.full_access_context_parameter,
+    )
 
 
 class _ClassNodeReading:
@@ -760,13 +777,31 @@ class _NodeFunctionReading(_ClassNodeReading):
     def _pin_group(
         self, attribute_name: str, annotation: Any, description: Optional[str]
     ) -> ClassNodePinGroup:
-        raise self._refusal(
-            f"`{self._node}`'s parameter `{attribute_name}` is a `PinGroup`, which a node function "
-            f"does not take yet. To fix: declare the node as a class under bare `@node` while it "
-            f"holds a pin group.",
-            "pin_group_on_a_node_function",
-            pin=attribute_name,
-        )
+        """The group a `PinGroup[Slot]` parameter declares, its slot read as a class's is, each of
+        its values live: a slot value that is a setting, or that chooses a pin type, is refused."""
+        pin_group = super()._pin_group(attribute_name, annotation, description)
+        for member in pin_group.members:
+            slot_member = f"{attribute_name}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{member.attribute}"
+            if member.a_setting:
+                raise self._refusal(
+                    f"`{self._node}`'s pin group `{attribute_name}` holds the setting "
+                    f"`{member.attribute}`, and every input of a node function is live: a "
+                    f"computed value whose build reads the group builds again when it changes. "
+                    f"To fix: drop its `SettingOnly()`, and read `{attribute_name}` in a "
+                    f"`computed(...)` build.",
+                    "setting_on_a_node_function",
+                    pin=slot_member,
+                )
+            if member.form == "field" and _chooses_a_pin_type(member.pin_declaration):
+                raise self._refusal(
+                    f"`{self._node}`'s pin group `{attribute_name}` holds `{member.attribute}`, "
+                    f"which chooses a pin type, and every input of a node function is live. To "
+                    f"fix: declare the node as a class under bare `@node` while a slot value "
+                    f"chooses its pin types.",
+                    "pin_type_choice_on_a_node_function",
+                    pin=slot_member,
+                )
+        return pin_group
 
 
 def _chooses_a_pin_type(declaration: PinDeclarationOnTheWire) -> bool:

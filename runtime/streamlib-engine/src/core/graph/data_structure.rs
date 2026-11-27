@@ -10,7 +10,10 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
 use super::nodes::{GraphNode, NodeRunId};
-use super::{GraphEdgeWithComponents, PendingDeletionComponent};
+use super::{
+    GraphEdgeWithComponents, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
+    PendingDeletionComponent,
+};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -112,11 +115,20 @@ impl Graph {
             })
     }
 
-    /// How many slots each pin group of each node declaring one holds now, by node.
-    pub(crate) fn the_pin_group_slot_counts_of_each_node(&self) -> HashMap<NodeRunId, Vec<usize>> {
+    /// How many slots each pin group holds now, by node, of each node declaring one that is
+    /// built for the slots it holds: a node whose helper takes its slots while it plays, a node
+    /// written as one function, is left out, since a change in their count rebuilds nothing.
+    pub(crate) fn the_pin_group_slot_counts_of_each_node_built_for_them(
+        &self,
+    ) -> HashMap<NodeRunId, Vec<usize>> {
         self.digraph
             .node_weights()
             .filter(|node| !node.pin_groups().is_empty())
+            .filter(|node| {
+                !node
+                    .get::<OutOfProcessLinkWiringComponent>()
+                    .is_some_and(|wiring| wiring.0.its_far_side_takes_its_pin_group_slots_live())
+            })
             .map(|node| (node.id.clone(), node.slot_counts_held()))
             .collect()
     }

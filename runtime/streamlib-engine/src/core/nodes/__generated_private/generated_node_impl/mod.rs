@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::{Condvar, Mutex};
 
@@ -385,6 +386,8 @@ pub struct OutOfProcessLinkWiringEnvelope {
     /// writes; `None` before any spawn of a far side calling a stateful node.
     function_node_states_its_far_side_writes:
         Mutex<Option<Arc<FunctionNodeStatesCarriedForOneStream>>>,
+    /// Read by `its_far_side_takes_its_pin_group_slots_live`.
+    its_far_side_takes_its_pin_group_slots_live: AtomicBool,
 }
 
 impl std::fmt::Debug for OutOfProcessLinkWiringEnvelope {
@@ -431,6 +434,7 @@ impl OutOfProcessLinkWiringEnvelope {
             far_side_process_execution,
             function_node_promotion_out_of_its_islands: Default::default(),
             function_node_states_its_far_side_writes: Mutex::new(None),
+            its_far_side_takes_its_pin_group_slots_live: AtomicBool::new(false),
         }
     }
 
@@ -761,6 +765,27 @@ impl OutOfProcessLinkWiringEnvelope {
                     .note_it_ran_compiled(function_node_id, ran_compiled);
             }
         }
+    }
+
+    /// Note the `takes_its_pin_group_slots_live` its far side's `ready` carries.
+    pub(crate) fn note_whether_its_far_side_takes_its_pin_group_slots_live(
+        &self,
+        takes_its_pin_group_slots_live: Option<&JsonValue>,
+    ) {
+        self.its_far_side_takes_its_pin_group_slots_live.store(
+            takes_its_pin_group_slots_live
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Whether its far side, set up last, gives the node the slots its pin groups' wiring gives
+    /// them while it plays, so a change in their count rebuilds nothing: a node written as one
+    /// function does.
+    pub(crate) fn its_far_side_takes_its_pin_group_slots_live(&self) -> bool {
+        self.its_far_side_takes_its_pin_group_slots_live
+            .load(Ordering::Relaxed)
     }
 
     pub(crate) fn number_the_function_node_its_far_side_runs_as_a_standalone_node(

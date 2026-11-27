@@ -197,7 +197,7 @@ class OutputPin(_ClassNodePin, Generic[PinTypeOfThePin]):
 
 
 class PinGroup(Generic[SlotOfTheGroup]):
-    """A class node's slot of pins and values that repeats: `layers: PinGroup[Layer]`.
+    """A node's slot of pins and values that repeats: `layers: PinGroup[Layer]`.
 
     The slot is a frozen dataclass whose fields are pins, `picture: InputPin[Texture]`, and
     values with their defaults, `opacity: float = 1.0`, read as a class node's own pins and
@@ -206,16 +206,21 @@ class PinGroup(Generic[SlotOfTheGroup]):
     whose slot holds only outputs or settings has as many slots as the node's Integer input
     named after the group says.
 
-    On a running node the attribute holds the slots the node was built with, in order: each slot
-    the dataclass, its pins bound and its values as set. A change in the count rebuilds the node,
-    so `len(self.layers)` read in `__init__()` or `setup()` holds for the node's life.
+    A node written as one function takes the group as a parameter, and `get()` reads its slots
+    in a build or in the per-frame function: each slot the dataclass, its pins bound and its
+    values as set. A slot wired or unwired while the node plays, or a value set on one, gives
+    `get()` the new slots, and builds again each computed value that read them.
+
+    On a running class node the attribute holds the slots the node was built with, in order. A
+    change in the count rebuilds a class node, so `len(self.layers)` read in `__init__()` or
+    `setup()` holds for its life.
     """
 
     __slots__ = ()
 
     def __init__(self) -> NoReturn:
         raise TypeError(
-            "`PinGroup[...]` declares a class node's pin group in an annotation with no value, "
+            "`PinGroup[...]` declares a node's pin group in an annotation with no value, "
             "`layers: PinGroup[Layer]`, and is never constructed."
         )
 
@@ -229,4 +234,9 @@ class PinGroup(Generic[SlotOfTheGroup]):
 
     def __getitem__(self, index: int) -> SlotOfTheGroup:
         """The slot at `index`, from 0."""
+        raise NotImplementedError
+
+    def get(self) -> "tuple[SlotOfTheGroup, ...]":
+        """Each slot of a node function's group, in order, read in a build or in the per-frame
+        function of the running node."""
         raise NotImplementedError

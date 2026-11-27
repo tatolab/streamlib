@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A class node's `PinGroup[Slot]`: its slot, a frozen dataclass of pins and values, read as the engine declares a pin group.
+"""A node's `PinGroup[Slot]`: its slot, a frozen dataclass of pins and values, read as the engine declares a pin group.
 
 Each field of the slot is read as a class node's own field or pin is, so its pin types, modes,
 defaults and refusals are the same, and a refusal names the node and `<group>.<field>`. The
@@ -212,15 +212,16 @@ def read_a_pin_group(
 
 
 def refuse_a_pin_group_on_a_function_node(function_name: str, parameter: str, annotation: Any) -> None:
-    """Refuse `parameter` of function node `function_name` when it is a `PinGroup`, which only a
-    class node declares."""
+    """Refuse `parameter` of pure function node `function_name` when it is a `PinGroup`, which
+    only a class under bare `@node` or a node function under `@node(...)` takes."""
     if not a_pin_group_written_in(annotation):
         return
     raise NodeDeclarationRefusal(
-        f"`{function_name}` takes `{parameter}` as a `PinGroup`, and only a class node under "
-        f"bare `@node` declares a pin group: a function node's inputs are fixed by its "
-        f"signature. To fix: declare the node as a class with `{parameter}: PinGroup[...]`, "
-        f"or take a `list[...]` value.",
+        f"`{function_name}` takes `{parameter}` as a `PinGroup`, and a pure function node's "
+        f"inputs are fixed by its signature: only a class under bare `@node` or a node "
+        f"function under `@node(...)` takes a pin group. "
+        f"To fix: write it under `@node(...)`, its `{parameter}: PinGroup[...]` read with "
+        f"`.get()`, or take a `list[...]` value.",
         finding_code="pin_group_on_a_function_node",
         node=function_name,
         pin=parameter,

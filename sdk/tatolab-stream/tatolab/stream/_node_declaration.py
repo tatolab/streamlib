@@ -549,12 +549,13 @@ def _declare_a_node_function(
             finding_code="node_function_not_a_plain_def",
             node=function.__name__,
         )
-    input_ports, output_ports, members, full_access_context_parameter = (
+    input_ports, output_ports, members, pin_groups, full_access_context_parameter = (
         read_node_function_ports_and_members(function)
     )
     node_function = NodeFunction(
         function,
         members=members,
+        pin_groups=pin_groups,
         full_access_context_parameter=full_access_context_parameter,
     )
     held_meta = take_node_meta_held_for_the_kind_decorator(function)
@@ -564,7 +565,7 @@ def _declare_a_node_function(
         node_function,
         input_ports=input_ports,
         output_ports=output_ports,
-        pin_groups=[],
+        pin_groups=[pin_group.declared for pin_group in pin_groups],
         execution=execution,
         interval_ms=interval_ms,
         scheduling=scheduling,
