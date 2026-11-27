@@ -173,6 +173,7 @@ struct VideoCodecNodeThreadEnding {
 }
 
 /// A session open on a codec node's thread, closed when dropped.
+#[must_use = "dropping the session closes it"]
 pub struct VideoCodecNodeSession<Settings> {
     number: u64,
     commands: mpsc::Sender<VideoCodingSessionCommand<Settings>>,

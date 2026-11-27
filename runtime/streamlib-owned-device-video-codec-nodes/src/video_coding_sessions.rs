@@ -48,7 +48,7 @@ impl fmt::Display for VideoCodingSessionNotOpened {
 impl std::error::Error for VideoCodingSessionNotOpened {}
 
 /// What a coding thread is asked to do with its sessions.
-pub enum VideoCodingSessionCommand<Settings> {
+pub(crate) enum VideoCodingSessionCommand<Settings> {
     /// Open a session of `settings` numbered `number`, and answer whether it opened.
     Open {
         number: u64,
@@ -61,7 +61,7 @@ pub enum VideoCodingSessionCommand<Settings> {
 
 /// The sessions open on one coding thread, oldest first, each by the number it was opened
 /// under.
-pub struct VideoCodingSessionsOfTheThread<Session> {
+pub(crate) struct VideoCodingSessionsOfTheThread<Session> {
     open: Vec<(u64, Session)>,
 }
 
@@ -75,7 +75,7 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
     /// Carry out every command waiting in `commands`, in the order they were sent: each open
     /// with `open`, which is told whether another session is open, and answered; each close by
     /// dropping its session here, on the coding thread.
-    pub fn take_the_commands<Settings>(
+    pub(crate) fn take_the_commands<Settings>(
         &mut self,
         commands: &mpsc::Receiver<VideoCodingSessionCommand<Settings>>,
         mut open: impl FnMut(Settings, bool) -> Result<Session, VideoCodingSessionNotOpened>,
@@ -107,12 +107,12 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
     }
 
     /// The newest session open, which an encoder codes every frame with.
-    pub fn newest_mut(&mut self) -> Option<&mut Session> {
+    pub(crate) fn newest_mut(&mut self) -> Option<&mut Session> {
         self.open.last_mut().map(|(_, session)| session)
     }
 
     /// Whether a session numbered `number` is open.
-    pub fn is_open(&self, number: u64) -> bool {
+    pub(crate) fn is_open(&self, number: u64) -> bool {
         self.open
             .iter()
             .any(|(open_number, _)| *open_number == number)
@@ -126,7 +126,7 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
     /// where a decoder may. With no session decoding, for the first frame or once that session
     /// closed, the newest that takes frames takes any media frame, and the decoder's own entry
     /// gate waits for the group start.
-    pub fn the_session_decoding_a_media_frame(
+    pub(crate) fn the_session_decoding_a_media_frame(
         &mut self,
         decoding_with: &mut Option<u64>,
         starts_group: bool,

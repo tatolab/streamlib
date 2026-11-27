@@ -51,7 +51,18 @@ fn raised(not_opened: VideoCodingSessionNotOpened) -> PyErr {
 #[pyclass(frozen)]
 struct H265EncoderThread {
     module_host: ModuleHost,
-    encoding_thread: VideoCodecNodeThread<VideoEncoderSettings>,
+    /// Taken only by `Drop`, which lets the thread go with the GIL released.
+    encoding_thread: Option<VideoCodecNodeThread<VideoEncoderSettings>>,
+}
+
+impl Drop for H265EncoderThread {
+    /// Letting the thread go waits for it to end, which other Python threads must not wait
+    /// out.
+    fn drop(&mut self) {
+        if let Some(thread) = self.encoding_thread.take() {
+            Python::attach(|python| python.detach(|| drop(thread)));
+        }
+    }
 }
 
 #[pymethods]
@@ -69,10 +80,10 @@ impl H265EncoderThread {
             VideoCodecNodeIdentity::H265_ENCODER,
             module_host.clone(),
         )
-        .map_err(VideoCodingThreadEnded::new_err)?;
+        .map_err(PyRuntimeError::new_err)?;
         Ok(Self {
             module_host,
-            encoding_thread,
+            encoding_thread: Some(encoding_thread),
         })
     }
 
@@ -111,7 +122,14 @@ impl H265EncoderThread {
             effort_level,
         };
         let session = python
-            .detach(|| self.encoding_thread.open_session(settings))
+            .detach(|| {
+                self.encoding_thread
+                    .as_ref()
+                    .ok_or(VideoCodingSessionNotOpened::CodingThreadEnded {
+                        node_type_name: "H265EncoderThread",
+                    })?
+                    .open_session(settings)
+            })
             .map_err(raised)?;
         Ok(H265EncodeSession { session })
     }
@@ -137,7 +155,18 @@ impl H265EncodeSession {
 #[pyclass(frozen)]
 struct H265DecoderThread {
     module_host: ModuleHost,
-    decoding_thread: VideoCodecNodeThread<VideoDecoderSettings>,
+    /// Taken only by `Drop`, which lets the thread go with the GIL released.
+    decoding_thread: Option<VideoCodecNodeThread<VideoDecoderSettings>>,
+}
+
+impl Drop for H265DecoderThread {
+    /// Letting the thread go waits for it to end, which other Python threads must not wait
+    /// out.
+    fn drop(&mut self) {
+        if let Some(thread) = self.decoding_thread.take() {
+            Python::attach(|python| python.detach(|| drop(thread)));
+        }
+    }
 }
 
 #[pymethods]
@@ -155,10 +184,10 @@ impl H265DecoderThread {
             VideoCodecNodeIdentity::H265_DECODER,
             module_host.clone(),
         )
-        .map_err(VideoCodingThreadEnded::new_err)?;
+        .map_err(PyRuntimeError::new_err)?;
         Ok(Self {
             module_host,
-            decoding_thread,
+            decoding_thread: Some(decoding_thread),
         })
     }
 
@@ -180,7 +209,14 @@ impl H265DecoderThread {
             max_height,
         };
         let session = python
-            .detach(|| self.decoding_thread.open_session(settings))
+            .detach(|| {
+                self.decoding_thread
+                    .as_ref()
+                    .ok_or(VideoCodingSessionNotOpened::CodingThreadEnded {
+                        node_type_name: "H265DecoderThread",
+                    })?
+                    .open_session(settings)
+            })
             .map_err(raised)?;
         Ok(H265DecodeSession { session })
     }

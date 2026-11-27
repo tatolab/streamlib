@@ -336,21 +336,27 @@ impl WhepPlayerThread {
             endpoint_url,
             bearer_token,
         };
-        let another_is_open = self.endpoints_open.load(Ordering::Acquire) > 0;
-        let command = python
+        // Counted before the dial, so two openings at once cannot both count none open.
+        let another_is_open = self.endpoints_open.fetch_add(1, Ordering::AcqRel) > 0;
+        let handed_over = python
             .detach(|| open_an_endpoint(number, dialer, another_is_open))
             .map_err(|refusal| {
                 WhepSessionNotOpened::new_err(format!(
                     "WhepPlayer: the session did not open, and the one playing keeps \
                      playing: {refusal}"
                 ))
-            })?;
-        self.commands.send(command).map_err(|_| {
-            WhepPlayerThreadEnded::new_err(
-                "WhepPlayer: the reading thread has ended, so no session opens on it",
-            )
-        })?;
-        self.endpoints_open.fetch_add(1, Ordering::AcqRel);
+            })
+            .and_then(|command| {
+                self.commands.send(command).map_err(|_| {
+                    WhepPlayerThreadEnded::new_err(
+                        "WhepPlayer: the reading thread has ended, so no session opens on it",
+                    )
+                })
+            });
+        if let Err(not_opened) = handed_over {
+            self.endpoints_open.fetch_sub(1, Ordering::AcqRel);
+            return Err(not_opened);
+        }
         Ok(WhepPlayerSession {
             number,
             commands: self.commands.clone(),
@@ -366,16 +372,25 @@ impl Drop for WhepPlayerThread {
         let Some(ending) = self.reading_thread.get_mut().ok().and_then(Option::take) else {
             return;
         };
-        match ending.ended.recv_timeout(READING_THREAD_END_WAIT) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = ending.join_handle.join();
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => self.module_host.log(
+        // Waited out with the GIL released, so other Python threads run meanwhile.
+        let ended = Python::attach(|python| {
+            python.detach(
+                move || match ending.ended.recv_timeout(READING_THREAD_END_WAIT) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        let _ = ending.join_handle.join();
+                        true
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => false,
+                },
+            )
+        });
+        if !ended {
+            self.module_host.log(
                 ModuleHostLogLevel::Warn,
                 "tatolab_webrtc::whep_player",
                 "WhepPlayer: the reading thread is still connecting; the session will close \
                  when that connect returns",
-            ),
+            );
         }
     }
 }
