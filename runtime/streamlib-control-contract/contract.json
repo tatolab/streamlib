@@ -8585,7 +8585,7 @@
           {
             "type": "string",
             "const": "computed_value_not_yet_built",
-            "description": "A computed value of a node written as one function has no first value yet: its build\nruns, or waits on another computed value's first value. The node runs no frame until it\nhas one."
+            "description": "A computed value of a node written as one function has no first value yet: its first\nbuild runs, or runs again from a new input after it failed. The node runs no frame until\nevery computed value has one."
           },
           {
             "type": "string",

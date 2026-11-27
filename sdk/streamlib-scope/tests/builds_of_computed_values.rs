@@ -95,6 +95,8 @@ fn the_builds_of_a_closed_scope_read_none_and_keep_no_value_alive() {
     let (scope, mut view) = declared.start().unwrap();
     let builds = scope.builds();
     run_frames_until(&mut view, || counted.get().value == 3);
+    // The worker hands the value over before it reports it, under the lock settling waits on.
+    assert!(scope.wait_until_settled(SETTLE));
     let built: Vec<BuildsOfAComputedValue> = builds.of_each_computed_value();
     assert_eq!(built.len(), 1);
     assert!(built[0].has_a_value);

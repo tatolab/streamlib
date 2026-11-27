@@ -180,9 +180,9 @@ pub enum DiagnosticKindOnTheWire {
     /// A link the running graph holds that could not be wired, so its reader reads nothing
     /// from it: the words say why, in the words of the end that refused it.
     LinkNotWired,
-    /// A computed value of a node written as one function has no first value yet: its build
-    /// runs, or waits on another computed value's first value. The node runs no frame until it
-    /// has one.
+    /// A computed value of a node written as one function has no first value yet: its first
+    /// build runs, or runs again from a new input after it failed. The node runs no frame until
+    /// every computed value has one.
     ComputedValueNotYetBuilt,
     /// The latest build of a computed value returned an error: the words name the value and the
     /// error, and say whether the node runs no frame, the build being its first, or runs on its

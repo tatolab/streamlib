@@ -143,20 +143,18 @@ fn a_build_that_panicked_is_its_own_kind_recovered_by_fixing_the_code() {
 fn a_pending_first_build_shows_the_node_not_ready_and_a_closed_scope_shows_nothing() {
     let place = DiagnosticPlaceOnTheWire::Stream;
     let state = ObservableNodeState::new(NodeState::Running);
-    let let_go = Arc::new((Mutex::new(false), Condvar::new()));
+    let gate = Gate::shut();
+    let held = Arc::clone(&gate.0);
     let mut declaring = streamlib_scope::ScopeBeingDeclared::new();
-    let held = Arc::clone(&let_go);
     declaring.declare(|| {
         streamlib_scope::computed(move || {
-            let (gone, went) = &*held;
-            let mut gone = gone.lock();
-            while !*gone {
-                went.wait(&mut gone);
-            }
+            Gate::wait_on(&held);
             Ok::<_, String>(1_u8)
         })
     });
     let (scope, view) = declaring.start().expect("the scope starts");
+    // Declared after the scope, so it opens before the scope joins its worker on an unwind.
+    let gate = gate;
     state.read_the_builds_of_its_computed_values_from(scope.builds());
 
     let (health, pending) = the_one_diagnostic_of(&state, &place);
@@ -176,8 +174,7 @@ fn a_pending_first_build_shows_the_node_not_ready_and_a_closed_scope_shows_nothi
         "{pending:?}"
     );
 
-    *let_go.0.lock() = true;
-    let_go.1.notify_all();
+    drop(gate);
     drop(scope);
     drop(view);
     assert_eq!(
@@ -237,6 +234,8 @@ fn a_failed_first_build_building_again_from_a_new_input_shows_as_building() {
         })
     });
     let (scope, _view) = declaring.start().expect("the scope starts");
+    // Declared after the scope, so it opens before the scope joins its worker on an unwind.
+    let gate = gate;
     state.read_the_builds_of_its_computed_values_from(scope.builds());
     assert!(scope.wait_until_settled(SETTLED_WITHIN));
     assert_eq!(
