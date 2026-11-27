@@ -15,8 +15,8 @@ use super::super::pin_type_resolution::{
     PinTypeInItsGraph, the_conversion_whose_output_follows_a_setting,
 };
 use super::super::{
-    Graph, GraphEdgeWithComponents, GraphNode, Link, LinkPinTypesDifferComponent, LinkUniqueId,
-    NodeRunId, PendingDeletionComponent, PortInfo,
+    Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, Link, LinkPinTypesDifferComponent,
+    LinkUniqueId, NodeRunId, OutputLinkPortRef, PendingDeletionComponent, PortInfo,
 };
 use super::wired_links_past_an_input::the_wired_links_out_of;
 use super::{the_ends_a_link_is_judged_by, the_refusal_without_its_fix, the_typed_ends_of};
@@ -50,7 +50,12 @@ impl Graph {
                 .into_iter()
                 .map(|link| OneLinkJudgedAgain {
                     link_id: link.id.clone(),
-                    differing_now: how_the_ends_of_a_link_differ_now(self, link, &conversions),
+                    differing_now: how_the_ends_of_a_link_differ_now(
+                        self,
+                        link.source(),
+                        link.to_port(),
+                        &conversions,
+                    ),
                     differed_before: link.has::<LinkPinTypesDifferComponent>(),
                 })
                 .collect()
@@ -180,14 +185,47 @@ fn the_links_the_type_choices_of_a_node_reach<'graph>(
     reached
 }
 
-/// How the two ends of `link` differ in `graph` now, naming the type each carries; `None` when
-/// they connect under `conversions`, or when an end is not typed yet, which is judged once it is.
+/// Whether a link from `from` to `to` of a saved graph, refused as it is, is one whose ends
+/// differ only since a type choice of a node at one of its ends changed: kept, so the compile
+/// holds it unwired as it holds a link the change left differing, rather than refusing the
+/// graph it was saved in.
+pub(crate) fn a_saved_link_differs_by_a_type_choice(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> bool {
+    let typed_by_a_choice = |node_run_id: &NodeRunId, port_name: &str, typed_input: bool| {
+        graph
+            .traversal()
+            .v(node_run_id)
+            .first()
+            .is_some_and(|node| {
+                let typed = the_ports_a_type_choice_of_the_node_types(graph, node);
+                if typed_input {
+                    typed.inputs.contains(&port_name)
+                } else {
+                    typed.outputs.iter().any(|output| output.name == port_name)
+                }
+            })
+    };
+    if !typed_by_a_choice(from.node_run_id(), from.port_name(), false)
+        && !typed_by_a_choice(to.node_run_id(), to.port_name(), true)
+    {
+        return false;
+    }
+    let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+    how_the_ends_of_a_link_differ_now(graph, from, to, &conversions).is_some()
+}
+
+/// How the two ends of a link from `from` to `to` differ in `graph` now, naming the type each
+/// carries; `None` when they connect under `conversions`, or when an end is not typed yet, which
+/// is judged once it is.
 fn how_the_ends_of_a_link_differ_now(
     graph: &Graph,
-    link: &Link,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
     conversions: &[PinConversion],
 ) -> Option<LinkPinTypesDifferComponent> {
-    let (from, to) = (link.source(), link.to_port());
     let why = match refuse_a_member_its_port_does_not_hold(graph, from, to) {
         Err(refusal) => refusal.to_string(),
         Ok(()) => the_typed_ends_of(graph, from, to)?

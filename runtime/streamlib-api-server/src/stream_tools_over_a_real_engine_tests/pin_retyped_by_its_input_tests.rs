@@ -4,8 +4,9 @@
 //! An input choosing a pin's type, set through `transact` while its stream plays, re-types the
 //! pin live: the node is never rebuilt and the stream keeps playing; a link the new type no
 //! longer fits carries nothing and is reported as `LinkPinTypesDiffer`, recovered by fixing the
-//! link; setting the input back makes the link flow again without wiring it again, and removing
-//! the link instead clears the report.
+//! link; setting the input back, or undoing the change, makes the link flow again without
+//! wiring it again, removing the link instead clears the report, and a stream saved so plays
+//! holding the link unwired.
 
 use std::collections::BTreeMap;
 
@@ -88,6 +89,12 @@ impl ReactiveNode for StreamToolsTestWordCounter::Node {
 /// A project whose stream `main` holds `source`, its `format` choosing a String, linked into the
 /// `word` of a [`StreamToolsTestWordCounter`] `reader`.
 fn a_project_whose_source_chooses_a_string_for_its_reader() -> ProjectWithGraphDocuments {
+    a_project_whose_source_chooses_for_its_reader(PinType::String {})
+}
+
+/// A project whose stream `main` holds `source`, its `format` choosing `format`, linked into the
+/// `word` of a [`StreamToolsTestWordCounter`] `reader`.
+fn a_project_whose_source_chooses_for_its_reader(format: PinType) -> ProjectWithGraphDocuments {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         NODE_REGISTRY.register::<ASourceWhoseFormatChoosesItsType::Node>();
@@ -98,7 +105,7 @@ fn a_project_whose_source_chooses_a_string_for_its_reader() -> ProjectWithGraphD
         "nodes": [
             { "id": SOURCE_NODE_UUID, "name": "source",
               "type": ASourceWhoseFormatChoosesItsType::Node::node_class_import_path().as_str(),
-              "input_values": { "format": PinType::String {} } },
+              "input_values": { "format": format } },
             { "id": READER_NODE_UUID, "name": "reader",
               "type": StreamToolsTestWordCounter::node_class_import_path().as_str() },
         ],
@@ -164,6 +171,38 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         }
     }
 
+    /// Assert the one link of `stream_id` is held unwired and reported as its pin types
+    /// differing, recovered by fixing the link, naming both pin types.
+    async fn assert_the_link_is_reported_as_its_pin_types_differing(&self, stream_id: &str) {
+        let diagnostics = self.the_diagnostics_of(stream_id).await;
+        let differing: Vec<&Value> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic["kind"] == "link_pin_types_differ")
+            .collect();
+        assert_eq!(differing.len(), 1, "{diagnostics:?}");
+        assert_eq!(differing[0]["recovery"], "fix_the_link", "{diagnostics:?}");
+        assert_eq!(differing[0]["place"]["on"], "link", "{diagnostics:?}");
+        let words = differing[0]["words"].as_str().expect("words");
+        assert!(
+            words.contains("Audio") && words.contains("String"),
+            "both pin types are named: {words}"
+        );
+        assert_eq!(self.the_state_of_the_link_of(stream_id), "error");
+    }
+
+    /// Assert no link of `stream_id` is reported as its pin types differing, and its one link
+    /// is wired.
+    async fn assert_the_link_fits_again(&self, stream_id: &str) {
+        assert!(
+            self.the_diagnostics_of(stream_id)
+                .await
+                .iter()
+                .all(|diagnostic| diagnostic["kind"] != "link_pin_types_differ"),
+            "the link fits again"
+        );
+        assert_eq!(self.the_state_of_the_link_of(stream_id), "wired");
+    }
+
     /// The diagnostics of `stream_id`'s condition, as `list_streams` serves them.
     async fn the_diagnostics_of(&self, stream_id: &str) -> Vec<Value> {
         let listing = the_listing_of(&self.operations_on_the_loaded_streams(), stream_id).await;
@@ -205,20 +244,9 @@ async fn a_format_change_retypes_the_pin_live_and_a_link_it_no_longer_fits_says_
         .await;
 
     engine.the_reader_stops_reading(&stream_id).await;
-    let diagnostics = engine.the_diagnostics_of(&stream_id).await;
-    let differing: Vec<&Value> = diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic["kind"] == "link_pin_types_differ")
-        .collect();
-    assert_eq!(differing.len(), 1, "{diagnostics:?}");
-    assert_eq!(differing[0]["recovery"], "fix_the_link", "{diagnostics:?}");
-    assert_eq!(differing[0]["place"]["on"], "link", "{diagnostics:?}");
-    let words = differing[0]["words"].as_str().expect("words");
-    assert!(
-        words.contains("Audio") && words.contains("String"),
-        "both pin types are named: {words}"
-    );
-    assert_eq!(engine.the_state_of_the_link_of(&stream_id), "error");
+    engine
+        .assert_the_link_is_reported_as_its_pin_types_differing(&stream_id)
+        .await;
     assert_the_graph_document_equals_the_running_graph(
         &project.the_graph_document_of("main"),
         &engine.the_live_graph_of(&stream_id),
@@ -232,15 +260,7 @@ async fn a_format_change_retypes_the_pin_live_and_a_link_it_no_longer_fits_says_
     engine
         .the_reader_reads_past(&stream_id, read_while_held)
         .await;
-    assert!(
-        engine
-            .the_diagnostics_of(&stream_id)
-            .await
-            .iter()
-            .all(|diagnostic| diagnostic["kind"] != "link_pin_types_differ"),
-        "the link fits again"
-    );
-    assert_eq!(engine.the_state_of_the_link_of(&stream_id), "wired");
+    engine.assert_the_link_fits_again(&stream_id).await;
     assert_eq!(
         counted_in(&stream_id).bodies_run,
         1,
@@ -293,6 +313,81 @@ async fn a_link_whose_pin_types_differ_is_removed_clearing_the_report() {
             .is_some_and(Vec::is_empty)
     );
     assert_eq!(counted_in(&stream_id).bodies_run, 1);
+    assert_the_graph_document_equals_the_running_graph(
+        &project.the_graph_document_of("main"),
+        &engine.the_live_graph_of(&stream_id),
+    );
+}
+
+/// Mental-revert: a saved link whose ends a type choice left differing refuses the graph it was
+/// saved in, so the stream does not load, or is kept and wired, carrying words into an input that
+/// does not read their type.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_saved_with_a_link_its_type_choice_no_longer_fits_plays_holding_it_unwired() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_source_chooses_for_its_reader(PinType::Audio {});
+    let (stream_id, _served) = engine
+        .the_stream_main_of_the_project_started_and_served(&project)
+        .await;
+
+    engine.the_reader_stops_reading(&stream_id).await;
+    assert_eq!(
+        counted_in(&stream_id).words_read,
+        0,
+        "nothing flows on the link"
+    );
+    engine
+        .assert_the_link_is_reported_as_its_pin_types_differing(&stream_id)
+        .await;
+
+    engine
+        .set_the_format_of_the_source(&project, PinType::String {})
+        .await;
+    engine.the_reader_reads_past(&stream_id, 0).await;
+    engine.assert_the_link_fits_again(&stream_id).await;
+    assert_eq!(
+        counted_in(&stream_id).bodies_run,
+        1,
+        "the source is never rebuilt"
+    );
+}
+
+/// Mental-revert: an undo putting back the format a link fits, reconciled from the graph
+/// document, leaves the link held unwired and reported.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_undo_of_the_format_change_makes_the_link_flow_again() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_source_chooses_a_string_for_its_reader();
+    let (stream_id, _served) = engine
+        .the_stream_main_of_the_project_started_and_served(&project)
+        .await;
+    engine.the_reader_reads_past(&stream_id, 0).await;
+    engine
+        .set_the_format_of_the_source(&project, PinType::Audio {})
+        .await;
+    engine.the_reader_stops_reading(&stream_id).await;
+    engine
+        .assert_the_link_is_reported_as_its_pin_types_differing(&stream_id)
+        .await;
+
+    let read_while_held = counted_in(&stream_id).words_read;
+    engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the undo puts the String back");
+
+    engine
+        .the_reader_reads_past(&stream_id, read_while_held)
+        .await;
+    engine.assert_the_link_fits_again(&stream_id).await;
+    assert_eq!(
+        counted_in(&stream_id).bodies_run,
+        1,
+        "the source is never rebuilt"
+    );
     assert_the_graph_document_equals_the_running_graph(
         &project.the_graph_document_of("main"),
         &engine.the_live_graph_of(&stream_id),

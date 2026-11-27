@@ -29,6 +29,7 @@ mod wired_links_past_an_input;
 
 use bundle_frames_into_an_untyped_input::refuse_bundle_frames_into_an_untyped_input;
 pub(crate) use bundle_frames_into_an_untyped_input::the_bundle_frame_type_an_output_may_carry;
+use links_a_type_choice_reaches::a_saved_link_differs_by_a_type_choice;
 pub(crate) use links_a_type_choice_reaches::a_type_choice_of_the_node_types_a_port;
 use named_type_at_an_untyped_end::refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other;
 use wired_links_past_an_input::the_first_wired_link_past_an_input_refused;
@@ -362,8 +363,33 @@ pub(crate) fn a_link_made_now_would_be_refused(
 /// Refuse a link from `from` to `to` its verdict among the conversions `graph`'s stream
 /// resolves refuses; `a_link_connected` says whether one the verdict refuses by its pin types
 /// alone is kept. Answers the verdict of a link between two typed ends that connects, and `None`
-/// for one with an end its graph does not type yet, which is judged once it is.
+/// for one with an end its graph does not type yet, which is judged once it is, or for a saved
+/// graph's link whose ends differ since a type choice at one of them changed, which is kept for
+/// the compile to hold unwired.
 pub(crate) fn refuse_a_link_its_pin_types_refuse(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    a_link_connected: ALinkConnected,
+) -> Result<Option<PinLinkVerdict>> {
+    let judged = refuse_a_link_its_pin_types_refuse_as_it_is(graph, from, to, a_link_connected);
+    if judged.is_err()
+        && a_link_connected == ALinkConnected::OfASavedGraph
+        && a_saved_link_differs_by_a_type_choice(graph, from, to)
+    {
+        tracing::info!(
+            from = %from,
+            to = %to,
+            "a saved link is kept, held unwired: its ends differ since a type choice changed"
+        );
+        return Ok(None);
+    }
+    judged
+}
+
+/// Refuse a link from `from` to `to` as [`refuse_a_link_its_pin_types_refuse`] does, keeping no
+/// saved link a type choice left differing.
+fn refuse_a_link_its_pin_types_refuse_as_it_is(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,

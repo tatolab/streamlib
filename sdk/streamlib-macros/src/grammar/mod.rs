@@ -10,10 +10,11 @@ use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
 use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized};
 
+mod pin_type_chosen_by_an_input;
 mod port_grammar;
 mod value_input_grammar;
 
-pub(crate) use port_grammar::PinTypeChosenBy;
+pub(crate) use pin_type_chosen_by_an_input::PinTypeChosenBy;
 use port_grammar::{DeclaredPort, parse_port};
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side

@@ -142,7 +142,9 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
     None
 }
 
-/// Each link wired out of output `output_name` of `node` in `graph`, none being taken off.
+/// Each link drawn out of output `output_name` of `node` in `graph`, none being taken off: one
+/// held unwired, its ends differing since a type choice changed, among them, so a change back
+/// finds it to wire it again.
 pub(super) fn the_wired_links_out_of<'graph>(
     graph: &'graph Graph,
     node: &GraphNode,
