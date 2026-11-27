@@ -18,15 +18,17 @@ from tatolab.stream import (
     ColorInfo,
     ComputeKernel,
     GpuContextLimitedAccess,
-    Texture,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
+    Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     log,
     node,
 )
@@ -64,49 +66,50 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
 @node.meta(description="Publishes frames of one premultiplied RGBA colour")
 @node(execution="continuous", interval_ms=SOURCE_INTERVAL_MS)
-class SolidPremultipliedColourSource:
+def SolidPremultipliedColourSource(
+    *,
+    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+    width: Input[int] = Input(64),
+    height: Input[int] = Input(64),
+    premultiplied_rgba: Input[list[int]] = Input([0, 0, 0, 255]),
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Every frame is `premultiplied_rgba`, each channel 0-255, at `width`x`height`."""
+    fill_push_constants = computed(
+        lambda: struct.pack("<4f", *(channel / 255 for channel in premultiplied_rgba.get()))
+    )
+    frame_ring = NodeOutputTextureRing("rgba8_unorm", ["storage_binding", "texture_binding"])
+    fill_kernel: ComputeKernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=_FILL_KERNEL_SLANG,
+        push_constant_size=struct.calcsize("<4f"),
+        bindings={"filled_frame": "storage_image"},
+    )
 
-    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
-
-    width: int = 64
-    height: int = 64
-    premultiplied_rgba: list[int] = [0, 0, 0, 255]
-
-    def __init__(self) -> None:
-        self._fill_push_constants = struct.pack(
-            "<4f", *(channel / 255 for channel in self.premultiplied_rgba)
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        frame_width, frame_height = width.get(), height.get()
+        frame_texture = frame_ring.next_texture_for_this_frame(
+            frame_ctx.gpu_limited_access, frame_width, frame_height
         )
-        self._frame_ring = NodeOutputTextureRing("rgba8_unorm", ["storage_binding", "texture_binding"])
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self._fill_kernel: ComputeKernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=_FILL_KERNEL_SLANG,
-            push_constant_size=len(self._fill_push_constants),
-            bindings={"filled_frame": "storage_image"},
-        )
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame_texture = self._frame_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.width, self.height
-        )
-        self._fill_kernel.dispatch(
+        fill_kernel.dispatch(
             bindings={"filled_frame": frame_texture},
-            group_count=((self.width + 7) // 8, (self.height + 7) // 8, 1),
-            push_constants=self._fill_push_constants,
+            group_count=((frame_width + 7) // 8, (frame_height + 7) // 8, 1),
+            push_constants=fill_push_constants.get(),
         )
-        self.video.write(
+        video.write(
             TextureToWrite.of_texture(frame_texture, ColorInfo()),
-            timestamp_ns=ctx.time,
+            timestamp_ns=frame_ctx.time,
         )
+
+    return each_frame
 
 
 @node.meta(description="Declares a video output and never publishes on it")
 @node(execution="manual")
-class NeverPublishingVideoSource:
+def NeverPublishingVideoSource(
+    *,
+    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+) -> None:
     """Stands for a layer that is wired and has never sent a frame."""
-
-    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
 
 
 def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
@@ -119,51 +122,55 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
 
 @node.meta(description="Reports the pixels of the composite it holds once the sources have settled")
 @node(execution="continuous", interval_ms=10)
-class AlphaOverCompositeProbe:
+def AlphaOverCompositeProbe(
+    *,
+    composite_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Holds the newest composite and reports its pixels, or reports that none arrived."""
 
-    composite_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    reported = False
+    started_at_ns: "int | None" = None
+    first_composite_at_ns: "int | None" = None
+    composites_received = 0
+    _newest_composite: "Texture | None" = None
 
-    def __init__(self) -> None:
-        self._reported = False
-        self._started_at_ns: "int | None" = None
-        self._first_composite_at_ns: "int | None" = None
-        self._composites_received = 0
-        self._newest_composite: "Texture | None" = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self._reported:
-            return
-        if self._started_at_ns is None:
-            self._started_at_ns = ctx.time
-        composite = self.composite_from_upstream.read()
-        if composite is not None:
-            self._composites_received += 1
-            self._newest_composite = composite
-            if self._first_composite_at_ns is None:
-                self._first_composite_at_ns = ctx.time
-
-        if self._first_composite_at_ns is None:
-            if ctx.time - self._started_at_ns >= FIRST_COMPOSITE_DEADLINE_SECONDS * 1e9:
-                self._report(lambda: {"composites_received": 0})
-            return
-        if ctx.time - self._first_composite_at_ns < SETTLING_SECONDS_AFTER_THE_FIRST_COMPOSITE * 1e9:
-            return
-        newest_composite = self._newest_composite
-        assert newest_composite is not None
-        gpu = ctx.gpu_limited_access
-        self._report(
-            lambda: {
-                "composites_received": self._composites_received,
-                "extent": [newest_composite.width, newest_composite.height],
-                "pixels": _pixels_of(gpu, newest_composite.surface_id),
-            }
-        )
-
-    def _report(self, observe: "Callable[[], dict[str, Any]]") -> None:
-        self._reported = True
+    def report(observe: "Callable[[], dict[str, Any]]") -> None:
+        nonlocal reported
+        reported = True
         try:
             observation = observe()
         except BaseException:  # noqa: BLE001 — re-raised by the asserting test
             observation = {"failure": traceback.format_exc()}
         log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal _newest_composite, composites_received, first_composite_at_ns, started_at_ns
+        if reported:
+            return
+        if started_at_ns is None:
+            started_at_ns = ctx.time
+        composite = composite_from_upstream.read()
+        if composite is not None:
+            composites_received += 1
+            _newest_composite = composite
+            if first_composite_at_ns is None:
+                first_composite_at_ns = ctx.time
+
+        if first_composite_at_ns is None:
+            if ctx.time - started_at_ns >= FIRST_COMPOSITE_DEADLINE_SECONDS * 1e9:
+                report(lambda: {"composites_received": 0})
+            return
+        if ctx.time - first_composite_at_ns < SETTLING_SECONDS_AFTER_THE_FIRST_COMPOSITE * 1e9:
+            return
+        newest_composite = _newest_composite
+        assert newest_composite is not None
+        gpu = ctx.gpu_limited_access
+        report(
+            lambda: {
+                "composites_received": composites_received,
+                "extent": [newest_composite.width, newest_composite.height],
+                "pixels": _pixels_of(gpu, newest_composite.surface_id),
+            }
+        )
+
+    return each_frame

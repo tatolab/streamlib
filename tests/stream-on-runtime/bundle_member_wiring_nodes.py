@@ -10,9 +10,9 @@ declared inside a pytest module would have the child import the test suite.
 
 import json
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import InputPin, OutputPin, StreamDelivery, Texture, log, node
+from tatolab.stream import InputPin, OutputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, log, node
 
 #: The level the source writes into the bundle's `level` member.
 LEVEL_WRITTEN = 0.25
@@ -27,34 +27,40 @@ class Reading:
 
 
 @node(execution="continuous", interval_ms=20)
-class WritesOneLevelSource:
+def WritesOneLevelSource(
+    *,
+    level: OutputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes `LEVEL_WRITTEN` every tick."""
 
-    level: OutputPin[float]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        level.write(LEVEL_WRITTEN)
 
-    def process(self, ctx) -> None:
-        self.level.write(LEVEL_WRITTEN)
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=20)
-class ReportsTheMembersItReads:
+def ReportsTheMembersItReads(
+    *,
+    level: InputPin[float],
+    label: InputPin[str],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the level and the label it reads, once both have arrived."""
 
-    level: InputPin[float]
-    label: InputPin[str]
+    latest: "dict[str, object]" = {}
+    reported = False
 
-    def __init__(self) -> None:
-        self._latest: "dict[str, object]" = {}
-        self._reported = False
-
-    def process(self, ctx) -> None:
-        for name, pin in (("level", self.level), ("label", self.label)):
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        for name, pin in (("level", level), ("label", label)):
             value = pin.read()
             if value is not None:
-                self._latest[name] = value
-        if not self._reported and len(self._latest) == 2:
-            self._reported = True
-            log.info("MARKER:BUNDLE_MEMBERS_READ " + json.dumps(self._latest))
+                latest[name] = value
+        if not reported and len(latest) == 2:
+            reported = True
+            log.info("MARKER:BUNDLE_MEMBERS_READ " + json.dumps(latest))
+
+    return each_frame
 
 
 @dataclass(frozen=True)
@@ -67,23 +73,26 @@ class MeteredPicture:
 
 
 @node(execution="continuous", interval_ms=20)
-class ReportsThePictureAndTheLevelItReads:
+def ReportsThePictureAndTheLevelItReads(
+    *,
+    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    level: InputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the size of the picture and the level it reads, once both have arrived."""
 
-    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-    level: InputPin[float]
+    latest: "dict[str, object]" = {}
+    reported = False
 
-    def __init__(self) -> None:
-        self._latest: "dict[str, object]" = {}
-        self._reported = False
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        newest_picture = picture.read()
+        if newest_picture is not None:
+            latest["picture"] = [newest_picture.width, newest_picture.height]
+        newest_level = level.read()
+        if newest_level is not None:
+            latest["level"] = newest_level
+        if not reported and len(latest) == 2:
+            reported = True
+            log.info("MARKER:METERED_PICTURE_MEMBERS_READ " + json.dumps(latest))
 
-    def process(self, ctx) -> None:
-        picture = self.picture.read()
-        if picture is not None:
-            self._latest["picture"] = [picture.width, picture.height]
-        level = self.level.read()
-        if level is not None:
-            self._latest["level"] = level
-        if not self._reported and len(self._latest) == 2:
-            self._reported = True
-            log.info("MARKER:METERED_PICTURE_MEMBERS_READ " + json.dumps(self._latest))
+    return each_frame

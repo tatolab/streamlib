@@ -45,9 +45,10 @@ dependencies = ["tatolab-stream"]
 """
 
 NODES_OF_THE_PROJECT = '''\
+from typing import Callable
 import json
 
-from tatolab.stream import InputPin, Vector2, log, node
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, Vector2, log, node
 
 
 @node.meta(description="A Vector of two as one number: x plus ten times y.")
@@ -58,22 +59,25 @@ def SpotAsOneNumber(spot: Vector2 = Vector2(0.0, 0.0)) -> float:
 
 @node.meta(description="Reports the green and the spot it reads, once both have arrived.")
 @node(execution="continuous", interval_ms=20)
-class ReportsTheLevelsItReads:
-    green: InputPin[float]
-    spot: InputPin[float]
+def ReportsTheLevelsItReads(
+    *,
+    green: InputPin[float],
+    spot: InputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    latest = {}
+    reported = False
 
-    def __init__(self) -> None:
-        self._latest = {}
-        self._reported = False
-
-    def process(self, ctx) -> None:
-        for name, pin in (("green", self.green), ("spot", self.spot)):
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        for name, pin in (("green", green), ("spot", spot)):
             level = pin.read()
             if level is not None:
-                self._latest[name] = level
-        if not self._reported and len(self._latest) == 2:
-            self._reported = True
-            log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(self._latest))
+                latest[name] = level
+        if not reported and len(latest) == 2:
+            reported = True
+            log.info("MARKER:COMBINED_LEVELS_READ " + json.dumps(latest))
+
+    return each_frame
 '''
 
 

@@ -13,7 +13,7 @@ still decodes.
 """
 
 import os
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 
@@ -48,26 +48,32 @@ def waveform_placed_by_start_sample(
     return waveform
 
 
-@node
-class CapturedAudioWaveformRecorder:
+@node(execution="reactive")
+def CapturedAudioWaveformRecorder(
+    *,
+    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Accumulates captured blocks, then writes them once as one waveform."""
 
-    # The plan's profile for audio: order carries meaning, so blocks arrive in
-    # the order they were published rather than skipping to the freshest. It
-    # promises nothing about how many arrive.
-    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]]
+    _blocks: "list[tuple[int, numpy.ndarray]]" = []
+    samples_recorded = 0
+    sample_rate = None
+    written = False
 
-    def __init__(self) -> None:
-        self._blocks: "list[tuple[int, numpy.ndarray]]" = []
-        self._samples_recorded = 0
-        self._sample_rate = None
-        self._written = False
+    def write_the_waveform() -> None:
+        nonlocal written
+        written = True
+        path = os.environ["STREAMLIB_CAPTURED_WAVEFORM"]
+        waveform = waveform_placed_by_start_sample(_blocks)
+        known_audio_signal.write_wav(path, waveform, sample_rate)
+        log.info(f"{RESULT_MARKER}{path}")
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        block = self.audio_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal sample_rate, samples_recorded
+        block = audio_from_upstream.read()
         if block is None:
             return
-        if self._written:
+        if written:
             # Still drained: a recorder that stopped reading would back its
             # link up behind the microphone, and a full link costs dropped
             # blocks rather than a stalled producer —
@@ -75,25 +81,20 @@ class CapturedAudioWaveformRecorder:
             # whatever a port's profile says.
             return
 
-        self._sample_rate = block.sample_rate
+        sample_rate = block.sample_rate
         # Mixed down here rather than in the analysis, so what is written is one
         # waveform whatever the device's channel count turned out to be.
         mono = numpy.from_dlpack(block).astype("<f8").mean(axis=0)
-        if self._blocks and block.start_sample < self._blocks[-1][0]:
+        if _blocks and block.start_sample < _blocks[-1][0]:
             # A restarted source counts its samples from zero again, so the
             # blocks before it share no timeline with the ones after.
-            self._blocks.clear()
-            self._samples_recorded = 0
-        self._blocks.append((block.start_sample, mono))
-        self._samples_recorded += len(mono)
+            _blocks.clear()
+            samples_recorded = 0
+        _blocks.append((block.start_sample, mono))
+        samples_recorded += len(mono)
 
-        if self._samples_recorded < SECONDS_TO_RECORD * block.sample_rate:
+        if samples_recorded < SECONDS_TO_RECORD * block.sample_rate:
             return
-        self._write_the_waveform()
+        write_the_waveform()
 
-    def _write_the_waveform(self) -> None:
-        self._written = True
-        path = os.environ["STREAMLIB_CAPTURED_WAVEFORM"]
-        waveform = waveform_placed_by_start_sample(self._blocks)
-        known_audio_signal.write_wav(path, waveform, self._sample_rate)
-        log.info(f"{RESULT_MARKER}{path}")
+    return each_frame

@@ -31,12 +31,12 @@ CRASH_LOOP_TIMEOUT_SECONDS = 60.0
 CRASHING_NODES_SOURCE = '''\
 """A node whose helper process exits a moment after every start, beside one that keeps running."""
 
+from typing import Callable
 import json
 import os
 
 from tatolab.stream import (
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     Trigger,
     log,
@@ -45,31 +45,36 @@ from tatolab.stream import (
 
 
 @node(execution="continuous", interval_ms=10)
-class ExitsSoonAfterEveryStart:
+def ExitsSoonAfterEveryStart(
+    *,
+    nothing_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Ends its own process on its tenth callback."""
 
-    def __init__(self) -> None:
-        self._callbacks = 0
+    callbacks = 0
 
-    nothing_to_downstream: OutputPin[Trigger]
+    log.info("MARKER:EXITING_PROBE_STARTED " + json.dumps({"pid": os.getpid()}))
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        log.info("MARKER:EXITING_PROBE_STARTED " + json.dumps({"pid": os.getpid()}))
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self._callbacks += 1
-        if self._callbacks == 10:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal callbacks
+        callbacks += 1
+        if callbacks == 10:
             os._exit(17)
+
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class KeepsRunning:
+def KeepsRunning(
+    *,
+    nothing_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Does nothing, for as long as the stream runs."""
 
-    nothing_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         pass
+
+    return each_frame
 '''
 
 CRASHING_STREAM_SOURCE = '''\

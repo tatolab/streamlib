@@ -10,29 +10,29 @@ device frames reaching a Python node in an interpreter of its own.
 
 import dataclasses
 import json
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import InputPin, StreamDelivery, Texture, log, node
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, log, node
 
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
 
-@node
-class ImageFrameProbe:
+@node(execution="reactive")
+def ImageFrameProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the first two Texture frames the test pattern publishes."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    frames_seen = []
 
-    def __init__(self) -> None:
-        self._frames_seen = []
-
-    def process(self, ctx) -> None:
-        if len(self._frames_seen) >= 2:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        if len(frames_seen) >= 2:
             return
-        frame = self.video_from_upstream.read()
+        frame = video_from_upstream.read()
         if frame is None:
             return
-        self._frames_seen.append(
+        frames_seen.append(
             {
                 "surface_id": frame.surface_id,
                 "width": frame.width,
@@ -42,5 +42,7 @@ class ImageFrameProbe:
                 "timestamp_ns": frame.timestamp_ns,
             }
         )
-        if len(self._frames_seen) == 2:
-            log.info(RESULT_MARKER + json.dumps(self._frames_seen))
+        if len(frames_seen) == 2:
+            log.info(RESULT_MARKER + json.dumps(frames_seen))
+
+    return each_frame

@@ -48,39 +48,39 @@ LIVE_ADDED_EFFECT_CLASS = "LiveAddedEffect"
 LIVE_ADDED_EFFECT_SOURCE = '''\
 """An effect that announces its frames, written after the node started."""
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     log,
     node,
 )
 
 
-@node
-class LiveAddedEffect:
+@node(execution="reactive")
+def LiveAddedEffect(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+    marker: Input[str] = Input("LIVE_FRAME"),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Republishes each frame on a texture of its own and counts them."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
-    marker: str = "LIVE_FRAME"
+    frames = 0
 
-    def __init__(self) -> None:
-        self._frames = 0
+    output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self._output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames
+        frame = video_from_upstream.read()
         if frame is None:
             return
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as upstream:
@@ -89,7 +89,7 @@ class LiveAddedEffect:
                 pixels = upstream.as_numpy().copy()
             finally:
                 upstream.unlock()
-        texture = self._output_ring.next_texture_for_this_frame(
+        texture = output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
         texture.lock(read_only=False)
@@ -97,13 +97,15 @@ class LiveAddedEffect:
             texture.as_numpy()[...] = pixels
         finally:
             texture.unlock()
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
-        self._frames += 1
-        if self._frames == 1:
-            log.info(f"MARKER:{self.marker}")
+        frames += 1
+        if frames == 1:
+            log.info(f"MARKER:{marker.get()}")
+
+    return each_frame
 '''
 
 # A native built-in is named over the control plane by the type `graph`
@@ -462,7 +464,7 @@ SLOWLY_IMPORTING_SINK_SOURCE = f'''\
 
 import os
 import time
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
@@ -470,14 +472,17 @@ if "STREAMLIB_ENTRYPOINT" in os.environ:
     time.sleep({HELPER_IMPORT_SECONDS})
 
 
-@node
-class SlowlyImportingSink:
+@node(execution="reactive")
+def SlowlyImportingSink(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads and drops every frame."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        video_from_upstream.read()
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.video_from_upstream.read()
+    return each_frame
 '''
 
 

@@ -4,6 +4,8 @@
 """Probes that run a scope over device memory, write through MLX or torch for the
 engine to read on the GPU, and hold an array past the texture it came from."""
 
+from typing import Callable
+
 import numpy
 
 from device_exchange_probe_shared_surfaces_and_reporting import (
@@ -13,10 +15,13 @@ from device_exchange_probe_shared_surfaces_and_reporting import (
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
     DeviceExchangeFrameProbeBase,
+    FramesInOrder,
     report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
+    InputPin,
     RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     node,
 )
 
@@ -40,7 +45,10 @@ DOUBLED_FLOAT_RGBA = [0.5, 1.0, 3.0, 4.0]
 
 
 @node(execution="manual")
-class DeviceTensorScopeDoublesAKernelOutputProbe:
+def DeviceTensorScopeDoublesAKernelOutputProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """The demo: torch doubles a kernel output in place through the scope.
 
     An rgba16_float output — the common HDR compute shape — reaches torch as
@@ -50,10 +58,9 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
     reached the texture rather than lingering in the staging.
     """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        report_device_exchange_probe_observation(lambda: self._probe(ctx))
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
         fill_kernel = ctx.gpu_limited_access.create_compute_kernel(
@@ -91,7 +98,10 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
 
 
 @node(execution="manual")
-class DeviceTensorScopeDiscardsOnRaiseProbe:
+def DeviceTensorScopeDiscardsOnRaiseProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """A raise mid-scope leaves the surface holding its pre-scope content.
 
     The write did not finish, so publishing it would hand downstream a torn
@@ -99,10 +109,9 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
     and the surface — and the kernel that writes it — keep working afterwards.
     """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        report_device_exchange_probe_observation(lambda: self._probe(ctx))
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
         fill_kernel = ctx.gpu_limited_access.create_compute_kernel(
@@ -151,15 +160,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
             return observation
 
 
-@node
-class PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
-    """One rule for both scopes: the CPU pixel-buffer scope discards a pending
-    device write when the block is left by a raise.
-
-    This deliberately changes what shipped: the handle used to publish however
-    the block was left, and two scopes with two behaviours is not shippable.
-    """
-
+class _PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -195,8 +196,25 @@ class PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
         }
 
 
+@node(execution="reactive")
+def PixelBufferScopeDiscardsOnRaiseProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """One rule for both scopes: the CPU pixel-buffer scope discards a pending
+    device write when the block is left by a raise.
+
+    This deliberately changes what shipped: the handle used to publish however
+    the block was left, and two scopes with two behaviours is not shippable.
+    """
+    return _PixelBufferScopeDiscardsOnRaiseProbe(video_from_upstream).each_frame
+
+
 @node(execution="manual")
-class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
+def DeviceTensorScopeTakesEveryAcquiredTextureProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """No usage an author spells at `acquire_texture` can close the scope.
 
     `parse_texture_usages` implies `copy_src | copy_dst` on every request,
@@ -208,10 +226,9 @@ class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
     through an acquire that can no longer produce them.
     """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        report_device_exchange_probe_observation(lambda: self._probe(ctx))
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def probe(ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
         with ctx.gpu_full_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
@@ -267,7 +284,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
     what orders it, so that variant proves the contract.
     """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def report_from(self, ctx: RuntimeContextFullAccess) -> None:
         report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
@@ -304,13 +321,17 @@ class _DeviceWriteThenEngineGpuReadProbe:
             return observation
 
 
-@node(execution="manual")
-class TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
+class _TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
         import torch
 
         tensor = torch.from_dlpack(device_tensor)
         tensor[:, :] = torch.tensor(DEVICE_WRITE_RGBA, dtype=torch.uint8, device=tensor.device)
+
+
+@node(execution="manual")
+def TorchDeviceWriteThenEngineGpuReadProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    _TorchDeviceWriteThenEngineGpuReadProbe().report_from(ctx)
 
 
 def _mlx_or_none():
@@ -322,8 +343,7 @@ def _mlx_or_none():
         return None
 
 
-@node(execution="manual")
-class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
+class _MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
             return {"mlx_unavailable": "mlx is not installed in this venv"}
@@ -344,11 +364,12 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         mx.eval(array)
 
 
-@node
-class MlxReadsTheFrameProbe(DeviceExchangeFrameProbeBase):
-    """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
-    frame's own bytes."""
+@node(execution="manual")
+def MlxDeviceWriteThenEngineGpuReadProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    _MlxDeviceWriteThenEngineGpuReadProbe().report_from(ctx)
 
+
+class _MlxReadsTheFrameProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         mx = _mlx_or_none()
         if mx is None:
@@ -367,6 +388,16 @@ class MlxReadsTheFrameProbe(DeviceExchangeFrameProbeBase):
         }
 
 
+@node(execution="reactive")
+def MlxReadsTheFrameProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
+    frame's own bytes."""
+    return _MlxReadsTheFrameProbe(video_from_upstream).each_frame
+
+
 MLX_EDIT_VALUE = 7
 MLX_ROWS_TO_EDIT = 4
 
@@ -379,11 +410,7 @@ def _frame_pixels_now(ctx, surface_id: str):
     return pixels
 
 
-@node
-class MlxWritesTheFrameThroughTheWriteDoorProbe(DeviceExchangeFrameProbeBase):
-    """`with frame.writable() as t:` with MLX as the package: an in-place,
-    evaluated write reaches every other holder once the block ends."""
-
+class _MlxWritesTheFrameThroughTheWriteDoorProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         mx = _mlx_or_none()
         if mx is None:
@@ -407,13 +434,17 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node
-class MlxWriteWithAViewAliveMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
-    """The negative control the MLX write contract rests on: with a view of the
-    array alive at the write, MLX cannot donate the buffer, so the scatter lands
-    in a buffer of MLX's own and the frame never sees it — whatever the scope
-    does at its exit."""
+@node(execution="reactive")
+def MlxWritesTheFrameThroughTheWriteDoorProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`with frame.writable() as t:` with MLX as the package: an in-place,
+    evaluated write reaches every other holder once the block ends."""
+    return _MlxWritesTheFrameThroughTheWriteDoorProbe(video_from_upstream).each_frame
 
+
+class _MlxWriteWithAViewAliveMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         mx = _mlx_or_none()
         if mx is None:
@@ -435,12 +466,19 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node
-class MlxWholeArrayAssignmentMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
-    """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
-    array to MLX, not a store into this one, so the frame never sees it even
-    evaluated inside the scope."""
+@node(execution="reactive")
+def MlxWriteWithAViewAliveMissesTheFrameProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The negative control the MLX write contract rests on: with a view of the
+    array alive at the write, MLX cannot donate the buffer, so the scatter lands
+    in a buffer of MLX's own and the frame never sees it — whatever the scope
+    does at its exit."""
+    return _MlxWriteWithAViewAliveMissesTheFrameProbe(video_from_upstream).each_frame
 
+
+class _MlxWholeArrayAssignmentMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         mx = _mlx_or_none()
         if mx is None:
@@ -458,11 +496,25 @@ class MlxWholeArrayAssignmentMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
         }
 
 
+@node(execution="reactive")
+def MlxWholeArrayAssignmentMissesTheFrameProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
+    array to MLX, not a store into this one, so the frame never sees it even
+    evaluated inside the scope."""
+    return _MlxWholeArrayAssignmentMissesTheFrameProbe(video_from_upstream).each_frame
+
+
 SCOPES_IN_ONE_HELPER = 12
 
 
 @node(execution="manual")
-class TorchAndMlxScopesAlternateInOneHelperProbe:
+def TorchAndMlxScopesAlternateInOneHelperProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Many device-tensor scopes in one helper, torch and MLX alternating, each
     over a fresh texture whose arrays are dropped as soon as the scope ends.
 
@@ -472,10 +524,9 @@ class TorchAndMlxScopesAlternateInOneHelperProbe:
     harness's wait for the result turns the hang into a failure.
     """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        report_device_exchange_probe_observation(lambda: self._probe(ctx))
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
         mx = _mlx_or_none()
@@ -521,7 +572,7 @@ class _DeviceArrayOutlivesTextureHandleProbe:
     afterwards releases the texture — from the capsule's deleter — without
     wedging the helper."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def report_from(self, ctx: RuntimeContextFullAccess) -> None:
         report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _import(self, handle):
@@ -562,8 +613,7 @@ class _DeviceArrayOutlivesTextureHandleProbe:
         }
 
 
-@node(execution="manual")
-class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
+class _TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _import(self, handle):
         import torch
 
@@ -576,7 +626,11 @@ class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandlePro
 
 
 @node(execution="manual")
-class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
+def TorchTensorOutlivesTextureHandleProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    _TorchTensorOutlivesTextureHandleProbe().report_from(ctx)
+
+
+class _MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
             return {"mlx_unavailable": "mlx is not installed in this venv"}
@@ -589,3 +643,8 @@ class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe)
 
     def _checksum(self, array) -> int:
         return int(numpy.array(array, dtype=numpy.int64).sum())
+
+
+@node(execution="manual")
+def MlxArrayOutlivesTextureHandleProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    _MlxArrayOutlivesTextureHandleProbe().report_from(ctx)

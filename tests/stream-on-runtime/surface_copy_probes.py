@@ -12,13 +12,14 @@ import json
 import os
 import sys
 import traceback
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 
 from tatolab.stream import (
     ComputeKernel,
     GpuSurfaceHandle,
+    Input,
     InputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -73,8 +74,13 @@ def _pixels_of(surface: GpuSurfaceHandle) -> numpy.ndarray:
     return pixels
 
 
-@node
-class FrameLandingProbe:
+@node(execution="reactive")
+def FrameLandingProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+    skip_copy: Input[bool] = Input(False),
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Lands the first test-pattern frame in an acquired texture with the
     engine copy, inverts it with a kernel, and reports whether the kernel's
     output is the inverted frame.
@@ -82,49 +88,39 @@ class FrameLandingProbe:
     `skip_copy` is the negative control: the kernel then reads a texture
     nothing landed a frame in, and the check must fail.
     """
+    gpu_full_access = ctx.gpu_full_access
+    kernel: ComputeKernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=INVERT_SLANG,
+        bindings={"landed_frame": "storage_image", "inverted_frame": "storage_image"},
+    )
+    landing_texture: GpuSurfaceHandle = gpu_full_access.acquire_texture(
+        FRAME_WIDTH, FRAME_HEIGHT, "rgba8_unorm", TEXTURE_USAGE
+    )
+    inverted_texture: GpuSurfaceHandle = gpu_full_access.acquire_texture(
+        FRAME_WIDTH, FRAME_HEIGHT, "rgba8_unorm", TEXTURE_USAGE
+    )
+    reported = False
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
-
-    _kernel: ComputeKernel
-    _landing_texture: GpuSurfaceHandle
-    _inverted_texture: GpuSurfaceHandle
-
-    skip_copy: bool = False
-
-    def __init__(self) -> None:
-        self._reported = False
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        gpu = ctx.gpu_full_access
-        self._kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=INVERT_SLANG,
-            bindings={"landed_frame": "storage_image", "inverted_frame": "storage_image"},
-        )
-        self._landing_texture = gpu.acquire_texture(
-            FRAME_WIDTH, FRAME_HEIGHT, "rgba8_unorm", TEXTURE_USAGE
-        )
-        self._inverted_texture = gpu.acquire_texture(
-            FRAME_WIDTH, FRAME_HEIGHT, "rgba8_unorm", TEXTURE_USAGE
-        )
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._reported:
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = video_from_upstream.read()
+        if frame is None or reported:
             return
-        self._reported = True
-        gpu = ctx.gpu_limited_access
+        reported = True
+        gpu = frame_ctx.gpu_limited_access
+        copies_the_frame = not skip_copy.get()
 
         def land_and_invert() -> dict:
             claim = gpu.claim_surface_against_producer_reuse(frame.surface_id)
-            if not self.skip_copy:
-                gpu.copy_surface_to_surface(frame.surface_id, self._landing_texture)
+            if copies_the_frame:
+                gpu.copy_surface_to_surface(frame.surface_id, landing_texture)
             array_libraries_imported = sorted(
                 name for name in ("cupy", "torch") if name in sys.modules
             )
-            self._kernel.dispatch(
+            kernel.dispatch(
                 bindings={
-                    "landed_frame": self._landing_texture,
-                    "inverted_frame": self._inverted_texture,
+                    "landed_frame": landing_texture,
+                    "inverted_frame": inverted_texture,
                 },
                 group_count=(FRAME_WIDTH // 8, FRAME_HEIGHT // 8, 1),
             )
@@ -133,7 +129,7 @@ class FrameLandingProbe:
             del claim
             expected = source_pixels.copy()
             expected[:, :, :3] = 255 - expected[:, :, :3]
-            inverted = _pixels_of(self._inverted_texture)
+            inverted = _pixels_of(inverted_texture)
             return {
                 "array_libraries_imported": array_libraries_imported,
                 "source_is_not_uniform": bool((source_pixels != source_pixels[0, 0]).any()),
@@ -142,21 +138,24 @@ class FrameLandingProbe:
 
         _report(land_and_invert)
 
+    return each_frame
 
-@node
-class CopyRefusalProbe:
+
+@node(execution="reactive")
+def CopyRefusalProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Asks for each copy the engine must refuse, and reports what it said."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = video_from_upstream.read()
+        if frame is None or reported:
             return
-        self._reported = True
+        reported = True
         gpu = ctx.gpu_limited_access
 
         def refusals() -> dict:
@@ -176,3 +175,5 @@ class CopyRefusalProbe:
             }
 
         _report(refusals)
+
+    return each_frame

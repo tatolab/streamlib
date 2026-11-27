@@ -15,17 +15,19 @@ the other probes use, tagged with `probe` because a scenario runs two of them.
 import json
 import os
 import traceback
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     ColorInfo,
-    Texture,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
+    RuntimeContextLimitedAccess,
     StreamDelivery,
+    Texture,
     TexturePixelFormats,
+    TextureToWrite,
     clock,
     log,
     node,
@@ -79,39 +81,35 @@ def pixel_value_of_frame(frame_index: int) -> int:
 
 
 @node(execution="continuous", interval_ms=10)
-class TextureRingPublishingVideoSource:
-    """Publishes frames from its own output ring, one slot per frame."""
-
-    frames_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats(RING_TEXTURE_FORMAT)]]
-
-    frames_to_publish: int = RING_DEPTH
+def TextureRingPublishingVideoSource(
+    *,
+    frames_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats(RING_TEXTURE_FORMAT)]],
+    frames_to_publish: Input[int] = Input(RING_DEPTH),
     # Paces the source so a consumer in another process takes its claim on
     # the first frame before the ring's depth of publishes has gone by.
-    minimum_interval_between_publishes_ns: int = 0
+    minimum_interval_between_publishes_ns: Input[int] = Input(0),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Publishes frames from its own output ring, one slot per frame."""
+    output_texture_ring = NodeOutputTextureRing(
+        RING_TEXTURE_FORMAT, RING_TEXTURE_USAGE, depth=RING_DEPTH
+    )
+    last_publish_ns: "int | None" = None
+    surface_ids_published_so_far: "list[str]" = []
 
-    def __init__(self) -> None:
-        self._output_texture_ring = NodeOutputTextureRing(
-            RING_TEXTURE_FORMAT, RING_TEXTURE_USAGE, depth=RING_DEPTH
-        )
-        self._frames_to_publish = self.frames_to_publish
-        self._minimum_interval_between_publishes_ns = self.minimum_interval_between_publishes_ns
-        self._last_publish_ns: "int | None" = None
-        self._surface_ids_published_so_far: "list[str]" = []
-
-    def process(self, ctx) -> None:
-        frame_index = len(self._surface_ids_published_so_far)
-        if frame_index >= self._frames_to_publish:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal last_publish_ns
+        frame_index = len(surface_ids_published_so_far)
+        if frame_index >= frames_to_publish.get():
             return
         now_ns = clock.monotonic_now_ns()
         if (
-            self._last_publish_ns is not None
-            and now_ns - self._last_publish_ns
-            < self._minimum_interval_between_publishes_ns
+            last_publish_ns is not None
+            and now_ns - last_publish_ns < minimum_interval_between_publishes_ns.get()
         ):
             return
-        self._last_publish_ns = now_ns
+        last_publish_ns = now_ns
 
-        slot_for_this_frame = self._output_texture_ring.next_texture_for_this_frame(
+        slot_for_this_frame = output_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, FRAME_WIDTH, FRAME_HEIGHT
         )
         slot_for_this_frame.lock(read_only=False)
@@ -120,33 +118,36 @@ class TextureRingPublishingVideoSource:
         finally:
             slot_for_this_frame.unlock()
 
-        self.frames_to_downstream.write(
+        frames_to_downstream.write(
             TextureToWrite.of_texture(slot_for_this_frame, ColorInfo()),
         )
-        self._surface_ids_published_so_far.append(slot_for_this_frame.surface_id)
+        surface_ids_published_so_far.append(slot_for_this_frame.surface_id)
 
-        if len(self._surface_ids_published_so_far) == self._frames_to_publish:
+        if len(surface_ids_published_so_far) == frames_to_publish.get():
             _report(
                 "TextureRingPublishingVideoSource",
-                lambda: {"surface_ids_published": self._surface_ids_published_so_far},
+                lambda: {"surface_ids_published": surface_ids_published_so_far},
             )
 
+    return each_frame
 
-@node
-class PublishedFramePixelReadingSink:
+
+@node(execution="reactive")
+def PublishedFramePixelReadingSink(
+    *,
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Resolves each published surface id and reports the pixels behind it."""
 
-    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    frames_read = 0
 
-    def __init__(self) -> None:
-        self._frames_read = 0
-
-    def process(self, ctx) -> None:
-        frame = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames_read
+        frame = frames_from_upstream.read()
         if frame is None:
             return
-        frame_index = self._frames_read
-        self._frames_read += 1
+        frame_index = frames_read
+        frames_read += 1
 
         def read_the_frames_pixels() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -162,20 +163,25 @@ class PublishedFramePixelReadingSink:
 
         _report("PublishedFramePixelReadingSink", read_the_frames_pixels)
 
+    return each_frame
 
-@node
-class PublishedFrameIdRecordingSink:
+
+@node(execution="reactive")
+def PublishedFrameIdRecordingSink(
+    *,
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Records each published surface id without resolving it — the link an
     output port needs, for a scenario that reads only the producer's report."""
 
-    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
-
-    def process(self, ctx) -> None:
-        frame = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = frames_from_upstream.read()
         if frame is None:
             return
         surface_id = frame.surface_id
         _report("PublishedFrameIdRecordingSink", lambda: {"surface_id": surface_id})
+
+    return each_frame
 
 
 def _top_left_pixel_of(ctx, surface_id: str) -> "list[int]":
@@ -186,59 +192,63 @@ def _top_left_pixel_of(ctx, surface_id: str) -> "list[int]":
     return top_left_pixel
 
 
-@node
-class ClaimedFrameHoldingSink:
+@node(execution="reactive")
+def ClaimedFrameHoldingSink(
+    *,
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Claims the first frame with a typed read and holds it, re-reading its
     pixels as every later frame arrives."""
 
-    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    _held_frame: "Texture | None" = None
+    later_frames_seen = 0
 
-    def __init__(self) -> None:
-        self._held_frame: "Texture | None" = None
-        self._later_frames_seen = 0
-
-    def process(self, ctx) -> None:
-        if self._held_frame is None:
-            self._held_frame = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal _held_frame, later_frames_seen
+        if _held_frame is None:
+            _held_frame = frames_from_upstream.read()
             return
-        later_frame = self.frames_from_upstream.read()
+        later_frame = frames_from_upstream.read()
         if later_frame is None:
             return
-        self._later_frames_seen += 1
-        held_frame = self._held_frame
+        later_frames_seen += 1
+        held_frame = _held_frame
         later_surface_id = later_frame.surface_id
 
         def reread_the_held_frame() -> dict:
             return {
                 "held_surface_id": held_frame.surface_id,
                 "later_surface_id": later_surface_id,
-                "later_frames_seen": self._later_frames_seen,
+                "later_frames_seen": later_frames_seen,
                 "held_top_left_pixel": _top_left_pixel_of(ctx, held_frame.surface_id),
             }
 
         _report("ClaimedFrameHoldingSink", reread_the_held_frame)
 
+    return each_frame
 
-@node
-class UnclaimedFrameHoldingSink:
+
+@node(execution="reactive")
+def UnclaimedFrameHoldingSink(
+    *,
+    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Keeps only the first frame's id — no claim — and tries it again as every
     later frame arrives: the negative control for the claimed sink."""
 
-    frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    _first_surface_id: "str | None" = None
+    later_frames_seen = 0
 
-    def __init__(self) -> None:
-        self._first_surface_id: "str | None" = None
-        self._later_frames_seen = 0
-
-    def process(self, ctx) -> None:
-        frame = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal _first_surface_id, later_frames_seen
+        frame = frames_from_upstream.read()
         if frame is None:
             return
-        if self._first_surface_id is None:
-            self._first_surface_id = frame.surface_id
+        if _first_surface_id is None:
+            _first_surface_id = frame.surface_id
             return
-        self._later_frames_seen += 1
-        first_surface_id = self._first_surface_id
+        later_frames_seen += 1
+        first_surface_id = _first_surface_id
         try:
             observation = {
                 "held_top_left_pixel": _top_left_pixel_of(ctx, first_surface_id)
@@ -252,8 +262,10 @@ class UnclaimedFrameHoldingSink:
                     "probe": "UnclaimedFrameHoldingSink",
                     "pid": os.getpid(),
                     "held_surface_id": first_surface_id,
-                    "later_frames_seen": self._later_frames_seen,
+                    "later_frames_seen": later_frames_seen,
                     **observation,
                 }
             )
         )
+
+    return each_frame

@@ -16,7 +16,7 @@ rather than one the machine happens to have.
 
 import json
 import math
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 
 import numpy
 from tatolab.stream import (
@@ -66,13 +66,9 @@ def _reading(block: Audio) -> dict:
     }
 
 
-@node
-class ExactWindowProbe:
-    """Reports the shape and stamp of the first few windows it is handed."""
-
-    def __init__(self) -> None:
-        self._readings = []
-
+@node(execution="reactive")
+def ExactWindowProbe(
+    *,
     audio_from_upstream: InputPin[
         Annotated[
             Audio,
@@ -85,26 +81,28 @@ class ExactWindowProbe:
                 hop=512,
             ),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Reports the shape and stamp of the first few windows it is handed."""
 
-    def process(self, ctx) -> None:
+    readings = []
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         # Drained past the report so the probe measures the stage rather than
         # its own backlog draining away as counted drops.
-        block = self.audio_from_upstream.read()
-        if block is None or len(self._readings) >= WINDOWS_REPORTED:
+        block = audio_from_upstream.read()
+        if block is None or len(readings) >= WINDOWS_REPORTED:
             return
-        self._readings.append(_reading(block))
-        if len(self._readings) == WINDOWS_REPORTED:
-            log.info(CONTIGUOUS_RESULT_MARKER + json.dumps(self._readings))
+        readings.append(_reading(block))
+        if len(readings) == WINDOWS_REPORTED:
+            log.info(CONTIGUOUS_RESULT_MARKER + json.dumps(readings))
+
+    return each_frame
 
 
-@node
-class RollingWindowProbe:
-    """A hop below the window: consecutive windows overlap by the difference."""
-
-    def __init__(self) -> None:
-        self._readings = []
-
+@node(execution="reactive")
+def RollingWindowProbe(
+    *,
     audio_from_upstream: InputPin[
         Annotated[
             Audio,
@@ -117,19 +115,28 @@ class RollingWindowProbe:
                 hop=160,
             ),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """A hop below the window: consecutive windows overlap by the difference."""
 
-    def process(self, ctx) -> None:
-        block = self.audio_from_upstream.read()
-        if block is None or len(self._readings) >= WINDOWS_REPORTED:
+    readings = []
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        block = audio_from_upstream.read()
+        if block is None or len(readings) >= WINDOWS_REPORTED:
             return
-        self._readings.append(_reading(block))
-        if len(self._readings) == WINDOWS_REPORTED:
-            log.info(ROLLING_RESULT_MARKER + json.dumps(self._readings))
+        readings.append(_reading(block))
+        if len(readings) == WINDOWS_REPORTED:
+            log.info(ROLLING_RESULT_MARKER + json.dumps(readings))
+
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=1)
-class StereoToneSource:
+def StereoToneSource(
+    *,
+    audio: OutputPin[Audio],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Publishes a stereo tone at a stated rate, so a consumer's channel count
     is the test's own fact rather than the machine's.
 
@@ -138,29 +145,27 @@ class StereoToneSource:
     read as the stage's failure rather than this fixture's.
     """
 
-    audio: OutputPin[Audio]
+    frames_published = 0
+    first_sample_timestamp_ns: Optional[int] = None
 
-    def __init__(self) -> None:
-        self._frames_published = 0
-        self._first_sample_timestamp_ns: Optional[int] = None
-
-    def _is_far_enough_ahead(self, anchor_ns: int) -> bool:
-        published_ns = self._frames_published * 1_000_000_000 // SOURCE_SAMPLE_RATE
+    def is_far_enough_ahead(anchor_ns: int) -> bool:
+        published_ns = frames_published * 1_000_000_000 // SOURCE_SAMPLE_RATE
         elapsed_ns = monotonic_now_ns() - anchor_ns
         return published_ns - elapsed_ns > PUBLISHING_LEAD_NS
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        anchor_ns = self._first_sample_timestamp_ns
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal first_sample_timestamp_ns, frames_published
+        anchor_ns = first_sample_timestamp_ns
         if anchor_ns is None:
             anchor_ns = monotonic_now_ns()
-            self._first_sample_timestamp_ns = anchor_ns
-        elif self._is_far_enough_ahead(anchor_ns):
+            first_sample_timestamp_ns = anchor_ns
+        elif is_far_enough_ahead(anchor_ns):
             return
 
-        at = self._frames_published
+        at = frames_published
         instants = (at + numpy.arange(SOURCE_FRAMES_PER_BLOCK)) / SOURCE_SAMPLE_RATE
         tone = numpy.sin(math.tau * 440.0 * instants).astype(numpy.float32)
-        self.audio.write(
+        audio.write(
             numpy.ascontiguousarray(numpy.stack([tone] * SOURCE_CHANNELS)),
             # Derived from the samples before it rather than read fresh, so the
             # stamps describe one gapless stream even though the publishing
@@ -169,16 +174,14 @@ class StereoToneSource:
             start_sample=at,
             sample_rate=SOURCE_SAMPLE_RATE,
         )
-        self._frames_published += SOURCE_FRAMES_PER_BLOCK
+        frames_published += SOURCE_FRAMES_PER_BLOCK
+
+    return each_frame
 
 
-@node
-class SourceFollowingWindowProbe:
-    """Declares no channel count, so its windows carry the source's own."""
-
-    def __init__(self) -> None:
-        self._readings = []
-
+@node(execution="reactive")
+def SourceFollowingWindowProbe(
+    *,
     audio_from_upstream: InputPin[
         Annotated[
             Audio,
@@ -189,25 +192,26 @@ class SourceFollowingWindowProbe:
                 window_size=WINDOW_SIZE,
             ),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Declares no channel count, so its windows carry the source's own."""
 
-    def process(self, ctx) -> None:
-        block = self.audio_from_upstream.read()
-        if block is None or len(self._readings) >= WINDOWS_REPORTED:
+    readings = []
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        block = audio_from_upstream.read()
+        if block is None or len(readings) >= WINDOWS_REPORTED:
             return
-        self._readings.append(_reading(block))
-        if len(self._readings) == WINDOWS_REPORTED:
-            log.info(SOURCE_FOLLOWING_RESULT_MARKER + json.dumps(self._readings))
+        readings.append(_reading(block))
+        if len(readings) == WINDOWS_REPORTED:
+            log.info(SOURCE_FOLLOWING_RESULT_MARKER + json.dumps(readings))
+
+    return each_frame
 
 
-@node
-class DeclaredMonoWindowProbe:
-    """The same source through a contract that does state a count: proof the
-    declared path still converts while the one beside it follows."""
-
-    def __init__(self) -> None:
-        self._readings = []
-
+@node(execution="reactive")
+def DeclaredMonoWindowProbe(
+    *,
     audio_from_upstream: InputPin[
         Annotated[
             Audio,
@@ -219,12 +223,19 @@ class DeclaredMonoWindowProbe:
                 channels=1,
             ),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The same source through a contract that does state a count: proof the
+    declared path still converts while the one beside it follows."""
 
-    def process(self, ctx) -> None:
-        block = self.audio_from_upstream.read()
-        if block is None or len(self._readings) >= WINDOWS_REPORTED:
+    readings = []
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        block = audio_from_upstream.read()
+        if block is None or len(readings) >= WINDOWS_REPORTED:
             return
-        self._readings.append(_reading(block))
-        if len(self._readings) == WINDOWS_REPORTED:
-            log.info(DECLARED_MONO_RESULT_MARKER + json.dumps(self._readings))
+        readings.append(_reading(block))
+        if len(readings) == WINDOWS_REPORTED:
+            log.info(DECLARED_MONO_RESULT_MARKER + json.dumps(readings))
+
+    return each_frame

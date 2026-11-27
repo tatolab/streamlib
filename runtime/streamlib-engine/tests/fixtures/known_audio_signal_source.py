@@ -29,6 +29,7 @@ published against elapsed monotonic time, so it never reads a wall clock and
 never sleeps.
 """
 
+from typing import Callable
 import os
 
 import numpy
@@ -77,38 +78,39 @@ def _stereo_planar_f32(mono_samples):
 
 
 @node(execution="continuous", interval_ms=1)
-class KnownAudioSignalSource:
+def KnownAudioSignalSource(
+    *,
+    audio: OutputPin[Audio],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Plays the known signal once, then silence — or over and over."""
 
-    audio: OutputPin[Audio]
-
-    def __init__(self) -> None:
-        signal = known_audio_signal.generate_signal()
-        if FAULT_INJECTED_INTO_THE_SIGNAL:
-            signal = known_audio_signal.signal_with_injected_fault(
-                signal, FAULT_INJECTED_INTO_THE_SIGNAL
-            )
-        trailing_silence = numpy.zeros(
-            int(TRAILING_SILENCE_SECONDS * SAMPLE_RATE), dtype="<f8"
+    signal = known_audio_signal.generate_signal()
+    if FAULT_INJECTED_INTO_THE_SIGNAL:
+        signal = known_audio_signal.signal_with_injected_fault(
+            signal, FAULT_INJECTED_INTO_THE_SIGNAL
         )
-        self._signal = numpy.concatenate([signal, trailing_silence])
-        self._plays_over_and_over = THE_SIGNAL_PLAYS_OVER_AND_OVER
-        self._samples_published = 0
-        self._first_sample_timestamp_ns = None
+    trailing_silence = numpy.zeros(
+        int(TRAILING_SILENCE_SECONDS * SAMPLE_RATE), dtype="<f8"
+    )
+    _signal = numpy.concatenate([signal, trailing_silence])
+    plays_over_and_over = THE_SIGNAL_PLAYS_OVER_AND_OVER
+    samples_published = 0
+    first_sample_timestamp_ns = None
 
-    def _is_far_enough_ahead(self) -> bool:
-        published_ns = self._samples_published * 1_000_000_000 // SAMPLE_RATE
-        elapsed_ns = monotonic_now_ns() - self._first_sample_timestamp_ns
+    def is_far_enough_ahead() -> bool:
+        published_ns = samples_published * 1_000_000_000 // SAMPLE_RATE
+        elapsed_ns = monotonic_now_ns() - first_sample_timestamp_ns
         return published_ns - elapsed_ns > PUBLISHING_LEAD_NS
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if not self._plays_over_and_over and self._samples_published >= len(
-            self._signal
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal first_sample_timestamp_ns, samples_published
+        if not plays_over_and_over and samples_published >= len(
+            _signal
         ):
             return
-        if self._first_sample_timestamp_ns is None:
-            self._first_sample_timestamp_ns = monotonic_now_ns()
-        elif self._is_far_enough_ahead():
+        if first_sample_timestamp_ns is None:
+            first_sample_timestamp_ns = monotonic_now_ns()
+        elif is_far_enough_ahead():
             return
 
         # The stamp counts every sample ever published and the waveform wraps
@@ -117,18 +119,20 @@ class KnownAudioSignalSource:
         # publishing lead into the stamps as a gap. The signal's length is a
         # whole number of blocks, so a pass ends exactly on a block boundary
         # and no block spans the wrap.
-        at = self._samples_published % len(self._signal)
-        block = self._signal[at : at + SAMPLES_PER_BLOCK]
+        at = samples_published % len(_signal)
+        block = _signal[at : at + SAMPLES_PER_BLOCK]
         # Derived from the samples before it rather than read fresh, so the
         # stamps describe one gapless stream even though the publishing runs
         # ahead of the device.
-        self.audio.write(
+        audio.write(
             _stereo_planar_f32(block),
             timestamp_ns=(
-                self._first_sample_timestamp_ns
-                + self._samples_published * 1_000_000_000 // SAMPLE_RATE
+                first_sample_timestamp_ns
+                + samples_published * 1_000_000_000 // SAMPLE_RATE
             ),
-            start_sample=self._samples_published,
+            start_sample=samples_published,
             sample_rate=SAMPLE_RATE,
         )
-        self._samples_published += len(block)
+        samples_published += len(block)
+
+    return each_frame

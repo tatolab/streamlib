@@ -9,11 +9,15 @@ one module differ only in `__qualname__`, and a graph mixing modules is what a
 real app looks like.
 """
 
-from tatolab.stream import node
+from typing import Callable
+from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
 @node(execution="continuous", interval_ms=1)
-class SecondIdentityStableNode:
+def SecondIdentityStableNode() -> Callable[[RuntimeContextLimitedAccess], None]:
     """Does nothing per tick. Identity is the whole subject here."""
 
-    def process(self, ctx) -> None: ...
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        def process(self, ctx) -> None: ...
+
+    return each_frame

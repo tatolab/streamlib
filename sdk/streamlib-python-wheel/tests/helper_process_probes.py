@@ -4,13 +4,16 @@
 
 import json
 import time
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Callable, TypedDict
 
 from tatolab.stream import (
     Color,
     EncodedVideo,
+    Input,
     InputPin,
     OutputPin,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     SettingOnly,
     StreamDelivery,
     Texture,
@@ -44,32 +47,33 @@ def built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
     return stand_in
 
 
-@node
-class PassThroughProbe:
+@node(execution="reactive")
+def PassThroughProbe(
+    *,
+    tag: Input[str] = Input("untagged"),
+    frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Copies every JSON record from its input to its output, tagged."""
 
-    tag: str = "untagged"
-
-    frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx) -> None:
-        unit = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        unit = frames_from_upstream.read()
         if unit is not None:
             record = json.loads(bytes(unit.payload))
-            self.frames_to_downstream.write(json.dumps({**record, "tag": self.tag}).encode())
+            frames_to_downstream.write(json.dumps({**record, "tag": tag.get()}).encode())
+
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=60_000)
-class WritesOnceInSetupProbe:
+def WritesOnceInSetupProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> None:
     """Writes one record in `setup`, before any link reaches its output, and never again;
     its interval is long enough that it never runs again inside a test."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def setup(self, ctx) -> None:
-        self.frames_to_downstream.write(json.dumps({"written": "once"}).encode())
+    frames_to_downstream.write(json.dumps({"written": "once"}).encode())
 
 
 class OuterProbe:
@@ -80,40 +84,43 @@ class OuterProbe:
 
 
 @node(execution="manual")
-class ImportsADmaBufOffLinuxProbe:
+def ImportsADmaBufOffLinuxProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def setup(self, ctx) -> None:
-        ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
+    ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
 
 
 @node(execution="manual")
-class RefusesSetupProbe:
+def RefusesSetupProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> None:
     """Raises out of `setup`, which the parent must hear about."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def setup(self, ctx) -> None:
-        raise RuntimeError("this node cannot set itself up")
+    raise RuntimeError("this node cannot set itself up")
 
 
-@node
-class SlowPassThroughProbe:
+@node(execution="reactive")
+def SlowPassThroughProbe(
+    *,
+    frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Copies every message's payload to its output, slower than a burst arrives."""
 
-    frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx) -> None:
-        unit = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        unit = frames_from_upstream.read()
         if unit is not None:
             time.sleep(0.005)
-            self.frames_to_downstream.write(
+            frames_to_downstream.write(
                 bytes(unit.payload), unit.pts, starts_group=unit.starts_group
             )
+
+    return each_frame
 
 
 # The hooks the interrupt probes below actually reached, in order. A test reads
@@ -192,14 +199,17 @@ WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
 
 
 @node(execution="continuous", interval_ms=250)
-class ContinuousPacingProbe:
+def ContinuousPacingProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Records when each `process()` ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         WHEN_THE_PACING_PROBE_PROCESSED_NS.append(time.monotonic_ns())
+
+    return each_frame
 
 
 # Whether `RaisesUntilToldNotToProbe.process()` raises on its next call; a
@@ -208,15 +218,18 @@ RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES = [True]
 
 
 @node(execution="continuous", interval_ms=20)
-class RaisesUntilToldNotToProbe:
+def RaisesUntilToldNotToProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Raises on every `process()` until a test clears
     `RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES`, then runs cleanly."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         if RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0]:
             raise RuntimeError("broke on purpose")
+
+    return each_frame
 
 
 @node
@@ -230,14 +243,17 @@ def builds_an_object_then_answers_its_level_raising_on_a_negative_one(level: flo
 
 
 @node(execution="continuous", interval_ms=20)
-class ReadsTheIslandFeedingItsLevelProbe:
+def ReadsTheIslandFeedingItsLevelProbe(
+    *,
+    level: InputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads its `level` input, which a function node island feeds, on every
     `process()`."""
 
-    level: InputPin[float]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        level.read()
 
-    def process(self, ctx) -> None:
-        self.level.read()
+    return each_frame
 
 
 class ReconfigurableProbeConfig(TypedDict, total=False):
@@ -276,13 +292,16 @@ LEVELS_THE_ISLAND_READING_PROBE_READ: "list[float | None]" = []
 
 
 @node(execution="continuous", interval_ms=5)
-class IslandReadingProbe:
+def IslandReadingProbe(
+    *,
+    level: InputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Records the control value each `process()` reads from `level`."""
 
-    level: InputPin[float]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        LEVELS_THE_ISLAND_READING_PROBE_READ.append(level.read())
 
-    def process(self, ctx) -> None:
-        LEVELS_THE_ISLAND_READING_PROBE_READ.append(self.level.read())
+    return each_frame
 
 
 @built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
@@ -318,18 +337,21 @@ PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE = [0]
 
 
 @node(execution="continuous", interval_ms=20)
-class NotReadyUntilToldOtherwiseProbe:
+def NotReadyUntilToldOtherwiseProbe(
+    *,
+    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports itself not ready from each `process()` until a test clears
     `NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY`, then ready."""
 
-    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE[0] += 1
         if NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY[0]:
             ctx.report_not_ready("the image asset `poster.png` is missing")
         else:
             ctx.report_ready()
+
+    return each_frame
 
 
 WHAT_THE_FIELDS_PROBE_SAW: "list[tuple[str, float, Any, int]]" = []

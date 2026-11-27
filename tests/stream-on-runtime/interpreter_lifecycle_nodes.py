@@ -7,13 +7,14 @@ Imported by the test process to compile a stream, by the node
 interpreter describing each class, and by the helper hosting each node.
 """
 
+from typing import Callable
 import json
 import os
 import signal
 import subprocess
 import time
 
-from tatolab.stream import OutputPin, Trigger, log, node
+from tatolab.stream import OutputPin, RuntimeContextLimitedAccess, Trigger, log, node
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.
@@ -113,7 +114,10 @@ class WorkerKeepingTeardownGoingProbe:
 
 
 @node(execution="continuous", interval_ms=10)
-class StartsAProcessThatOutlivesItProbe:
+def StartsAProcessThatOutlivesItProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Starts a process that inherits every descriptor it can and outlives
     `tatolabd` by far.
 
@@ -121,18 +125,18 @@ class StartsAProcessThatOutlivesItProbe:
     started once the stream runs, so it inherits whatever the helper holds.
     """
 
-    def __init__(self) -> None:
-        self._survivor_pid = None
+    survivor_pid = None
 
-    frames_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx) -> None:
-        if self._survivor_pid is None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal survivor_pid
+        if survivor_pid is None:
             survivor = subprocess.Popen(
                 ["sleep", "30"], close_fds=False, stdin=subprocess.DEVNULL, start_new_session=True
             )
-            self._survivor_pid = survivor.pid
+            survivor_pid = survivor.pid
             report("SURVIVOR_PID", {"pid": survivor.pid})
+
+    return each_frame
 
 
 # Set only in the helper hosting the node: the test process imports this module
@@ -144,7 +148,8 @@ if os.environ.get("STREAMLIB_ENTRYPOINT", "").endswith(":ThirtySecondImportProbe
 
 
 @node(execution="manual")
-class ThirtySecondImportProbe:
+def ThirtySecondImportProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> None:
     """Its module takes thirty seconds to import in the helper that hosts it."""
-
-    frames_to_downstream: OutputPin[Trigger]

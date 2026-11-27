@@ -5,32 +5,34 @@
 
 import json
 import os
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import InputPin, StreamDelivery, Texture, log, node
+from tatolab.stream import Input, InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, log, node
 
 READ_MARKER_PREFIX = "MARKER:GRAPH_VARIABLE_READ_"
 
 
-@node
-class ImageVariableReader:
+@node(execution="reactive")
+def ImageVariableReader(
+    *,
+    image_from_the_variable: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+    reader: Input[str] = Input("reader"),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the first Texture frame it reads, under a marker named for `reader`."""
 
-    image_from_the_variable: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    reported = False
 
-    reader: str = "reader"
-
-    def __init__(self) -> None:
-        self._reported = False
-
-    def process(self, ctx) -> None:
-        frame = self.image_from_the_variable.read()
-        if frame is None or self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = image_from_the_variable.read()
+        if frame is None or reported:
             return
-        self._reported = True
+        reported = True
         log.info(
-            f"{READ_MARKER_PREFIX}{self.reader.upper()} "
+            f"{READ_MARKER_PREFIX}{reader.get().upper()} "
             + json.dumps(
                 {"pid": os.getpid(), "surface_id": frame.surface_id, "width": frame.width}
             )
         )
+
+    return each_frame

@@ -13,13 +13,16 @@ import hashlib
 import json
 import os
 import traceback
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 
 from tatolab.stream import (
+    Input,
     InputPin,
     OutputPin,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
@@ -50,11 +53,13 @@ def _report(probe_body) -> None:
 
 
 @node(execution="manual")
-class NumpyViewProbe:
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+def NumpyViewProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
         ) as surface_handle:
@@ -72,11 +77,13 @@ class NumpyViewProbe:
 
 
 @node(execution="manual")
-class UnlockedExportProbe:
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+def UnlockedExportProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
         ) as surface_handle:
@@ -103,11 +110,13 @@ class UnlockedExportProbe:
 
 
 @node(execution="manual")
-class LockModeProbe:
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+def LockModeProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         gpu = ctx.gpu_limited_access
         outcomes = {}
         with gpu.acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT) as surface_handle:
@@ -127,13 +136,15 @@ class LockModeProbe:
 
 
 @node(execution="manual")
-class SharedMemoryProbe:
+def SharedMemoryProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Writes through one handle, reads through a second one resolved by id."""
 
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         gpu = ctx.gpu_limited_access
         with gpu.acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT) as writer_handle:
             writer_handle.lock(read_only=False)
@@ -154,11 +165,13 @@ class SharedMemoryProbe:
 
 
 @node(execution="manual")
-class TensorOutlivesTheSurfaceProbe:
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+def TensorOutlivesTheSurfaceProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         surface_handle = ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
         )
@@ -178,13 +191,15 @@ class TensorOutlivesTheSurfaceProbe:
 
 
 @node(execution="manual")
-class PoolCycleProbe:
+def PoolCycleProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Holds a tensor, then churns the pool past its depth with fresh writes."""
 
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         gpu = ctx.gpu_limited_access
         held_handle = gpu.acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT)
         held_handle.lock(read_only=False)
@@ -215,11 +230,13 @@ class PoolCycleProbe:
 
 
 @node(execution="manual")
-class DlpackConsumerProbe:
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+def DlpackConsumerProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
         ) as surface_handle:
@@ -238,11 +255,13 @@ class DlpackConsumerProbe:
 
 
 @node(execution="manual")
-class UnsupportedFormatProbe:
-    def setup(self, ctx) -> None:
-        _report(lambda: self._probe(ctx))
+def UnsupportedFormatProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    _report(lambda: _probe(ctx))
 
-    def _probe(self, ctx) -> dict:
+    def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT, "nv12"
         ) as surface_handle:
@@ -256,24 +275,25 @@ class UnsupportedFormatProbe:
             return {"outcome": outcome}
 
 
-@node
-class InvertingEffect:
+@node(execution="reactive")
+def InvertingEffect(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """What a user writes: read the frame, change the pixels, pass it on.
 
     The frame arrives as a surface id, not pixels — so the effect resolves it,
     opens CPU access, and edits the engine's own memory in place.
     """
 
-    video_from_upstream: InputPin[FramesInOrder]
+    frames_seen = 0
 
-    def __init__(self) -> None:
-        self._frames_seen = 0
-
-    def process(self, ctx) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._frames_seen >= 1:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames_seen
+        frame = video_from_upstream.read()
+        if frame is None or frames_seen >= 1:
             return
-        self._frames_seen += 1
+        frames_seen += 1
 
         def probe() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -301,6 +321,8 @@ class InvertingEffect:
 
         _report(probe)
 
+    return each_frame
+
 
 def _sha256_of_every_pixel(pixels: numpy.ndarray) -> str:
     """A digest over the whole frame, row padding excluded — equal digests
@@ -308,8 +330,15 @@ def _sha256_of_every_pixel(pixels: numpy.ndarray) -> str:
     return hashlib.sha256(numpy.ascontiguousarray(pixels).tobytes()).hexdigest()
 
 
-@node
-class ReportingInvertingEffect:
+@node(execution="reactive")
+def ReportingInvertingEffect(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+    video_to_downstream: OutputPin[
+        Annotated[Texture, TexturePixelFormats(TEST_PATTERN_TEXTURE_FORMAT)]
+    ],
+    skip_edit: Input[bool] = Input(False),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The scaffold's edit, reporting what the frame must read afterwards.
 
     It holds its first frame for the rest of its life, so the verifier
@@ -320,20 +349,13 @@ class ReportingInvertingEffect:
     and leaves the pixels alone.
     """
 
-    video_from_upstream: InputPin[FramesInOrder]
-    video_to_downstream: OutputPin[
-        Annotated[Texture, TexturePixelFormats(TEST_PATTERN_TEXTURE_FORMAT)]
-    ]
+    edited_frame = None
 
-    skip_edit: bool = False
-
-    def __init__(self) -> None:
-        self._edited_frame = None
-
-    def process(self, ctx) -> None:
-        frame = self.video_from_upstream.read()
-        if self._edited_frame is not None:
-            self.video_to_downstream.write(self._edited_frame)
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal edited_frame
+        frame = video_from_upstream.read()
+        if edited_frame is not None:
+            video_to_downstream.write(edited_frame)
             return
         if frame is None:
             return
@@ -344,7 +366,7 @@ class ReportingInvertingEffect:
                 pixels = surface.as_numpy()
                 inverted = pixels.copy()
                 inverted[:, :, :3] = 255 - inverted[:, :, :3]
-                if not self.skip_edit:
+                if not skip_edit.get():
                     pixels[...] = inverted
                 surface.unlock()
             return {
@@ -354,25 +376,28 @@ class ReportingInvertingEffect:
             }
 
         _report(edit)
-        self._edited_frame = frame
-        self.video_to_downstream.write(frame)
+        edited_frame = frame
+        video_to_downstream.write(frame)
+
+    return each_frame
 
 
-@node
-class FrameDigestVerifier:
+@node(execution="reactive")
+def FrameDigestVerifier(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the first frame it is handed, in a process of its own, and
     reports a digest of every pixel."""
 
-    video_from_upstream: InputPin[FramesInOrder]
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
-
-    def process(self, ctx) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = video_from_upstream.read()
+        if frame is None or reported:
             return
-        self._reported = True
+        reported = True
 
         def verify() -> dict:
             with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -386,3 +411,5 @@ class FrameDigestVerifier:
             }
 
         _report(verify)
+
+    return each_frame

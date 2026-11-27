@@ -24,19 +24,22 @@ LINUX_X86_64_PLATFORM_TAG = "manylinux_2_28_x86_64"
 MACOS_ARM64_PLATFORM_TAG = "macosx_26_0_arm64"
 
 NODE_MODULE_SOURCE = '''
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import Description, InputPin, OutputPin, Texture, node
+from tatolab.stream import Description, InputPin, OutputPin, RuntimeContextLimitedAccess, Texture, node
 
 
 @node.meta(description="Makes frames out of nothing.\\n\\nA second paragraph.")
-@node
-class FrameMaker:
-    pattern: InputPin[Annotated[Texture, Description("A picture to tile")]]
-    video: OutputPin[Annotated[Texture, Description("The frames it makes")]]
-
-    def process(self, ctx):
+@node(execution="reactive")
+def FrameMaker(
+    *,
+    pattern: InputPin[Annotated[Texture, Description("A picture to tile")]],
+    video: OutputPin[Annotated[Texture, Description("The frames it makes")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         pass
+
+    return each_frame
 '''
 
 PROGRAM_VIEW_MANIFEST = {

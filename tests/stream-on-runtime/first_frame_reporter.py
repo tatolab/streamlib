@@ -11,22 +11,25 @@ the pipeline live.
 """
 
 import os
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import InputPin, StreamDelivery, Texture, log, node
+from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, log, node
 
 
-@node
-class ReportsItsProcessOnFirstFrame:
+@node(execution="reactive")
+def ReportsItsProcessOnFirstFrame(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Announces its own process the first time a frame reaches it."""
 
-    def __init__(self) -> None:
-        self._announced = False
+    announced = False
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-
-    def process(self, ctx) -> None:
-        if self._announced or self.video_from_upstream.read() is None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal announced
+        if announced or video_from_upstream.read() is None:
             return
-        self._announced = True
+        announced = True
         log.info(f"MARKER:LIVE {os.getpid()}")
+
+    return each_frame
