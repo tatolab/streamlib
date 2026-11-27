@@ -78,6 +78,9 @@ pub const ENCODED_VIDEO_PORT: &str = "encoded_video";
 
 /// How long one wait for a message lasts before the stop flag is read again.
 const INPUT_PORT_WAIT: Duration = Duration::from_millis(100);
+/// How long a coding thread leaves its input unread for the node's first build to ask for a
+/// session; a first build that raises asks for none, and the input is drained after this.
+const FIRST_BUILD_WAIT: Duration = Duration::from_secs(5);
 
 /// Why an encoder did not encode a frame.
 #[derive(Debug, PartialEq, Eq)]
@@ -418,9 +421,9 @@ fn open_the_encoder(
     ))
 }
 
-/// Read, encode and write until the node stops, with the newest session open. While none is
-/// open, once the first build has asked for one, `video` is still drained, so upstream sees a
-/// live consumer.
+/// Read, encode and write until the node stops, with the newest session open. Until the node's
+/// first build asks for a session, for up to [`FIRST_BUILD_WAIT`], `video` is left unread;
+/// after, while none is open, it is still drained, so upstream sees a live consumer.
 fn encode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -442,6 +445,7 @@ fn encode_until_stopped(
         packets_unit,
     };
     let mut sessions = VideoCodingSessionsOfTheThread::default();
+    let started = Instant::now();
     let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<_>| {
         sessions.take_the_commands(
             commands,
@@ -459,7 +463,7 @@ fn encode_until_stopped(
         take_the_commands(&mut sessions);
         // Frames wait on `video` for the node's first build, so the stream's first frame
         // is encoded rather than read with no session to take it.
-        if !sessions.a_session_was_asked_for() {
+        if !sessions.a_session_was_asked_for() && started.elapsed() < FIRST_BUILD_WAIT {
             continue;
         }
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
@@ -613,8 +617,9 @@ impl Drop for VideoDecodeSession {
 
 /// Read, decode and publish until the node stops, each media frame with the session
 /// [`VideoCodingSessionsOfTheThread::the_session_decoding_a_media_frame`] names. Until the
-/// node's first build asks for a session, `encoded_video` is left unread; after, while no
-/// session decodes, it is still drained, so upstream sees a live consumer.
+/// node's first build asks for a session, for up to [`FIRST_BUILD_WAIT`], `encoded_video` is
+/// left unread; after, while no session decodes, it is still drained, so upstream sees a live
+/// consumer.
 fn decode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -625,6 +630,7 @@ fn decode_until_stopped(
 ) {
     let node_type_name = node.node_type_name;
     let mut sessions = VideoCodingSessionsOfTheThread::default();
+    let started = Instant::now();
     let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<VideoDecodeSession>| {
         sessions.take_the_commands(
             commands,
@@ -646,7 +652,7 @@ fn decode_until_stopped(
         take_the_commands(&mut sessions);
         // Media frames wait on `encoded_video` for the node's first build, so the group
         // the stream opens with reaches the first session rather than being drained.
-        if !sessions.a_session_was_asked_for() {
+        if !sessions.a_session_was_asked_for() && started.elapsed() < FIRST_BUILD_WAIT {
             continue;
         }
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
