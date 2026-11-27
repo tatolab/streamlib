@@ -193,7 +193,7 @@ fn a_node_pacing_itself_returns_nothing_and_has_nothing_to_start_or_stop() {
         a_gain_on_its_own_clock(),
         quote! {
             fn a_node(gain: Input<f32>) {
-                let _published = computed(move || Ok::<_, String>(*gain.get()));
+                let _published = computed(move |_ctx| Ok::<_, String>(*gain.get()));
             }
         },
     );

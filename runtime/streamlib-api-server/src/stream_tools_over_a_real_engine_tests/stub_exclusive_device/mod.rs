@@ -2,91 +2,141 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A device only one holder may have open at once, as a camera or a microphone is, standing in
-//! for one in a test: it counts each open and close, and any read of it fails the test once a
-//! second holder ever asked for it while it was held.
+//! for one in a test. An open while another holder has it takes it over, as a real device's
+//! layer does, and is recorded as a takeover, so a test can tell a holder closed before the next
+//! open from one the open took the device from. It records each open, close and takeover in
+//! order, and each lease dropped once it no longer held the device.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+/// One open, close or takeover of a [`StubExclusiveDevice`], or a lease dropped once it no
+/// longer held the device, naming the holder by the count of opens before its own: the first
+/// holder is 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StubExclusiveDeviceEvent {
+    Opened {
+        holder: usize,
+    },
+    Closed {
+        holder: usize,
+    },
+    /// An open while `holder` still had the device took it from `holder`.
+    TakenOver {
+        holder: usize,
+    },
+    Released {
+        holder: usize,
+    },
+}
+
 /// What a [`StubExclusiveDevice`] has seen since it was made.
 #[derive(Debug, Default)]
 struct StubExclusiveDeviceOpensAndCloses {
-    held: bool,
-    opens: usize,
-    closes: usize,
-    opens_refused_while_held: usize,
+    held_by: Option<usize>,
+    events: Vec<StubExclusiveDeviceEvent>,
 }
 
-/// A device one holder at a time may open; a second open while it is held is refused, as a
-/// busy device refuses it, and recorded against the test.
+impl StubExclusiveDeviceOpensAndCloses {
+    fn count(&self, counted: fn(&StubExclusiveDeviceEvent) -> bool) -> usize {
+        self.events.iter().filter(|event| counted(event)).count()
+    }
+}
+
+/// A device one holder at a time may have open; an open while it is held closes the holder
+/// that has it first.
 #[derive(Debug, Default)]
 pub(super) struct StubExclusiveDevice {
     held_so_far: Mutex<StubExclusiveDeviceOpensAndCloses>,
 }
 
-/// The one open hold on a [`StubExclusiveDevice`], which closes it when dropped.
+/// One holder's hold on a [`StubExclusiveDevice`], closed when dropped unless a later open took
+/// the device over first.
 #[derive(Debug)]
 pub(super) struct StubExclusiveDeviceLease {
     device: Arc<StubExclusiveDevice>,
+    holder: usize,
 }
 
-/// A second holder asked for a [`StubExclusiveDevice`] while another held it.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct StubExclusiveDeviceAlreadyHeld;
-
-impl std::fmt::Display for StubExclusiveDeviceAlreadyHeld {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("the stub exclusive device is already held by another holder")
+impl PartialEq for StubExclusiveDeviceLease {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.device, &other.device) && self.holder == other.holder
     }
 }
 
 impl StubExclusiveDevice {
-    /// Open the device for one holder, refused while another holds it.
-    pub(super) fn open(
-        self: &Arc<Self>,
-    ) -> std::result::Result<StubExclusiveDeviceLease, StubExclusiveDeviceAlreadyHeld> {
+    /// Open the device for a new holder, taking it from the holder that has it first.
+    pub(super) fn open(self: &Arc<Self>) -> StubExclusiveDeviceLease {
         let mut held_so_far = self.held_so_far.lock();
-        if held_so_far.held {
-            held_so_far.opens_refused_while_held += 1;
-            return Err(StubExclusiveDeviceAlreadyHeld);
+        if let Some(taken_from) = held_so_far.held_by.take() {
+            held_so_far
+                .events
+                .push(StubExclusiveDeviceEvent::TakenOver { holder: taken_from });
         }
-        held_so_far.held = true;
-        held_so_far.opens += 1;
-        Ok(StubExclusiveDeviceLease {
-            device: Arc::clone(self),
-        })
-    }
-
-    /// How many times the device was opened; fails the test if two holders ever asked for it
-    /// at once.
-    pub(super) fn opens(&self) -> usize {
-        self.held_so_far_by_one_holder_at_a_time().opens
-    }
-
-    /// How many times the device was closed; fails the test if two holders ever asked for it
-    /// at once.
-    pub(super) fn closes(&self) -> usize {
-        self.held_so_far_by_one_holder_at_a_time().closes
-    }
-
-    fn held_so_far_by_one_holder_at_a_time(
-        &self,
-    ) -> parking_lot::MutexGuard<'_, StubExclusiveDeviceOpensAndCloses> {
-        let held_so_far = self.held_so_far.lock();
-        assert_eq!(
-            held_so_far.opens_refused_while_held, 0,
-            "two holders asked for the stub exclusive device at once: {held_so_far:?}"
-        );
+        let holder =
+            held_so_far.count(|event| matches!(event, StubExclusiveDeviceEvent::Opened { .. }));
+        held_so_far.held_by = Some(holder);
         held_so_far
+            .events
+            .push(StubExclusiveDeviceEvent::Opened { holder });
+        StubExclusiveDeviceLease {
+            device: Arc::clone(self),
+            holder,
+        }
+    }
+
+    /// Every open and close of the device, in the order they happened.
+    pub(super) fn events(&self) -> Vec<StubExclusiveDeviceEvent> {
+        self.held_so_far.lock().events.clone()
+    }
+
+    /// How many times the device was opened.
+    pub(super) fn opens(&self) -> usize {
+        self.held_so_far
+            .lock()
+            .count(|event| matches!(event, StubExclusiveDeviceEvent::Opened { .. }))
+    }
+
+    /// How many leases were dropped after a later open took the device from them.
+    pub(super) fn releases(&self) -> usize {
+        self.held_so_far
+            .lock()
+            .count(|event| matches!(event, StubExclusiveDeviceEvent::Released { .. }))
+    }
+
+    /// How many times the device was closed.
+    pub(super) fn closes(&self) -> usize {
+        self.held_so_far
+            .lock()
+            .count(|event| matches!(event, StubExclusiveDeviceEvent::Closed { .. }))
+    }
+}
+
+impl StubExclusiveDeviceLease {
+    /// Close the device if this lease still holds it; the lease's drop then only releases it.
+    pub(super) fn close(&self) {
+        let mut held_so_far = self.device.held_so_far.lock();
+        if held_so_far.held_by == Some(self.holder) {
+            held_so_far.held_by = None;
+            held_so_far.events.push(StubExclusiveDeviceEvent::Closed {
+                holder: self.holder,
+            });
+        }
     }
 }
 
 impl Drop for StubExclusiveDeviceLease {
     fn drop(&mut self) {
         let mut held_so_far = self.device.held_so_far.lock();
-        held_so_far.held = false;
-        held_so_far.closes += 1;
+        let holder = self.holder;
+        let dropped = if held_so_far.held_by == Some(holder) {
+            held_so_far.held_by = None;
+            StubExclusiveDeviceEvent::Closed { holder }
+        } else {
+            StubExclusiveDeviceEvent::Released { holder }
+        };
+        held_so_far.events.push(dropped);
     }
 }
 

@@ -291,3 +291,106 @@ fn a_virtual_camera_handle_no_open_returned_is_refused() {
         "{refusal}"
     );
 }
+
+/// Mental-revert: open a device again beside the stream this node has open on it, and the first
+/// stream keeps delivering, two holders of one device.
+#[test]
+fn a_capture_opened_again_on_a_device_takes_it_over_from_the_stream_that_had_it() {
+    let module_host = module_host_lending_no_port("audio_capture_taken_over");
+    let mut first = module_host
+        .open_audio_capture_stream(
+            &tatolab_module_sdk::ModuleHostAudioCaptureStreamRequest::default(),
+        )
+        .expect("the default device, or silence, opens");
+    let (first_sender, first_blocks) = std::sync::mpsc::sync_channel(64);
+    first
+        .start_delivering_to(Box::new(move |_| {
+            let _ = first_sender.try_send(());
+        }))
+        .unwrap();
+    first_blocks
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the first stream delivers");
+
+    let mut second = module_host
+        .open_audio_capture_stream(
+            &tatolab_module_sdk::ModuleHostAudioCaptureStreamRequest::default(),
+        )
+        .expect("the device opens again, taken over");
+
+    while first_blocks.try_recv().is_ok() {}
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        first_blocks.try_recv().is_err(),
+        "the stream taken over delivers nothing once the device is opened again"
+    );
+    let refusal = first
+        .start_delivering_to(Box::new(|_| {}))
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("taken over by a later open"), "{refusal}");
+    first
+        .stop_delivering()
+        .expect("a stream taken over is stopped already");
+    let ended = first
+        .failure_that_ended_the_stream()
+        .expect("the stream taken over answers")
+        .expect("the stream taken over has ended");
+    assert!(ended.contains("taken over by a later open"), "{ended}");
+    assert_eq!(
+        second
+            .failure_that_ended_the_stream()
+            .expect("the stream that took the device over answers"),
+        None
+    );
+    let (second_sender, second_blocks) = std::sync::mpsc::sync_channel(64);
+    second
+        .start_delivering_to(Box::new(move |_| {
+            let _ = second_sender.try_send(());
+        }))
+        .unwrap();
+    second_blocks
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the stream that took the device over delivers");
+}
+
+#[test]
+fn a_playback_opened_again_on_a_device_takes_it_over_from_the_stream_that_had_it() {
+    let module_host = module_host_lending_no_port("audio_playback_taken_over");
+    let request = tatolab_module_sdk::ModuleHostAudioPlaybackStreamRequest {
+        sample_rate: Some(48_000),
+        channels: Some(2),
+        sample_format: Some(tatolab_module_sdk::ModuleHostAudioSampleFormat::F32),
+        ..Default::default()
+    };
+    let mut first = module_host
+        .open_audio_playback_stream(&request)
+        .expect("the default device, or the null backend, opens");
+
+    let mut second = module_host
+        .open_audio_playback_stream(&request)
+        .expect("the device opens again, taken over");
+
+    let refusal = first
+        .start_requesting_from(Box::new(|_| {}))
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("taken over by a later open"), "{refusal}");
+    first
+        .stop_requesting()
+        .expect("a stream taken over is stopped already");
+    let ended = first
+        .failure_that_ended_the_stream()
+        .expect("the stream taken over answers")
+        .expect("the stream taken over has ended");
+    assert!(ended.contains("taken over by a later open"), "{ended}");
+    assert_eq!(
+        second
+            .failure_that_ended_the_stream()
+            .expect("the stream that took the device over answers"),
+        None
+    );
+    second
+        .start_requesting_from(Box::new(|_| {}))
+        .expect("the stream that took the device over starts");
+}

@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::descriptors::PinType;
-use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
 
@@ -107,9 +106,7 @@ pub(super) fn node_counting_its_builds(
     });
     let held = HeldFromSetupToTeardown {
         stream_id: ctx.stream_id().to_owned(),
-        _lease: device
-            .open()
-            .map_err(|already_held| Error::Configuration(already_held.to_string()))?,
+        _lease: device.open(),
     };
     Ok(move |ctx: &RuntimeContextLimitedAccess<'_>| {
         // Named so the closure owns `held`: its drop, when the node's frame function goes, is

@@ -8,8 +8,7 @@ half opens the capture stream through the engine's audio device backend, which
 the module host table exports, so PipeWire, ALSA and CoreAudio are the
 engine's own arms and no second audio device path exists. The device callback
 hands each block to a native thread that publishes it on `audio` with no
-Python attached: Python runs at setup, start, stop and teardown, never per
-block.
+Python attached: Python runs only when an input changes, never per block.
 """
 
 from __future__ import annotations
@@ -19,17 +18,18 @@ from typing import Annotated
 from tatolab.stream import (
     Audio,
     Description,
+    Input,
     OutputPin,
     PinControl,
     RuntimeContextFullAccess,
-    SettingOnly,
+    computed,
     log,
     node,
 )
 
 from . import _native
 
-__all__ = ["MicrophoneSource"]
+__all__ = ["AUDIO_OUTPUT_PORT", "MicrophoneSource"]
 
 AUDIO_OUTPUT_PORT = "audio"
 
@@ -41,7 +41,27 @@ AUDIO_OUTPUT_PORT = "audio"
     ),
 )
 @node(execution="manual", scheduling="realtime", paced_by_real_time=True)
-class MicrophoneSource:
+def MicrophoneSource(
+    *,
+    device_id: Input[
+        Annotated[
+            str | None,
+            PinControl("audio_capture_device"),
+            Description(
+                "Backend-named capture device, as the runtime's `list_audio_capture_devices` "
+                "lists it. Unset or empty: the backend's default device. A name the backend "
+                "cannot open fails the open rather than landing on a different device — a wrong "
+                "device id is a wiring error. On the PipeWire backend, `<sink>.monitor` captures "
+                "what that sink is playing, and `@DEFAULT_MONITOR@` what the default output is "
+                "playing when the device opens."
+            ),
+        ]
+    ] = Input(None),
+    audio: OutputPin[
+        Annotated[Audio, Description("Timestamped planar blocks of f32 capture samples")]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Captures audio from the machine's audio backend as timestamped sample blocks
     (silence where no backend exists).
 
@@ -52,69 +72,35 @@ class MicrophoneSource:
     rate and channel count, an i16 device widened to f32, each stamped with the
     device's instant of its first sample.
 
+    The open capture stream is a computed value: setting `device_id` while the
+    stream plays closes the capture it has, then opens the device named, so two
+    devices never publish on `audio` at once. A device that fails to open shows
+    on the node, and nothing publishes until the next set.
+
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID;
     naming one that is not attached is refused with the UIDs that are. Only a
     stream that holds this node opens a microphone, so only such a stream can
     put the platform's access prompt in front of the user, and it asks only when
     the stream's load allows: a stream the runtime re-loads on its own never
-    asks, and is refused at `setup()` until microphone access has been answered.
+    asks, and its microphone fails to open until access has been answered.
     """
+    del audio  # Lent to the native half, which publishes on it.
+    module_host_table = ctx.open_module_host_table(output_ports=[AUDIO_OUTPUT_PORT])
 
-    device_id: Annotated[
-        str | None,
-        SettingOnly(),
-        PinControl("audio_capture_device"),
-        Description(
-            "Backend-named capture device, as the runtime's `list_audio_capture_devices` lists "
-            "it. Unset or empty: the backend's default device. A name the backend cannot open raises "
-            "rather than landing on a different device — a wrong device id is a wiring error. "
-            "On the PipeWire backend, `<sink>.monitor` captures what that sink is playing, and "
-            "`@DEFAULT_MONITOR@` what the default output is playing when the node opens."
-        ),
-    ] = None
-    audio: OutputPin[
-        Annotated[Audio, Description("Timestamped planar blocks of f32 capture samples")]
-    ]
+    open_now: "list[_native.MicrophoneCapture]" = []
 
-    def __init__(self) -> None:
-        self._capture: "_native.MicrophoneCapture | None" = None
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        """Lend `audio` to the native half and open the capture stream, so a
-        device that cannot be opened refuses the node here."""
-        module_host_table = ctx.open_module_host_table(output_ports=[AUDIO_OUTPUT_PORT])
-        self._capture = _native.MicrophoneCapture(module_host_table, self.device_id or None)
+    def open_the_microphone() -> _native.MicrophoneCapture:
+        named = device_id.get() or None
+        # The capture this one replaces closes first, so two devices never publish at once.
+        while open_now:
+            open_now.pop().close()
+        capture = _native.MicrophoneCapture(module_host_table, named)
+        open_now.append(capture)
         log.info(
-            f"MicrophoneSource: capture stream opened on "
-            f"{self.device_id or '<default>'} at {self._capture.sample_rate} Hz × "
-            f"{self._capture.channels} ch, {self._capture.sample_format}"
+            f"MicrophoneSource: capture stream opened on {named or '<default>'} at "
+            f"{capture.sample_rate} Hz × {capture.channels} ch, {capture.sample_format}"
         )
+        capture.start()
+        return capture
 
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._opened_capture().start()
-
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        if self._capture is not None:
-            self._capture.stop()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        capture = self._capture
-        if capture is None:
-            return
-        capture.stop()
-        log.info(
-            f"MicrophoneSource: teardown. published_blocks={capture.published_block_count} "
-            f"dropped_blocks={capture.dropped_block_count} "
-            f"capture_device_failure={capture.failure_that_ended_the_capture}"
-        )
-        self._capture = None
-
-    def _opened_capture(self) -> "_native.MicrophoneCapture":
-        if self._capture is None:
-            raise RuntimeError(
-                "MicrophoneSource: start() ran before setup() opened the capture stream"
-            )
-        return self._capture
+    computed(open_the_microphone)

@@ -21,8 +21,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tatolab_module_sdk::{
     ModuleHost, ModuleHostAudioCaptureStream, ModuleHostAudioCaptureStreamRequest,
-    ModuleHostAudioSampleFormat, ModuleHostCallTooSlowForAFrame, ModuleHostCapturedAudioBlock,
-    ModuleHostLogLevel,
+    ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat, ModuleHostCallTooSlowForAFrame,
+    ModuleHostCapturedAudioBlock, ModuleHostLogLevel,
 };
 
 use captured_audio_block_hand_off_ring::CapturedAudioBlockHandOffRing;
@@ -54,7 +54,11 @@ struct CapturedAudioBlockDelivery {
 #[pyclass(name = "MicrophoneCapture", module = "tatolab.microphone._native")]
 struct MicrophoneCapture {
     module_host: ModuleHost,
-    capture_stream: ModuleHostAudioCaptureStream,
+    /// `None` once closed, its device given back.
+    capture_stream: Option<ModuleHostAudioCaptureStream>,
+    stream_format: ModuleHostAudioStreamFormat,
+    /// Why the device stopped serving the capture, as it stood when the capture closed.
+    failure_that_ended_the_closed_capture: Option<String>,
     delivery: Option<CapturedAudioBlockDelivery>,
     published_block_count: Arc<AtomicU64>,
     /// Drops of every delivery that has ended, beside the current one's.
@@ -88,7 +92,9 @@ impl MicrophoneCapture {
             .map_err(|refusal| PyRuntimeError::new_err(format!("MicrophoneSource: {refusal}")))?;
         Ok(Self {
             module_host,
-            capture_stream,
+            stream_format: capture_stream.stream_format(),
+            capture_stream: Some(capture_stream),
+            failure_that_ended_the_closed_capture: None,
             delivery: None,
             published_block_count: Arc::new(AtomicU64::new(0)),
             dropped_block_count_of_ended_deliveries: 0,
@@ -98,19 +104,19 @@ impl MicrophoneCapture {
     /// The rate every block is captured at, in hertz.
     #[getter]
     fn sample_rate(&self) -> u32 {
-        self.capture_stream.stream_format().sample_rate
+        self.stream_format.sample_rate
     }
 
     /// The channel count every block is interleaved by.
     #[getter]
     fn channels(&self) -> u32 {
-        self.capture_stream.stream_format().channels
+        self.stream_format.channels
     }
 
     /// The scalar encoding on the wire: `f32` or `i16`.
     #[getter]
     fn sample_format(&self) -> &'static str {
-        match self.capture_stream.stream_format().sample_format {
+        match self.stream_format.sample_format {
             ModuleHostAudioSampleFormat::F32 => "f32",
             ModuleHostAudioSampleFormat::I16 => "i16",
         }
@@ -135,16 +141,26 @@ impl MicrophoneCapture {
     /// Why the device stopped serving the capture, or `None` while it serves it.
     #[getter]
     fn failure_that_ended_the_capture(&self) -> PyResult<Option<String>> {
-        self.capture_stream
+        let Some(capture_stream) = &self.capture_stream else {
+            return Ok(self.failure_that_ended_the_closed_capture.clone());
+        };
+        capture_stream
             .failure_that_ended_the_stream()
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
     }
 
-    /// Begin capturing and publishing; a capture already started is left as it is.
+    /// Begin capturing and publishing; a capture already started is left as it is, and a closed
+    /// one is refused.
     fn start(&mut self, python: Python<'_>) -> PyResult<()> {
         if self.delivery.is_some() {
             return Ok(());
         }
+        let Some(capture_stream) = self.capture_stream.as_mut() else {
+            return Err(PyRuntimeError::new_err(
+                "MicrophoneSource: this capture is closed and its device given back; open a new one",
+            ));
+        };
+        let capture_stream_liveness = capture_stream.liveness();
         let audio_output_port = self
             .module_host
             .open_output_port(AUDIO_OUTPUT_PORT)
@@ -156,8 +172,8 @@ impl MicrophoneCapture {
         let publishing = CapturedAudioBlockPublishing {
             module_host: self.module_host.clone(),
             audio_output_port,
-            capture_stream_liveness: self.capture_stream.liveness(),
-            stream_format: self.capture_stream.stream_format(),
+            capture_stream_liveness,
+            stream_format: self.stream_format,
             hand_off_ring: Arc::clone(&hand_off_ring),
             is_publishing: Arc::clone(&is_publishing),
             published_block_count: Arc::clone(&self.published_block_count),
@@ -175,7 +191,6 @@ impl MicrophoneCapture {
                 ))
             })?;
         let hand_off_ring_in_the_device_callback = Arc::clone(&hand_off_ring);
-        let capture_stream = &mut self.capture_stream;
         let started = python.detach(|| {
             capture_stream.start_delivering_to(Box::new(
                 move |captured: ModuleHostCapturedAudioBlock<'_>| {
@@ -194,7 +209,7 @@ impl MicrophoneCapture {
             publish_thread_finished: Mutex::new(publish_thread_finished),
         });
         if let Err(refusal) = started {
-            self.stop(python);
+            self.close(python);
             return Err(PyRuntimeError::new_err(format!(
                 "MicrophoneSource: {refusal}"
             )));
@@ -202,22 +217,53 @@ impl MicrophoneCapture {
         Ok(())
     }
 
-    /// Stop capturing, publish what was already captured, and end the
-    /// publishing thread within its grace.
-    fn stop(&mut self, python: Python<'_>) {
+    /// Stop capturing, publish what was already captured, end the publishing
+    /// thread within its grace, give the device back and log what the capture
+    /// published. Idempotent.
+    fn close(&mut self, python: Python<'_>) {
         python.detach(|| self.stop_capturing_and_publishing());
     }
 }
 
 impl MicrophoneCapture {
     fn stop_capturing_and_publishing(&mut self) {
-        if let Err(refusal) = self.capture_stream.stop_delivering() {
+        let Some(mut capture_stream) = self.capture_stream.take() else {
+            return;
+        };
+        if let Err(refusal) = capture_stream.stop_delivering() {
             self.module_host.log(
                 ModuleHostLogLevel::Warn,
                 MICROPHONE_LOG_TARGET,
                 &format!("MicrophoneSource: the capture stream failed to stop: {refusal}"),
             );
         }
+        self.end_the_delivery();
+        let failure_that_ended_the_capture = capture_stream.failure_that_ended_the_stream();
+        drop(capture_stream);
+        let failure_that_ended_the_capture = match failure_that_ended_the_capture {
+            Ok(failure) => {
+                self.failure_that_ended_the_closed_capture = failure;
+                self.failure_that_ended_the_closed_capture
+                    .as_deref()
+                    .unwrap_or("None")
+                    .to_owned()
+            }
+            Err(refusal) => format!("unknown, the host refused to say: {refusal}"),
+        };
+        self.module_host.log(
+            ModuleHostLogLevel::Info,
+            MICROPHONE_LOG_TARGET,
+            &format!(
+                "MicrophoneSource: closed. published_blocks={} dropped_blocks={} \
+                 capture_device_failure={failure_that_ended_the_capture}",
+                self.published_block_count.load(Ordering::Relaxed),
+                self.dropped_block_count_of_ended_deliveries,
+            ),
+        );
+    }
+
+    /// End the delivery in progress, if one is, within its publishing thread's grace.
+    fn end_the_delivery(&mut self) {
         let Some(delivery) = self.delivery.take() else {
             return;
         };

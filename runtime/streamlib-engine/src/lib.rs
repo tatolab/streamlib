@@ -260,7 +260,8 @@ pub mod sdk {
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};
 
-        pub use streamlib_scope::{Computed, Input, computed};
+        pub use crate::core::nodes::__generated_private::computed;
+        pub use streamlib_scope::{Computed, Input};
     }
 
     pub use crate::crossbeam_channel;

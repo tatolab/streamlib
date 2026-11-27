@@ -85,7 +85,7 @@ pub fn tensor_to_audio(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    let held = computed(move || {
+    let held = computed(move |_ctx| {
         let held = TensorToAudioInputs {
             attribute: String::clone(&attribute.get()),
             channel_names: Vec::clone(&channel_names.get()),

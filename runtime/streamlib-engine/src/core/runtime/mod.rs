@@ -1,6 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+#[cfg(test)]
+mod a_node_creating_a_kernel_in_a_build_for_a_test;
+#[cfg(test)]
+mod a_node_creating_a_kernel_in_a_build_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub mod a_node_pacing_itself_written_as_one_function_for_a_test;
 #[cfg(test)]

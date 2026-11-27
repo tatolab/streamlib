@@ -14,6 +14,7 @@ compile_error!("tatolab-camera captures through V4L2 on Linux and AVFoundation o
 pub mod avfoundation_camera_capture;
 pub mod camera_frame_publication;
 pub mod camera_image_frame;
+pub mod camera_taken_over_by_its_next_capture;
 pub mod capture_timestamp;
 pub mod captured_frame_colour_description;
 #[cfg(target_os = "macos")]
@@ -22,21 +23,56 @@ pub mod core_video_colour_description;
 pub mod v4l2_camera_capture;
 pub mod v4l2_colour_description;
 
+use pyo3::create_exception;
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
 
 #[cfg(target_os = "macos")]
-use crate::avfoundation_camera_capture::AvFoundationZeroCopyCameraCapture;
+use crate::avfoundation_camera_capture::{
+    AvFoundationZeroCopyCameraCapture, NegotiatedAvFoundationCaptureFormat,
+};
+use crate::camera_taken_over_by_its_next_capture::{
+    CamerasHeldByOneCaptureEach, CaptureHoldingACamera,
+};
 #[cfg(target_os = "linux")]
-use crate::v4l2_camera_capture::V4l2ZeroCopyCameraCapture;
+use crate::v4l2_camera_capture::{
+    NegotiatedCaptureFormat, V4l2ZeroCopyCameraCapture, the_capture_device_at_or_the_first_found,
+};
+
+create_exception!(
+    _native,
+    CameraCaptureClosed,
+    PyOSError,
+    "A capture was started after it was closed, or after a later capture took its camera over."
+);
+
+fn refused_as_closed(capture_class: &str) -> PyErr {
+    CameraCaptureClosed::new_err(format!(
+        "this {capture_class} was closed, or a later capture of its camera took the camera over: \
+         open a new one to capture again"
+    ))
+}
+
+/// The cameras this process's V4L2 captures hold, one capture each.
+#[cfg(target_os = "linux")]
+static CAMERAS_HELD_BY_V4L2_CAPTURES: CamerasHeldByOneCaptureEach<V4l2ZeroCopyCameraCapture> =
+    CamerasHeldByOneCaptureEach::new();
+
+/// The cameras this process's AVFoundation captures hold, one capture each.
+#[cfg(target_os = "macos")]
+static CAMERAS_HELD_BY_AVFOUNDATION_CAPTURES: CamerasHeldByOneCaptureEach<
+    AvFoundationZeroCopyCameraCapture,
+> = CamerasHeldByOneCaptureEach::new();
 
 /// A camera publishing Image frames on a lent output port from a thread this
-/// wheel owns.
+/// wheel owns. Opening a camera another capture in this process holds closes
+/// that capture first.
 #[cfg(target_os = "linux")]
 #[pyclass(name = "V4l2ZeroCopyCameraCapture")]
 struct PythonV4l2ZeroCopyCameraCapture {
-    capture: V4l2ZeroCopyCameraCapture,
+    format: NegotiatedCaptureFormat,
+    capture: CaptureHoldingACamera<V4l2ZeroCopyCameraCapture>,
 }
 
 #[cfg(target_os = "linux")]
@@ -67,93 +103,105 @@ impl PythonV4l2ZeroCopyCameraCapture {
         )?;
         let capture = python
             .detach(|| {
-                V4l2ZeroCopyCameraCapture::open(
-                    module_host,
-                    &video_output_port,
-                    device_path.as_deref(),
-                    max_width,
-                    max_height,
-                    output_pool_rotation_depth,
-                )
+                let device_path = the_capture_device_at_or_the_first_found(device_path.as_deref())?;
+                CAMERAS_HELD_BY_V4L2_CAPTURES.open_taking_over(&device_path, || {
+                    V4l2ZeroCopyCameraCapture::open(
+                        module_host,
+                        &video_output_port,
+                        &device_path,
+                        max_width,
+                        max_height,
+                        output_pool_rotation_depth,
+                    )
+                })
             })
             .map_err(|refusal| PyOSError::new_err(refusal.0))?;
-        Ok(Self { capture })
+        let format = capture
+            .while_it_holds_its_camera(|opened| opened.format().clone())
+            .ok_or_else(|| refused_as_closed("V4l2ZeroCopyCameraCapture"))?;
+        Ok(Self { format, capture })
     }
 
     #[getter]
     fn device_path(&self) -> String {
-        self.capture.format().device_path.clone()
+        self.format.device_path.clone()
     }
 
     #[getter]
     fn card_name(&self) -> String {
-        self.capture.format().card_name.clone()
+        self.format.card_name.clone()
     }
 
     #[getter]
     fn fourcc(&self) -> &'static str {
-        self.capture.format().pixel_layout.fourcc_name()
+        self.format.pixel_layout.fourcc_name()
     }
 
     #[getter]
     fn width(&self) -> u32 {
-        self.capture.format().width
+        self.format.width
     }
 
     #[getter]
     fn height(&self) -> u32 {
-        self.capture.format().height
+        self.format.height
     }
 
     #[getter]
     fn bytes_per_line(&self) -> u32 {
-        self.capture.format().bytes_per_line
+        self.format.bytes_per_line
     }
 
     #[getter]
     fn nominal_frames_per_second(&self) -> Option<u32> {
-        self.capture.format().nominal_frames_per_second
+        self.format.nominal_frames_per_second
     }
 
     #[getter]
     fn colour_primaries(&self) -> Option<&'static str> {
-        self.capture.format().colour.primaries
+        self.format.colour.primaries
     }
 
     #[getter]
     fn colour_transfer(&self) -> Option<&'static str> {
-        self.capture.format().colour.transfer
+        self.format.colour.transfer
     }
 
     #[getter]
     fn colour_matrix(&self) -> Option<&'static str> {
-        self.capture.format().colour.matrix
+        self.format.colour.matrix
     }
 
     #[getter]
     fn colour_range(&self) -> Option<&'static str> {
-        self.capture.format().colour.range
+        self.format.colour.range
     }
 
     /// Stream on and publish every frame from the capture thread.
-    fn start(&mut self, python: Python<'_>) -> PyResult<()> {
+    fn start(&self, python: Python<'_>) -> PyResult<()> {
         python
-            .detach(|| self.capture.start())
+            .detach(|| {
+                self.capture
+                    .while_it_holds_its_camera(|opened| opened.start())
+            })
+            .ok_or_else(|| refused_as_closed("V4l2ZeroCopyCameraCapture"))?
             .map_err(|refusal| PyOSError::new_err(refusal.0))
     }
 
     /// Stop streaming and release the device. Idempotent.
-    fn stop(&mut self, python: Python<'_>) {
-        python.detach(|| self.capture.stop());
+    fn close(&self, python: Python<'_>) {
+        python.detach(|| self.capture.close());
     }
 }
 
 /// A camera publishing Image frames on a lent output port from AVFoundation's
-/// own queues.
+/// own queues. Opening a camera another capture in this process holds closes
+/// that capture first.
 #[cfg(target_os = "macos")]
 #[pyclass(name = "AvFoundationZeroCopyCameraCapture")]
 struct PythonAvFoundationZeroCopyCameraCapture {
-    capture: AvFoundationZeroCopyCameraCapture,
+    format: NegotiatedAvFoundationCaptureFormat,
+    capture: CaptureHoldingACamera<AvFoundationZeroCopyCameraCapture>,
 }
 
 #[cfg(target_os = "macos")]
@@ -184,59 +232,78 @@ impl PythonAvFoundationZeroCopyCameraCapture {
         )?;
         let capture = python
             .detach(|| {
-                AvFoundationZeroCopyCameraCapture::open(
-                    module_host,
-                    &video_output_port,
-                    device_id.as_deref(),
-                    max_width,
-                    max_height,
-                    output_pool_rotation_depth,
+                // The camera an unset id opens, by its unique id, so either name of it is one key.
+                let camera = device_id.clone().or_else(|| {
+                    avfoundation_camera_capture::list_avfoundation_capture_devices()
+                        .into_iter()
+                        .next()
+                        .map(|(unique_id, _)| unique_id)
+                });
+                CAMERAS_HELD_BY_AVFOUNDATION_CAPTURES.open_taking_over(
+                    camera.as_deref().unwrap_or_default(),
+                    || {
+                        AvFoundationZeroCopyCameraCapture::open(
+                            module_host,
+                            &video_output_port,
+                            device_id.as_deref(),
+                            max_width,
+                            max_height,
+                            output_pool_rotation_depth,
+                        )
+                    },
                 )
             })
             .map_err(|refusal| PyOSError::new_err(refusal.0))?;
-        Ok(Self { capture })
+        let format = capture
+            .while_it_holds_its_camera(|opened| opened.format().clone())
+            .ok_or_else(|| refused_as_closed("AvFoundationZeroCopyCameraCapture"))?;
+        Ok(Self { format, capture })
     }
 
     #[getter]
     fn device_id(&self) -> String {
-        self.capture.format().device_id.clone()
+        self.format.device_id.clone()
     }
 
     #[getter]
     fn device_name(&self) -> String {
-        self.capture.format().device_name.clone()
+        self.format.device_name.clone()
     }
 
     #[getter]
     fn fourcc(&self) -> &'static str {
-        self.capture.format().fourcc_name()
+        self.format.fourcc_name()
     }
 
     #[getter]
     fn width(&self) -> u32 {
-        self.capture.format().width
+        self.format.width
     }
 
     #[getter]
     fn height(&self) -> u32 {
-        self.capture.format().height
+        self.format.height
     }
 
     #[getter]
     fn nominal_frames_per_second(&self) -> Option<u32> {
-        self.capture.format().nominal_frames_per_second
+        self.format.nominal_frames_per_second
     }
 
     /// Start the session, or start it once the user grants camera access.
-    fn start(&mut self, python: Python<'_>) -> PyResult<()> {
+    fn start(&self, python: Python<'_>) -> PyResult<()> {
         python
-            .detach(|| self.capture.start())
+            .detach(|| {
+                self.capture
+                    .while_it_holds_its_camera(|opened| opened.start())
+            })
+            .ok_or_else(|| refused_as_closed("AvFoundationZeroCopyCameraCapture"))?
             .map_err(|refusal| PyOSError::new_err(refusal.0))
     }
 
     /// Stop the session and give its surfaces back. Idempotent.
-    fn stop(&mut self, python: Python<'_>) {
-        python.detach(|| self.capture.stop());
+    fn close(&self, python: Python<'_>) {
+        python.detach(|| self.capture.close());
     }
 }
 
@@ -274,5 +341,9 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module.add_function(wrap_pyfunction!(list_avfoundation_capture_devices, module)?)?;
     }
     module.add_function(wrap_pyfunction!(monotonic_now_ns, module)?)?;
+    module.add(
+        "CameraCaptureClosed",
+        module.py().get_type::<CameraCaptureClosed>(),
+    )?;
     Ok(())
 }

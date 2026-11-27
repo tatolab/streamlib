@@ -78,6 +78,7 @@ use virtual_camera_streams::{
 
 mod audio_capture_streams;
 mod audio_playback_streams;
+mod audio_stream_on_a_device;
 mod virtual_camera_streams;
 
 /// The `tracing` target a module's records are emitted under in this helper;
