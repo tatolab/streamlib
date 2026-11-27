@@ -383,7 +383,8 @@ def WhipPublisher(
         Annotated[
             str,
             Description(
-                "The WHIP endpoint to publish to; the node fails, naming `url`, until it is set."
+                "The WHIP endpoint to publish to; until it is set, the node shows `EndpointUrlNotSet`, "
+                "naming `url`, and publishes nothing."
             ),
         ]
     ] = Input(""),
@@ -465,7 +466,8 @@ def WhepPlayer(
         Annotated[
             str,
             Description(
-                "The WHEP endpoint to play from; the node fails, naming `url`, until it is set."
+                "The WHEP endpoint to play from; until it is set, the node shows `EndpointUrlNotSet`, "
+                "naming `url`, and plays nothing."
             ),
         ]
     ] = Input(""),

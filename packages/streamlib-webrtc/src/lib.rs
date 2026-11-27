@@ -371,11 +371,19 @@ impl WhepPlayerThread {
         let command = python
             .detach(|| open_an_endpoint(number, dialer, another_plays))
             .map_err(whep_session_not_opened)?;
-        self.commands.send(command).map_err(|_| {
-            WhepPlayerThreadEnded::new_err(
+        if let Err(mpsc::SendError(command)) = self.commands.send(command) {
+            // Dialled here with no thread left to play it, so it is closed here.
+            if let WhepPlayerCommand::Play {
+                connected: Some(mut connected),
+                ..
+            } = command
+            {
+                python.detach(|| connected.close());
+            }
+            return Err(WhepPlayerThreadEnded::new_err(
                 "WhepPlayer: the reading thread has ended, so no session opens on it",
-            )
-        })?;
+            ));
+        }
         Ok(WhepPlayerSession {
             number,
             commands: self.commands.clone(),
@@ -519,12 +527,24 @@ impl WhepPlayerSessionDialer for WhepSessionDialer {
         let session = transport_stack::transport_runtime()?.block_on(
             WhepPlayingSession::connect(self.endpoint_url.clone(), self.bearer_token.clone()),
         )?;
-        Ok(ConnectedWhepPlayingSession { session })
+        Ok(ConnectedWhepPlayingSession {
+            session,
+            closed: false,
+        })
     }
 }
 
+/// A dialled session, closed when it is let go if nothing closed it first, so a session
+/// dialled for a thread that ended before playing it is still DELETEd.
 struct ConnectedWhepPlayingSession {
     session: WhepPlayingSession,
+    closed: bool,
+}
+
+impl Drop for ConnectedWhepPlayingSession {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 impl WhepPlayerConnectedSession for ConnectedWhepPlayingSession {
@@ -539,6 +559,9 @@ impl WhepPlayerConnectedSession for ConnectedWhepPlayingSession {
     }
 
     fn close(&mut self) {
+        if std::mem::replace(&mut self.closed, true) {
+            return;
+        }
         if let Ok(runtime) = transport_stack::transport_runtime() {
             runtime.block_on(self.session.close());
         }

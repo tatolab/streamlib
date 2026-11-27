@@ -64,10 +64,12 @@ pub(crate) enum VideoCodingSessionCommand<Settings> {
 }
 
 /// The sessions open on one coding thread, oldest first, each by the number it was opened
-/// under, and which one the last media frame was decoded with.
+/// under, which one the last media frame was decoded with, and whether a build has asked for a
+/// session yet.
 pub(crate) struct VideoCodingSessionsOfTheThread<Session> {
     open: Vec<SessionOfTheThread<Session>>,
     decoding_with: Option<u64>,
+    a_session_was_asked_for: bool,
 }
 
 struct SessionOfTheThread<Session> {
@@ -83,6 +85,7 @@ impl<Session> Default for VideoCodingSessionsOfTheThread<Session> {
         Self {
             open: Vec::new(),
             decoding_with: None,
+            a_session_was_asked_for: false,
         }
     }
 }
@@ -91,22 +94,34 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
     /// Carry out every command waiting in `commands`, in the order they were sent: each open
     /// with `open`, which is told whether another session already codes (one `codes` answers
     /// true for), and answered; each close by dropping its session here, on the coding thread.
+    /// Until a build has asked for a session, it waits up to `wait_for_the_first` for one, so
+    /// the thread can hold its input unread until the node's first build has run.
     ///
     /// A decoder's session let go before a newer one has taken a group start decodes on until
     /// one does, since a node's build lets the old value go as soon as the new one is built.
     pub(crate) fn take_the_commands<Settings>(
         &mut self,
         commands: &mpsc::Receiver<VideoCodingSessionCommand<Settings>>,
+        wait_for_the_first: Duration,
         codes: impl Fn(&Session) -> bool,
         mut open: impl FnMut(Settings, bool) -> Result<Session, VideoCodingSessionNotOpened>,
     ) {
-        while let Ok(command) = commands.try_recv() {
+        let first = if self.a_session_was_asked_for {
+            None
+        } else {
+            commands.recv_timeout(wait_for_the_first).ok()
+        };
+        for command in first
+            .into_iter()
+            .chain(std::iter::from_fn(|| commands.try_recv().ok()))
+        {
             match command {
                 VideoCodingSessionCommand::Open {
                     number,
                     settings,
                     answer,
                 } => {
+                    self.a_session_was_asked_for = true;
                     let another_codes = self.open.iter().any(|open| codes(&open.session));
                     let answered = open(settings, another_codes).map(|session| {
                         self.open.push(SessionOfTheThread {
@@ -142,6 +157,12 @@ impl<Session> VideoCodingSessionsOfTheThread<Session> {
         {
             self.open.remove(index);
         }
+    }
+
+    /// Whether a build has asked for a session, opened or refused; until one has, the thread
+    /// leaves its input unread.
+    pub(crate) fn a_session_was_asked_for(&self) -> bool {
+        self.a_session_was_asked_for
     }
 
     /// The newest session open, which an encoder codes every frame with.

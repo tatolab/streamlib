@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::video_coding_sessions::{
     VideoCodingSessionCommand, VideoCodingSessionNotOpened, VideoCodingSessionsOfTheThread,
@@ -68,12 +69,12 @@ fn a_session_opened_beside_another_takes_every_frame_from_then_on() {
     let (commands, received) = mpsc::channel();
     let mut sessions = VideoCodingSessionsOfTheThread::default();
     let first = open(&commands, 1, 2_000_000);
-    sessions.take_the_commands(&received, codes, open_unless_zero);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
     assert_eq!(first.try_recv(), Ok(Ok(())));
     assert_eq!(newest_bitrate(&mut sessions), Some(2_000_000));
 
     let second = open(&commands, 2, 6_000_000);
-    sessions.take_the_commands(&received, codes, open_unless_zero);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
     assert_eq!(second.try_recv(), Ok(Ok(())));
     assert_eq!(newest_bitrate(&mut sessions), Some(6_000_000));
     assert!(
@@ -82,7 +83,7 @@ fn a_session_opened_beside_another_takes_every_frame_from_then_on() {
     );
 
     close(&commands, 1);
-    sessions.take_the_commands(&received, codes, open_unless_zero);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
     assert!(!sessions.is_open(1));
     assert_eq!(newest_bitrate(&mut sessions), Some(6_000_000));
 }
@@ -93,7 +94,7 @@ fn a_refused_session_is_answered_with_its_refusal_and_the_old_one_keeps_coding()
     let mut sessions = VideoCodingSessionsOfTheThread::default();
     let _first = open(&commands, 1, 2_000_000);
     let refused = open(&commands, 2, 0);
-    sessions.take_the_commands(&received, codes, open_unless_zero);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
     assert!(matches!(
         refused.try_recv(),
         Ok(Err(VideoCodingSessionNotOpened::Refused(refusal))) if refusal.contains("bitrate_bps is 0")
@@ -110,7 +111,7 @@ fn closing_the_newest_session_returns_the_frames_to_the_one_before_it() {
     let _first = open(&commands, 1, 2_000_000);
     let _second = open(&commands, 2, 4_000_000);
     close(&commands, 2);
-    sessions.take_the_commands(&received, codes, open_unless_zero);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
     assert_eq!(newest_bitrate(&mut sessions), Some(2_000_000));
 }
 
@@ -121,10 +122,15 @@ fn the_opener_is_told_whether_another_session_is_open() {
     let mut told = Vec::new();
     let _first = open(&commands, 1, 2_000_000);
     let _second = open(&commands, 2, 4_000_000);
-    sessions.take_the_commands(&received, codes, |bitrate_bps, another_codes| {
-        told.push(another_codes);
-        open_unless_zero(bitrate_bps, another_codes)
-    });
+    sessions.take_the_commands(
+        &received,
+        Duration::ZERO,
+        codes,
+        |bitrate_bps, another_codes| {
+            told.push(another_codes);
+            open_unless_zero(bitrate_bps, another_codes)
+        },
+    );
     assert_eq!(told, [false, true]);
 }
 
@@ -137,13 +143,18 @@ fn a_session_whose_decoder_has_not_opened_does_not_count_as_another_coding() {
     let mut told = Vec::new();
     let _first = open(&commands, 1, 2_000_000);
     let _second = open(&commands, 2, 4_000_000);
-    sessions.take_the_commands(&received, codes, |bitrate_bps, another_codes| {
-        told.push(another_codes);
-        Ok(SessionStandIn {
-            bitrate_bps,
-            takes_frames: false,
-        })
-    });
+    sessions.take_the_commands(
+        &received,
+        Duration::ZERO,
+        codes,
+        |bitrate_bps, another_codes| {
+            told.push(another_codes);
+            Ok(SessionStandIn {
+                bitrate_bps,
+                takes_frames: false,
+            })
+        },
+    );
     assert_eq!(told, [false, false]);
 }
 
@@ -154,7 +165,7 @@ fn a_session_whose_build_stopped_waiting_is_closed_by_the_close_that_follows_it(
     let answer = open(&commands, 1, 2_000_000);
     drop(answer);
     close(&commands, 1);
-    sessions.take_the_commands(&received, codes, open_unless_zero);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
     assert!(!sessions.is_open(1));
     assert_eq!(newest_bitrate(&mut sessions), None);
 }
@@ -180,7 +191,7 @@ impl DecoderSessions {
     fn open(&mut self, number: u64, takes_frames: bool) {
         let _ = open(&self.commands, number, number as u32);
         self.sessions
-            .take_the_commands(&self.received, codes, |bitrate_bps, _| {
+            .take_the_commands(&self.received, Duration::ZERO, codes, |bitrate_bps, _| {
                 Ok(SessionStandIn {
                     bitrate_bps,
                     takes_frames,
@@ -191,7 +202,7 @@ impl DecoderSessions {
     fn close(&mut self, number: u64) {
         close(&self.commands, number);
         self.sessions
-            .take_the_commands(&self.received, codes, open_unless_zero);
+            .take_the_commands(&self.received, Duration::ZERO, codes, open_unless_zero);
     }
 
     /// The number of the session decoding a media frame.
@@ -276,4 +287,35 @@ fn with_no_session_that_takes_frames_a_media_frame_is_discarded() {
     let mut decoder = DecoderSessions::new();
     decoder.open(1, false);
     assert_eq!(decoder.decoding(true), None);
+}
+
+#[test]
+fn the_thread_waits_for_the_first_open_sent_while_it_waits_and_takes_it() {
+    let (commands, received) = mpsc::channel();
+    let mut sessions = VideoCodingSessionsOfTheThread::default();
+    sessions.take_the_commands(&received, Duration::from_millis(1), codes, open_unless_zero);
+    assert!(!sessions.a_session_was_asked_for());
+
+    let sender = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        open(&commands, 1, 2_000_000)
+    });
+    sessions.take_the_commands(&received, Duration::from_secs(5), codes, open_unless_zero);
+    assert!(sessions.a_session_was_asked_for());
+    assert_eq!(sender.join().unwrap().try_recv(), Ok(Ok(())));
+    assert_eq!(newest_bitrate(&mut sessions), Some(2_000_000));
+}
+
+#[test]
+fn a_refused_first_open_still_counts_as_asked_for() {
+    let (commands, received) = mpsc::channel();
+    let mut sessions = VideoCodingSessionsOfTheThread::default();
+    let refused = open(&commands, 1, 0);
+    sessions.take_the_commands(&received, Duration::ZERO, codes, open_unless_zero);
+    assert!(matches!(
+        refused.try_recv(),
+        Ok(Err(VideoCodingSessionNotOpened::Refused(_)))
+    ));
+    assert!(sessions.a_session_was_asked_for());
+    assert_eq!(newest_bitrate(&mut sessions), None);
 }

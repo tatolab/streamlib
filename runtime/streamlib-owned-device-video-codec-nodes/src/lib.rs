@@ -419,7 +419,8 @@ fn open_the_encoder(
 }
 
 /// Read, encode and write until the node stops, with the newest session open. While none is
-/// open, `video` is still drained, so upstream sees a live consumer.
+/// open, once the first build has asked for one, `video` is still drained, so upstream sees a
+/// live consumer.
 fn encode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -444,6 +445,7 @@ fn encode_until_stopped(
     let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<_>| {
         sessions.take_the_commands(
             commands,
+            INPUT_PORT_WAIT,
             |_| true,
             |settings, _| {
                 open_the_encoder(node, module_host, settings)
@@ -455,6 +457,11 @@ fn encode_until_stopped(
     let mut frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         take_the_commands(&mut sessions);
+        // Frames wait on `video` for the node's first build, so the stream's first frame
+        // is encoded rather than read with no session to take it.
+        if !sessions.a_session_was_asked_for() {
+            continue;
+        }
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
             tracing::error!("{node_type_name}: waiting for a frame was refused: {refusal}");
             return;
@@ -605,8 +612,9 @@ impl Drop for VideoDecodeSession {
 }
 
 /// Read, decode and publish until the node stops, each media frame with the session
-/// [`VideoCodingSessionsOfTheThread::the_session_decoding_a_media_frame`] names. While no
-/// session decodes, `encoded_video` is still drained, so upstream sees a live consumer.
+/// [`VideoCodingSessionsOfTheThread::the_session_decoding_a_media_frame`] names. Until the
+/// node's first build asks for a session, `encoded_video` is left unread; after, while no
+/// session decodes, it is still drained, so upstream sees a live consumer.
 fn decode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
@@ -620,6 +628,7 @@ fn decode_until_stopped(
     let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<VideoDecodeSession>| {
         sessions.take_the_commands(
             commands,
+            INPUT_PORT_WAIT,
             |session| session.opening.opened_decoder().is_some(),
             |settings, another_decodes| {
                 VideoDecodeSession::open(
@@ -635,6 +644,11 @@ fn decode_until_stopped(
     let mut media_frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         take_the_commands(&mut sessions);
+        // Media frames wait on `encoded_video` for the node's first build, so the group
+        // the stream opens with reaches the first session rather than being drained.
+        if !sessions.a_session_was_asked_for() {
+            continue;
+        }
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
             tracing::error!("{node_type_name}: waiting for a media frame was refused: {refusal}");
             return;

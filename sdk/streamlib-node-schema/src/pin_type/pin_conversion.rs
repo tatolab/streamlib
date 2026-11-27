@@ -202,7 +202,8 @@ impl NodeDescriptor {
             .collect();
         // Beside other inputs, a value input, which holds a value of its own until a wire
         // carries one, is read by the node's builds, and is not what the conversion converts.
-        // `tatolab.stream`'s declaration-time rule is the same.
+        // `tatolab.stream` reads a node function so at declaration, and refuses a class node's
+        // plain field beside its pin before the descriptor reaches here.
         if wired_inputs.len() > 1
             && wired_inputs
                 .iter()
