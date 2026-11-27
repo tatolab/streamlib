@@ -3,8 +3,9 @@
 
 //! A node written as one function that paces itself, as a camera does: its one computed value
 //! is its stream's [`StubExclusiveDevice`] opened at its `width`, opened again by each new width
-//! on the same device, which takes the device over from the value it replaces. It counts each run
-//! of its body, one count and one device for each stream it runs in.
+//! once the lease the value it replaces holds is closed, as each shipped device node closes the
+//! device it has before opening the next. It counts each run of its body, one count and one
+//! device for each stream it runs in.
 
 use std::collections::BTreeMap;
 
@@ -57,7 +58,7 @@ pub(super) fn the_device_held_in<T>(
 /// The stub device, open at one width.
 #[derive(Debug, PartialEq)]
 struct StubDeviceOpenAtAWidth {
-    _lease: StubExclusiveDeviceLease,
+    _lease: Arc<StubExclusiveDeviceLease>,
     width: i32,
 }
 
@@ -67,11 +68,17 @@ struct StubDeviceOpenAtAWidth {
 )]
 pub(super) fn node_holding_the_stub_device(width: Input<i32>, ctx: &RuntimeContextFullAccess<'_>) {
     held_in(ctx.stream_id(), |held| held.bodies_run += 1);
+    let open_now: Arc<Mutex<Option<Arc<StubExclusiveDeviceLease>>>> = Arc::default();
     computed(move |build_ctx| {
         let width = *width.get();
         let device = held_in(build_ctx.stream_id(), |held| Arc::clone(&held.device));
+        if let Some(replaced) = open_now.lock().take() {
+            replaced.close();
+        }
+        let lease = Arc::new(device.open());
+        *open_now.lock() = Some(Arc::clone(&lease));
         Ok::<_, String>(StubDeviceOpenAtAWidth {
-            _lease: device.open(),
+            _lease: lease,
             width,
         })
     });

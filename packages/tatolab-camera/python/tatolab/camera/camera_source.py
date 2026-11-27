@@ -130,7 +130,12 @@ def CameraSource(
         )
         open_now.append(capture)
         _log_the_camera_opened(capture)
-        capture.start()
+        try:
+            capture.start()
+        except BaseException:
+            open_now.remove(capture)
+            capture.close()
+            raise
         return capture
 
     computed(open_the_camera)

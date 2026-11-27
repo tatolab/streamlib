@@ -3,20 +3,32 @@
 
 //! A device only one holder may have open at once, as a camera or a microphone is, standing in
 //! for one in a test. An open while another holder has it takes it over, as a real device's
-//! layer does: the earlier holder is closed first, so two holders never have it. It records each
-//! open and close in order, and each lease dropped after its device was taken from it.
+//! layer does, and is recorded as a takeover, so a test can tell a holder closed before the next
+//! open from one the open took the device from. It records each open, close and takeover in
+//! order, and each lease dropped once it no longer held the device.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-/// One open or close of a [`StubExclusiveDevice`], or a lease dropped once a later open took the
-/// device from it, naming the holder by the count of opens before its own: the first holder is 0.
+/// One open, close or takeover of a [`StubExclusiveDevice`], or a lease dropped once it no
+/// longer held the device, naming the holder by the count of opens before its own: the first
+/// holder is 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StubExclusiveDeviceEvent {
-    Opened { holder: usize },
-    Closed { holder: usize },
-    Released { holder: usize },
+    Opened {
+        holder: usize,
+    },
+    Closed {
+        holder: usize,
+    },
+    /// An open while `holder` still had the device took it from `holder`.
+    TakenOver {
+        holder: usize,
+    },
+    Released {
+        holder: usize,
+    },
 }
 
 /// What a [`StubExclusiveDevice`] has seen since it was made.
@@ -54,13 +66,13 @@ impl PartialEq for StubExclusiveDeviceLease {
 }
 
 impl StubExclusiveDevice {
-    /// Open the device for a new holder, closing the holder that has it first.
+    /// Open the device for a new holder, taking it from the holder that has it first.
     pub(super) fn open(self: &Arc<Self>) -> StubExclusiveDeviceLease {
         let mut held_so_far = self.held_so_far.lock();
         if let Some(taken_from) = held_so_far.held_by.take() {
             held_so_far
                 .events
-                .push(StubExclusiveDeviceEvent::Closed { holder: taken_from });
+                .push(StubExclusiveDeviceEvent::TakenOver { holder: taken_from });
         }
         let holder =
             held_so_far.count(|event| matches!(event, StubExclusiveDeviceEvent::Opened { .. }));
@@ -98,6 +110,19 @@ impl StubExclusiveDevice {
         self.held_so_far
             .lock()
             .count(|event| matches!(event, StubExclusiveDeviceEvent::Closed { .. }))
+    }
+}
+
+impl StubExclusiveDeviceLease {
+    /// Close the device if this lease still holds it; the lease's drop then only releases it.
+    pub(super) fn close(&self) {
+        let mut held_so_far = self.device.held_so_far.lock();
+        if held_so_far.held_by == Some(self.holder) {
+            held_so_far.held_by = None;
+            held_so_far.events.push(StubExclusiveDeviceEvent::Closed {
+                holder: self.holder,
+            });
+        }
     }
 }
 

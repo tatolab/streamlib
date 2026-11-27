@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A device held as a computed value is opened again by an input set while its stream plays,
-//! with no stop and no node rebuilt: the new open takes the device over, closing the value it
-//! replaces before it opens, so two holders never have it, and the replaced value is dropped.
+//! with no stop and no node rebuilt: the device the value it replaces holds closes before the new
+//! one opens, so two holders never have it, and the replaced value is dropped.
 
 use super::node_holding_the_stub_device_as_a_computed_value::{
     NodeHoldingTheStubDevice, THE_DEVICE_HOLDING_NODES_WIDTH,
@@ -50,9 +50,9 @@ async fn wait_until_the_device_of(
     }
 }
 
-/// Mental-revert: a set that never rebuilds the computed value opens the device once; an engine
-/// that keeps the replaced value never releases its lease; a node rebuilt by the set runs its
-/// body again.
+/// Mental-revert: a build opening before the value it replaces closes takes the device over; a
+/// set that never rebuilds the computed value opens the device once; an engine that keeps the
+/// replaced value never releases its lease; a node rebuilt by the set runs its body again.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_device_opened_again_by_an_input_set_while_playing_closes_the_one_it_replaces_first() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();

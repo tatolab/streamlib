@@ -191,6 +191,27 @@ def test_a_device_set_while_capturing_opens_it_and_keeps_publishing(
     assert len(opened) == 2, opened
 
 
+def test_a_device_set_while_capturing_closes_the_capture_it_has_even_when_it_fails_to_open(
+    microphone_wired_to_a_reader,
+):
+    """Mental-revert: open the device a set names beside the capture it replaces, and a device
+    that fails to open leaves the old one publishing."""
+    microphone = microphone_wired_to_a_reader.a_microphone()
+    try:
+        first = microphone.built()
+        microphone_wired_to_a_reader.read_blocks(1)
+
+        microphone.set(device_id="tatolab-no-such-microphone")
+        assert "tatolab-no-such-microphone" in microphone.why_the_last_build_failed()
+        published_once_closed = first.published_block_count
+        time.sleep(0.2)
+        published_after = first.published_block_count
+    finally:
+        microphone.stop()
+
+    assert published_after == published_once_closed, "the capture replaced publishes nothing more"
+
+
 def test_the_distribution_declares_the_node_for_the_node_catalog():
     """The node type is the import path a node interpreter imports the
     class back by, and the catalog reads it off the `tatolab.nodes` entry point."""

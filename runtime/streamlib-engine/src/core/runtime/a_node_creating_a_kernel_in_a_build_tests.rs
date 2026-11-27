@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A Rust node written as one function builds its computed values with its node's limited
-//! context, whose GPU escalates in a build for the work a frame is refused.
+//! context, whose GPU escalates in a build for the work a frame is refused; a value declared in a
+//! scope no node's body declares has no such context, and never builds.
 
 use serde_json::Value;
 use serial_test::serial;
@@ -38,4 +39,20 @@ fn a_build_creates_a_kernel_through_its_nodes_context_and_a_frame_is_refused_one
         refusal.contains("`let kernel = computed(move |ctx| … create_compute_kernel(…));`"),
         "{refusal}"
     );
+}
+
+/// Mental-revert: a build handed some other context would build, and one with none would panic
+/// on the build thread rather than fail as the node's diagnostics show.
+#[test]
+fn a_value_declared_in_a_scope_no_nodes_body_declares_fails_each_build_for_want_of_a_context() {
+    let mut declaring = streamlib_scope::ScopeBeingDeclared::new();
+    let value = declaring.declare(|| crate::sdk::nodes::computed(|_ctx| Ok::<_, String>(1)));
+    let (scope, _view) = declaring.start().expect("the scope starts");
+    assert!(scope.wait_until_settled(std::time::Duration::from_secs(5)));
+
+    let last_build = scope.last_build_of(value);
+    let streamlib_scope::LastBuild::Failed { why, .. } = &last_build else {
+        panic!("the build fails: {last_build:?}");
+    };
+    assert!(format!("{why:?}").contains("no node's context"), "{why:?}");
 }

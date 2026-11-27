@@ -219,6 +219,29 @@ def test_a_device_set_while_playing_opens_it_and_keeps_playing(
     )
 
 
+def test_a_device_set_while_playing_closes_the_playback_it_has_even_when_it_fails_to_open(
+    speaker_wired_to_a_writer,
+):
+    """Mental-revert: open the device a set names beside the playback it replaces, and a device
+    that fails to open leaves the old one draining the port."""
+    speaker = speaker_wired_to_a_writer.a_speaker()
+    try:
+        first = speaker.built()
+        speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(1)
+        await_count(lambda: first.played_block_count, 1, "blocks played")
+
+        speaker.set(device_id="tatolab-no-such-speaker")
+        assert "tatolab-no-such-speaker" in speaker.why_the_last_build_failed()
+        played_once_closed = first.played_block_count
+        speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(BLOCKS_WRITTEN_PER_TEST)
+        time.sleep(0.2)
+        played_after = first.played_block_count
+    finally:
+        speaker.stop()
+
+    assert played_after == played_once_closed, "the playback replaced plays nothing more"
+
+
 def test_the_distribution_declares_the_node_for_the_node_catalog():
     """The node type is the import path a node interpreter imports the
     class back by, and the catalog reads it off the `tatolab.nodes` entry point."""

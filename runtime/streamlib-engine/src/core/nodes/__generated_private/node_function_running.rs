@@ -27,8 +27,9 @@ thread_local! {
 /// Declare a value `build` computes from what it reads with `.get()`, in the body of a node
 /// written as one function. `build` runs off the frame thread with the node's limited context,
 /// whose GPU escalates for the work a frame may not do: creating a kernel, opening a device.
-/// Refused outside such a body, where no scope is being declared either, with the scope's own
-/// refusal.
+/// Outside such a body: refused with the scope's own refusal where no scope is being declared,
+/// and in a scope no node's body declares, a value whose every build fails for want of a node's
+/// context.
 #[track_caller]
 pub fn computed<T, E, B>(build: B) -> Computed<T>
 where

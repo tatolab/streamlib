@@ -243,7 +243,7 @@ impl MicrophoneCapture {
         let failure_that_ended_the_capture = match failure_that_ended_the_capture {
             Ok(failure) => {
                 self.failure_that_ended_the_closed_capture = failure;
-                format!("{:?}", self.failure_that_ended_the_closed_capture)
+                self.failure_that_ended_the_closed_capture.as_deref().unwrap_or("None").to_owned()
             }
             Err(refusal) => format!("unknown, the host refused to say: {refusal}"),
         };
