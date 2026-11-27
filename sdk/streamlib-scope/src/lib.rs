@@ -224,6 +224,23 @@ where
     E: fmt::Display,
     B: Fn() -> Result<T, E> + Send + Sync + 'static,
 {
+    computed_declared_as(
+        ComputedValueDeclared::InRust {
+            holding: std::any::type_name::<T>(),
+            at: Location::caller(),
+        },
+        build,
+    )
+}
+
+/// [`computed`], for a binding that names the value in its node's diagnostics itself, as
+/// `declared` says.
+pub fn computed_declared_as<T, E, B>(declared: ComputedValueDeclared, build: B) -> Computed<T>
+where
+    T: PartialEq + Send + Sync + 'static,
+    E: fmt::Display,
+    B: Fn() -> Result<T, E> + Send + Sync + 'static,
+{
     let build: BuildOfAnyValue = Arc::new(move || {
         build()
             .map(|value| Arc::new(value) as AnyValue)
@@ -234,10 +251,7 @@ where
             build,
             read_at: Vec::new(),
             last_build: LastBuild::NotYetBuilt,
-            declared: ComputedValueDeclared {
-                holding: std::any::type_name::<T>(),
-                at: Location::caller(),
-            },
+            declared,
         },
         value: None,
         changed_at: 0,
@@ -306,7 +320,7 @@ impl ScopeSlots {
                 declared,
                 ..
             } => Some(BuildsOfAComputedValue {
-                declared: *declared,
+                declared: declared.clone(),
                 has_a_value: slot.value.is_some(),
                 last_build: last_build.clone(),
                 building_again: self.is_left_to_build(index),

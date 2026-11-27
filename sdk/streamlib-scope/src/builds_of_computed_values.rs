@@ -60,18 +60,40 @@ impl LastBuild {
     }
 }
 
-/// A computed value as its node's diagnostics name it: the type it holds and where it is declared.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ComputedValueDeclared {
-    /// The type the value holds, as [`std::any::type_name`] names it.
-    pub holding: &'static str,
-    /// Where its [`computed`] is called.
-    pub at: &'static Location<'static>,
+/// A computed value as its node's diagnostics name it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ComputedValueDeclared {
+    /// Declared in Rust with [`computed`]: the type it holds and where `computed` is called.
+    InRust {
+        /// The type the value holds, as [`std::any::type_name`] names it.
+        holding: &'static str,
+        /// Where its [`computed`] is called.
+        at: &'static Location<'static>,
+    },
+    /// Declared through a binding with [`computed_declared_as`]: as the binding names it, and
+    /// where the binding says it is declared when it knows.
+    ThroughABinding {
+        /// What the binding names it by, such as its build function.
+        named: Arc<str>,
+        /// Where it is declared, such as `file:line`, when the binding knows.
+        at: Option<Arc<str>>,
+    },
 }
 
 impl fmt::Display for ComputedValueDeclared {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}` declared at {}", self.holding, self.at)
+        match self {
+            ComputedValueDeclared::InRust { holding, at } => {
+                write!(f, "`{holding}` declared at {at}")
+            }
+            ComputedValueDeclared::ThroughABinding {
+                named,
+                at: Some(at),
+            } => {
+                write!(f, "`{named}` declared at {at}")
+            }
+            ComputedValueDeclared::ThroughABinding { named, at: None } => write!(f, "`{named}`"),
+        }
     }
 }
 

@@ -34,6 +34,7 @@ __all__ = [
     "DeviceOpenedInAFrame",
     "FunctionNodeEvaluatedAsAStandaloneNode",
     "KernelCreatedInAFrame",
+    "BuildsOfANodeScopeComputedValue",
     "LastBuildOfANodeScopeComputedValue",
     "NodeScopeBeingDeclared",
     "NodeScopeComputedOutsideADeclaration",
@@ -174,6 +175,23 @@ class LastBuildOfANodeScopeComputedValue:
         """Of a failed build: why, as the exception or the panic said it."""
 
 @final
+class BuildsOfANodeScopeComputedValue:
+    """How the builds of one computed value of a scope stand, for its node's diagnostics."""
+
+    @property
+    def declared(self) -> str:
+        """The computed value, as its node's diagnostics name it: its build function and where it is declared."""
+    @property
+    def has_a_value(self) -> bool:
+        """Whether its first build landed."""
+    @property
+    def building_again(self) -> bool:
+        """Whether it is left to build again."""
+    @property
+    def last_build(self) -> LastBuildOfANodeScopeComputedValue:
+        """Its latest build, as `RunningNodeScope.last_build_of` answers it."""
+
+@final
 class RunningNodeScope:
     """A Python node's running scope: sets and wires write its inputs, and the frame thread runs each frame through it.
 
@@ -187,6 +205,8 @@ class RunningNodeScope:
         """Take the values built since the last frame, then call `frame` with `get()` reading them, once every computed value has its first value; whether `frame` ran."""
     def last_build_of(self, computed_value: _stream_node_function.NodeScopeComputedValue[Any]) -> LastBuildOfANodeScopeComputedValue:
         """How the last build of `computed_value` went."""
+    def builds_of_each_computed_value(self) -> list[BuildsOfANodeScopeComputedValue]:
+        """How the builds of each computed value stand, in the order the node's body declared them."""
     def wait_until_settled(self, timeout_seconds: float) -> bool:
         """Wait up to `timeout_seconds` until no computed value is left to build; whether it settled."""
     def close(self) -> None:

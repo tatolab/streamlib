@@ -32,6 +32,9 @@ pub use component_map::{
     ComponentMap, ComponentRenderer, LinkComponent, NodeComponent, StorableComponent,
     default_component_renderers, default_components,
 };
+pub(crate) use computed_value_build_diagnostics::{
+    BuildsOfAComputedValueShown, BuildsOfItsComputedValues, ComputedValueBuildsItsHelperReports,
+};
 pub use device_matched_audio_window_contracts_component::DeviceMatchedAudioWindowContractsComponent;
 pub use function_node_host_component::FunctionNodeHostComponent;
 pub use function_node_promoted_to_its_own_process_component::{
