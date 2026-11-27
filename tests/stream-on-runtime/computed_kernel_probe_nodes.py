@@ -96,7 +96,7 @@ class RebuildsAKernelSizedByItsWidth:
         width = int(self.width)
         if width != self._width_last_written:
             self._width_last_written = width
-            self._scope.write(self._width, width)
+            self._scope.write([(self._width, width)])
         self._scope.run_frame(self._dispatch_one_frame)
 
     def _dispatch_one_frame(self) -> None:

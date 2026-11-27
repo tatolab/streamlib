@@ -131,7 +131,7 @@ kernels_read_in_frames = []
 scope.run_frame(lambda: kernels_read_in_frames.append(kernel.get()))
 first_kernel = kernels_read_in_frames[0]
 
-scope.write(width, 16)
+scope.write([(width, 16)])
 run_frames_until(scope, lambda: kernel.get() is not first_kernel)
 deadline = time.monotonic() + 5.0
 while not released:
