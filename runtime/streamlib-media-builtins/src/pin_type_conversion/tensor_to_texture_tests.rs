@@ -184,19 +184,19 @@ fn the_texture_written_is_of_the_format_the_node_holds() {
     };
 
     assert_eq!(
-        the_texture_written_under_the_settings(&Map::new()),
+        the_texture_written_under_the_input_values(&Map::new()),
         Some(texture_of(TexturePixelFormat::Rgba8Unorm))
     );
     assert_eq!(
-        the_texture_written_under_the_settings(&held(json!({ "format": "bgra8_unorm" }))),
+        the_texture_written_under_the_input_values(&held(json!({ "format": "bgra8_unorm" }))),
         Some(texture_of(TexturePixelFormat::Bgra8Unorm))
     );
     assert_eq!(
-        the_texture_written_under_the_settings(&held(json!({ "format": "nv12" }))),
+        the_texture_written_under_the_input_values(&held(json!({ "format": "nv12" }))),
         None
     );
     assert_eq!(
-        the_texture_written_under_the_settings(&held(json!({ "format": 3 }))),
+        the_texture_written_under_the_input_values(&held(json!({ "format": 3 }))),
         None
     );
 }

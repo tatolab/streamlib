@@ -32,7 +32,6 @@ fn each_conversion_node_given_no_values_holds_defaults_its_builds_accept() {
         sample_rate: serde_json::from_value(the_default_of(&tensor_to_audio, "sample_rate"))
             .unwrap(),
     };
-    assert_eq!(held, TensorToAudioInputs::default());
     refuse_a_channels_output_config("TensorToAudio", &held.channel_names, held.sample_rate)
         .expect("TensorToAudio's defaults are accepted by its build");
 

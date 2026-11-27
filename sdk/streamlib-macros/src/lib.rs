@@ -80,8 +80,8 @@ fn node_struct(attr: TokenStream, mut item_struct: ItemStruct) -> TokenStream {
 }
 
 /// Declares a struct as a node type's settings: each field an input read once, when the node is
-/// set up, from its value or from a Value wire into it, described by `#[description = "…"]` and, for a String chosen
-/// from a list, `#[options("…", …)]`. A node takes it with `#[node(settings = …)]`.
+/// set up, from its value or from a Value wire into it, described by `#[description = "…"]`. A
+/// node takes it with `#[node(settings = …)]`.
 #[proc_macro_attribute]
 pub fn node_settings(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);

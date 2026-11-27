@@ -57,7 +57,7 @@ pub trait NodeSettings: Default + Serialize + DeserializeOwned + Send + 'static 
 /// The pin type a setting holding a value of this Rust type is declared with.
 #[diagnostic::on_unimplemented(
     message = "a setting of type `{Self}` has no pin type",
-    note = "a setting is a bool, a String, an integer of 8, 16 or 32 bits, an f32 or f64, a Vec of one, or an `Option<PinType>` choosing a pin type; a String chosen from a list is marked `#[options(\"…\", …)]`"
+    note = "a setting is a bool, a String, an integer of 8, 16 or 32 bits, an f32 or f64, a Vec of one, or an `Option<PinType>` choosing a pin type; a String chosen from a list states `options = [\"…\", …]`"
 )]
 pub trait SettingPinType {
     /// The pin type a setting of this type holds.
@@ -124,9 +124,9 @@ impl<Element: SettingPinType> SettingPinType for Vec<Element> {
     }
 }
 
-/// A setting chosen from a list of names, which `#[options("…", …)]` declares on a field.
+/// A value input chosen from a list of names, which `options = ["…", …]` declares.
 #[diagnostic::on_unimplemented(
-    message = "`#[options(…)]` marks a setting of type `{Self}`, and only a String setting is chosen from a list"
+    message = "`options = […]` marks a value input of type `{Self}`, and only a String is chosen from a list"
 )]
 pub trait SettingChosenFromOptions {}
 
@@ -139,10 +139,10 @@ pub fn the_menu_of_a_setting<T: SettingChosenFromOptions>(option_names: &[&str])
     }
 }
 
-/// A setting choosing one of the bundles its stream's node types declare, which
-/// `#[among_the_bundles_its_stream_declares]` declares on a field.
+/// A value input choosing one of the bundles its stream's node types declare, which
+/// `among_the_bundles_its_stream_declares = true` declares on a value input.
 #[diagnostic::on_unimplemented(
-    message = "`#[among_the_bundles_its_stream_declares]` marks a setting of type `{Self}`, and only an `Option<PinType>` setting chooses a pin type"
+    message = "`among_the_bundles_its_stream_declares = true` marks a value input of type `{Self}`, and only an `Option<PinType>` chooses a pin type"
 )]
 pub trait SettingChoosingAPinType {}
 

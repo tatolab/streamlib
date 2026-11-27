@@ -141,7 +141,7 @@ fn a_channels_block_converted_to_an_array_and_back_keeps_its_samples() {
 }
 
 #[test]
-fn the_attribute_its_settings_name_is_the_one_read() {
+fn the_attribute_its_input_names_is_the_one_read() {
     let gains = [1.0f32, 2.0, 3.0, 4.0];
     let gain_bytes: Vec<u8> = gains.iter().flat_map(|gain| gain.to_le_bytes()).collect();
     let (descriptor, payload) = array_frame_of(&[
@@ -158,13 +158,12 @@ fn the_attribute_its_settings_name_is_the_one_read() {
             data: &gain_bytes,
         },
     ]);
-    let settings = TensorToAudioInputs {
+    let held = TensorToAudioInputs {
         attribute: "gains".into(),
         ..stereo_at_48_khz()
     };
 
-    let (_, samples) =
-        channels_block_of_the_array_frame(&settings, 0, descriptor, &payload).unwrap();
+    let (_, samples) = channels_block_of_the_array_frame(&held, 0, descriptor, &payload).unwrap();
 
     assert_eq!(samples, gain_bytes);
 }

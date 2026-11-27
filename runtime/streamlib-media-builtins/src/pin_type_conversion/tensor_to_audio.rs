@@ -34,16 +34,6 @@ pub struct TensorToAudioInputs {
     pub sample_rate: u32,
 }
 
-impl Default for TensorToAudioInputs {
-    fn default() -> Self {
-        Self {
-            attribute: AUDIO_TO_TENSOR_SAMPLES_ATTRIBUTE_NAME.to_string(),
-            channel_names: one_channel_named_value(),
-            sample_rate: forty_eight_thousand_samples_per_second(),
-        }
-    }
-}
-
 #[streamlib::sdk::node(
     built_in_node,
     execution = reactive,

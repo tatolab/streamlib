@@ -114,7 +114,7 @@ pub fn float_to_integer(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    casting_each_message("FloatToInteger", FLOAT, INTEGER, inputs, outputs)
+    casting_each_message(FloatToInteger::Node::NAME, FLOAT, INTEGER, inputs, outputs)
 }
 
 #[streamlib::sdk::node(
@@ -142,7 +142,7 @@ pub fn integer_to_float(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    casting_each_message("IntegerToFloat", INTEGER, FLOAT, inputs, outputs)
+    casting_each_message(IntegerToFloat::Node::NAME, INTEGER, FLOAT, inputs, outputs)
 }
 
 #[streamlib::sdk::node(
@@ -170,7 +170,13 @@ pub fn boolean_to_integer(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    casting_each_message("BooleanToInteger", BOOLEAN, INTEGER, inputs, outputs)
+    casting_each_message(
+        BooleanToInteger::Node::NAME,
+        BOOLEAN,
+        INTEGER,
+        inputs,
+        outputs,
+    )
 }
 
 #[streamlib::sdk::node(
@@ -198,7 +204,13 @@ pub fn integer_to_boolean(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    casting_each_message("IntegerToBoolean", INTEGER, BOOLEAN, inputs, outputs)
+    casting_each_message(
+        IntegerToBoolean::Node::NAME,
+        INTEGER,
+        BOOLEAN,
+        inputs,
+        outputs,
+    )
 }
 
 #[streamlib::sdk::node(
@@ -226,7 +238,7 @@ pub fn boolean_to_float(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    casting_each_message("BooleanToFloat", BOOLEAN, FLOAT, inputs, outputs)
+    casting_each_message(BooleanToFloat::Node::NAME, BOOLEAN, FLOAT, inputs, outputs)
 }
 
 #[streamlib::sdk::node(
@@ -254,5 +266,5 @@ pub fn float_to_boolean(
     inputs: InputMailboxes,
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    casting_each_message("FloatToBoolean", FLOAT, BOOLEAN, inputs, outputs)
+    casting_each_message(FloatToBoolean::Node::NAME, FLOAT, BOOLEAN, inputs, outputs)
 }

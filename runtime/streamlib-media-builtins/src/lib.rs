@@ -132,7 +132,7 @@ pub fn register_the_conversion_node_types() {
         pin_type_conversion::TensorToTexture::Node,
     >(PinConversionOutputPick {
         picked_for: pin_type_conversion::tensor_to_texture::the_format_picked_for_the_input,
-        given_under: pin_type_conversion::tensor_to_texture::the_texture_written_under_the_settings,
+        given_under: pin_type_conversion::tensor_to_texture::the_texture_written_under_the_input_values,
     });
 }
 

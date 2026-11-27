@@ -48,7 +48,7 @@ fn default_image_format_wire_name() -> String {
         "format",
         description = "The texture format each Image frame states, by its wire name.",
         value = String,
-        default = TextureFormat::Rgba8Unorm.wire_name(),
+        default = default_image_format_wire_name(),
         options = [
             "rgba8_unorm",
             "rgba8_unorm_srgb",
@@ -165,10 +165,10 @@ pub fn the_format_picked_for_the_input(input: &PinType) -> Option<PinConversionO
     })
 }
 
-/// The Texture a `TensorToTexture` holding the input values `held` writes: one of the `format` it holds, or of the
-/// default `format` when it holds none; `None` when it holds a `format` no one `[h, w, c]`
-/// tensor holds.
-pub fn the_texture_written_under_the_settings(
+/// The Texture a `TensorToTexture` holding the input values `held` writes: one of the `format`
+/// it holds, or of the default `format` when it holds none; `None` when it holds a `format` no
+/// one `[h, w, c]` tensor holds.
+pub fn the_texture_written_under_the_input_values(
     held: &streamlib::sdk::serde_json::Map<String, streamlib::sdk::serde_json::Value>,
 ) -> Option<PinType> {
     let format = match held.get("format") {
