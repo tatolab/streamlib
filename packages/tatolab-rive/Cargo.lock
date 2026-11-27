@@ -346,7 +346,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.68.82"
+version = "0.70.14"
 dependencies = [
  "libc",
  "objc2",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-slang-shader-compiler"
-version = "0.68.82"
+version = "0.70.14"
 dependencies = [
  "libloading",
  "tracing",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.68.82"
+version = "0.70.14"
 dependencies = [
  "libc",
  "mach2",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-rive"
-version = "0.68.82"
+version = "0.70.14"
 dependencies = [
  "pyo3",
  "serde_json",
