@@ -88,10 +88,6 @@ impl Drop for PythonValueInANodeScope {
             if is_closed_as_its_last_holder_lets_go(&object) {
                 close_the_computed_value(python, &object);
             }
-            // Released here through the bound reference: pyo3 does not count a thread attached
-            // through `PyGILState_Ensure`, so dropping the unbound one would defer the release to
-            // whichever thread next attaches, the frame thread included.
-            drop(object);
         });
     }
 }

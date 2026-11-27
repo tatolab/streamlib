@@ -19,8 +19,15 @@ pub(crate) fn attached_from_any_thread<R>(f: impl FnOnce(Python<'_>) -> R) -> Op
         return None;
     }
     let _attached = InterpreterAttachedOnThisThread::ensure();
+    // Attached through pyo3 as well, so a reference `f` drops, a `PyErr`'s included, is released
+    // here rather than deferred to whichever thread next attaches, the frame thread included.
+    let mut f = Some(f);
+    if let Some(answer) = Python::try_attach(|python| f.take().map(|f| f(python))) {
+        return answer;
+    }
+    // pyo3 refuses during a GC traversal or the interpreter's shutdown; the ensure still holds.
     // SAFETY: the interpreter is attached on this thread until `_attached` drops, after `f`.
-    Some(f(unsafe { Python::assume_attached() }))
+    f.map(|f| f(unsafe { Python::assume_attached() }))
 }
 
 /// One `PyGILState_Ensure`, released once on drop, also when `f` unwinds.
@@ -39,3 +46,6 @@ impl Drop for InterpreterAttachedOnThisThread {
         unsafe { pyo3::ffi::PyGILState_Release(self.0) };
     }
 }
+
+#[cfg(test)]
+mod tests;
