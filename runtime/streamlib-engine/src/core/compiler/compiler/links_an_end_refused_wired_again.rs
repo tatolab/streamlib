@@ -5,15 +5,25 @@
 //! the way it was wired and kept in the graph, then wired afresh with the rest of the compile's
 //! links, so a far side that is ready now opens it with no stop of the stream.
 
+use std::sync::Arc;
+
 use super::{CompilationPlan, Compiler};
 use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compiler_ops::running_node_restart::unwire_each_link_keeping_it;
 use crate::core::error::Result;
-use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
+use crate::core::graph::{
+    Graph, GraphEdgeWithComponents, LinkState, LinkStateComponent, LinkUniqueId, NodeRunId,
+    OutOfProcessLinkWireRepliesComponent,
+};
+use crate::core::nodes::OutOfProcessLinkWireReply;
 
 /// Close each link `plan` wires again after an end refused it, keeping it in the graph, so the
 /// wiring that follows opens it afresh. One `plan` no longer adds, one it holds unwired for its
 /// pin types, and one `links_a_restart_unwires` closes already are left to what does.
+///
+/// Each closed link is held pending with the answers that refused it until the wiring hands it
+/// over again: a channel is sized by the links it is wired for, which a disconnected one is
+/// not, and a link whose handover fails still reads refused, so it is wired again later.
 pub(super) fn unwire_each_link_an_end_refused_keeping_it(
     graph: &mut Graph,
     plan: &CompilationPlan,
@@ -29,7 +39,29 @@ pub(super) fn unwire_each_link_an_end_refused_keeping_it(
         })
         .cloned()
         .collect();
-    unwire_each_link_keeping_it(graph, &links_to_close)
+    let refusals: Vec<(LinkUniqueId, Vec<Arc<OutOfProcessLinkWireReply>>)> = links_to_close
+        .iter()
+        .filter_map(|link_id| {
+            let replies = graph
+                .traversal()
+                .e(link_id)
+                .first()?
+                .get::<OutOfProcessLinkWireRepliesComponent>()?
+                .0
+                .clone();
+            Some((link_id.clone(), replies))
+        })
+        .collect();
+    unwire_each_link_keeping_it(graph, &links_to_close)?;
+    for (link_id, replies) in refusals {
+        if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
+            link.insert(LinkStateComponent(LinkState::Pending));
+            link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(
+                replies,
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl Compiler {

@@ -3,7 +3,8 @@
 
 //! The one restart policy every child process the runtime keeps alive runs
 //! under: how long to wait before starting it again, and when a child running
-//! user code has died soon after its start often enough to be given up on.
+//! user code has died soon after its start often enough to be given up on. Its
+//! doubling wait also paces the retries of a link a running helper refused.
 
 use std::time::Duration;
 

@@ -900,12 +900,14 @@ fn each_function_node_rides_the_setup_command_with_one_breadcrumb_number() {
     );
 }
 
-/// An envelope holds a link its far side refused while it records it, and none once the link
-/// is forgotten to be wired again; a link opened or still awaited is no refusal.
+/// An envelope holds a link or a function node island its far side refused while it records
+/// it, and none once it is forgotten to be wired again; a link opened or still awaited is no
+/// refusal.
 ///
-/// Mental-revert: reading every answered link as refused retries a link the far side opened.
+/// Mental-revert: reading every answered link as refused retries a link the far side opened;
+/// recording no answer of an island never retries an island a running reader refused.
 #[test]
-fn an_envelope_holds_a_refused_link_until_it_forgets_it_and_no_other_counts() {
+fn an_envelope_holds_a_refused_link_or_island_until_it_forgets_it_and_no_other_counts() {
     let envelope =
         OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
     envelope
@@ -942,5 +944,23 @@ fn an_envelope_holds_a_refused_link_until_it_forgets_it_and_no_other_counts() {
             "L-refused",
         )
         .expect("the far side is told");
+    assert!(!envelope.holds_a_link_its_far_side_refused());
+
+    envelope
+        .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+            serde_json::json!({
+                "link_id": "L-island",
+                "input_port": "in1",
+                "nodes": [{"node": "P-remap", "name": "remap"}],
+            }),
+        )
+        .expect("a far side that is not gone takes the island")
+        .expect("an island past the setup command waits on the far side's answer")
+        .note_the_far_sides_answer(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+            reason: "could not evaluate the island".to_string(),
+        });
+    assert!(envelope.holds_a_link_its_far_side_refused());
+
+    envelope.forget_a_function_node_island("L-island");
     assert!(!envelope.holds_a_link_its_far_side_refused());
 }

@@ -157,7 +157,8 @@ fn a_helper_past_its_setup(
 /// and it reads wired once both open it, with no stop of the stream.
 ///
 /// Mental-revert: wiring it again without closing it first hands both helpers the link again
-/// while each still holds the port it opened or refused for it, and tells neither to drop it.
+/// while each still holds the port it opened or refused for it, and tells neither to drop it;
+/// leaving it disconnected once closed names it to no later retry if its handover fails.
 #[test]
 fn a_link_its_reader_refused_is_closed_and_wired_again_and_reads_wired_once_both_ends_open_it() {
     use crate::core::json_schema::why_the_link_is_not_wired;
@@ -204,6 +205,12 @@ fn a_link_its_reader_refused_is_closed_and_wired_again_and_reads_wired_once_both
     let mut graph = graph.into_inner();
     unwire_each_link_an_end_refused_keeping_it(&mut graph, &plan, &[])
         .expect("the refused link is closed");
+    assert_eq!(
+        graph.the_links_of_a_node_an_end_refused(&reader),
+        vec![link_id.clone()],
+        "a closed link still reads refused until it is handed over again, so a handover that \
+         fails leaves it to be wired again later"
+    );
     for link_to_add in &plan.links_to_add {
         super::super::compiler_ops::open_iceoryx2_service(&mut graph, link_to_add, &iceoryx2_node)
             .expect("the refused link is handed over again");

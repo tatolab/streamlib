@@ -650,8 +650,8 @@ impl WhyALinkIsNotWired {
                 "change the input that chose the type back, or remove the link"
             }
             Self::AnEndRefused(_) => {
-                "nothing, as it is wired again by itself once the end that refused it can open \
-                 it; reconnect it to try again now, or remove it"
+                "nothing while the end that refused it runs, as it is wired again by itself; \
+                 reconnect it to try again now, or remove it"
             }
         }
     }

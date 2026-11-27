@@ -244,7 +244,8 @@ impl Compiler {
             &plan.links_to_remove,
         )?;
         // A link this commit starts holding unwired for its pin types is no link a restart
-        // wires again; one already held so changes nothing here, so restarts nothing again.
+        // wires again; one already held so changes nothing here, so restarts nothing again. A
+        // link an end refused is only opened again, which changes the shape of no island.
         let links_changed: Vec<LinkUniqueId> = {
             let graph = graph_arc.read();
             [
@@ -253,6 +254,7 @@ impl Compiler {
             ]
             .concat()
             .into_iter()
+            .filter(|link_id| !plan.links_to_wire_again.contains(link_id))
             .chain(
                 plan.links_judged_again
                     .differing

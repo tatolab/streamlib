@@ -5,7 +5,10 @@
 //! wires again by itself rather than leave them carrying nothing until the stream starts again.
 
 use super::{Graph, GraphEdgeWithComponents, Link, LinkUniqueId, NodeRunId};
-use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
+use crate::core::graph::{
+    LinkPinTypesDifferComponent, LinkState, LinkStateComponent,
+    OutOfProcessLinkWireRepliesComponent,
+};
 
 impl Graph {
     /// Each link into or out of `node_run_id` that an end out of process refused to open, in
@@ -30,10 +33,20 @@ impl Graph {
     }
 }
 
-/// Whether an end of `link` that runs out of process refused to open its side of it.
+/// Whether `link` reads as refused by an end of it that runs out of process: its wiring still
+/// awaits those ends' answers, one of which refused it, and its pin types connect. A link the
+/// wiring or a disconnect has stamped past pending reads as that stamp, whatever answers it
+/// still carries.
 pub(crate) fn an_end_refused_the_link(link: &Link) -> bool {
-    link.get::<OutOfProcessLinkWireRepliesComponent>()
-        .is_some_and(OutOfProcessLinkWireRepliesComponent::an_end_refused)
+    let stamped = link
+        .get::<LinkStateComponent>()
+        .map(|state| state.0)
+        .unwrap_or(link.state);
+    stamped == LinkState::Pending
+        && !link.has::<LinkPinTypesDifferComponent>()
+        && link
+            .get::<OutOfProcessLinkWireRepliesComponent>()
+            .is_some_and(OutOfProcessLinkWireRepliesComponent::an_end_refused)
 }
 
 #[cfg(test)]

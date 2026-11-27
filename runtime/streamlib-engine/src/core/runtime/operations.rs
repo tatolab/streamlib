@@ -447,8 +447,9 @@ pub trait RuntimeOperations: Send + Sync {
     /// it: after its helper process started again in place of one that died, or while a far
     /// side that refused one keeps running.
     ///
-    /// A request that never blocks: the graph-change listener compiles it. A node none of whose
-    /// links an end refused asks for nothing.
+    /// It waits for no compile, only for the graph to be free to log the links in: the
+    /// graph-change listener compiles them. A node none of whose links an end refused asks for
+    /// nothing.
     fn request_each_link_of_a_node_an_end_refused_be_wired_again(
         &self,
         node_run_id: &NodeRunId,

@@ -541,8 +541,10 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Whether the far side refused a link handed over to it past its setup
-    /// command that the envelope still records, so the link is wired again.
+    /// Whether the far side refused a link or a function node island handed
+    /// over to it past its setup command that the envelope still records, so
+    /// it is wired again. A link whose handover itself failed is refused with
+    /// the far side gone, and is wired again once a new one starts.
     pub(crate) fn holds_a_link_its_far_side_refused(&self) -> bool {
         self.recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
@@ -658,6 +660,12 @@ impl OutOfProcessLinkWiringEnvelope {
                     &function_node_island,
                     Arc::clone(&answer_cell),
                 )?;
+                recorded
+                    .answer_cells_of_links_handed_over_past_the_setup_command
+                    .retain(|(link_id, _)| *link_id != island_link_id);
+                recorded
+                    .answer_cells_of_links_handed_over_past_the_setup_command
+                    .push((island_link_id, Arc::clone(&answer_cell)));
                 Ok(Some(answer_cell))
             }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
@@ -994,6 +1002,9 @@ impl OutOfProcessLinkWiringEnvelope {
         recorded
             .function_node_islands_feeding_its_input_ports
             .retain(|island| link_id_of(island).as_deref() != Some(link_id));
+        recorded
+            .answer_cells_of_links_handed_over_past_the_setup_command
+            .retain(|(handed_over_link_id, _)| handed_over_link_id.as_deref() != Some(link_id));
         if let (HowALinkReachesTheFarSide::HandedOverTo(delivery), Some(input_port)) = (
             &recorded.how_a_link_reaches_the_far_side,
             &input_port_it_fed,

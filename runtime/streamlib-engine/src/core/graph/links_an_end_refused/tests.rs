@@ -1,11 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::sync::Arc;
-
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, NodeRunId,
-    OutOfProcessLinkWireRepliesComponent, OutputLinkPortRef,
+    Graph, GraphEdgeWithComponents, InputLinkPortRef, LinkState, LinkStateComponent, LinkUniqueId,
+    NodeRunId, OutOfProcessLinkWireRepliesComponent, OutputLinkPortRef,
 };
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::test_support::{
@@ -54,9 +52,7 @@ fn answered(
         .e(link_id)
         .first_mut()
         .expect("the link is held")
-        .insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
-            Arc::clone(&reply),
-        ]));
+        .insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![reply]));
 }
 
 fn refused() -> Option<OutOfProcessLinkWireOutcome> {
@@ -65,11 +61,13 @@ fn refused() -> Option<OutOfProcessLinkWireOutcome> {
     })
 }
 
-/// Only a link an end refused is named, into the node or out of it; one still awaiting its
-/// answer, one opened and one wired in this process are not.
+/// Only a link that reads as refused by an end is named, into the node or out of it; one still
+/// awaiting its answer, one opened, one wired in this process and one a later wiring stamped
+/// wired over an old refusal are not.
 ///
 /// Mental-revert: naming every link holding answers names a link still awaiting one, which a
-/// second wiring would open twice.
+/// second wiring would open twice; reading the answers past the stamp closes and opens again a
+/// link that is wired, at every restart of its helper.
 #[test]
 fn a_node_names_each_link_into_or_out_of_it_an_end_refused_and_no_other() {
     let mut graph = Graph::new();
@@ -81,7 +79,15 @@ fn a_node_names_each_link_into_or_out_of_it_an_end_refused_and_no_other() {
     let refused_out_of_it = a_link(&mut graph, &node, &reader);
     let opened_out_of_it = a_link(&mut graph, &node, &reader);
     let _wired_in_this_process = a_link(&mut graph, &node, &reader);
+    let refused_then_stamped_wired = a_link(&mut graph, &node, &reader);
     answered(&mut graph, &refused_into_it, refused());
+    answered(&mut graph, &refused_then_stamped_wired, refused());
+    graph
+        .traversal_mut()
+        .e(&refused_then_stamped_wired)
+        .first_mut()
+        .expect("the link is held")
+        .insert(LinkStateComponent(LinkState::Wired));
     answered(&mut graph, &awaited_into_it, None);
     answered(&mut graph, &refused_out_of_it, refused());
     answered(
