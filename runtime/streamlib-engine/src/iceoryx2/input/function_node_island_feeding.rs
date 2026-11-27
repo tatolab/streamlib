@@ -60,17 +60,6 @@ impl InputMailboxesInner {
             })
     }
 
-    /// The state each stateful node of the island feeding `port` last
-    /// returned, by its breadcrumb number; empty when no island feeds `port`.
-    pub fn the_state_each_stateful_function_node_of_the_island_feeding_last_returned(
-        &self,
-        port: &str,
-    ) -> Vec<(u32, Vec<f64>)> {
-        self.function_node_island_feeding(port)
-            .map(|island_port| island_port.the_state_each_stateful_function_node_last_returned())
-            .unwrap_or_default()
-    }
-
     pub(super) fn function_node_island_feeding(
         &self,
         port: &str,

@@ -71,6 +71,43 @@ fn a_reader_connected_after_a_value_was_written_reads_it_from_the_kept_message()
     );
 }
 
+/// The kept message sent again to a late reader carries the number of the send that first
+/// carried it, so a reader that read that send sees the number it received last, and the next
+/// write takes the number after it, so the late reader sees no gap.
+#[test]
+fn the_kept_message_sent_again_carries_the_number_of_the_send_that_first_carried_it() {
+    let pubsub = open_channel_data_service("kept/numbered-again", 3);
+    let inner = output_writer_keeping_the_last_message_of_one_channel(&pubsub);
+    let first_reader = pubsub.create_subscriber(4).unwrap();
+    inner
+        .write_bytes_with_timestamp("out", b"one", 1, MessageGroupBoundary::StartsGroup)
+        .unwrap();
+    inner
+        .write_bytes_with_timestamp("out", b"two", 2, MessageGroupBoundary::StartsGroup)
+        .unwrap();
+    let mut numbers_the_first_reader_read = Vec::new();
+    while let Some(sample) = first_reader.receive().unwrap() {
+        numbers_the_first_reader_read.push(sample.user_header().sequence_number);
+    }
+    assert_eq!(numbers_the_first_reader_read, [0, 1]);
+
+    let late_reader = pubsub.create_subscriber(4).unwrap();
+    inner.send_each_kept_message_to_a_reader_it_missed();
+    inner
+        .write_bytes_with_timestamp("out", b"three", 3, MessageGroupBoundary::StartsGroup)
+        .unwrap();
+
+    let numbers_of = |reader: &crate::iceoryx2::ChannelDataServiceSubscriber| {
+        let mut numbers = Vec::new();
+        while let Some(sample) = reader.receive().unwrap() {
+            numbers.push(sample.user_header().sequence_number);
+        }
+        numbers
+    };
+    assert_eq!(numbers_of(&first_reader), [1, 2]);
+    assert_eq!(numbers_of(&late_reader), [1, 2]);
+}
+
 /// A port that keeps no last message sends nothing again to a late reader.
 #[test]
 fn a_port_that_keeps_no_last_message_sends_nothing_to_a_late_reader() {

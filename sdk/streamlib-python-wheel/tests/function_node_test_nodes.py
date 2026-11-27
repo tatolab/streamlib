@@ -37,6 +37,11 @@ def lfo(rate_hz: float = 1.0, *, now: Time, previous: State[Phase]) -> Stateful[
 
 
 @node
+def wave(rate_hz: float = 1.0, *, now: Time) -> float:
+    return math.sin(2.0 * math.pi * rate_hz * now * 1e-9)
+
+
+@node
 def amplify(x: float = 0.0, gain: float = 2.0, inverted: bool = False) -> float:
     return -x * gain if inverted else x * gain
 
@@ -109,6 +114,24 @@ def a_rust_function_node_declaration(**overrides: Any) -> "dict[str, Any]":
 
 
 WeightedSumCountingItsCalls = node.rust_function(a_rust_function_node_declaration())
+
+
+@_EVALUATE_ENTRY_TYPE
+def _weighted_sum_evaluate_entry(
+    input_values: Any, config_values: Any, state_values: Any, output_values: Any, now_ns: int
+) -> int:
+    output_values[0] = input_values[0] * config_values[0] + input_values[1]
+    return 0
+
+
+WeightedSum = node.rust_function(
+    a_rust_function_node_declaration(
+        short_name="WeightedSum",
+        state_fields=[],
+        state_parameter=None,
+        evaluate_entry_address=ctypes.cast(_weighted_sum_evaluate_entry, ctypes.c_void_p).value,
+    )
+)
 
 
 @_EVALUATE_ENTRY_TYPE

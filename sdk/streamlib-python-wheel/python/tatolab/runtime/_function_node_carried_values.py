@@ -61,6 +61,11 @@ class FunctionNodeDoesNotCompile(Exception):
     """A function node whose body or signature the evaluate entry cannot carry."""
 
 
+class StatefulFunctionNodeInAnIsland(FunctionNodeDoesNotCompile):
+    """A stateful function node handed to an island, which evaluates only stateless ones: the
+    runtime runs each stateful function node in a helper process of its own."""
+
+
 # What a node whose every value is a number, a bool or a dict carries beyond numbers: nothing.
 _NO_VALUES_CARRIED_BEYOND_NUMBERS: "dict[str, list[Any]]" = {
     "inputs_that_take_none": [],

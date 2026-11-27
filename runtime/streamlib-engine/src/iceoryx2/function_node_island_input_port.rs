@@ -97,10 +97,6 @@ pub trait FunctionNodeIslandEvaluatedAtEachRead: Send + Sync {
     /// node runs as native code.
     fn the_first_function_node_it_runs_as_python(&self) -> Option<&str>;
 
-    /// The state each stateful node of the island last returned, by its
-    /// breadcrumb number, which an island replacing this one resumes from.
-    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)>;
-
     /// The reader's input ports the island's links from outside it arrive at,
     /// which it reads at each evaluation; empty when it reads none.
     fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String];
@@ -138,10 +134,6 @@ impl FunctionNodeIslandEvaluatedAtEachRead for PinValueReadByAnUnlinkedInputPort
 
     fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
         None
-    }
-
-    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
-        Vec::new()
     }
 
     fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
@@ -190,15 +182,6 @@ impl InputPortFedByAFunctionNodeIsland {
     /// The first function node the island runs as Python, if any.
     pub(crate) fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
         self.island.the_first_function_node_it_runs_as_python()
-    }
-
-    /// The state each stateful node of the island last returned, by its
-    /// breadcrumb number.
-    pub(crate) fn the_state_each_stateful_function_node_last_returned(
-        &self,
-    ) -> Vec<(u32, Vec<f64>)> {
-        self.island
-            .the_state_each_stateful_function_node_last_returned()
     }
 
     /// The reader's input ports the island's links from outside it arrive at.
@@ -342,10 +325,6 @@ mod tests {
 
         fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
             None
-        }
-
-        fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
-            Vec::new()
         }
 
         fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
