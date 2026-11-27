@@ -548,12 +548,7 @@ impl OutOfProcessLinkWiringEnvelope {
             .lock()
             .answer_cells_of_links_handed_over_past_the_setup_command
             .iter()
-            .any(|(_, answer_cell)| {
-                matches!(
-                    answer_cell.the_far_sides_answer(),
-                    Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { .. })
-                )
-            })
+            .any(|(_, answer_cell)| answer_cell.the_far_side_refused())
     }
 
     /// Record one link, in the direction its port faces, and get it to the far

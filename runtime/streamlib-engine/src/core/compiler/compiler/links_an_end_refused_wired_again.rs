@@ -16,21 +16,20 @@ use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
 /// pin types, and one `links_a_restart_unwires` closes already are left to what does.
 pub(super) fn unwire_each_link_an_end_refused_keeping_it(
     graph: &mut Graph,
-    plan: &mut CompilationPlan,
+    plan: &CompilationPlan,
     links_a_restart_unwires: &[LinkUniqueId],
 ) -> Result<()> {
-    let CompilationPlan {
-        links_to_add,
-        links_to_hold_unwired,
-        links_to_wire_again,
-        ..
-    } = plan;
-    links_to_wire_again.retain(|link_id| {
-        links_to_add.contains(link_id)
-            && !links_to_hold_unwired.contains(link_id)
-            && !links_a_restart_unwires.contains(link_id)
-    });
-    unwire_each_link_keeping_it(graph, links_to_wire_again)
+    let links_to_close: Vec<LinkUniqueId> = plan
+        .links_to_wire_again
+        .iter()
+        .filter(|link_id| {
+            plan.links_to_add.contains(link_id)
+                && !plan.links_to_hold_unwired.contains(link_id)
+                && !links_a_restart_unwires.contains(link_id)
+        })
+        .cloned()
+        .collect();
+    unwire_each_link_keeping_it(graph, &links_to_close)
 }
 
 impl Compiler {

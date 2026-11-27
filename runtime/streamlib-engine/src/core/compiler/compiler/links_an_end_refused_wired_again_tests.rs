@@ -199,10 +199,10 @@ fn a_link_its_reader_refused_is_closed_and_wired_again_and_reads_wired_once_both
     assert!(is_not_wired(&graph));
 
     let graph = RwLock::new(graph);
-    let mut plan =
+    let plan =
         the_plan_these_operations_make(&graph, vec![PendingOperation::AddLink(link_id.clone())]);
     let mut graph = graph.into_inner();
-    unwire_each_link_an_end_refused_keeping_it(&mut graph, &mut plan, &[])
+    unwire_each_link_an_end_refused_keeping_it(&mut graph, &plan, &[])
         .expect("the refused link is closed");
     for link_to_add in &plan.links_to_add {
         super::super::compiler_ops::open_iceoryx2_service(&mut graph, link_to_add, &iceoryx2_node)

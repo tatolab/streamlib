@@ -14,17 +14,16 @@ impl Graph {
         &self,
         node_run_id: &NodeRunId,
     ) -> Vec<LinkUniqueId> {
-        let into_the_node = self.traversal().v(node_run_id).in_e().ids();
-        let out_of_the_node = self.traversal().v(node_run_id).out_e().ids();
         let mut refused: Vec<LinkUniqueId> = Vec::new();
-        for link_id in into_the_node.into_iter().chain(out_of_the_node) {
-            let is_refused = self
-                .traversal()
-                .e(&link_id)
-                .first()
-                .is_some_and(an_end_refused_the_link);
-            if is_refused && !refused.contains(&link_id) {
-                refused.push(link_id);
+        for link in self
+            .traversal()
+            .v(node_run_id)
+            .in_e()
+            .iter()
+            .chain(self.traversal().v(node_run_id).out_e().iter())
+        {
+            if an_end_refused_the_link(link) && !refused.contains(&link.id) {
+                refused.push(link.id.clone());
             }
         }
         refused

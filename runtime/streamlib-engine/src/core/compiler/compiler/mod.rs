@@ -323,7 +323,7 @@ impl Compiler {
         links_whose_pin_types_differ::hold_each_link_unwired(&mut graph_arc.write(), &plan)?;
         links_an_end_refused_wired_again::unwire_each_link_an_end_refused_keeping_it(
             &mut graph_arc.write(),
-            &mut plan,
+            &plan,
             &nodes_restarted.links,
         )?;
 
