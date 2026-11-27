@@ -57,6 +57,11 @@ pub trait GeneratedNode: Send + 'static {
         Ok(())
     }
 
+    /// Take the values built or written since the last tick, at each tick of a node that paces
+    /// itself (`execution = manual`), as a frame of any other node takes them; never waits on a
+    /// build. A node of any form but one function takes no values at a tick.
+    fn take_the_new_values_at_a_tick(&mut self) {}
+
     fn execution_config(&self) -> ExecutionConfig {
         ExecutionConfig::default()
     }

@@ -52,6 +52,12 @@ impl NodeInstance {
         self.0.stop(ctx)
     }
 
+    /// Take the values built or written since the last tick, at a tick of a node that paces
+    /// itself.
+    pub fn take_the_new_values_at_a_tick(&mut self) {
+        self.0.take_the_new_values_at_a_tick()
+    }
+
     pub fn execution_config(&self) -> ExecutionConfig {
         self.0.execution_config()
     }

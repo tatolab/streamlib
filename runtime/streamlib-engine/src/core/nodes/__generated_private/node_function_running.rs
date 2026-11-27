@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! What a node written as one function runs on once its body has run: the scope its body
-//! declared, the view its frames read and the per-frame function its body returned.
+//! declared, the view its frames or ticks read and the per-frame function its body returned,
+//! which a node that paces itself (`execution = manual`) has none of.
 
 use streamlib_scope::{FrameView, Scope, ScopeBeingDeclared, Writes};
 
@@ -21,7 +22,8 @@ pub type PerFrameFunction =
 /// Its fields drop in order: the per-frame function and what it captured, then the view's
 /// values, then the scope, whose drop waits out a build in flight and starts no other.
 pub struct NodeFunctionRunning {
-    per_frame: PerFrameFunction,
+    /// `None` for a node that paces itself, whose computed values publish on their own.
+    per_frame: Option<PerFrameFunction>,
     view: FrameView,
     scope: Scope,
 }
@@ -30,12 +32,13 @@ impl NodeFunctionRunning {
     /// Run `body`, the node `node`'s body, once, with every computed value it declares declared
     /// into `declaring`, then start the scope, its computed values' builds shown in the health
     /// `ctx`'s node reports: refused with the body's own error, or when the thread its computed
-    /// values build on does not start.
+    /// values build on does not start. The body returns the per-frame function, or `None` for a
+    /// node that paces itself.
     pub fn run_the_body_once(
         node: &str,
         ctx: &RuntimeContextFullAccess<'_>,
         mut declaring: ScopeBeingDeclared,
-        body: impl FnOnce() -> Result<PerFrameFunction>,
+        body: impl FnOnce() -> Result<Option<PerFrameFunction>>,
     ) -> Result<Self> {
         let per_frame = declaring.declare(body)?;
         let (scope, view) =
@@ -62,10 +65,20 @@ impl NodeFunctionRunning {
         let Self {
             per_frame, view, ..
         } = self;
+        let Some(per_frame) = per_frame else {
+            view.flush();
+            return Ok(());
+        };
         view.run_frame(|| per_frame(ctx)).unwrap_or_else(|| {
             std::thread::sleep(UNBUILT_FRAME_BACKOFF);
             Ok(())
         })
+    }
+
+    /// Take the values built or written since the last tick, at a tick of a node that paces
+    /// itself: each value they replace is dropped on the scope's worker. Never waits on a build.
+    pub fn take_the_new_values_at_a_tick(&mut self) {
+        self.view.flush();
     }
 
     /// Write the inputs `writes` names to the scope, all as one write.

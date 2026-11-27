@@ -126,14 +126,48 @@ pub(crate) fn generate_from_a_node_function(
 
     let arguments = read.arguments();
     let argument_bindings = read.argument_bindings();
-    let per_frame_function_taken = match read.returned {
-        PerFrameFunctionReturned::Itself => quote! { super::#function_ident(#(#arguments),*) },
-        PerFrameFunctionReturned::InAResult => {
-            quote! { super::#function_ident(#(#arguments),*)? }
-        }
-    };
-
     let private = quote! { __streamlib_sdk::nodes::__generated_private };
+    let per_frame_function_taken = match read.returned {
+        PerFrameFunctionReturned::Itself => quote! {
+            Ok(::std::option::Option::Some(::std::boxed::Box::new(
+                super::#function_ident(#(#arguments),*),
+            ) as #private::PerFrameFunction))
+        },
+        PerFrameFunctionReturned::InAResult => quote! {
+            Ok(::std::option::Option::Some(::std::boxed::Box::new(
+                super::#function_ident(#(#arguments),*)?,
+            ) as #private::PerFrameFunction))
+        },
+        PerFrameFunctionReturned::Nothing => quote! {
+            super::#function_ident(#(#arguments),*);
+            Ok(::std::option::Option::None)
+        },
+        PerFrameFunctionReturned::NothingInAResult => quote! {
+            super::#function_ident(#(#arguments),*)?;
+            Ok(::std::option::Option::None)
+        },
+    };
+    let started_and_stopped_by_its_own_clock =
+        matches!(parsed.execution, NodeSchemaExecution::Manual).then(|| {
+            quote! {
+                /// Nothing to start: the body ran at setup, and its computed values publish on
+                /// their own from their first build.
+                fn start(
+                    &mut self,
+                    _ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
+                ) -> __streamlib_sdk::error::Result<()> {
+                    Ok(())
+                }
+
+                /// Nothing to stop: teardown drops every value the body made.
+                fn stop(
+                    &mut self,
+                    _ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
+                ) -> __streamlib_sdk::error::Result<()> {
+                    Ok(())
+                }
+            }
+        });
 
     let node_module = node_module(
         module_visibility,
@@ -215,6 +249,14 @@ pub(crate) fn generate_from_a_node_function(
                     })
                 }
 
+                #started_and_stopped_by_its_own_clock
+
+                fn take_the_new_values_at_a_tick(&mut self) {
+                    if let ::std::option::Option::Some((running, _)) = &mut self.running {
+                        running.take_the_new_values_at_a_tick();
+                    }
+                }
+
                 /// Run a frame once the body has run and every computed value has its first
                 /// value; nothing runs before then.
                 fn process(
@@ -255,10 +297,7 @@ pub(crate) fn generate_from_a_node_function(
                         Self::NAME,
                         ctx,
                         declaring,
-                        || {
-                            let per_frame = #per_frame_function_taken;
-                            Ok(::std::boxed::Box::new(per_frame) as #private::PerFrameFunction)
-                        },
+                        || { #per_frame_function_taken },
                     )?;
                     self.running = ::std::option::Option::Some((running, handles));
                     Ok(())
@@ -406,12 +445,16 @@ enum ParameterRole {
     ValueInput(Ident),
 }
 
-/// How a node function returns its per-frame function.
+/// How a node function returns its per-frame function, or that it returns none.
 enum PerFrameFunctionReturned {
     /// `-> impl FnMut(…) -> Result<()>`.
     Itself,
     /// `-> Result<impl FnMut(…) -> Result<()>>`, when the body can fail.
     InAResult,
+    /// No return type: a node that paces itself, whose computed values publish on their own.
+    Nothing,
+    /// `-> Result<()>`: a node that paces itself, when its body can fail.
+    NothingInAResult,
 }
 
 /// A node function, read: each parameter's role, in order, and how it returns its per-frame
@@ -471,13 +514,6 @@ fn refuse_a_form_the_function_does_not_take(
             span,
             "a node written as one function takes no `unsafe_send`: its per-frame function and \
              every computed value are `Send`",
-        ));
-    }
-    if matches!(parsed.execution, NodeSchemaExecution::Manual) {
-        return Err(syn::Error::new(
-            span,
-            "a node written as one function runs `execution = reactive` or `execution = \
-             continuous(…)`; `execution = manual` is not yet written as one function",
         ));
     }
     if let Some(port) = parsed
@@ -557,7 +593,11 @@ fn read_the_node_function(
             ),
         ));
     }
-    let returned = per_frame_function_returned(&mut item.sig.output)?;
+    let returned = if matches!(parsed.execution, NodeSchemaExecution::Manual) {
+        nothing_returned_by_a_node_pacing_itself(&item.sig.output)?
+    } else {
+        per_frame_function_returned(&mut item.sig.output)?
+    };
     Ok(NodeFunctionRead {
         parameters,
         returned,
@@ -636,6 +676,32 @@ fn refuse_a_parameter_the_node_does_not_declare(
         }
         _ => Ok(()),
     }
+}
+
+/// How the body of a node that paces itself (`execution = manual`) returns: nothing, or
+/// `Result<()>` when it can fail. It has no per-frame function: its computed values publish on
+/// their own, and it takes new values at each tick.
+fn nothing_returned_by_a_node_pacing_itself(
+    output: &ReturnType,
+) -> syn::Result<PerFrameFunctionReturned> {
+    let ReturnType::Type(_, returned) = output else {
+        return Ok(PerFrameFunctionReturned::Nothing);
+    };
+    let returns_a_result_of_nothing = last_path_segment(returned).is_some_and(|segment| {
+        segment.ident == "Result"
+            && matches!(&segment.arguments, PathArguments::AngleBracketed(arguments)
+                if matches!(arguments.args.first(),
+                    Some(GenericArgument::Type(Type::Tuple(unit))) if unit.elems.is_empty()))
+    });
+    if returns_a_result_of_nothing {
+        return Ok(PerFrameFunctionReturned::NothingInAResult);
+    }
+    Err(syn::Error::new(
+        returned.span(),
+        "a node that paces itself (`execution = manual`) returns no per-frame function: its \
+         computed values publish on their own, and it takes new values at each tick — return \
+         nothing, or `Result<()>` when its body can fail",
+    ))
 }
 
 /// How `output` returns the per-frame function, with `+ Send + 'static` added to its type
