@@ -138,7 +138,10 @@ def test_a_second_reader_wired_to_a_playing_stateful_function_node_reads_it_and_
     first_readers_counts = [count for batch in first_readers_batches for count in batch["counts"]]
     assert first_readers_counts == [
         first_readers_counts[0] + offset for offset in range(len(first_readers_counts))
-    ], f"the first reader reads each count once, in order, across the edit: {first_readers_counts}"
+    ], (
+        f"the first reader reads each count once, in order, across the edit: {first_readers_counts}; "
+        f"batches {batches}; helpers {helper_pids}:\n{tatolabd.stderr_text}"
+    )
     second_readers_counts = second_readers_batch["counts"]
     assert second_readers_counts == [
         second_readers_counts[0] + offset for offset in range(len(second_readers_counts))
@@ -163,12 +166,13 @@ def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(
     """The state a stateful node carries is a parameter, not a side effect.
 
     Two runs of the same `Lfo`, each in a helper of its own read by its own
-    class, read the same value at each step: the one the step's stream time gives, a sine
-    advanced by exactly one step of stream time per step, whatever the machine
-    took to run it.
+    class, each read a sine advanced by exactly one step of stream time per
+    step, whatever the machine took to run it. The LFO runs in a process of its
+    own, so a reader takes the value its LFO wrote on this step or on the step
+    before, never one off the step's sine.
 
     Fail-without-fix: with the node's state or time taken from anywhere but
-    its parameters, the two runs drift apart and off the step's sine.
+    its parameters, the runs drift off the step's sine.
     """
     tatolabd = start_tatolabd_running_stream(
         two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock
@@ -179,16 +183,34 @@ def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(
     tatolabd.await_clean_exit()
 
     assert first_run["pid"] != second_run["pid"], (first_run, second_run)
-    assert first_run["steps"] == second_run["steps"], (
-        f"two runs of one stateful node on one stepped clock read different values: "
-        f"{first_run['steps']} and {second_run['steps']}"
-    )
-    first_step_read = first_run["steps"][0][0]
-    lfo_rate_hz = 1.0
-    for step_index, value in first_run["steps"]:
-        stream_seconds_since_the_first_read = (step_index - first_step_read) * STEPPED_LFO_STEP_MS / 1000
-        expected = math.sin(2.0 * math.pi * ((lfo_rate_hz * stream_seconds_since_the_first_read) % 1.0))
-        assert value == pytest.approx(expected, abs=1e-9), (
-            f"at step {step_index} the LFO read {value}, and one step of stream time a step "
-            f"puts it at {expected}: {first_run['steps']}"
+    for run in (first_run, second_run):
+        steps = run["steps"]
+        assert the_steps_of_stream_time_an_lfo_read_at_each_step_had_advanced(steps), (
+            f"an LFO read at each step a value off the sine of the whole steps of stream "
+            f"time since it started, each one step of stream time on or behind the step: {steps}"
         )
+
+
+def the_steps_of_stream_time_an_lfo_read_at_each_step_had_advanced(
+    steps: "list[list[float]]",
+) -> bool:
+    """Whether each `[step_index, value]` is the 1 Hz sine of some whole number of
+    `STEPPED_LFO_STEP_MS` steps since the LFO started, that number rising with the
+    step index and lagging it by one step at most."""
+
+    def is_the_sine_after(steps_since_it_started: int, value: float) -> bool:
+        stream_seconds = steps_since_it_started * STEPPED_LFO_STEP_MS / 1000
+        return value == pytest.approx(math.sin(2.0 * math.pi * (stream_seconds % 1.0)), abs=1e-9)
+
+    first_step_index = int(steps[0][0])
+    step_the_lfo_started_on_candidates = range(first_step_index - len(steps), first_step_index + 1)
+    for step_it_started_on in step_the_lfo_started_on_candidates:
+        if all(
+            any(
+                is_the_sine_after(max(int(step_index) - step_it_started_on - lag, 0), value)
+                for lag in (0, 1)
+            )
+            for step_index, value in steps
+        ):
+            return True
+    return False

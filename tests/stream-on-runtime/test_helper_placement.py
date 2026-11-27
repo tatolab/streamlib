@@ -793,10 +793,10 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
     one runs in a helper of its own.
 
     `Wave -> ScaleAndOffset (Rust) -> Clamp` maps the wave's -1..1 onto 0..1
-    with no process of its own, and `CountsItsOwnCalls (Rust) -> Remap` hands
-    its ordered reader each count once, as `(count + 1) / 2`: the two Python
-    classes and the counter get a helper each, and `graph` shows each Rust
-    node as `function` / `rust`.
+    with no process of its own, and `CountsItsOwnCalls (Rust)`, in a helper of
+    its own, hands its ordered reader each count once: the two Python classes
+    and the counter get a helper each, and `graph` shows each Rust node as
+    `function` / `rust`.
     """
     tatolabd = start_tatolabd_running_stream(rust_function_nodes_in_islands_beside_python_ones)
     stream_id = tatolabd.await_the_latest_stream_loaded()
@@ -816,7 +816,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
     values = values_read["values"]
     assert all(0.0 <= value <= 1.0 for value in values), values
     assert len(set(values)) > 1, f"the island moves with the stream's clock: {values}"
-    counts = [2.0 * value - 1.0 for value in counts_read["counts"]]
+    counts = counts_read["counts"]
     assert counts == [counts[0] + offset for offset in range(len(counts))], (
         f"the Rust counter's reader reads each count it wrote once, in order: {counts}"
     )

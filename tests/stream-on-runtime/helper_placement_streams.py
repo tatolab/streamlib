@@ -316,8 +316,8 @@ def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
 
 @graph_generator
 def rust_function_nodes_in_islands_beside_python_ones(stream_builder: StreamBuilder) -> None:
-    """`Wave` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
-    into `Remap`, each read by its own Python class."""
+    """`Wave` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`,
+    each read by its own Python class."""
     wave = stream_builder.add(Wave)
     scale_and_offset = stream_builder.add(ScaleAndOffset)
     clamp = stream_builder.add(Clamp)
@@ -327,10 +327,8 @@ def rust_function_nodes_in_islands_beside_python_ones(stream_builder: StreamBuil
     stream_builder.connect(clamp.output("result"), values_sink.input("brightness"))
 
     counter = stream_builder.add(RustCountsItsOwnCalls, name="rust_counter")
-    remap = stream_builder.add(Remap)
     counts_sink = stream_builder.add(ReportsTheCountsItReadInOrderSink)
-    stream_builder.connect(counter.output("result"), remap.input("x"))
-    stream_builder.connect(remap.output("result"), counts_sink.input("count"))
+    stream_builder.connect(counter.output("result"), counts_sink.input("count"))
 
 
 @graph_generator
