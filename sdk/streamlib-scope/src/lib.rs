@@ -34,11 +34,14 @@ mod sync {
 use sync::{Mutex, MutexGuard, Thread};
 
 mod builds_of_computed_values;
+mod read_refusal;
 
 use builds_of_computed_values::BuildsReported;
 pub use builds_of_computed_values::{
     BuildFailure, BuildsOfAComputedValue, BuildsOfAScope, ComputedValueDeclared, LastBuild,
 };
+use read_refusal::{ReadOfAComputedValueNotYetBuilt, Refusal, refuse, refuse_the_read};
+pub use read_refusal::{ReadRefused, fail_this_build_on_a_computed_value_not_yet_built};
 
 type AnyValue = Arc<dyn Any + Send + Sync>;
 type BuildOfAnyValue = Arc<dyn Fn() -> Result<AnyValue, String> + Send + Sync>;
@@ -63,10 +66,16 @@ struct SlotOf {
 
 impl SlotOf {
     fn in_scope(self, scope_id: ScopeId) -> usize {
-        if self.scope_id != scope_id {
-            refuse(Refusal::HandleOfAnotherScope);
+        self.read_in_scope(scope_id)
+            .unwrap_or_else(|_| refuse(Refusal::HandleOfAnotherScope))
+    }
+
+    fn read_in_scope(self, scope_id: ScopeId) -> Result<usize, ReadRefused> {
+        if self.scope_id == scope_id {
+            Ok(self.slot)
+        } else {
+            Err(ReadRefused::HandleOfAnotherScope)
         }
-        self.slot
     }
 }
 
@@ -95,36 +104,6 @@ impl<T> Clone for Computed<T> {
     }
 }
 impl<T> Copy for Computed<T> {}
-
-/// A use of the scope's API that can never be right, refused with a panic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Refusal {
-    GetOutsideABuildOrAFrame,
-    ComputedOutsideADeclaration,
-    HandleOfAnotherScope,
-}
-
-impl fmt::Display for Refusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Refusal::GetOutsideABuildOrAFrame => {
-                "`.get()` reads only in a build or a frame; read the value in a `computed` build \
-                 or in the per-frame function"
-            }
-            Refusal::ComputedOutsideADeclaration => {
-                "`computed` declares only while a scope is being declared, in the node's body"
-            }
-            Refusal::HandleOfAnotherScope => "the handle belongs to another scope",
-        })
-    }
-}
-
-fn refuse(refusal: Refusal) -> ! {
-    panic!("{refusal}")
-}
-
-/// The unwind payload of a build's `.get()` of a computed value that has no value yet.
-struct ReadOfAComputedValueNotYetBuilt;
 
 /// What a build or a frame on this thread reads from.
 enum Reading {
@@ -164,19 +143,21 @@ fn replace_declaring(declaring: Option<Declaring>) -> Option<Declaring> {
     DECLARING.with(|cell| cell.replace(declaring))
 }
 
-fn read_slot(slot: SlotOf) -> Option<AnyValue> {
+fn read_slot(slot: SlotOf) -> Result<Option<AnyValue>, ReadRefused> {
     READING.with(|reading| match &mut *reading.borrow_mut() {
-        None => refuse(Refusal::GetOutsideABuildOrAFrame),
+        None => Err(ReadRefused::OutsideABuildOrAFrame),
         Some(Reading::Build {
             scope_id,
             values,
             read,
         }) => {
-            let slot = slot.in_scope(*scope_id);
+            let slot = slot.read_in_scope(*scope_id)?;
             read.push(slot);
-            values[slot].clone()
+            Ok(values[slot].clone())
         }
-        Some(Reading::Frame { scope_id, values }) => values[slot.in_scope(*scope_id)].clone(),
+        Some(Reading::Frame { scope_id, values }) => {
+            Ok(values[slot.read_in_scope(*scope_id)?].clone())
+        }
     })
 }
 
@@ -185,10 +166,16 @@ impl<T: Send + Sync + 'static> Input<T> {
     /// frame, as of the frame's boundary. Refused anywhere else.
     #[must_use]
     pub fn get(self) -> Arc<T> {
-        read_slot(self.slot)
+        self.try_get()
+            .unwrap_or_else(|refused| refuse_the_read(refused))
+    }
+
+    /// [`Input::get`], answering why instead of panicking when it reads no value.
+    pub fn try_get(self) -> Result<Arc<T>, ReadRefused> {
+        Ok(read_slot(self.slot)?
             .expect("an input always holds a value")
             .downcast::<T>()
-            .expect("an input holds its own type")
+            .expect("an input holds its own type"))
     }
 }
 
@@ -198,11 +185,18 @@ impl<T: Send + Sync + 'static> Computed<T> {
     /// frames run only once every computed value has one. Refused anywhere else.
     #[must_use]
     pub fn get(self) -> Arc<T> {
-        match read_slot(self.slot) {
-            Some(value) => value
+        self.try_get()
+            .unwrap_or_else(|refused| refuse_the_read(refused))
+    }
+
+    /// [`Computed::get`], answering why instead of panicking or failing the build when it reads
+    /// no value.
+    pub fn try_get(self) -> Result<Arc<T>, ReadRefused> {
+        match read_slot(self.slot)? {
+            Some(value) => Ok(value
                 .downcast::<T>()
-                .expect("a computed value holds its own type"),
-            None => resume_unwind(Box::new(ReadOfAComputedValueNotYetBuilt)),
+                .expect("a computed value holds its own type")),
+            None => Err(ReadRefused::ComputedValueNotYetBuilt),
         }
     }
 }
