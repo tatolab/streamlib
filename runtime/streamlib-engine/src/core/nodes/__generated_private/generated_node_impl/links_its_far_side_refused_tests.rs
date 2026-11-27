@@ -103,3 +103,40 @@ fn a_link_whose_handover_after_the_setup_command_fails_is_held_as_refused() {
     assert!(answer.the_far_side_refused());
     assert!(envelope.holds_a_link_its_far_side_refused());
 }
+
+/// A link end handed over again without being forgotten keeps one record: the newer
+/// handover's. Once the far side opened that one, a new far side in place of one that died
+/// is handed the link once, though the superseded handover was never answered.
+///
+/// Mental-revert: record each handover beside the one before it, and the unanswered
+/// superseded record reads as a link the far side never opened, so the link is forgotten.
+#[test]
+fn a_link_end_handed_over_again_keeps_only_its_newer_handovers_record() {
+    let envelope =
+        OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+    envelope
+        .send_the_setup_command_then_hand_every_later_link_over(
+            |_| Ok(()),
+            RecordingOutOfProcessFarSideLinkDelivery::default(),
+        )
+        .expect("the setup command goes out");
+    let hand_over = || {
+        envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                link_wiring_entry("L-again", "in1"),
+            )
+            .expect("a far side that is not gone takes the link")
+            .expect("a link past the setup command waits on the far side's answer")
+    };
+    let _superseded = hand_over();
+    hand_over().note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+
+    envelope.reopen_for_a_new_far_side_in_place_of_one_that_died();
+
+    assert_eq!(
+        envelope.as_setup_command_ports()["inputs"],
+        serde_json::json!([link_wiring_entry("L-again", "in1")]),
+        "the link rides the new far side's setup command once"
+    );
+}
