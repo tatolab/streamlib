@@ -23,7 +23,7 @@ pub(crate) const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
     output("numbers", pin_type = String, flow = Stream),
     output("more_numbers", pin_type = String, flow = Stream),
 )]
-pub fn numbered_message_writer_test_node(
+pub(crate) fn numbered_message_writer_test_node(
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     let mut next_message_number = 0u64;

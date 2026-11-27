@@ -21,7 +21,7 @@ const GROUPS_WRITTEN_TOGETHER: u64 = 2;
     execution = continuous(interval_ms = 20),
     output("paired_groups", pin_type = String, flow = Stream),
 )]
-pub fn paired_group_writer_test_node(
+pub(crate) fn paired_group_writer_test_node(
     outputs: OutputWriter,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     let mut next_message_number = 0u64;

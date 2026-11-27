@@ -40,10 +40,16 @@ fn the_last_level_read() -> Option<i32> {
         .copied()
 }
 
+/// The words of the panic the build of level 2 reports.
+const THE_PANIC_OF_THE_BUILD_OF_LEVEL_2: &str = "panicked: PanickingLifecycle: injected panic in \
+     the build of level 2; the node runs on its previous value";
+
+/// The report of the build of level 2 panicking, not an earlier build's.
 fn a_panicked_build(diagnostics: &[DiagnosticOnTheWire]) -> Option<&DiagnosticOnTheWire> {
-    diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.kind == DiagnosticKindOnTheWire::ComputedValueBuildPanicked)
+    diagnostics.iter().find(|diagnostic| {
+        diagnostic.kind == DiagnosticKindOnTheWire::ComputedValueBuildPanicked
+            && diagnostic.words.contains(THE_PANIC_OF_THE_BUILD_OF_LEVEL_2)
+    })
 }
 
 /// Mental-revert: a panic that escaped its build would end the node's builds and report
@@ -79,13 +85,6 @@ fn a_panic_in_a_build_is_reported_and_the_frames_run_on_the_previous_value() {
     );
     let panicked = a_panicked_build(&diagnostics)
         .unwrap_or_else(|| panic!("the panicked build is reported: {diagnostics:?}"));
-    assert!(
-        panicked.words.contains(
-            "panicked: PanickingLifecycle: injected panic in the build of level 2; the node runs \
-             on its previous value"
-        ),
-        "the report carries the panic: {panicked:?}"
-    );
     assert_eq!(panicked.recovery, DiagnosticRecoveryOnTheWire::FixTheCode);
     let frames_at_the_failure = levels_the_frames_of_the_panicking_node_read().len();
     let levels = once_it_holds(levels_the_frames_of_the_panicking_node_read, |levels| {

@@ -9,9 +9,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
+use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::schemars::JsonSchema;
 
 /// How the node crashes the runtime.
