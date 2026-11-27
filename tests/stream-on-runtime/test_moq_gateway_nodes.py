@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Gateway nodes carry a port off its stream and back, through a relay the test starts, and a
-track renamed or a relay moved to while the stream plays carries it on with no node rebuilt."""
+track renamed, a relay moved to or a receive's content type chosen while the stream plays
+carries it on with no node rebuilt."""
 
 from __future__ import annotations
 
@@ -25,6 +26,8 @@ from moq_gateway_streams import (
     COUNT_TRACK,
     FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE,
     RENAMED_COUNT_TRACK,
+    UNLINKED_RECEIVE,
+    a_receive_reading_the_count_track_alone,
     counting_records_sent_to_the_relay_and_read_back,
 )
 
@@ -198,3 +201,42 @@ def test_gateways_moved_to_another_relay_while_playing_carry_the_records_through
         assert_the_stream_still_runs_on_its_first_helpers(tatolabd, local_api, stream_id, helpers)
         tatolabd.interrupt()
         tatolabd.await_clean_exit()
+
+
+#: The type a test chooses for the unlinked receive's `content` while the stream plays.
+H264_VIDEO = {"type": "encoded_video", "codecs": ["h264"]}
+
+#: How long the retyped pin may take to show in the running graph.
+RETYPED_PIN_BUDGET_SECONDS = 15.0
+
+
+def test_a_receive_whose_content_type_is_chosen_while_playing_retypes_its_output_restarting_nothing(
+    start_tatolabd_running_stream: Callable[..., TatolabdUnderTest],
+    fixture_moq_relay_url: str,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mental-revert: refuse a `PinTypeChoice` input on a node function, or read it only when the
+    node is set up, and choosing `content_type` rebuilds the receive in a new helper, or leaves
+    `content` typed as it was."""
+    monkeypatch.setenv(FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE, fixture_moq_relay_url)
+    tatolabd = start_tatolabd_running_stream(a_receive_reading_the_count_track_alone)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    helpers = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    set_input_values_while_playing(local_api, stream_id, [(UNLINKED_RECEIVE, "content_type", H264_VIDEO)])
+
+    def the_content_pin_type() -> Any:
+        (receive,) = [
+            node for node in local_api.graph(stream=stream_id)["nodes"] if node["name"] == UNLINKED_RECEIVE
+        ]
+        (content,) = [port for port in receive["ports"]["outputs"] if port["name"] == "content"]
+        return content.get("pin_type")
+
+    deadline = time.monotonic() + RETYPED_PIN_BUDGET_SECONDS
+    while the_content_pin_type() != H264_VIDEO and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert the_content_pin_type() == H264_VIDEO, f"`content` is retyped:\n{tatolabd.recent_stderr()}"
+    assert_the_stream_still_runs_on_its_first_helpers(tatolabd, local_api, stream_id, helpers)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()

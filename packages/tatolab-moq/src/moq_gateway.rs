@@ -321,8 +321,20 @@ impl MoqGatewayPasses {
                     }
                     return;
                 }
-                if self.tracks.remove(&track_node).is_some() {
+                tracing::info!(
+                    "MoqGateway `{}`: track node `{track_node}` declares `{track}`",
+                    self.gateway_node
+                );
+                if let Some(declared) = self.tracks.get_mut(&track_node) {
+                    // Renamed: its send writes on, so the content read and the
+                    // entry its stream facts built carry over to the new name.
+                    declared.track = track;
+                    declared.catalog_entry_declared = catalog_entry;
+                    declared.last_declared_at = now;
+                    declared.writer = None;
+                    declared.writer_refused_on_this_session = false;
                     self.the_catalog_may_have_changed = true;
+                    return;
                 }
                 let content = match self.ipc.track_content_subscriber(&track_node) {
                     Ok(content) => content,
@@ -333,10 +345,6 @@ impl MoqGatewayPasses {
                         return;
                     }
                 };
-                tracing::info!(
-                    "MoqGateway `{}`: track node `{track_node}` declares `{track}`",
-                    self.gateway_node
-                );
                 self.tracks.insert(
                     track_node,
                     DeclaredTrack {

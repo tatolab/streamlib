@@ -305,15 +305,29 @@ fn a_receive_reading(
     .expect("the receive starts")
 }
 
-/// The track node `telemetry` declaring `track` on `gateway`.
+/// The track node `telemetry` declaring `track` on `gateway` as JSON.
 fn a_declaration_of(ipc: &MoqNodeIpc, track: &str) -> MoqTrackDeclarationThread {
+    a_declaration_with_its_entry(
+        ipc,
+        track,
+        Some(serde_json::json!({"section": "json", "entry": {}})),
+    )
+}
+
+/// The track node `telemetry` declaring `track` on `gateway` with `catalog_entry`; with none,
+/// the entry is the one the stream facts the send hands over build.
+fn a_declaration_with_its_entry(
+    ipc: &MoqNodeIpc,
+    track: &str,
+    catalog_entry: Option<serde_json::Value>,
+) -> MoqTrackDeclarationThread {
     MoqTrackDeclarationThread::spawn(
         ipc.clone(),
         MoqTrackDeclared {
             track_node: "telemetry".into(),
             gateway_node: "gateway".into(),
             track: track.into(),
-            catalog_entry: Some(serde_json::json!({"section": "json", "entry": {}})),
+            catalog_entry,
         },
     )
     .expect("the track is declared")
@@ -413,4 +427,60 @@ fn a_track_renamed_and_its_gateways_moved_to_another_relay_carry_the_send_on_unr
     assert!(renamed_declaration.stop_and_join(Duration::from_secs(2)));
     assert!(moved_gateway.stop_and_join(Duration::from_secs(5)));
     assert!(moved_receiving_gateway.stop_and_join(Duration::from_secs(5)));
+}
+
+#[test]
+fn a_track_renamed_keeps_the_entry_its_stream_facts_built_and_its_objects_wrapped() {
+    let relay_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let relay = a_relay_running_on(&relay_runtime);
+    let domain_root = tempfile::Builder::new()
+        .prefix("moq")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let ipc = MoqNodeIpc::open_under_the_domain_root(
+        domain_root.path(),
+        MoqStreamServiceNames::of_the_stream("run", "studio-encoded-renamed"),
+    )
+    .expect("the iceoryx2 node opens");
+
+    let mut gateway = a_gateway_dialing(&ipc, "gateway", "studio", &relay);
+    let mut receiving_gateway = a_gateway_dialing(&ipc, "receiving-gateway", "audience", &relay);
+    let mut declaration = a_declaration_with_its_entry(&ipc, "first", None);
+    let mut send = MoqTrackSendPublisher::open(ipc.clone(), "telemetry").expect("the send opens");
+    // Handed over once: within a second the send does not hand unchanged facts over again, so
+    // the renamed track has the entry only if the gateway carried it over.
+    send.send_the_upstream_stream_facts_when_they_changed(Some(serde_json::json!({
+        "family": "packets", "rfc6381_codec": "avc1.64001f",
+        "coded_width": 1280, "coded_height": 720,
+    })))
+    .unwrap();
+    let received = Arc::new(Mutex::new(WhatTheReceiveWrote::default()));
+    let mut receive = a_receive_reading(&ipc, "first", &received);
+    let mut sent = 0;
+    send_until_three_labelled_arrive(&mut send, &received, "first", &mut sent);
+    let facts_read_for_the_first_name =
+        std::mem::take(&mut received.lock().unwrap().packets_stream_facts);
+    assert!(
+        !facts_read_for_the_first_name.is_empty(),
+        "the receive reads the entry the stream facts built"
+    );
+
+    let mut renamed_declaration = a_declaration_with_its_entry(&ipc, "second", None);
+    let mut renamed_receive = a_receive_reading(&ipc, "second", &received);
+    assert!(declaration.stop_and_join(Duration::ZERO));
+    assert!(receive.stop_and_join(Duration::ZERO));
+    send_until_three_labelled_arrive(&mut send, &received, "second", &mut sent);
+    assert_eq!(
+        received.lock().unwrap().packets_stream_facts.first(),
+        facts_read_for_the_first_name.first(),
+        "the renamed track's entry is the one the stream facts built"
+    );
+
+    assert!(renamed_receive.stop_and_join(Duration::from_secs(2)));
+    assert!(renamed_declaration.stop_and_join(Duration::from_secs(2)));
+    assert!(gateway.stop_and_join(Duration::from_secs(5)));
+    assert!(receiving_gateway.stop_and_join(Duration::from_secs(5)));
 }

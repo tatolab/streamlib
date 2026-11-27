@@ -3,7 +3,8 @@
 
 //! The classes `tatolab.moq` starts each node's native half with.
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use pyo3::buffer::PyBuffer;
@@ -283,20 +284,55 @@ impl MoqTrackDeclarationThread {
     }
 }
 
+/// A send's publisher, gone once closed or taken over.
+type HeldPublisher = Mutex<Option<MoqTrackSendRunningPublisher>>;
+
+/// The publisher writing to each track node in this process, by the name of its content
+/// service: a send's description and content services admit one holder.
+static THE_PUBLISHER_OF_EACH_TRACK_NODE: LazyLock<Mutex<HashMap<String, Weak<HeldPublisher>>>> =
+    LazyLock::new(Mutex::default);
+
+/// A publisher writing to the track `track_node` declares, as the one publisher of this process
+/// writing to it: one opened before, by a send rewired away and back before its value was
+/// closed, is closed first.
+fn the_publisher_taking_over(
+    ipc: MoqNodeIpc,
+    track_node: &str,
+) -> Result<Arc<HeldPublisher>, MoqModuleError> {
+    let mut publishers = THE_PUBLISHER_OF_EACH_TRACK_NODE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    publishers.retain(|_, held| held.strong_count() > 0);
+    let content_service = ipc.service_names.track_content(track_node);
+    if let Some(held_before) = publishers.get(&content_service).and_then(Weak::upgrade) {
+        *held_before.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+    let held = Arc::new(Mutex::new(Some(MoqTrackSendRunningPublisher::open(
+        ipc, track_node,
+    )?)));
+    publishers.insert(content_service, Arc::downgrade(&held));
+    Ok(held)
+}
+
 /// A send node's native half: its writes to the track its config names.
 #[pyclass]
 struct MoqTrackSendPublisher {
-    publisher: Option<MoqTrackSendRunningPublisher>,
+    publisher: Arc<HeldPublisher>,
 }
 
 impl MoqTrackSendPublisher {
-    fn publisher(&mut self) -> PyResult<&mut MoqTrackSendRunningPublisher> {
-        self.publisher.as_mut().ok_or_else(|| {
-            MoqModuleError::Closed {
-                what: "MoqTrackSend's publisher",
-            }
-            .into()
-        })
+    fn with_the_publisher<T>(
+        &self,
+        write: impl FnOnce(&mut MoqTrackSendRunningPublisher) -> crate::error::Result<T>,
+    ) -> PyResult<T> {
+        let mut publisher = self
+            .publisher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let publisher = publisher.as_mut().ok_or(MoqModuleError::Closed {
+            what: "MoqTrackSend's publisher",
+        })?;
+        Ok(write(publisher)?)
     }
 }
 
@@ -315,17 +351,20 @@ impl MoqTrackSendPublisher {
             &ModuleHost::from_python_module_host_table_capsule(module_host_table)?,
         );
         Ok(Self {
-            publisher: Some(MoqTrackSendRunningPublisher::open(
+            publisher: the_publisher_taking_over(
                 the_ipc_of_the_stream(runtime_id, stream_id)?,
                 track_node,
-            )?),
+            )?,
         })
     }
 
     /// Give up the track's content service, which a publisher for another
     /// track the send is wired leaves to it.
     fn close(&mut self) {
-        self.publisher = None;
+        *self
+            .publisher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     /// Hand the gateway one message, its payload any contiguous byte buffer.
@@ -347,13 +386,14 @@ impl MoqTrackSendPublisher {
         let payload_bytes = unsafe {
             std::slice::from_raw_parts(payload.buf_ptr().cast::<u8>(), payload.item_count())
         };
-        let sent = self.publisher()?.send_message(
-            payload_bytes,
-            timestamp_ns,
-            starts_group,
-            lost_since_last_read,
-        );
-        Ok(sent?)
+        self.with_the_publisher(|publisher| {
+            publisher.send_message(
+                payload_bytes,
+                timestamp_ns,
+                starts_group,
+                lost_since_last_read,
+            )
+        })
     }
 
     /// Hand the gateway the hang entry the stream facts of the port feeding
@@ -364,9 +404,9 @@ impl MoqTrackSendPublisher {
         upstream_stream_facts: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let upstream_stream_facts = upstream_stream_facts.map(json_of).transpose()?;
-        Ok(self
-            .publisher()?
-            .send_the_upstream_stream_facts_when_they_changed(upstream_stream_facts)?)
+        self.with_the_publisher(|publisher| {
+            publisher.send_the_upstream_stream_facts_when_they_changed(upstream_stream_facts)
+        })
     }
 }
 
@@ -522,6 +562,24 @@ pub fn add_the_node_classes_to(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_publisher_opened_again_for_its_track_node_takes_it_over_from_the_one_before() {
+        let domain_root = tempfile::Builder::new()
+            .prefix("moq")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let ipc = MoqNodeIpc::open_under_the_domain_root(
+            domain_root.path(),
+            MoqStreamServiceNames::of_the_stream("run", "send-rewired-back"),
+        )
+        .expect("the iceoryx2 node opens");
+        let first = the_publisher_taking_over(ipc.clone(), "telemetry").expect("the first opens");
+        let again =
+            the_publisher_taking_over(ipc, "telemetry").expect("the track node is taken over");
+        assert!(first.lock().unwrap().is_none(), "the one before is closed");
+        assert!(again.lock().unwrap().is_some());
+    }
 
     #[test]
     fn a_settings_message_reads_as_its_json_map() {
