@@ -428,9 +428,6 @@ struct FunctionNodeInAnIsland {
     /// any other input with no value the node hands out nothing, uncalled.
     inputs_that_take_none: Vec<usize>,
     output_values: Vec<FunctionNodeValue>,
-    /// Whether each call's new state is written on the helper's board: only a
-    /// stateful node a helper runs as a standalone node carries its state there.
-    writes_its_state_on_the_board: bool,
 }
 
 /// The values every node of an island last took, and the stream time they were
@@ -673,7 +670,7 @@ fn the_state_a_function_node_starts_from(
 
 /// Feed `input_port` from the island of `function_nodes`, each after what it
 /// reads, evaluated at each read of the port; an island already feeding the
-/// port is replaced, and each stateful node it shares resumes from its state.
+/// port is replaced.
 #[pyfunction]
 #[pyo3(signature = (
     *,

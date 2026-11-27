@@ -25,7 +25,7 @@ use island_edit_refusals::{
     the_refusal_of_a_reactive_reader_fed_only_by_islands,
     the_refusal_of_an_island_fed_into_the_app_process,
 };
-pub(crate) use island_placement::{the_island_feeding_a_link, the_state_fields_of_a_function_node};
+pub(crate) use island_placement::the_island_feeding_a_link;
 
 use std::collections::HashSet;
 
@@ -108,11 +108,37 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     node_id: &NodeRunId,
 ) -> bool {
     graph.traversal().v(node_id).first().is_some_and(|node| {
-        node.node_kind()
-            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+        is_a_function_node_of_its_kind(node)
             && !node.has::<FunctionNodePromotedToItsOwnProcessComponent>()
-            && the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
+            && !is_a_stateful_function_node(graph, node)
     })
+}
+
+/// Whether `node` is a function node whose type carries a state record.
+pub(crate) fn is_a_stateful_function_node(
+    graph: &Graph,
+    node: &crate::core::graph::GraphNode,
+) -> bool {
+    is_a_function_node_of_its_kind(node)
+        && !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
+}
+
+fn is_a_function_node_of_its_kind(node: &crate::core::graph::GraphNode) -> bool {
+    node.node_kind()
+        .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+}
+
+/// The state record fields a function node of `node_type` carries; none for a
+/// stateless one.
+pub(crate) fn the_state_fields_of_a_function_node(
+    graph: &Graph,
+    node_type: &crate::core::descriptors::NodeClassImportPath,
+) -> Vec<String> {
+    graph
+        .node_types_this_stream_resolves()
+        .descriptor(node_type)
+        .map(|descriptor| descriptor.function_node_state_fields)
+        .unwrap_or_default()
 }
 
 /// Whether `node_id` is a `PreviousValue` node, whose input the island reads

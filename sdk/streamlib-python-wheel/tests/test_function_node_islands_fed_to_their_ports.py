@@ -127,18 +127,6 @@ def test_an_island_with_an_input_no_value_reaches_holds_until_a_later_feed_gives
     )
 
 
-def test_a_stateful_node_feeding_two_inputs_of_one_reader_is_refused_by_name():
-    with pytest.raises(FunctionNodeDoesNotCompile, match="stateful function node `lfo-1` feeds both"):
-        feed_each_input_port_from_its_function_node_island(
-            _engine.open_node_link_data_access_for_helper_process(),
-            [
-                an_island_of_lfo_then_remap_feeding("brightness"),
-                an_island_of_lfo_then_remap_feeding("contrast"),
-            ],
-            _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
-        )
-
-
 def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_port():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["weighted"], [])
@@ -335,41 +323,6 @@ def the_value_read_from(data_plane: Any, input_port: str) -> float:
     return struct.unpack("<d", bytes(payload))[0]
 
 
-def test_an_island_fed_again_to_its_port_carries_each_compiled_stateful_nodes_state_on():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["count"], [])
-    fed = feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [an_island_of_the_counter_feeding("count", then_remap_it=False)],
-        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
-    )
-    assert fed.ran_compiled_by_node_id == {"counter-1": True}
-    assert the_value_read_from(data_plane, "count") == 1.0
-    assert the_value_read_from(data_plane, "count") == 2.0
-
-    fed.feed_an_input_port_from_its_island(an_island_of_the_counter_feeding("count", then_remap_it=True))
-
-    assert fed.ran_compiled_by_node_id == {"counter-1": True, "remap-1": True}
-    assert the_value_read_from(data_plane, "count") == 3.0, "the counter resumes, read through remap"
-
-
-def test_an_island_fed_again_keeps_the_body_of_each_node_run_as_python_and_its_state():
-    import_path = f"{__name__}:remember_each_call_by_a_letter"
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["letters"], [])
-    fed = feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [an_island_of_one_node("letters", import_path, None, "letters-1")],
-        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
-    )
-    assert fed.ran_compiled_by_node_id == {"letters-1": False}
-    assert the_value_read_from(data_plane, "letters") == 1.0
-
-    fed.feed_an_input_port_from_its_island(an_island_of_one_node("letters", import_path, None, "letters-1"))
-
-    assert the_value_read_from(data_plane, "letters") == 2.0, "a state of any record carries on"
-
-
 def test_a_port_an_island_stops_feeding_reads_nothing_and_names_no_node():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["count"], [])
@@ -458,25 +411,6 @@ def test_a_port_fed_again_by_an_island_of_another_node_forgets_the_raise_of_the_
     )
 
     assert _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane) == {}
-
-
-def test_a_live_feed_of_a_stateful_node_another_port_reads_is_refused_and_leaves_both_ports_as_they_were():
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["count", "also_count"], [])
-    fed = feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [an_island_of_the_counter_feeding("count", then_remap_it=False)],
-        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
-    )
-
-    with pytest.raises(FunctionNodeDoesNotCompile, match="stateful function node `counter-1` feeds both"):
-        fed.feed_an_input_port_from_its_island(
-            an_island_of_the_counter_feeding("also_count", then_remap_it=False)
-        )
-
-    assert fed.ran_compiled_by_node_id == {"counter-1": True}
-    assert the_value_read_from(data_plane, "count") == 1.0
-    assert data_plane.read_from_input_port("also_count") is None
 
 
 def test_an_unlinked_input_takes_its_pin_value_before_its_default():

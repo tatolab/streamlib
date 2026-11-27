@@ -169,16 +169,3 @@ fn place_a_function_node_after_what_it_reads(
     }));
     Ok(())
 }
-
-/// The state record fields a function node of `node_type` carries; none for a
-/// stateless one.
-pub(crate) fn the_state_fields_of_a_function_node(
-    graph: &Graph,
-    node_type: &crate::core::descriptors::NodeClassImportPath,
-) -> Vec<String> {
-    graph
-        .node_types_this_stream_resolves()
-        .descriptor(node_type)
-        .map(|descriptor| descriptor.function_node_state_fields)
-        .unwrap_or_default()
-}

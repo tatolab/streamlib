@@ -536,6 +536,15 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
         raises["hand_on"].contains("names none of its message inputs"),
         "{raises:?}"
     );
+    assert_eq!(
+        island
+            .evaluation
+            .lock()
+            .function_nodes_each_after_what_it_reads[0]
+            .how_it_is_called
+            .state_values(),
+        [0.0]
+    );
 }
 
 /// An object as the bootstrap builds one to run a body as Python: this one

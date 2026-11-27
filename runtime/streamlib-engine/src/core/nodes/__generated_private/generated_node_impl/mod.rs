@@ -112,7 +112,7 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     function_nodes_by_breadcrumb_number: Vec<FunctionNodeNumberedOnTheBreadcrumb>,
     /// The stateful function node its far side runs as a standalone node,
     /// whose state its board carries; islands call only stateless ones.
-    stateful_function_nodes_its_far_side_calls: Vec<StatefulFunctionNodeItsFarSideCalls>,
+    stateful_function_node_its_far_side_runs: Option<StatefulFunctionNodeItsFarSideCalls>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -187,37 +187,19 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
     }
 
     /// Note that the function node numbered `breadcrumb_number` keeps a state
-    /// of `state_fields`, once.
+    /// of `state_fields`, or keeps none when `state_fields` is empty.
     fn note_a_stateful_function_node(
         &mut self,
         breadcrumb_number: u32,
         function_node_uuid: uuid::Uuid,
         state_fields: Vec<String>,
     ) {
-        if state_fields.is_empty() {
-            self.forget_a_stateful_function_node(breadcrumb_number);
-            return;
-        }
-        let noted_now = StatefulFunctionNodeItsFarSideCalls {
-            breadcrumb_number,
-            function_node_uuid,
-            state_fields,
-        };
-        match self
-            .stateful_function_nodes_its_far_side_calls
-            .iter_mut()
-            .find(|noted| noted.breadcrumb_number == breadcrumb_number)
-        {
-            Some(noted_before) => *noted_before = noted_now,
-            None => self
-                .stateful_function_nodes_its_far_side_calls
-                .push(noted_now),
-        }
-    }
-
-    fn forget_a_stateful_function_node(&mut self, breadcrumb_number: u32) {
-        self.stateful_function_nodes_its_far_side_calls
-            .retain(|noted| noted.breadcrumb_number != breadcrumb_number);
+        self.stateful_function_node_its_far_side_runs =
+            (!state_fields.is_empty()).then_some(StatefulFunctionNodeItsFarSideCalls {
+                breadcrumb_number,
+                function_node_uuid,
+                state_fields,
+            });
     }
 
     fn as_setup_command_ports(&self) -> JsonValue {
@@ -415,7 +397,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     function_node_islands_feeding_its_input_ports: Vec::new(),
                     unlinked_input_values: serde_json::Map::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
-                    stateful_function_nodes_its_far_side_calls: Vec::new(),
+                    stateful_function_node_its_far_side_runs: None,
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -482,7 +464,7 @@ impl OutOfProcessLinkWiringEnvelope {
         let stateful_function_nodes = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
-            .stateful_function_nodes_its_far_side_calls
+            .stateful_function_node_its_far_side_runs
             .clone();
         self.keep_every_function_node_state_its_far_side_wrote();
         let board = iceoryx2_node.create_helper_process_loss_count_board(

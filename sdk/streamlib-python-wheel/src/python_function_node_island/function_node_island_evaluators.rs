@@ -106,6 +106,10 @@ pub(super) type FunctionNodeHandedOverByTheBootstrap = (
     Vec<usize>,
 );
 
+/// An island member starts from its own initial state: no island calls a
+/// stateful node, so none resumes from a state its stream carries.
+const RESUMES_FROM_NO_STATE_ITS_STREAM_CARRIES: bool = false;
+
 impl FunctionNodeIslandEvaluatedInThisHelper {
     pub(super) fn of_the_function_nodes_the_bootstrap_compiled(
         function_nodes: Vec<FunctionNodeHandedOverByTheBootstrap>,
@@ -240,7 +244,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 config_value_indices_set_by_the_inputs_past_its_own,
                 where_each_input_takes_its_value_read.len(),
                 initial_state_values,
-                false,
+                RESUMES_FROM_NO_STATE_ITS_STREAM_CARRIES,
                 output_count,
                 how_it_carries_its_values,
             )?;
@@ -253,7 +257,6 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 output_values: (0..output_count)
                     .map(|_| FunctionNodeValue::Number(0.0))
                     .collect(),
-                writes_its_state_on_the_board: false,
             });
         }
         for function_node in &function_nodes_each_after_what_it_reads {
@@ -329,6 +332,9 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
 pub(crate) struct FunctionNodeEvaluatedAsAStandaloneNode {
     function_node: Mutex<FunctionNodeInAnIsland>,
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
+    /// Whether each call's new state is written on the helper's board, which
+    /// carries an entry for the node exactly when its state is carried.
+    writes_its_state_on_the_board: bool,
 }
 
 #[pymethods]
@@ -379,11 +385,12 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
                 .is_some_and(|board_writer| {
                     board_writer.carries_a_state_entry_for(breadcrumb_number)
                 });
-        let state_resumed_from = link_data_access
-            .the_state_a_function_node_resumes_from(breadcrumb_number)
-            .filter(|resumed| resumed.len() == initial_state_values.len());
-        let resumes_from_the_state_its_stream_carries =
-            state_resumed_from.is_some() && !initial_state_values.is_empty();
+        let state_resumed_from =
+            link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number);
+        let resumes_from_the_state_its_stream_carries = !initial_state_values.is_empty()
+            && state_resumed_from
+                .as_ref()
+                .is_some_and(|resumed| resumed.len() == initial_state_values.len());
         let how_it_is_called = HowAFunctionNodeIsCalled::handed_over_by_the_bootstrap(
             &node_id,
             called_through,
@@ -413,9 +420,9 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
                 output_values: (0..output_count)
                     .map(|_| FunctionNodeValue::Number(0.0))
                     .collect(),
-                writes_its_state_on_the_board,
             }),
             call_breadcrumb_board_writer,
+            writes_its_state_on_the_board,
         })
     }
 
@@ -435,6 +442,7 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
             .collect::<PyResult<Vec<_>>>()?;
         let function_node = &self.function_node;
         let call_breadcrumb_board_writer = self.call_breadcrumb_board_writer.as_deref();
+        let writes_its_state_on_the_board = self.writes_its_state_on_the_board;
         python.detach(|| {
             let mut function_node = function_node.lock();
             let function_node = &mut *function_node;
@@ -458,7 +466,7 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
             )
             .map_err(FunctionNodeCallFailure::into_py_err)?;
             if let Some(board_writer) = call_breadcrumb_board_writer
-                && function_node.writes_its_state_on_the_board
+                && writes_its_state_on_the_board
             {
                 board_writer
                     .write_the_state_of_a_function_node(
