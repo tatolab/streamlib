@@ -14,13 +14,22 @@ __all__ = [
     "H265EncodeSession",
     "H265EncoderThread",
     "VideoCodingSessionRefused",
+    "VideoCodingSessionRefusedForNow",
     "VideoCodingSessionUnanswered",
     "VideoCodingThreadEnded",
+    "VideoCodingThreadNotStarted",
 ]
 
 class VideoCodingSessionRefused(RuntimeError):
     """The codec refused a session: its settings, the device, or the video codec host. The
     sessions already open keep coding."""
+
+class VideoCodingSessionRefusedForNow(VideoCodingSessionRefused):
+    """The GPU lacked something another of its clients may free, such as a video session; a
+    later try may open the session. The sessions already open keep coding."""
+
+class VideoCodingThreadNotStarted(RuntimeError):
+    """The coding thread did not start: a port it is lent was refused, or the thread itself."""
 
 class VideoCodingThreadEnded(RuntimeError):
     """The coding thread has ended, so no session opens on it."""

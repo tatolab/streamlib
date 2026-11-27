@@ -21,6 +21,19 @@ create_exception!(
 );
 create_exception!(
     _native,
+    VideoCodingSessionRefusedForNow,
+    VideoCodingSessionRefused,
+    "The GPU lacked something another of its clients may free, such as a video session; a \
+     later try may open the session. The sessions already open keep coding."
+);
+create_exception!(
+    _native,
+    VideoCodingThreadNotStarted,
+    PyRuntimeError,
+    "The coding thread did not start: a port it is lent was refused, or the thread itself."
+);
+create_exception!(
+    _native,
     VideoCodingThreadEnded,
     PyRuntimeError,
     "The coding thread has ended, so no session opens on it."
@@ -36,6 +49,9 @@ fn raised(not_opened: VideoCodingSessionNotOpened) -> PyErr {
     let words = not_opened.to_string();
     match not_opened {
         VideoCodingSessionNotOpened::Refused(_) => VideoCodingSessionRefused::new_err(words),
+        VideoCodingSessionNotOpened::RefusedForNow(_) => {
+            VideoCodingSessionRefusedForNow::new_err(words)
+        }
         VideoCodingSessionNotOpened::CodingThreadEnded { .. } => {
             VideoCodingThreadEnded::new_err(words)
         }
@@ -80,7 +96,7 @@ impl H264EncoderThread {
             VideoCodecNodeIdentity::H264_ENCODER,
             module_host.clone(),
         )
-        .map_err(PyRuntimeError::new_err)?;
+        .map_err(VideoCodingThreadNotStarted::new_err)?;
         Ok(Self {
             module_host,
             encoding_thread: Some(encoding_thread),
@@ -184,7 +200,7 @@ impl H264DecoderThread {
             VideoCodecNodeIdentity::H264_DECODER,
             module_host.clone(),
         )
-        .map_err(PyRuntimeError::new_err)?;
+        .map_err(VideoCodingThreadNotStarted::new_err)?;
         Ok(Self {
             module_host,
             decoding_thread: Some(decoding_thread),
@@ -246,6 +262,14 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "VideoCodingSessionRefused",
         python.get_type::<VideoCodingSessionRefused>(),
+    )?;
+    module.add(
+        "VideoCodingSessionRefusedForNow",
+        python.get_type::<VideoCodingSessionRefusedForNow>(),
+    )?;
+    module.add(
+        "VideoCodingThreadNotStarted",
+        python.get_type::<VideoCodingThreadNotStarted>(),
     )?;
     module.add(
         "VideoCodingThreadEnded",

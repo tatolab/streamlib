@@ -261,29 +261,26 @@ pub(crate) enum WhepPlayerCommand<Dialer: WhepPlayerSessionDialer> {
     Close { number: u64 },
 }
 
-/// Dial `dialer` where its endpoint is opened, so a refusal is the opening's
-/// to raise and the session already playing keeps playing. With no other
-/// endpoint open a refusal is handed to the thread instead, which redials it
-/// with backoff: a WHEP endpoint refuses until its publisher starts, and a
-/// player brought up first still plays once it does.
+/// Dial `dialer` where its endpoint is opened while another endpoint plays, so a refusal is
+/// the opening's to raise and the endpoint playing keeps playing. With none playing it is handed
+/// to the thread undialled, which dials it and redials it with backoff: a WHEP endpoint refuses
+/// until its publisher starts, a player brought up first still plays once it does, and a node
+/// set up and stopped at once waits on no dial.
 pub(crate) fn open_an_endpoint<Dialer: WhepPlayerSessionDialer>(
     number: u64,
     dialer: Dialer,
-    another_is_open: bool,
+    another_plays: bool,
 ) -> Result<WhepPlayerCommand<Dialer>, WebRtcExtensionError> {
-    match dialer.dial() {
-        Ok(session) => Ok(WhepPlayerCommand::Play {
-            number,
-            dialer,
-            connected: Some(session),
-        }),
-        Err(refusal) if another_is_open => Err(refusal),
-        Err(_) => Ok(WhepPlayerCommand::Play {
-            number,
-            dialer,
-            connected: None,
-        }),
-    }
+    let connected = if another_plays {
+        Some(dialer.dial()?)
+    } else {
+        None
+    };
+    Ok(WhepPlayerCommand::Play {
+        number,
+        dialer,
+        connected,
+    })
 }
 
 /// Whether the player has been asked to stop.
@@ -444,13 +441,14 @@ impl<Dialer: WhepPlayerSessionDialer> Drop for EndpointsOfTheThread<Dialer> {
 }
 
 /// Play the newest endpoint opened through `commands`, redialling it with
-/// backoff whenever its session ends, until `stop_signal` is set; each backoff
-/// is waited out through `wait_for_a_command`, which a newer endpoint cuts
-/// short.
+/// backoff whenever its session ends, until `stop_signal` is set, saying in
+/// `playing` whether that endpoint has a session connected; each backoff is
+/// waited out through `wait_for_a_command`, which a newer endpoint cuts short.
 pub(crate) fn play_until_stopped<Dialer: WhepPlayerSessionDialer>(
     commands: &Receiver<WhepPlayerCommand<Dialer>>,
     output_ports: &dyn WhepPlayerOutputPorts,
     stop_signal: &WhepPlayerStopSignal,
+    playing: &AtomicBool,
     wait_for_a_command: &mut dyn FnMut(Duration) -> Option<WhepPlayerCommand<Dialer>>,
 ) {
     let mut stated = WhatThePlayerStated::default();
@@ -459,6 +457,13 @@ pub(crate) fn play_until_stopped<Dialer: WhepPlayerSessionDialer>(
     };
     while !stop_signal.is_set() {
         endpoints.take_the_commands(commands, output_ports);
+        playing.store(
+            endpoints
+                .endpoints
+                .last()
+                .is_some_and(|newest| newest.session.is_some()),
+            Ordering::Release,
+        );
         let Some(newest) = endpoints.endpoints.last_mut() else {
             if let Some(command) = wait_for_a_command(PLAYER_POLL_TIMEOUT) {
                 endpoints.take(command, output_ports);

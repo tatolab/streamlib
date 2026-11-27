@@ -15,22 +15,36 @@ from typing import final
 # pyo3 builds this from what the module registers, so the stub has to carry it
 # too or stubtest reports the module as under-described.
 __all__ = [
+    "WhepPeerConnectionFailed",
     "WhepPlayerSession",
     "WhepPlayerThread",
     "WhepPlayerThreadEnded",
     "WhepSessionNotOpened",
+    "WhepSignallingFailed",
+    "WhipPeerConnectionFailed",
     "WhipSession",
     "WhipSessionNotOpened",
+    "WhipSignallingFailed",
     "monotonic_now_ns",
 ]
 
 class WhipSessionNotOpened(RuntimeError):
-    """The WHIP endpoint refused a session, or the signalling or peer connection failed; the
-    session already publishing keeps publishing."""
+    """A WHIP session did not open; the session already publishing keeps publishing."""
+
+class WhipSignallingFailed(WhipSessionNotOpened):
+    """The WHIP endpoint refused the offer or did not answer it."""
+
+class WhipPeerConnectionFailed(WhipSessionNotOpened):
+    """The WHIP endpoint answered, and the peer connection to it did not come up."""
 
 class WhepSessionNotOpened(RuntimeError):
-    """The WHEP endpoint refused a session, or the signalling or peer connection failed; the
-    endpoint already playing keeps playing."""
+    """A WHEP session did not open; the endpoint already playing keeps playing."""
+
+class WhepSignallingFailed(WhepSessionNotOpened):
+    """The WHEP endpoint refused the offer or did not answer it."""
+
+class WhepPeerConnectionFailed(WhepSessionNotOpened):
+    """The WHEP endpoint answered, and the peer connection to it did not come up."""
 
 class WhepPlayerThreadEnded(RuntimeError):
     """The WHEP player's reading thread has ended, so no session opens on it."""
@@ -107,10 +121,11 @@ class WhepPlayerThread:
     def open_session(
         self, endpoint_url: str, bearer_token: str | None = None
     ) -> WhepPlayerSession:
-        """Dial `endpoint_url` and play it from then on, in place of the endpoint playing.
+        """Play `endpoint_url` from then on, in place of the endpoint playing.
 
-        A refusal raises `WhepSessionNotOpened` and the endpoint playing keeps playing; with
-        none open, the thread redials it with backoff instead.
+        While another endpoint plays it is dialled here, and a failure raises a
+        `WhepSessionNotOpened` of its kind while the one playing keeps playing. With none
+        playing, the thread dials it, and redials it with backoff.
         """
 
 @final

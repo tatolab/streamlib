@@ -19,7 +19,8 @@ from importlib.metadata import distribution
 import pytest
 
 from helper_process_link_wiring import wire_one_link
-from tatolab.h264 import H264Decoder, H264Encoder
+from tatolab.h264 import H264Decoder, H264Encoder, VideoCodingSessionRefused
+from tatolab.h264 import _native
 from tatolab.h264.nodes import (
     ENCODED_VIDEO_OUTPUT_PORT,
     VIDEO_INPUT_PORT,
@@ -330,3 +331,95 @@ def test_a_decoder_never_set_up_stops_and_tears_down_cleanly(decoder_wired):
     context = decoder_wired.decoder_context
     decoder.stop(context)
     decoder.teardown(context)
+
+
+#: A bitrate `EncoderThreadStandIn` refuses a session at, as the codec refuses a setting.
+A_BITRATE_THE_CODEC_REFUSES = 1
+
+
+class EncodeSessionStandIn:
+    def __init__(self, settings: "dict[str, object]") -> None:
+        self.settings = settings
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class EncoderThreadStandIn:
+    """A `_native.H264EncoderThread` stand-in keeping each session a build asked for."""
+
+    started: "list[EncoderThreadStandIn]" = []
+
+    def __init__(self, module_host_table: object) -> None:
+        del module_host_table
+        self.asked_for: "list[dict[str, object]]" = []
+        self.opened: "list[EncodeSessionStandIn]" = []
+        EncoderThreadStandIn.started.append(self)
+
+    def open_session(self, **settings: object) -> EncodeSessionStandIn:
+        self.asked_for.append(settings)
+        if settings["bitrate_bps"] == A_BITRATE_THE_CODEC_REFUSES:
+            raise VideoCodingSessionRefused("H264Encoder: the codec refused the bitrate")
+        session = EncodeSessionStandIn(settings)
+        self.opened.append(session)
+        return session
+
+
+def wait_until(condition: "Callable[[], bool]", what: str, timeout_s: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not condition():
+        assert time.monotonic() < deadline, f"never: {what}"
+        time.sleep(0.005)
+
+
+@pytest.fixture
+def encoder_thread_stand_in(monkeypatch) -> "type[EncoderThreadStandIn]":
+    EncoderThreadStandIn.started = []
+    monkeypatch.setattr(_native, "H264EncoderThread", EncoderThreadStandIn)
+    return EncoderThreadStandIn
+
+
+def test_a_bitrate_set_live_opens_a_session_of_it_on_the_running_thread_with_no_rebuild(
+    encoder_wired, encoder_thread_stand_in
+):
+    """Mental-revert: read `bitrate_bps` at setup again, and the new value reaches no session
+    until the node is stopped and built again."""
+    encoder = an_encoder(bitrate_bps=2_000_000)
+    context = encoder_wired.encoder_context
+    encoder.setup(context)
+    try:
+        (thread,) = encoder_thread_stand_in.started
+        wait_until(lambda: len(thread.opened) == 1, "the first session opened")
+
+        encoder.write_inputs({"bitrate_bps": 6_000_000})
+        wait_until(lambda: thread.opened[0].closed, "the first session closed once replaced")
+
+        assert len(encoder_thread_stand_in.started) == 1, "the thread is never started again"
+        assert [session.settings["bitrate_bps"] for session in thread.opened] == [
+            2_000_000,
+            6_000_000,
+        ]
+        assert not thread.opened[1].closed
+    finally:
+        stopped_as_its_helper_stops_it(encoder, context)
+
+
+def test_a_bitrate_the_codec_refuses_leaves_the_session_coding_open(
+    encoder_wired, encoder_thread_stand_in
+):
+    encoder = an_encoder(bitrate_bps=2_000_000)
+    context = encoder_wired.encoder_context
+    encoder.setup(context)
+    try:
+        (thread,) = encoder_thread_stand_in.started
+        wait_until(lambda: len(thread.opened) == 1, "the first session opened")
+
+        encoder.write_inputs({"bitrate_bps": A_BITRATE_THE_CODEC_REFUSES})
+        wait_until(lambda: len(thread.asked_for) == 2, "the refused session was asked for")
+        time.sleep(0.05)
+
+        (coding,) = thread.opened
+        assert not coding.closed, "the refused build keeps the last value it built"
+    finally:
+        stopped_as_its_helper_stops_it(encoder, context)

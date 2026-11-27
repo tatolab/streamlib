@@ -160,8 +160,10 @@ def H264Encoder(
     each frame into an NV12 IOSurface for it, and refuses `effort_level`.
 
     Every input is live: a new value, a bitrate say, opens a session of it
-    beside the one encoding, off the frame thread, with no stop and no rebuild
-    of the node, and the next frame is encoded with it as a keyframe. A session
+    beside the one encoding, with no stop and no rebuild of the node, and the
+    next frame is encoded with it as a keyframe. The session opens on the
+    coding thread, which owns the device, so frames wait on `video` while it
+    opens and are encoded once it has. A session
     the codec refuses raises `VideoCodingSessionRefused` on the node, and the
     one before keeps encoding; while no session is open, every frame is
     discarded with no exception reaching Python.

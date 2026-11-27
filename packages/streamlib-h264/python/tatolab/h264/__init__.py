@@ -9,7 +9,22 @@ below are the binding. Nothing here links the engine — the wheel depends on
 any other Python node.
 """
 
+from ._native import VideoCodingSessionRefused as VideoCodingSessionRefused
+from ._native import VideoCodingSessionRefusedForNow as VideoCodingSessionRefusedForNow
+from ._native import VideoCodingSessionUnanswered as VideoCodingSessionUnanswered
+from ._native import VideoCodingThreadEnded as VideoCodingThreadEnded
+from ._native import VideoCodingThreadNotStarted as VideoCodingThreadNotStarted
+from .nodes import DecodedPictureBufferBoundSetAlone as DecodedPictureBufferBoundSetAlone
 from .nodes import H264Decoder as H264Decoder
 from .nodes import H264Encoder as H264Encoder
 
-__all__ = ["H264Decoder", "H264Encoder"]
+__all__ = [
+    "DecodedPictureBufferBoundSetAlone",
+    "H264Decoder",
+    "H264Encoder",
+    "VideoCodingSessionRefused",
+    "VideoCodingSessionRefusedForNow",
+    "VideoCodingSessionUnanswered",
+    "VideoCodingThreadEnded",
+    "VideoCodingThreadNotStarted",
+]

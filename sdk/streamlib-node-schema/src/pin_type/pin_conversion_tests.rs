@@ -75,6 +75,7 @@ fn a_conversion_is_its_one_wired_input_and_its_one_output_beside_any_settings() 
 fn a_value_input(name: &str) -> PortDescriptor {
     PortDescriptor {
         pin_default: Some(serde_json::json!(4_000_000)),
+        input_mode: Some(NodeInputMode::WireOrValue),
         ..a_typed_port(name, PinType::Float { exact_size: None })
     }
 }
@@ -198,4 +199,30 @@ fn a_conversion_whose_wired_pin_takes_no_wire_is_refused() {
         refusal.contains("its output `node` is a Node reference, which takes no wire"),
         "{refusal}"
     );
+}
+
+#[test]
+fn a_value_input_defaulting_to_no_value_is_still_not_what_a_conversion_converts() {
+    // `H264Encoder`'s `bitrate_bps: Input[int | None] = Input(None)`, as the engine reads it.
+    let bitrate_bps: PortDescriptor = serde_json::from_value(serde_json::json!({
+        "name": "bitrate_bps",
+        "description": "",
+        "required": false,
+        "pin_default": null,
+        "input_mode": {"mode": "wire_or_value"},
+    }))
+    .unwrap();
+    assert_eq!(bitrate_bps.pin_default, Some(serde_json::Value::Null));
+    let descriptor = a_node_type(
+        vec![bitrate_bps, a_typed_port("tensor", tensor())],
+        vec![a_typed_port("texture", texture())],
+    )
+    .stating_a_conversion();
+
+    let conversion = descriptor
+        .pin_conversion()
+        .expect("a conversion beside a value input")
+        .expect("stated");
+
+    assert_eq!(conversion.input_port_name, "tensor");
 }

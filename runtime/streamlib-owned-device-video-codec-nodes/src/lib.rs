@@ -442,10 +442,14 @@ fn encode_until_stopped(
     };
     let mut sessions = VideoCodingSessionsOfTheThread::default();
     let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<_>| {
-        sessions.take_the_commands(commands, |settings, _| {
-            open_the_encoder(node, module_host, settings)
-                .map_err(VideoCodingSessionNotOpened::Refused)
-        });
+        sessions.take_the_commands(
+            commands,
+            |_| true,
+            |settings, _| {
+                open_the_encoder(node, module_host, settings)
+                    .map_err(VideoCodingSessionNotOpened::Refused)
+            },
+        );
     };
     let mut its_producer_was_refused = false;
     let mut frames_refused: u64 = 0;
@@ -552,24 +556,27 @@ struct VideoDecodeSession {
 }
 
 impl VideoDecodeSession {
-    /// Open a session of `settings` at `now`. Refused for now as the node's only session, it is
-    /// opened again once a retry interval after each refusal, as a decoder brought up before
-    /// the GPU frees what it lacks needs; refused beside another, it is refused, and the other
-    /// keeps decoding.
+    /// Open a session of `settings` at `now`. Refused for now with no other session decoding,
+    /// it is opened again a retry interval after each refusal, as a decoder brought up before
+    /// the GPU frees what it needs; refused beside another that decodes, it is refused, and the
+    /// other keeps decoding.
     fn open(
         node: VideoCodecNodeIdentity,
         module_host: &ModuleHost,
         settings: VideoDecoderSettings,
-        another_is_open: bool,
+        another_decodes: bool,
         now: Instant,
     ) -> Result<Self, VideoCodingSessionNotOpened> {
         let opening = match open_the_decoder(node, module_host, settings) {
             Ok(decoder) => VideoDecoderOpening::opened(node.node_type_name, decoder),
-            Err(VideoCodecRefusal::ForNow(refusal)) if !another_is_open => {
+            Err(VideoCodecRefusal::ForNow(refusal)) if !another_decodes => {
                 VideoDecoderOpening::refused_for_now_at(node.node_type_name, now, &refusal)
             }
-            Err(refusal) => {
-                return Err(VideoCodingSessionNotOpened::Refused(refusal.into_message()));
+            Err(VideoCodecRefusal::ForNow(refusal)) => {
+                return Err(VideoCodingSessionNotOpened::RefusedForNow(refusal));
+            }
+            Err(VideoCodecRefusal::ForGood(refusal)) => {
+                return Err(VideoCodingSessionNotOpened::Refused(refusal));
             }
         };
         Ok(Self { settings, opening })
@@ -611,11 +618,20 @@ fn decode_until_stopped(
     let node_type_name = node.node_type_name;
     let mut sessions = VideoCodingSessionsOfTheThread::default();
     let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<VideoDecodeSession>| {
-        sessions.take_the_commands(commands, |settings, another_is_open| {
-            VideoDecodeSession::open(node, module_host, settings, another_is_open, Instant::now())
-        });
+        sessions.take_the_commands(
+            commands,
+            |session| session.opening.opened_decoder().is_some(),
+            |settings, another_decodes| {
+                VideoDecodeSession::open(
+                    node,
+                    module_host,
+                    settings,
+                    another_decodes,
+                    Instant::now(),
+                )
+            },
+        );
     };
-    let mut decoding_with = None;
     let mut media_frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
         take_the_commands(&mut sessions);
@@ -636,11 +652,11 @@ fn decode_until_stopped(
             };
             take_the_commands(&mut sessions);
             let now = Instant::now();
-            let Some(session) = sessions.the_session_decoding_a_media_frame(
-                &mut decoding_with,
-                media_frame.starts_group(),
-                |session| session.decoder_at(node, module_host, now).is_some(),
-            ) else {
+            let Some(session) = sessions
+                .the_session_decoding_a_media_frame(media_frame.starts_group(), |session| {
+                    session.decoder_at(node, module_host, now).is_some()
+                })
+            else {
                 continue;
             };
             let Some(decoder) = session.decoder_at(node, module_host, now) else {

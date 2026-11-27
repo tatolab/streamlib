@@ -200,12 +200,21 @@ class WhipSessionPublishing:
         self._media_frames_published = 0
         self._media_frames_discarded_awaiting_a_group_start = 0
 
-    def set_up(self, tracks: PublishedTracks, *, replacing_a_connected_session: bool = False) -> None:
-        """Make the session against the links feeding `tracks`, which are wired before the node
-        is set up, so the track count is known before a message has arrived and before anything
-        is offered. Replacing a connected session, it connects here when it can, so that a
-        refusal leaves the connected one publishing."""
-        self._inbound_links = tracks.inbound_link_names()
+    def set_up(
+        self,
+        inbound_links: "list[str]",
+        *,
+        tracks_of_a_connected_session: "Mapping[str, PublishedTrack] | None" = None,
+    ) -> None:
+        """Make the session against the links feeding the `tracks` pin, which are wired before
+        the node is set up, so the track count is known before a message has arrived and before
+        anything is offered.
+
+        Given the tracks a connected session it replaces publishes, it connects here when they
+        name every link, so that a refusal raises `WhipSessionNotOpened` here and the connected
+        one keeps publishing; each link still enters the new session at its next group start.
+        """
+        self._inbound_links = list(inbound_links)
         if not self._inbound_links:
             raise ValueError(
                 "WhipPublisher: nothing is connected to `tracks`, so there is "
@@ -222,25 +231,23 @@ class WhipSessionPublishing:
         self._inbound_links_awaiting_a_group_start = set(self._inbound_links)
 
         self._session = _native.WhipSession(self._url, self._bearer_token)
-        if replacing_a_connected_session:
-            self._connect_now_if_every_track_is_known(tracks)
-
-    def _connect_now_if_every_track_is_known(self, tracks: PublishedTracks) -> None:
-        """Connect while being set up when every link's upstream already states its stream
-        facts, as it does while a session is publishing: a refusal then raises
-        `WhipSessionNotOpened` here, and the session publishing keeps publishing. Each link still
-        enters the new session at its next group start."""
-        if any(
-            tracks.upstream_stream_facts(inbound_link=inbound_link) is None
-            for inbound_link in self._inbound_links
+        if tracks_of_a_connected_session is not None and all(
+            inbound_link in tracks_of_a_connected_session for inbound_link in self._inbound_links
         ):
-            return
-        published = [self._track_of(tracks, inbound_link) for inbound_link in self._inbound_links]
-        for inbound_link, track in zip(self._inbound_links, published):
-            if track.kind == "audio":
-                refuse_audio_rtp_cannot_carry(track.channels, inbound_link)
-        audio = next((track for track in published if track.kind == "audio"), None)
-        self._connect(audio or published[0], when="as the session is set up")
+            self._track_by_inbound_link = {
+                inbound_link: tracks_of_a_connected_session[inbound_link]
+                for inbound_link in self._inbound_links
+            }
+            published = list(self._track_by_inbound_link.values())
+            audio = next((track for track in published if track.kind == "audio"), None)
+            self._connect(audio or published[0], when="as the session is set up")
+
+    @property
+    def tracks_published(self) -> "Mapping[str, PublishedTrack] | None":
+        """The track each link publishes as, once the session has connected."""
+        if self._session is None or not self._session.is_connected:
+            return None
+        return dict(self._track_by_inbound_link)
 
     def publish_the_next_message(self, tracks: PublishedTracks) -> None:
         """Send the next message `tracks` holds, if any, on its link's track."""
@@ -270,10 +277,6 @@ class WhipSessionPublishing:
                 f"refused: {refused_unit}"
             ) from refused_unit
         self._report_progress()
-
-    @property
-    def is_connected(self) -> bool:
-        return self._session is not None and self._session.is_connected
 
     def close(self) -> None:
         """Close the session, and say how much it published."""
@@ -419,6 +422,8 @@ def WhipPublisher(
     zero.
     """
 
+    # Read once, as the node is set up: the links are wired before it is.
+    inbound_links = tracks.inbound_link_names()
     last_built: "WhipSessionPublishing | None" = None
 
     def publishing_at_the_endpoint() -> WhipSessionPublishing:
@@ -429,10 +434,13 @@ def WhipPublisher(
         try:
             # The first session connects on its first media frame, and so does one replacing a
             # session that never connected: only a connected session has frames to keep
-            # publishing while its replacement is refused.
+            # publishing while its replacement is refused, and its tracks are what the new one
+            # offers, read off it rather than off the pin the frames read.
             publishing.set_up(
-                tracks,
-                replacing_a_connected_session=last_built is not None and last_built.is_connected,
+                inbound_links,
+                tracks_of_a_connected_session=(
+                    None if last_built is None else last_built.tracks_published
+                ),
             )
         except BaseException:
             publishing.close()
@@ -494,12 +502,12 @@ def WhepPlayer(
     pre-skip of 0 because RTP states no encoder lookahead, so a decoder trims
     nothing.
 
-    `url` and `bearer_token` are live. A new value dials its endpoint off the frame thread
-    while the old one keeps playing, and the reading thread moves to it once it has connected;
-    an endpoint that refuses raises `WhepSessionNotOpened` on the node, and the old one keeps
-    playing. The first endpoint is the exception: a WHEP endpoint refuses until its publisher
-    starts, so the thread redials it with backoff instead, and a player brought up before its
-    publisher plays once the publisher does.
+    `url` and `bearer_token` are live. While an endpoint plays, a new value dials its endpoint
+    off the frame thread, and the reading thread moves to it once it has connected; one that
+    fails raises a `WhepSessionNotOpened` of its kind on the node, and the old one keeps
+    playing. While none plays, as for the first endpoint, the reading thread dials it and
+    redials it with backoff instead: a WHEP endpoint refuses until its publisher starts, so a
+    player brought up before its publisher plays once the publisher does.
     """
     del encoded_video, encoded_audio
     # Both outputs go to a reading thread of this wheel's Rust, which writes every frame with no

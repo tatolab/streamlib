@@ -4,6 +4,7 @@
 use super::PinType;
 use crate::NodeClassImportPath;
 use crate::descriptors::{NodeDescriptor, PortDescriptor};
+use crate::pin_type::NodeInputMode;
 
 /// A node type's statement that it converts its one wired input's type into its output's.
 #[derive(Debug, Clone, PartialEq)]
@@ -201,8 +202,13 @@ impl NodeDescriptor {
             .collect();
         // Beside other inputs, a value input, which holds a value of its own until a wire
         // carries one, is read by the node's builds, and is not what the conversion converts.
-        if wired_inputs.len() > 1 {
-            wired_inputs.retain(|input| input.pin_default.is_none());
+        // `tatolab.stream`'s declaration-time rule is the same.
+        if wired_inputs.len() > 1
+            && wired_inputs
+                .iter()
+                .any(|input| input.input_mode != Some(NodeInputMode::WireOrValue))
+        {
+            wired_inputs.retain(|input| input.input_mode != Some(NodeInputMode::WireOrValue));
         }
         let ([wired_input], [output]) = (wired_inputs.as_slice(), self.outputs.as_slice()) else {
             return refused(format!(

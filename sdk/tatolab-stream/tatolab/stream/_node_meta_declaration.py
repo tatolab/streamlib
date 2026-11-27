@@ -87,6 +87,11 @@ def read_node_meta(
     return declared
 
 
+def _takes_a_wire_or_a_value(port: "dict[str, Any]") -> bool:
+    input_mode = port.get("input_mode")
+    return isinstance(input_mode, dict) and input_mode.get("mode") == "wire_or_value"
+
+
 def the_conversion_a_node_states(
     node: str,
     declared_meta: NodeMeta,
@@ -106,7 +111,8 @@ def the_conversion_a_node_states(
     reads, and has exactly one input that takes a wire and exactly one output, each stating
     exactly one pin type a wire carries; every other input is a setting, or a value input of a
     node written as one function (`a_node_function`), and it declares no pin group, whose slots
-    add ports.
+    add ports. A class node's field is not one: it is marked `SettingOnly()` instead, the form
+    the class nodes still written keep until they are functions.
     """
     if not declared_meta.get("conversion", False):
         return False
@@ -128,9 +134,12 @@ def the_conversion_a_node_states(
         )
     wired_inputs = [port for port in input_ports if _takes_a_wire(port)]
     if a_node_function and len(wired_inputs) > 1:
-        # A value input of a node written as one function, which holds a value of its own until
-        # a wire carries one, is read by its builds, and is not what the conversion converts.
-        wired_inputs = [port for port in wired_inputs if "pin_default" not in port] or wired_inputs
+        # Beside other inputs, a value input, which holds a value of its own until a wire
+        # carries one, is read by the node's builds, and is not what the conversion converts;
+        # the engine's rule (`streamlib-node-schema`'s `pin_conversion`) reads it so too.
+        wired_inputs = [
+            port for port in wired_inputs if not _takes_a_wire_or_a_value(port)
+        ] or wired_inputs
     if not wired_inputs:
         _refuse_the_shape(node, "no input that takes a wire", "give it the one input it converts")
     if len(wired_inputs) > 1:

@@ -263,7 +263,7 @@ def test_a_publisher_sets_up_against_the_links_a_session_can_carry(
     wired = a_publisher_wired_to(
         request, publishers_to_stop, numbered_encoder_output_ports(inbound_links), AN_ENDPOINT
     )
-    WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks)
+    WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks.inbound_link_names())
 
 
 def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
@@ -275,7 +275,7 @@ def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
         request, publishers_to_stop, numbered_encoder_output_ports(0), AN_ENDPOINT
     )
     with pytest.raises(ValueError, match="nothing is connected"):
-        WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks)
+        WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks.inbound_link_names())
 
 
 def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(
@@ -285,7 +285,7 @@ def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(
         request, publishers_to_stop, numbered_encoder_output_ports(3), AN_ENDPOINT
     )
     with pytest.raises(ValueError, match="3 links feed"):
-        WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks)
+        WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks.inbound_link_names())
 
 
 @pytest.mark.parametrize("node_function", [WhipPublisher, WhepPlayer])
@@ -606,7 +606,7 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
         ],
     )
     publishing = WhipSessionPublishing(AN_ENDPOINT["url"], None)
-    publishing.set_up(tracks)
+    publishing.set_up(tracks.inbound_link_names())
 
     for _ in range(6):
         publishing.publish_the_next_message(tracks)
@@ -718,11 +718,11 @@ def test_a_player_never_set_up_stops_and_tears_down_cleanly(player_wired_to_both
     player.teardown(context)
 
 
-def test_an_endpoint_refused_beside_an_open_one_raises_its_own_kind_and_the_first_plays_on(
+def test_an_endpoint_opened_while_none_plays_goes_to_the_thread_with_no_dial_in_its_build(
     player_wired_to_both_decoders,
 ):
-    """The first endpoint is redialled by the thread, since a WHEP endpoint refuses until its
-    publisher starts; one opened beside it is the opening's to refuse."""
+    """A WHEP endpoint refuses until its publisher starts, so with none playing the thread dials
+    and redials the newest endpoint, and its opening neither waits on a dial nor raises."""
     context = player_wired_to_both_decoders.player_context
     reading_thread = _native.WhepPlayerThread(
         context.open_module_host_table(
@@ -730,14 +730,23 @@ def test_an_endpoint_refused_beside_an_open_one_raises_its_own_kind_and_the_firs
         )
     )
     try:
+        opened_at = time.monotonic()
         first = reading_thread.open_session(AN_UNANSWERING_WHEP_ENDPOINT)
-        with pytest.raises(_native.WhepSessionNotOpened, match="the one playing keeps playing"):
-            reading_thread.open_session("https://second.example.invalid/whep")
+        second = reading_thread.open_session("https://second.example.invalid/whep")
+        assert time.monotonic() - opened_at < 0.5
         first.close()
         first.close()
+        second.close()
     finally:
         _engine.note_stop_request_from_parent_on_runtime_context(context, True)
         del reading_thread
+
+
+def test_each_way_a_session_does_not_open_is_its_own_kind():
+    assert issubclass(_native.WhepSignallingFailed, _native.WhepSessionNotOpened)
+    assert issubclass(_native.WhepPeerConnectionFailed, _native.WhepSessionNotOpened)
+    assert issubclass(_native.WhipSignallingFailed, _native.WhipSessionNotOpened)
+    assert issubclass(_native.WhipPeerConnectionFailed, _native.WhipSessionNotOpened)
 
 
 def test_the_distribution_declares_both_nodes_for_the_node_catalog():

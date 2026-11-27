@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
 use super::*;
@@ -200,10 +201,16 @@ fn play_one_endpoint<Dialer: WhepPlayerSessionDialer>(
             connected: None,
         })
         .unwrap();
-    play_until_stopped(&received, output_ports, stop_signal, &mut |delay| {
-        wait_out_the_backoff(delay);
-        None
-    });
+    play_until_stopped(
+        &received,
+        output_ports,
+        stop_signal,
+        &AtomicBool::new(false),
+        &mut |delay| {
+            wait_out_the_backoff(delay);
+            None
+        },
+    );
 }
 
 #[test]
@@ -715,9 +722,13 @@ fn an_endpoint_opened_beside_the_playing_one_takes_over_and_the_older_session_cl
         .unwrap();
     let output_ports = RecordedOutputPorts::default();
 
-    play_until_stopped(&received, &output_ports, &stop_signal, &mut |_| {
-        panic!("a connected endpoint waits out no backoff")
-    });
+    play_until_stopped(
+        &received,
+        &output_ports,
+        &stop_signal,
+        &AtomicBool::new(false),
+        &mut |_| panic!("a connected endpoint waits out no backoff"),
+    );
 
     assert_eq!(the_written_timestamps(&output_ports), [1_000, 3_000]);
     assert_eq!(
@@ -784,7 +795,13 @@ fn closing_the_newest_endpoint_returns_the_player_to_the_one_before_it() {
         .unwrap();
     let output_ports = RecordedOutputPorts::default();
 
-    play_until_stopped(&received, &output_ports, &stop_signal, &mut |_| None);
+    play_until_stopped(
+        &received,
+        &output_ports,
+        &stop_signal,
+        &AtomicBool::new(false),
+        &mut |_| None,
+    );
 
     assert_eq!(the_written_timestamps(&output_ports), [1_000, 3_000, 5_000]);
     assert_eq!(*older_dials.borrow(), 1);
@@ -813,10 +830,16 @@ fn an_endpoint_opened_during_a_backoff_is_played_without_waiting_it_out() {
     let mut waited = Vec::new();
     let output_ports = RecordedOutputPorts::default();
 
-    play_until_stopped(&received, &output_ports, &stop_signal, &mut |delay| {
-        waited.push(delay);
-        opened_during_the_backoff.take()
-    });
+    play_until_stopped(
+        &received,
+        &output_ports,
+        &stop_signal,
+        &AtomicBool::new(false),
+        &mut |delay| {
+            waited.push(delay);
+            opened_during_the_backoff.take()
+        },
+    );
 
     assert_eq!(waited, [FIRST_RECONNECT_DELAY]);
     assert_eq!(the_written_timestamps(&output_ports), [1_000]);
@@ -836,12 +859,12 @@ fn an_endpoint_refused_beside_a_playing_one_is_the_openings_to_raise() {
 }
 
 #[test]
-fn the_first_endpoint_refused_is_handed_to_the_thread_to_redial() {
-    let handed_over = open_an_endpoint(
-        1,
-        RefCell::new(EndpointOfScriptedSessions::refusing_every_dial()),
-        false,
-    );
+fn an_endpoint_opened_with_none_playing_is_handed_to_the_thread_undialled() {
+    // Mental-revert: dial it in the opening, and a node set up and stopped at once waits on the
+    // dial, and a refusal from an endpoint whose publisher has not started fails the node.
+    let endpoint = EndpointOfScriptedSessions::refusing_every_dial();
+    let dials = Rc::clone(&endpoint.dials);
+    let handed_over = open_an_endpoint(1, RefCell::new(endpoint), false);
     assert!(matches!(
         handed_over,
         Ok(WhepPlayerCommand::Play {
@@ -850,10 +873,11 @@ fn the_first_endpoint_refused_is_handed_to_the_thread_to_redial() {
             ..
         })
     ));
+    assert_eq!(*dials.borrow(), 0);
 }
 
 #[test]
-fn an_endpoint_that_connects_is_handed_to_the_thread_connected() {
+fn an_endpoint_that_connects_beside_a_playing_one_is_handed_to_the_thread_connected() {
     let (session, _) = ScriptedSession::replaying(Vec::new(), OnceItsMessagesRunOut::Send(None));
     let handed_over = open_an_endpoint(
         2,
@@ -868,4 +892,32 @@ fn an_endpoint_that_connects_is_handed_to_the_thread_connected() {
             ..
         })
     ));
+}
+
+#[test]
+fn the_thread_says_whether_the_endpoint_it_plays_has_a_session_connected() {
+    let stop_signal = a_stop_signal();
+    let playing = AtomicBool::new(false);
+    let (commands, received) = mpsc::channel();
+    let (session, _) = ScriptedSession::replaying(
+        vec![access_unit(true, 1_000, 320)],
+        OnceItsMessagesRunOut::SetTheStop(Rc::clone(&stop_signal)),
+    );
+    commands
+        .send(play(
+            1,
+            EndpointOfScriptedSessions::refusing_every_dial(),
+            Some(session),
+        ))
+        .unwrap();
+
+    play_until_stopped(
+        &received,
+        &RecordedOutputPorts::default(),
+        &stop_signal,
+        &playing,
+        &mut |_| None,
+    );
+
+    assert!(playing.load(std::sync::atomic::Ordering::Acquire));
 }
