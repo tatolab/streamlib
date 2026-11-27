@@ -4,19 +4,17 @@
 //! Built-in `TensorToTexture`: one `[h, w, 4]` attribute of each Array frame as
 //! one Image frame.
 
-use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
-    NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+    NativeNodeOutputPixelBufferFrame, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
 use streamlib::sdk::descriptors::{PinConversionOutputPicked, PinType, TexturePixelFormat};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, DataChannelPayloadDescriptor,
     DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody, ImageFrameH273Colour,
-    array_frame_attribute_table_of,
+    InputMailboxes, OutputWriter, array_frame_attribute_table_of,
 };
-use streamlib::sdk::nodes::ReactiveNode;
+use streamlib::sdk::nodes::{Input, computed};
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
 use super::messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
@@ -27,51 +25,38 @@ use super::texture_to_tensor::{
 const ARRAY_INPUT_PORT: &str = "array";
 const IMAGE_OUTPUT_PORT: &str = "image";
 
-/// The settings [`TensorToTexture`] reads at setup.
-#[streamlib::sdk::node_settings]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TensorToTextureSettings {
-    #[description = "The attribute of each Array frame read as the image."]
-    pub attribute: String,
-    #[description = "The texture format each Image frame states, by its wire name."]
-    #[options(
-        "rgba8_unorm",
-        "rgba8_unorm_srgb",
-        "bgra8_unorm",
-        "bgra8_unorm_srgb",
-        "rgba16_float",
-        "rgba32_float"
-    )]
-    pub format: String,
-}
-
-fn default_image_attribute_name() -> String {
-    TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME.to_string()
-}
-
 fn default_image_format_wire_name() -> String {
     TextureFormat::Rgba8Unorm.wire_name().to_string()
-}
-
-impl Default for TensorToTextureSettings {
-    fn default() -> Self {
-        Self {
-            attribute: default_image_attribute_name(),
-            format: default_image_format_wire_name(),
-        }
-    }
 }
 
 #[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
-    settings = crate::pin_type_conversion::tensor_to_texture::TensorToTextureSettings,
     input(
         "array",
         description = "The Array frames whose `attribute` is converted",
         delivery_profile = "newest",
         pin_type = Tensor
+    ),
+    input(
+        "attribute",
+        description = "The attribute of each Array frame read as the image.",
+        value = String,
+        default = TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME
+    ),
+    input(
+        "format",
+        description = "The texture format each Image frame states, by its wire name.",
+        value = String,
+        default = TextureFormat::Rgba8Unorm.wire_name(),
+        options = [
+            "rgba8_unorm",
+            "rgba8_unorm_srgb",
+            "bgra8_unorm",
+            "bgra8_unorm_srgb",
+            "rgba16_float",
+            "rgba32_float"
+        ]
     ),
     output(
         "image",
@@ -102,40 +87,26 @@ impl Default for TensorToTextureSettings {
                    attribute, or whose attribute is of another dtype or another shape, is \
                    refused and writes nothing. Each Image frame states no colour."
 )]
-pub struct TensorToTexture {
-    output_pixel_buffer_pool: Option<NodeOutputPixelBufferPoolOfOneNativeNode>,
-}
-
-impl TensorToTexture::Node {
-    /// The texture format each Image frame states: the one its settings name.
-    pub fn image_format_it_writes(&self) -> Result<TextureFormat> {
-        image_format_of_the_settings(&self.settings)
-    }
-}
-
-impl ReactiveNode for TensorToTexture::Node {
-    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.image_format_it_writes()?;
-        let node_run_id_of_this_node = ctx
-            .node_run_id()
-            .unwrap_or_else(|| "TensorToTexture".to_string());
-        self.output_pixel_buffer_pool = Some(
-            ctx.gpu_full_access()
-                .create_node_output_pixel_buffer_pool_for_a_native_node(&node_run_id_of_this_node),
-        );
-        Ok(())
-    }
-
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let image_format = self.image_format_it_writes()?;
-        let Some(output_pixel_buffer_pool) = self.output_pixel_buffer_pool.as_mut() else {
-            return Err(Error::Runtime(
-                "TensorToTexture: process ran before setup".to_string(),
-            ));
-        };
-        while let Some(message) = self.inputs.read_raw(ARRAY_INPUT_PORT)? {
+pub fn tensor_to_texture(
+    attribute: Input<String>,
+    format: Input<String>,
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+    ctx: &RuntimeContextFullAccess<'_>,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    let image_format = computed(move || image_format_named(&format.get()));
+    let node_run_id_of_this_node = ctx
+        .node_run_id()
+        .unwrap_or_else(|| "TensorToTexture".to_string());
+    let mut output_pixel_buffer_pool = ctx
+        .gpu_full_access()
+        .create_node_output_pixel_buffer_pool_for_a_native_node(&node_run_id_of_this_node);
+    move |_ctx| {
+        let image_format = *image_format.get();
+        let attribute = attribute.get();
+        while let Some(message) = inputs.read_raw(ARRAY_INPUT_PORT)? {
             match image_frame_of_the_array_frame(
-                &self.settings.attribute,
+                &attribute,
                 image_format,
                 message.payload_descriptor,
                 message.payload.bytes(),
@@ -147,7 +118,7 @@ impl ReactiveNode for TensorToTexture::Node {
                     )
                 },
             ) {
-                Ok(payload_descriptor) => self.outputs.write_bytes_described_by(
+                Ok(payload_descriptor) => outputs.write_bytes_described_by(
                     IMAGE_OUTPUT_PORT,
                     &[],
                     message.timestamp_ns,
@@ -194,7 +165,7 @@ pub fn the_format_picked_for_the_input(input: &PinType) -> Option<PinConversionO
     })
 }
 
-/// The Texture a `TensorToTexture` holding `held` writes: one of the `format` it holds, or of the
+/// The Texture a `TensorToTexture` holding the input values `held` writes: one of the `format` it holds, or of the
 /// default `format` when it holds none; `None` when it holds a `format` no one `[h, w, c]`
 /// tensor holds.
 pub fn the_texture_written_under_the_settings(
@@ -218,16 +189,15 @@ fn the_texture_of_the_format(format: &str) -> PinType {
     }
 }
 
-/// The texture format `settings.format` names, refused unless one `[h, w, c]`
-/// tensor holds it.
-pub fn image_format_of_the_settings(settings: &TensorToTextureSettings) -> Result<TextureFormat> {
-    TextureFormat::from_wire_name(&settings.format)
+/// The texture format `format` names by its wire name, refused unless one `[h, w, c]` tensor
+/// holds it.
+pub fn image_format_named(format: &str) -> Result<TextureFormat> {
+    TextureFormat::from_wire_name(format)
         .filter(|format| tensor_element_and_channels_of_one_pixel(*format).is_some())
         .ok_or_else(|| {
             Error::Configuration(format!(
-                "TensorToTexture: `format` is {:?}; it is one of rgba8_unorm, rgba8_unorm_srgb, \
-                 bgra8_unorm, bgra8_unorm_srgb, rgba16_float and rgba32_float",
-                settings.format
+                "TensorToTexture: `format` is {format:?}; it is one of rgba8_unorm, \
+                 rgba8_unorm_srgb, bgra8_unorm, bgra8_unorm_srgb, rgba16_float and rgba32_float"
             ))
         })
 }

@@ -9,8 +9,8 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     ArrayFrameAttributeResidency, ArrayFrameAttributeRow, ArrayFrameDescriptorBody,
     DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody,
+    InputMailboxes, OutputWriter,
 };
-use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::rhi::TextureFormat;
 
 use super::messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
@@ -61,13 +61,14 @@ pub const TEXTURE_TO_TENSOR_IMAGE_ATTRIBUTE_NAME: &str = "image";
                    frame, so a producer that has recycled the slot by then makes the read a \
                    counted loss, never another frame's pixels."
 )]
-pub struct TextureToTensor;
-
-impl ReactiveNode for TextureToTensor::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(message) = self.inputs.read_raw(IMAGE_INPUT_PORT)? {
+pub fn texture_to_tensor(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw(IMAGE_INPUT_PORT)? {
             match array_frame_of_the_image_frame(message.payload_descriptor) {
-                Ok((payload_descriptor, payload)) => self.outputs.write_bytes_described_by(
+                Ok((payload_descriptor, payload)) => outputs.write_bytes_described_by(
                     ARRAY_OUTPUT_PORT,
                     &payload,
                     message.timestamp_ns,

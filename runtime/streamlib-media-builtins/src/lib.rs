@@ -20,10 +20,9 @@ pub mod pin_type_conversion;
 pub mod video_frame;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
-pub use bundle_members::{BreakBundle, BundleTypeSettings, MakeBundle};
+pub use bundle_members::{BreakBundle, MakeBundle};
 pub use pin_type_conversion::{
-    AudioToTensor, TensorToAudio, TensorToAudioSettings, TensorToTexture, TensorToTextureSettings,
-    TextureToTensor,
+    AudioToTensor, TensorToAudio, TensorToAudioInputs, TensorToTexture, TextureToTensor,
 };
 pub use video_frame::VideoFrame;
 

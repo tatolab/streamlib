@@ -19,7 +19,8 @@ fn refusal_of(descriptor: Value) -> String {
 }
 
 /// A built-in taking no config whose every port states one pin type, as the runtime describes
-/// it: a Stream input, two settings read at setup, a Menu among them, and an output.
+/// it: a Stream input, two inputs taking no wire, one read at setup and a Menu read each run,
+/// and an output.
 fn texture_tinter_descriptor_with_settings() -> Value {
     json!({
         "type": "tatolab.stream:TextureTinter",
@@ -44,7 +45,7 @@ fn texture_tinter_descriptor_with_settings() -> Value {
                 "required": false, "delivery_profile": null,
                 "pin_type": {"kind": "is", "pin_type": {"type": "menu", "option_names": ["warm", "cool"]}},
                 "flow": "value",
-                "input_mode": {"mode": "setting_only", "read": "at_setup"},
+                "input_mode": {"mode": "setting_only", "read": "each_run"},
                 "default_value": "warm"
             }
         ],
