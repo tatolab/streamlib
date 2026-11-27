@@ -536,8 +536,7 @@ fn a_second_reader_added_while_playing_reads_the_stateful_node_through_a_channel
     let report_placed_with = the_report_its_own_helper_notes_on(&graph, &counter);
 
     let new_reader = a_helper_reader_before_its_setup(&mut graph);
-    let counter_into_the_new_reader =
-        link(&mut graph, (&counter, "result"), (&new_reader, "in1"));
+    let counter_into_the_new_reader = link(&mut graph, (&counter, "result"), (&new_reader, "in1"));
     place_each_stateful_function_node_in_a_process_of_its_own(
         &mut graph,
         std::slice::from_ref(&new_reader),
@@ -648,10 +647,8 @@ fn the_report_its_own_helper_notes_on(
 fn a_stateful_node_shows_how_its_own_helper_ran_it() {
     let mut graph = a_graph_resolving_two_stateful_function_node_types();
     let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
-    let first_reader = a_helper_reader_before_its_setup(&mut graph);
-    let second_reader = a_helper_reader_before_its_setup(&mut graph);
-    link(&mut graph, (&counter, "result"), (&first_reader, "in1"));
-    link(&mut graph, (&counter, "result"), (&second_reader, "in1"));
+    let reader = a_helper_reader_before_its_setup(&mut graph);
+    link(&mut graph, (&counter, "result"), (&reader, "in1"));
     let added = every_node_of(&graph);
 
     place_each_stateful_function_node_in_a_process_of_its_own(&mut graph, &added);

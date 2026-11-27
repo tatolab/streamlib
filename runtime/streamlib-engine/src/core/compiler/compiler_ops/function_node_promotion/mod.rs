@@ -40,7 +40,7 @@ pub(crate) fn place_each_stateful_function_node_in_a_process_of_its_own(
     graph: &mut Graph,
     nodes_to_add: &[NodeRunId],
 ) {
-    let mut stateful_function_nodes_added: Vec<NodeRunId> = nodes_to_add
+    let stateful_function_nodes_added: Vec<NodeRunId> = nodes_to_add
         .iter()
         .filter(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))
         .filter(|node_id| {
@@ -50,7 +50,6 @@ pub(crate) fn place_each_stateful_function_node_in_a_process_of_its_own(
         })
         .cloned()
         .collect();
-    stateful_function_nodes_added.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     for stateful_function_node in stateful_function_nodes_added {
         mark_a_function_node_promoted_to_its_own_process(
             graph,
