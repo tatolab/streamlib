@@ -522,8 +522,9 @@ impl Drop for SubprocessBridge {
         // because an acquire landing after the drain would strand its cache
         // entry. A request the escalate worker is already executing can still
         // slip through; closing that too would mean joining the worker, which
-        // this path deliberately never blocks on. A build already executing
-        // releases its own kernel once it sees the helper given up on.
+        // this path deliberately never blocks on. A build already executing on
+        // the kernel build worker releases its own kernel once it sees the helper
+        // given up on; the native escalate worker answers builds inline and does not.
         self.parent_side.shut_the_socket_down();
         if let Some(native_escalate_socket) = &self.native_escalate_socket_for_shutting_down {
             let _ = native_escalate_socket.shutdown(std::net::Shutdown::Both);

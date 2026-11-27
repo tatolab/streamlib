@@ -122,6 +122,7 @@ class RebuildsAKernelSizedByItsWidth:
             return {
                 "frames": len(seconds),
                 "median": statistics.median(seconds),
+                "p90": statistics.quantiles(seconds, n=10)[-1] if len(seconds) > 1 else seconds[0],
                 "max": max(seconds),
             }
 

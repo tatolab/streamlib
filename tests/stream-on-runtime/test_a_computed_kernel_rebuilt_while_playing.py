@@ -120,10 +120,17 @@ def test_a_computed_kernel_is_rebuilt_for_each_width_set_while_playing_and_each_
     )
     while_a_build_ran = dispatch_seconds["while_a_build_ran"]
     while_no_build_ran = dispatch_seconds["while_no_build_ran"]
-    assert (
-        while_a_build_ran["frames"] >= FRAMES_OVERLAPPING_A_BUILD_THE_MEASURE_NEEDS
-    ), f"too few frames overlapped a build to measure them: {dispatch_seconds}"
-    assert while_a_build_ran["max"] <= while_no_build_ran["max"], (
-        "a frame whose dispatches overlap a kernel build takes longer than any frame with no "
+    assert while_no_build_ran["frames"] > 0, (
+        f"no frame ran with no build in flight to measure against: {dispatch_seconds}"
+    )
+    assert while_a_build_ran["frames"] >= FRAMES_OVERLAPPING_A_BUILD_THE_MEASURE_NEEDS, (
+        f"too few frames overlapped a build to measure them: {dispatch_seconds}"
+    )
+    # The 90th percentile rather than the single slowest: a hundred-odd overlapping frames
+    # against over a thousand with no build would put the one slowest frame among the
+    # overlapping ones by chance alone. A dispatch that waited out a compile is slow in nearly
+    # every overlapping frame, far past this bound.
+    assert while_a_build_ran["p90"] <= while_no_build_ran["max"], (
+        "frames whose dispatches overlap a kernel build take longer than any frame with no "
         f"build in flight: {dispatch_seconds}"
     )
