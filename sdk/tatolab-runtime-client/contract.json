@@ -18504,7 +18504,7 @@
           {
             "type": "string",
             "const": "each_run",
-            "description": "Each run, with no rebuild and no wire. Runtime-owned nodes only."
+            "description": "Each run, with no rebuild and no wire: an input of a runtime-owned node, or a value\ninput of a node written as one function."
           }
         ],
         "description": "When a node reads a setting."
