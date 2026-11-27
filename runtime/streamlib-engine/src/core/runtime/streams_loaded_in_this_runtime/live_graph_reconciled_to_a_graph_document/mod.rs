@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
-use streamlib_project_repository::STREAM_DOCUMENT_ASSET_KEY;
+use streamlib_project_repository::{STREAM_DOCUMENT_ASSET_KEY, StreamDocumentsAnEditStaged};
 use uuid::Uuid;
 
 use crate::core::compiler::compiler_ops::function_node_island::{
@@ -171,17 +171,21 @@ impl LoadedStreamInThisRuntime {
     /// both its ends travel as one kind of message, and is set aside, not made, when the engine
     /// cannot wire it; so is a link the stream held set aside before, and a link the live graph
     /// keeps that the engine cannot wire once the reconcile made its links. A kept node left to
-    /// rebuild is handed its values, or left to its rebuild, as `left_to_rebuild` says.
+    /// rebuild is handed its values, or left to its rebuild, as `left_to_rebuild` says. Each
+    /// stream fragment placing a stream `stream_documents_an_edit_staged` holds places it as the
+    /// edit staged it rather than as its document is on disk.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
         left_to_rebuild: KeptNodesLeftToRebuild,
+        stream_documents_an_edit_staged: &StreamDocumentsAnEditStaged,
     ) -> Result<()> {
         self.in_one_commit(self.reconcile_the_live_graph_within_the_graph_edits_held(
             graph_document,
             links_it_makes,
             left_to_rebuild,
+            stream_documents_an_edit_staged,
         ))
         .await
     }
@@ -201,6 +205,7 @@ impl LoadedStreamInThisRuntime {
                     graph_document,
                     links_it_makes,
                     left_to_rebuild,
+                    &StreamDocumentsAnEditStaged::default(),
                 )
                 .await
         })
@@ -213,6 +218,7 @@ impl LoadedStreamInThisRuntime {
         mut graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
         left_to_rebuild: KeptNodesLeftToRebuild,
+        stream_documents_an_edit_staged: &StreamDocumentsAnEditStaged,
     ) -> Result<()> {
         if let Value::Object(document) = &mut graph_document {
             let stream_asset = self.stream_location().stream_asset;
@@ -223,6 +229,7 @@ impl LoadedStreamInThisRuntime {
         let graph_document = streamlib_project_repository::graph_document_as_its_project_reads_it(
             self.project_directory(),
             &graph_document,
+            stream_documents_an_edit_staged,
         )
         .map_err(Error::GraphError)?;
         let graph_whose_every_node_holds_a_uuid =

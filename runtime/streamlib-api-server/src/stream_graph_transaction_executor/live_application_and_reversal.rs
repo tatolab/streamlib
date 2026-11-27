@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use super::placements_reconciled_in_the_batch::PlacementsReconciledInTheirBatches;
 use super::*;
 use streamlib::sdk::runtime::{GraphEditBatch, HowFarARefusedBatchWasTakenBack};
 
@@ -193,6 +194,8 @@ impl StreamGraphTransactionExecutor<'_> {
         let project = project_repository.project_file().project;
         let stream_id_of_each_stream_asset =
             self.the_stream_id_of_each_loaded_stream_asset(project);
+        let staged_graph_of_each_stream_asset =
+            the_stream_documents_with_the_reversal_applied(&project_repository, &reversal)?;
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
@@ -221,10 +224,75 @@ impl StreamGraphTransactionExecutor<'_> {
                 _ => None,
             })
             .collect();
-        for (stream_id, stream_asset) in stream_assets_a_batch_opens_on {
+        let mut stream_ids_a_batch_opens_on: Vec<String> = stream_assets_a_batch_opens_on
+            .keys()
+            .map(|stream_id| (*stream_id).clone())
+            .collect();
+        // Each loaded stream the reversal edits, whether its edits reach it now or once the
+        // documents hold them.
+        let stream_ids_named: Vec<String> = staged_graph_of_each_stream_asset
+            .keys()
+            .filter_map(|stream_asset| stream_id_of_each_stream_asset.get(stream_asset))
+            .cloned()
+            .collect();
+        // A change the reversal makes as a whole file, an import's or a stream document's, is
+        // staged by no batch, so the streams placing what it changes are brought to it once it
+        // is recorded.
+        let changes_a_whole_file = reversal.operations.iter().any(|operation| {
+            matches!(
+                operation,
+                ProjectOperation::Import(_) | ProjectOperation::StreamDocument(_)
+            )
+        });
+        // A reversal also holds a batch open on each loaded stream it reaches through a
+        // placement, so each is brought to what it places within it, and refuses it whole.
+        let mut placements_not_named: BTreeMap<String, LoadedStreamHoldingAStreamFragment> = self
+            .the_placements_an_edit_can_reach(
+                self.the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(
+                    project_repository.project_directory(),
+                ),
+                &stream_ids_a_batch_opens_on,
+                staged_graph_of_each_stream_asset.keys().copied(),
+                &project_repository,
+            )
+            .into_iter()
+            .map(|placement| (placement.stream_id.clone(), placement))
+            .collect();
+        stream_ids_a_batch_opens_on.extend(placements_not_named.keys().cloned());
+        stream_ids_a_batch_opens_on.sort();
+        for stream_id in &stream_ids_a_batch_opens_on {
+            if let Some(placement) = placements_not_named.remove(stream_id) {
+                let staged_graph = match staged_graph_of_each_stream_asset
+                    .get(&placement.stream_location.stream_asset)
+                    .filter(|_| placement.stream_location.project == project)
+                {
+                    Some(staged_graph) => staged_graph.clone(),
+                    None => self
+                        .the_graph_document_of_a_loaded_stream_as_it_stands(
+                            Some(&project_repository),
+                            &placement.stream_location,
+                            placement.stream_operations.as_ref(),
+                        )
+                        .map_err(|refused| refused.refusal)?,
+                };
+                streams.insert(
+                    stream_id.clone(),
+                    StreamATransactionEdits::new(
+                        placement.stream_operations,
+                        placement.stream_location,
+                        staged_graph,
+                    )?,
+                );
+                continue;
+            }
+            let stream_asset = stream_assets_a_batch_opens_on[stream_id];
             let stream_operations = self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)?;
+            let staged_graph = match staged_graph_of_each_stream_asset.get(&stream_asset) {
+                Some(staged_graph) => staged_graph.clone(),
+                None => project_repository.stream_graph_document(stream_asset)?,
+            };
             streams.insert(
                 stream_id.clone(),
                 StreamATransactionEdits::new(
@@ -234,7 +302,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         project,
                         stream_asset,
                     },
-                    StreamGraphDocument::from_value(Value::Object(Map::new()))?,
+                    staged_graph,
                 )?,
             );
         }
@@ -283,10 +351,34 @@ impl StreamGraphTransactionExecutor<'_> {
                 }
             }
         }
+        let mut placements_reconciled = PlacementsReconciledInTheirBatches::default();
+        if let Err(refused) = self.reconcile_each_placement_in_its_batch(
+            &streams,
+            &stream_ids_named,
+            &staged_graph_of_each_stream_asset,
+            &project_repository,
+            &mut placements_reconciled,
+        ) {
+            take_back_the_graph_edits_of_each_stream(&mut streams);
+            self.put_back_what_the_refused_transaction_ran(
+                &streams,
+                applied_live,
+                placements_reconciled,
+            );
+            return Err(refused.refusal);
+        }
+        // A named stream brought to its graph as staged in its batch has taken each edit of its
+        // own the documents would have handed it once they hold it.
+        made_live_once_the_documents_hold_them
+            .retain(|(stream_id, _)| !placements_reconciled.holds_a_named_stream(stream_id));
         if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut streams).and_then(|()| {
             self.rebuild_each_node_a_setting_read_at_setup_changed(&streams, &mut Vec::new())
         }) {
-            self.reverse_what_was_applied_live(&streams, applied_live);
+            self.put_back_what_the_refused_transaction_ran(
+                &streams,
+                applied_live,
+                placements_reconciled,
+            );
             return Err(refusal);
         }
         match project_repository.apply_project_operations(
@@ -318,16 +410,27 @@ impl StreamGraphTransactionExecutor<'_> {
                         applied.transaction.transaction
                     )
                 })?;
-                self.reconcile_each_loaded_stream_holding_a_stream_fragment(
-                    &edited_project_directory,
-                );
+                if changes_a_whole_file {
+                    self.reconcile_each_loaded_stream_holding_a_stream_fragment(
+                        &edited_project_directory,
+                    );
+                } else {
+                    self.operations_on_the_loaded_streams
+                        .bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+                            &edited_project_directory,
+                        );
+                }
                 Ok(project_transaction_on_the_wire(
                     applied,
                     &undo_state_of_each_transaction,
                 ))
             }
             Err(refusal) => {
-                self.reverse_what_was_applied_live(&streams, applied_live);
+                self.put_back_what_the_refused_transaction_ran(
+                    &streams,
+                    applied_live,
+                    placements_reconciled,
+                );
                 Err(refusal.into())
             }
         }
@@ -633,4 +736,34 @@ pub(super) fn close_the_graph_edits_of_each_stream(
         Some(refusal) => Err(GraphRequestRefusal::from(refusal)),
         None => Ok(()),
     }
+}
+
+/// The graph document of each stream asset `reversal` edits, as the project `project_repository`
+/// holds it with each of the reversal's graph edits of it applied; a stream whose document does
+/// not read yet, one the reversal makes, is left out.
+fn the_stream_documents_with_the_reversal_applied(
+    project_repository: &ProjectRepository,
+    reversal: &ProjectTransactionReversal,
+) -> Result<BTreeMap<Uuid, StreamGraphDocument>, GraphRequestRefusal> {
+    let mut staged: BTreeMap<Uuid, StreamGraphDocument> = BTreeMap::new();
+    for operation in &reversal.operations {
+        let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+            stream,
+            graph_operation,
+        }) = operation
+        else {
+            continue;
+        };
+        let document = match staged.entry(*stream) {
+            std::collections::btree_map::Entry::Occupied(held) => held.into_mut(),
+            std::collections::btree_map::Entry::Vacant(vacant) => {
+                match project_repository.stream_graph_document(*stream) {
+                    Ok(document) => vacant.insert(document),
+                    Err(_) => continue,
+                }
+            }
+        };
+        document.apply(graph_operation)?;
+    }
+    Ok(staged)
 }

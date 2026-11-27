@@ -70,6 +70,7 @@ mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
 mod pin_group_gaps_closed;
+mod placements_reconciled_in_the_batch;
 use live_application_and_reversal::{StreamATransactionEdits, the_open_batch_of};
 mod ports_of_the_node_a_refusal_names;
 mod request_application;
@@ -583,7 +584,10 @@ impl StreamGraphTransactionExecutor<'_> {
             let edited_project_directory =
                 project_repository_held.project_directory().to_path_buf();
             drop(project_repository_held);
-            self.reconcile_each_loaded_stream_holding_a_stream_fragment(&edited_project_directory);
+            self.operations_on_the_loaded_streams
+                .bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+                    &edited_project_directory,
+                );
         }
         Ok(applied)
     }
@@ -597,38 +601,17 @@ impl StreamGraphTransactionExecutor<'_> {
         &self,
         edited_project_directory: &std::path::Path,
     ) {
-        let loaded_streams_the_edit_can_reach = self
-            .operations_on_the_loaded_streams
-            .list_streams()
-            .into_iter()
-            .filter(|listing| listing.node_count.is_some())
-            .filter_map(|listing| {
-                let stream_location = listing.stream_location?;
-                edited_project_directory
-                    .starts_with(&stream_location.project_directory)
-                    .then_some((stream_location.stream_asset, listing.stream_id))
-            });
-        for (stream_asset, stream_id) in loaded_streams_the_edit_can_reach {
-            let stream_operations = match self
-                .operations_on_the_loaded_streams
-                .runtime_operations_of_the_stream_a_call_names(&stream_id)
-            {
-                Ok(stream_operations) => stream_operations,
-                Err(_) => continue,
-            };
-            let holds_a_stream_fragment = self
-                .async_runtime
-                .block_on(stream_operations.to_json_async())
-                .is_ok_and(|graph| graph_document_holds_a_stream_fragment(&graph));
-            if !holds_a_stream_fragment {
-                continue;
-            }
+        for loaded_stream in self
+            .the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(edited_project_directory)
+        {
             if let Err(refusal) = self.async_runtime.block_on(
-                stream_operations.reconcile_each_stream_fragment_to_the_stream_it_references_live(),
+                loaded_stream
+                    .stream_operations
+                    .reconcile_each_stream_fragment_to_the_stream_it_references_live(),
             ) {
                 tracing::warn!(
-                    stream = %stream_id,
-                    %stream_asset,
+                    stream = %loaded_stream.stream_id,
+                    stream_asset = %loaded_stream.stream_location.stream_asset,
                     %refusal,
                     "a loaded stream's fragments were not brought to the streams they reference; \
                      its live graph is kept as it was until its next load"
@@ -639,6 +622,42 @@ impl StreamGraphTransactionExecutor<'_> {
             .bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
                 edited_project_directory,
             );
+    }
+
+    /// Each loaded stream, of the project at `edited_project_directory` or of a project
+    /// enclosing it as an import, whose live graph holds a stream fragment: each an edit of the
+    /// project's streams can reach through a placement.
+    pub(super) fn the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(
+        &self,
+        edited_project_directory: &std::path::Path,
+    ) -> Vec<LoadedStreamHoldingAStreamFragment> {
+        self.operations_on_the_loaded_streams
+            .list_streams()
+            .into_iter()
+            .filter(|listing| listing.node_count.is_some())
+            .filter_map(|listing| {
+                let stream_location = listing.stream_location?;
+                if !edited_project_directory.starts_with(&stream_location.project_directory) {
+                    return None;
+                }
+                let stream_operations = self
+                    .operations_on_the_loaded_streams
+                    .runtime_operations_of_the_stream_a_call_names(&listing.stream_id)
+                    .ok()?;
+                let live_graph = self
+                    .async_runtime
+                    .block_on(stream_operations.to_json_async())
+                    .ok()?;
+                graph_document_holds_a_stream_fragment(&live_graph).then_some(
+                    LoadedStreamHoldingAStreamFragment {
+                        stream_id: listing.stream_id,
+                        stream_location,
+                        stream_operations,
+                        live_graph,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// The project of the first of `stream_ids` that is a loaded stream of a project.
@@ -862,6 +881,14 @@ fn the_fragment_an_imported_stream_places(
     let fragment =
         the_fragment_a_stream_fragment_places(project_directory, fragment_node, held_stream)?;
     Ok((fragment, stream_name))
+}
+
+/// A loaded stream whose live graph holds a stream fragment, beside that live graph.
+pub(super) struct LoadedStreamHoldingAStreamFragment {
+    pub(super) stream_id: String,
+    pub(super) stream_location: StreamLocation,
+    pub(super) stream_operations: Arc<dyn RuntimeOperations>,
+    pub(super) live_graph: Value,
 }
 
 #[cfg(test)]

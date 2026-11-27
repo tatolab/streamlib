@@ -88,6 +88,7 @@ fn reconcile(stream: &LoadedStreamInThisRuntime, graph_document: Value) -> Resul
             graph_document,
             LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
             KeptNodesLeftToRebuild::HandedTheirValuesLive,
+            &StreamDocumentsAnEditStaged::default(),
         ))
 }
 
@@ -212,6 +213,7 @@ fn reconcile_making(
             graph_document,
             links_it_makes,
             KeptNodesLeftToRebuild::HandedTheirValuesLive,
+            &StreamDocumentsAnEditStaged::default(),
         ))
 }
 

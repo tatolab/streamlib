@@ -261,6 +261,7 @@ fn a_stream_placing_a_view_by_its_projects_name_reads_as_placing_it_by_its_proje
             "Acme DJ v1.2:mixer",
             "tatolab.testpattern:TestPatternSource",
         ]),
+        &crate::StreamDocumentsAnEditStaged::default(),
     )
     .unwrap();
 
@@ -517,6 +518,7 @@ fn a_stream_placing_a_view_by_its_folder_reads_as_placing_it_by_the_views_uuid()
             &meter,
             "tatolab.testpattern:TestPatternSource",
         ]),
+        &crate::StreamDocumentsAnEditStaged::default(),
     )
     .unwrap();
 
@@ -551,6 +553,7 @@ fn a_stream_placing_a_view_by_its_folder_reads_when_an_import_it_does_not_place_
     let read = crate::graph_document_as_its_project_reads_it(
         &project_directory,
         &a_stream_placing(&["Acme DJ:deck"]),
+        &crate::StreamDocumentsAnEditStaged::default(),
     )
     .unwrap();
 

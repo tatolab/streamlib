@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use streamlib_project_repository::{
     ProjectOperation, ProjectRepository, ProjectStreamDocumentOperation, ProjectTransactionAuthor,
-    ProjectTransactionLineage, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphOperation, StreamGraphOperationOnAStream,
-    graph_document_as_its_project_reads_it,
+    ProjectTransactionLineage, StreamDocumentsAnEditStaged, StreamGraphDocumentLink,
+    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphOperation,
+    StreamGraphOperationOnAStream, graph_document_as_its_project_reads_it,
 };
 use uuid::Uuid;
 
@@ -127,7 +127,11 @@ impl ProjectPlacingTitleInMain {
     }
 
     fn main_as_it_runs(&self) -> Result<Value, String> {
-        graph_document_as_its_project_reads_it(&self.project_directory(), &self.main_on_disk())
+        graph_document_as_its_project_reads_it(
+            &self.project_directory(),
+            &self.main_on_disk(),
+            &StreamDocumentsAnEditStaged::default(),
+        )
     }
 
     fn apply(&mut self, operations: Vec<ProjectOperation>) {
@@ -580,7 +584,12 @@ fn a_link_inside_a_placed_stream_onto_a_stream_it_places_runs_by_its_port_name()
         "links": [a_link(CAMERA, "video", PLACING_NODE, outer_in)]
     });
 
-    let read = graph_document_as_its_project_reads_it(&project.project_directory(), &main).unwrap();
+    let read = graph_document_as_its_project_reads_it(
+        &project.project_directory(),
+        &main,
+        &StreamDocumentsAnEditStaged::default(),
+    )
+    .unwrap();
 
     assert_eq!(
         the_links_of(&read),
@@ -662,5 +671,52 @@ fn a_link_naming_the_placing_node_by_its_name_is_saved_naming_its_port_by_uuid()
     assert_eq!(
         the_links_of(&project.main_as_the_repository_reads_it()),
         vec![a_link("camera", "video", "title", "clip_in")]
+    );
+}
+
+/// A stream an edit has staged, not yet written, is placed as staged: `main` reads `title` with
+/// the port its staged `GraphInput` declares, while its document on disk still declares the
+/// earlier one, and a read with nothing staged places it from disk.
+///
+/// Mental-revert: reading each placed stream from disk alone names the link onto `title` by the
+/// port its document on disk declares.
+#[test]
+fn a_stream_an_edit_staged_is_placed_as_staged_rather_than_as_its_document_on_disk() {
+    let project = ProjectPlacingTitleInMain::new(
+        "video_in",
+        json!([a_link(CAMERA, "video", PLACING_NODE, VIDEO_IN)]),
+    );
+    let mut title_staged: Value = serde_json::from_slice(
+        &std::fs::read(
+            project
+                .project_directory()
+                .join("streams/title_card.graph.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    title_staged["nodes"][0]["input_values"]["port"] = json!("clip_in");
+    let mut staged = StreamDocumentsAnEditStaged::default();
+    staged.stage(
+        project.repository.project_file().project,
+        uuid(TITLE),
+        "title_card".to_owned(),
+        title_staged,
+    );
+
+    let read_as_staged = graph_document_as_its_project_reads_it(
+        &project.project_directory(),
+        &project.main_on_disk(),
+        &staged,
+    )
+    .unwrap();
+
+    assert_eq!(
+        the_links_of(&read_as_staged),
+        vec![a_link(CAMERA, "video", PLACING_NODE, "clip_in")]
+    );
+    assert_eq!(
+        the_links_of(&project.main_as_it_runs().unwrap()),
+        vec![a_link(CAMERA, "video", PLACING_NODE, "video_in")]
     );
 }
