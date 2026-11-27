@@ -12,7 +12,7 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
     OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, StreamClock,
 };
-use crate::core::graph::NodeRunId;
+use crate::core::graph::{BuildsOfItsComputedValues, NodeRunId};
 use crate::core::logging::ProjectLogRouteEntry;
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::runtime::{
@@ -409,7 +409,7 @@ impl RuntimeContext {
     /// from `builds` whenever its health is.
     pub(crate) fn report_the_builds_of_the_computed_values_from(
         &self,
-        builds: streamlib_scope::BuildsOfAScope,
+        builds: BuildsOfItsComputedValues,
     ) {
         if let Some(node_state) = &self.node_state {
             node_state.read_the_builds_of_its_computed_values_from(builds);

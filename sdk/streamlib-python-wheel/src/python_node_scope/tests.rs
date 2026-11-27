@@ -613,3 +613,30 @@ assert builds == [(1, 1), (2, 3)], builds
 "#,
     );
 }
+
+/// Mental-revert: word `why` as `BuildFailure` displays it, and a panic reaches the parent as
+/// "it panicked: …", which its diagnostic words again as "panicked: it panicked: …".
+#[test]
+fn a_panicked_build_says_why_in_the_panics_own_words() {
+    use streamlib_scope::{BuildFailure, LastBuild};
+
+    use super::PythonLastBuildOfANodeScopeComputedValue;
+
+    for (failure, kind) in [
+        (
+            BuildFailure::Panicked("the device is gone".to_owned()),
+            "panicked",
+        ),
+        (
+            BuildFailure::ComparisonPanicked("the device is gone".to_owned()),
+            "comparison_panicked",
+        ),
+    ] {
+        let last_build = PythonLastBuildOfANodeScopeComputedValue::from(LastBuild::Failed {
+            builds: 1,
+            why: failure,
+        });
+        assert_eq!(last_build.failure, Some(kind));
+        assert_eq!(last_build.why.as_deref(), Some("the device is gone"));
+    }
+}

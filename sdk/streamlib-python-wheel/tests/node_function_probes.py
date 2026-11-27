@@ -76,11 +76,21 @@ class PublishingOfALevel:
         WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.append(("closed", self.level))
 
 
+class LevelNegative(ValueError):
+    """The publishing probe was given a level below 0."""
+
+
 @node(execution="manual")
 def LevelPublishingProbe(*, level: Input[float] = Input(0.25)) -> None:
     """Paces itself: opens a publishing of its level, which publishes on its own, and returns no
-    per-frame function."""
-    computed(lambda: PublishingOfALevel(level.get()))
+    per-frame function. A level below 0 raises, by its own kind."""
+
+    def publish_the_level() -> PublishingOfALevel:
+        if level.get() < 0:
+            raise LevelNegative(f"the level is {level.get()}, below 0")
+        return PublishingOfALevel(level.get())
+
+    computed(publish_the_level)
 
 
 @node(execution="manual")
