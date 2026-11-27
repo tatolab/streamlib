@@ -406,7 +406,8 @@ class NodeDeclarationDecorator:
         types be listed from source without running them.
 
         `conversion=True` states that the node converts the pin type of its one input that
-        takes a wire into that of its one output; every other input is `SettingOnly()`. Its
+        takes a wire into that of its one output; every other input is `SettingOnly()`, or a
+        value input of a node written as one function. Its
         pins say what it bridges. A link only it bridges is refused naming it, with the call
         that places it, and `connect` never places it itself. Only bare `@node` and
         `@node.shader` declare one, and any other shape is refused at decoration as a
@@ -428,6 +429,7 @@ class NodeDeclarationDecorator:
                         input_ports=getattr(node_under_declaration, NODE_DECLARATION_INPUT_PORTS_STAMP),
                         output_ports=getattr(node_under_declaration, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
                         pin_groups=getattr(node_under_declaration, NODE_DECLARATION_PIN_GROUPS_STAMP, []),
+                        a_node_function=isinstance(node_under_declaration, NodeFunction),
                     )
                 for meta_key, stamped_value in stamped.items():
                     setattr(
@@ -594,6 +596,7 @@ def _stamp_a_process_node(
         input_ports=input_ports,
         output_ports=output_ports,
         pin_groups=pin_groups,
+        a_node_function=isinstance(node_class, NodeFunction),
     )
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)

@@ -1,13 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `WhepPlayer`'s reading thread: connect, drain each received access unit and
-//! Opus packet onto the node's output ports, and reconnect for as long as the
-//! node runs — all of it native, writing through the module host table with no
-//! Python on the path.
+//! `WhepPlayer`'s reading thread: drain each access unit and Opus packet the
+//! newest endpoint opened on it receives onto the node's output ports, and
+//! reconnect for as long as the node runs — all of it native, writing through
+//! the module host table with no Python on the path.
 
-use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use crate::error::WebRtcExtensionError;
 use crate::opus_identification_header::hex_encoded_opus_identification_header_for_rtp_stream;
@@ -218,17 +219,76 @@ pub(crate) trait WhepPlayerConnectedSession {
     fn close(&mut self);
 }
 
-/// Opens one session per attempt: a closed peer connection cannot be dialled
-/// again.
-pub(crate) trait WhepPlayerSessionDialer {
-    fn dial(&self) -> Result<Box<dyn WhepPlayerConnectedSession>, WebRtcExtensionError>;
+impl<Session: WhepPlayerConnectedSession + ?Sized> WhepPlayerConnectedSession for Box<Session> {
+    fn next_message(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<MessageTheWhepPlayerWrites>, WebRtcExtensionError> {
+        (**self).next_message(timeout)
+    }
+
+    fn close(&mut self) {
+        (**self).close();
+    }
 }
 
-/// Whether the player has been asked to stop, and the wait a backoff spends
-/// that a stop cuts short.
+/// One endpoint, dialled once per attempt: a closed peer connection cannot be
+/// dialled again.
+pub(crate) trait WhepPlayerSessionDialer {
+    type Session: WhepPlayerConnectedSession;
+
+    fn dial(&self) -> Result<Self::Session, WebRtcExtensionError>;
+}
+
+impl<Dialer: WhepPlayerSessionDialer + ?Sized> WhepPlayerSessionDialer for &Dialer {
+    type Session = Dialer::Session;
+
+    fn dial(&self) -> Result<Self::Session, WebRtcExtensionError> {
+        (**self).dial()
+    }
+}
+
+/// What the reading thread is told by the endpoints opened and closed on it.
+pub(crate) enum WhepPlayerCommand<Dialer: WhepPlayerSessionDialer> {
+    /// Play this endpoint from now on, with the session its opening already
+    /// connected, or dialling it on the thread when its opening could not.
+    Play {
+        number: u64,
+        dialer: Dialer,
+        connected: Option<Dialer::Session>,
+    },
+    /// The endpoint's value was let go: drop it, and close its session.
+    Close { number: u64 },
+}
+
+/// Dial `dialer` where its endpoint is opened, so a refusal is the opening's
+/// to raise and the session already playing keeps playing. With no other
+/// endpoint open a refusal is handed to the thread instead, which redials it
+/// with backoff: a WHEP endpoint refuses until its publisher starts, and a
+/// player brought up first still plays once it does.
+pub(crate) fn open_an_endpoint<Dialer: WhepPlayerSessionDialer>(
+    number: u64,
+    dialer: Dialer,
+    another_is_open: bool,
+) -> Result<WhepPlayerCommand<Dialer>, WebRtcExtensionError> {
+    match dialer.dial() {
+        Ok(session) => Ok(WhepPlayerCommand::Play {
+            number,
+            dialer,
+            connected: Some(session),
+        }),
+        Err(refusal) if another_is_open => Err(refusal),
+        Err(_) => Ok(WhepPlayerCommand::Play {
+            number,
+            dialer,
+            connected: None,
+        }),
+    }
+}
+
+/// Whether the player has been asked to stop.
 pub(crate) struct WhepPlayerStopSignal {
-    stopped: Mutex<bool>,
-    stop_arrived: Condvar,
+    stopped: AtomicBool,
     stopped_from_elsewhere: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
@@ -239,33 +299,40 @@ impl WhepPlayerStopSignal {
         stopped_from_elsewhere: Box<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
         Self {
-            stopped: Mutex::new(false),
-            stop_arrived: Condvar::new(),
+            stopped: AtomicBool::new(false),
             stopped_from_elsewhere,
         }
     }
 
     pub(crate) fn is_set(&self) -> bool {
-        self.stopped.lock().map(|stopped| *stopped).unwrap_or(true)
-            || (self.stopped_from_elsewhere)()
+        self.stopped.load(Ordering::Acquire) || (self.stopped_from_elsewhere)()
     }
 
     pub(crate) fn set(&self) {
-        if let Ok(mut stopped) = self.stopped.lock() {
-            *stopped = true;
-        }
-        self.stop_arrived.notify_all();
+        self.stopped.store(true, Ordering::Release);
     }
+}
 
-    /// Wait out `delay` unless a stop arrives first.
-    pub(crate) fn wait_unless_stopped(&self, delay: Duration) {
-        let Ok(stopped) = self.stopped.lock() else {
-            return;
-        };
-        let _ = self
-            .stop_arrived
-            .wait_timeout_while(stopped, delay, |stopped| !*stopped);
+/// Wait out `delay` for the next command, unless a stop arrives first: the
+/// backoff the reading thread spends, which a newly opened endpoint cuts short.
+pub(crate) fn wait_for_a_command_unless_stopped<Dialer: WhepPlayerSessionDialer>(
+    commands: &Receiver<WhepPlayerCommand<Dialer>>,
+    stop_signal: &WhepPlayerStopSignal,
+    delay: Duration,
+) -> Option<WhepPlayerCommand<Dialer>> {
+    let deadline = Instant::now() + delay;
+    while !stop_signal.is_set() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        match commands.recv_timeout(left.min(PLAYER_POLL_TIMEOUT)) {
+            Ok(command) => return Some(command),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
     }
+    None
 }
 
 /// What a player has said about its ports so far, so it says each thing once.
@@ -276,100 +343,175 @@ struct WhatThePlayerStated {
     reported_an_oversized_packets_unit: bool,
 }
 
-/// Why a drain ended.
-enum WhyTheDrainEnded {
-    Stopped,
-    /// A write or entry the engine refused: not the endpoint's fault, and not
-    /// retryable.
-    OutputPortRefused {
-        port: WhepPlayerOutputPort,
-        refusal: String,
-    },
-    SessionEnded(WebRtcExtensionError),
+/// One endpoint open on the thread, and its session while it has one.
+struct EndpointOfTheThread<Dialer: WhepPlayerSessionDialer> {
+    number: u64,
+    dialer: Dialer,
+    session: Option<Dialer::Session>,
+    delay: Duration,
+    backoff_owed: bool,
 }
 
-/// Connect, drain and reconnect until `stop_signal` is set, waiting out each
-/// backoff through `wait_out_the_backoff`.
-pub(crate) fn play_until_stopped(
-    dialer: &dyn WhepPlayerSessionDialer,
+impl<Dialer: WhepPlayerSessionDialer> EndpointOfTheThread<Dialer> {
+    fn close_its_session(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            session.close();
+        }
+    }
+
+    fn back_off_after(
+        &mut self,
+        failure: &WebRtcExtensionError,
+        output_ports: &dyn WhepPlayerOutputPorts,
+    ) {
+        output_ports.log(
+            WhepPlayerLogLevel::Warn,
+            &format!(
+                "WhepPlayer: the session ended ({failure}); retrying in {:.1}s",
+                self.delay.as_secs_f64()
+            ),
+        );
+        self.backoff_owed = true;
+    }
+}
+
+/// The endpoints open on the thread, oldest first; the newest is the one played.
+struct EndpointsOfTheThread<Dialer: WhepPlayerSessionDialer> {
+    endpoints: Vec<EndpointOfTheThread<Dialer>>,
+}
+
+impl<Dialer: WhepPlayerSessionDialer> EndpointsOfTheThread<Dialer> {
+    fn take(
+        &mut self,
+        command: WhepPlayerCommand<Dialer>,
+        output_ports: &dyn WhepPlayerOutputPorts,
+    ) {
+        match command {
+            WhepPlayerCommand::Play {
+                number,
+                dialer,
+                connected,
+            } => {
+                // Only the newest endpoint is drained, so an older one's session
+                // would only fill its queue: it is closed, and redialled if the
+                // newer endpoint is let go first.
+                for older in &mut self.endpoints {
+                    older.close_its_session();
+                }
+                if connected.is_some() {
+                    output_ports.log(
+                        WhepPlayerLogLevel::Info,
+                        "WhepPlayer: the relay accepted the session",
+                    );
+                }
+                self.endpoints.push(EndpointOfTheThread {
+                    number,
+                    dialer,
+                    session: connected,
+                    delay: FIRST_RECONNECT_DELAY,
+                    backoff_owed: false,
+                });
+            }
+            WhepPlayerCommand::Close { number } => {
+                self.endpoints.retain_mut(|endpoint| {
+                    let closing = endpoint.number == number;
+                    if closing {
+                        endpoint.close_its_session();
+                    }
+                    !closing
+                });
+            }
+        }
+    }
+
+    fn take_the_commands(
+        &mut self,
+        commands: &Receiver<WhepPlayerCommand<Dialer>>,
+        output_ports: &dyn WhepPlayerOutputPorts,
+    ) {
+        while let Ok(command) = commands.try_recv() {
+            self.take(command, output_ports);
+        }
+    }
+}
+
+impl<Dialer: WhepPlayerSessionDialer> Drop for EndpointsOfTheThread<Dialer> {
+    fn drop(&mut self) {
+        for endpoint in &mut self.endpoints {
+            endpoint.close_its_session();
+        }
+    }
+}
+
+/// Play the newest endpoint opened through `commands`, redialling it with
+/// backoff whenever its session ends, until `stop_signal` is set; each backoff
+/// is waited out through `wait_for_a_command`, which a newer endpoint cuts
+/// short.
+pub(crate) fn play_until_stopped<Dialer: WhepPlayerSessionDialer>(
+    commands: &Receiver<WhepPlayerCommand<Dialer>>,
     output_ports: &dyn WhepPlayerOutputPorts,
     stop_signal: &WhepPlayerStopSignal,
-    wait_out_the_backoff: &mut dyn FnMut(Duration),
+    wait_for_a_command: &mut dyn FnMut(Duration) -> Option<WhepPlayerCommand<Dialer>>,
 ) {
     let mut stated = WhatThePlayerStated::default();
-    let mut delay = FIRST_RECONNECT_DELAY;
+    let mut endpoints = EndpointsOfTheThread {
+        endpoints: Vec::new(),
+    };
     while !stop_signal.is_set() {
-        output_ports.log(WhepPlayerLogLevel::Info, "WhepPlayer: opening the session");
-        match dialer.dial() {
-            Ok(mut session) => {
-                output_ports.log(
-                    WhepPlayerLogLevel::Info,
-                    "WhepPlayer: the relay accepted the session",
-                );
-                delay = FIRST_RECONNECT_DELAY;
-                let why_it_ended =
-                    drain_until_stopped(session.as_mut(), output_ports, stop_signal, &mut stated);
-                session.close();
-                match why_it_ended {
-                    WhyTheDrainEnded::Stopped => return,
-                    WhyTheDrainEnded::OutputPortRefused { port, refusal } => {
-                        output_ports.log(
-                            WhepPlayerLogLevel::Error,
-                            &format!(
-                                "WhepPlayer: writing to `{}` failed, and the reading thread is \
-                                 ending: {refusal}",
-                                port.port_name()
-                            ),
-                        );
-                        return;
-                    }
-                    WhyTheDrainEnded::SessionEnded(failure) => {
-                        output_ports.log(
-                            WhepPlayerLogLevel::Warn,
-                            &format!(
-                                "WhepPlayer: the session ended ({failure}); retrying in {:.1}s",
-                                delay.as_secs_f64()
-                            ),
-                        );
-                    }
+        endpoints.take_the_commands(commands, output_ports);
+        let Some(newest) = endpoints.endpoints.last_mut() else {
+            if let Some(command) = wait_for_a_command(PLAYER_POLL_TIMEOUT) {
+                endpoints.take(command, output_ports);
+            }
+            continue;
+        };
+        if newest.backoff_owed {
+            newest.backoff_owed = false;
+            let delay = newest.delay;
+            newest.delay = (delay * 2).min(LONGEST_RECONNECT_DELAY);
+            if let Some(command) = wait_for_a_command(delay) {
+                endpoints.take(command, output_ports);
+            }
+            continue;
+        }
+        let Some(session) = newest.session.as_mut() else {
+            output_ports.log(WhepPlayerLogLevel::Info, "WhepPlayer: opening the session");
+            match newest.dialer.dial() {
+                Ok(session) => {
+                    output_ports.log(
+                        WhepPlayerLogLevel::Info,
+                        "WhepPlayer: the relay accepted the session",
+                    );
+                    newest.session = Some(session);
+                    newest.delay = FIRST_RECONNECT_DELAY;
+                }
+                Err(failure) => newest.back_off_after(&failure, output_ports),
+            }
+            continue;
+        };
+        match session.next_message(PLAYER_POLL_TIMEOUT) {
+            Ok(None) => {}
+            Ok(Some(message)) => {
+                if let Err(refusal) = write_one_message(&message, output_ports, &mut stated) {
+                    // A write or entry the engine refused is not the endpoint's
+                    // fault, and not retryable.
+                    output_ports.log(
+                        WhepPlayerLogLevel::Error,
+                        &format!(
+                            "WhepPlayer: writing to `{}` failed, and the reading thread is \
+                             ending: {refusal}",
+                            message.port.port_name()
+                        ),
+                    );
+                    return;
                 }
             }
-            Err(failure) => output_ports.log(
-                WhepPlayerLogLevel::Warn,
-                &format!(
-                    "WhepPlayer: the session ended ({failure}); retrying in {:.1}s",
-                    delay.as_secs_f64()
-                ),
-            ),
-        }
-        if stop_signal.is_set() {
-            return;
-        }
-        wait_out_the_backoff(delay);
-        delay = (delay * 2).min(LONGEST_RECONNECT_DELAY);
-    }
-}
-
-fn drain_until_stopped(
-    session: &mut dyn WhepPlayerConnectedSession,
-    output_ports: &dyn WhepPlayerOutputPorts,
-    stop_signal: &WhepPlayerStopSignal,
-    stated: &mut WhatThePlayerStated,
-) -> WhyTheDrainEnded {
-    while !stop_signal.is_set() {
-        let message = match session.next_message(PLAYER_POLL_TIMEOUT) {
-            Ok(Some(message)) => message,
-            Ok(None) => continue,
-            Err(failure) => return WhyTheDrainEnded::SessionEnded(failure),
-        };
-        if let Err(refusal) = write_one_message(&message, output_ports, stated) {
-            return WhyTheDrainEnded::OutputPortRefused {
-                port: message.port,
-                refusal,
-            };
+            Err(failure) => {
+                newest.close_its_session();
+                newest.back_off_after(&failure, output_ports);
+            }
         }
     }
-    WhyTheDrainEnded::Stopped
 }
 
 fn write_one_message(

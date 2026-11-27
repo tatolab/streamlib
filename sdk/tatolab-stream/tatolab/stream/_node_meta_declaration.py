@@ -96,6 +96,7 @@ def the_conversion_a_node_states(
     input_ports: "Sequence[dict[str, Any]]",
     output_ports: "Sequence[dict[str, Any]]",
     pin_groups: "Sequence[dict[str, Any]]" = (),
+    a_node_function: bool = False,
 ) -> bool:
     """Whether `declared_meta` states that `node` is a conversion, refused unless it is one.
 
@@ -103,8 +104,9 @@ def the_conversion_a_node_states(
     `input_ports` and `output_ports` those ports as the engine reads them. A conversion is
     declared under bare `@node` or `@node.shader`, whose pins state the types the link verdict
     reads, and has exactly one input that takes a wire and exactly one output, each stating
-    exactly one pin type a wire carries; every other input is a setting, and it declares no pin
-    group, whose slots add ports.
+    exactly one pin type a wire carries; every other input is a setting, or a value input of a
+    node written as one function (`a_node_function`), and it declares no pin group, whose slots
+    add ports.
     """
     if not declared_meta.get("conversion", False):
         return False
@@ -125,6 +127,10 @@ def the_conversion_a_node_states(
             pin=pin_groups[0]["name"],
         )
     wired_inputs = [port for port in input_ports if _takes_a_wire(port)]
+    if a_node_function and len(wired_inputs) > 1:
+        # A value input of a node written as one function, which holds a value of its own until
+        # a wire carries one, is read by its builds, and is not what the conversion converts.
+        wired_inputs = [port for port in wired_inputs if "pin_default" not in port] or wired_inputs
     if not wired_inputs:
         _refuse_the_shape(node, "no input that takes a wire", "give it the one input it converts")
     if len(wired_inputs) > 1:

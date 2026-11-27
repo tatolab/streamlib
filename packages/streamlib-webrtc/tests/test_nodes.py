@@ -5,8 +5,8 @@
 import dataclasses
 import os
 import time
-from collections.abc import Buffer, Callable
-from typing import Any, cast
+from collections.abc import Buffer, Callable, Iterator
+from typing import Any
 
 import pytest
 from helper_process_link_wiring import wire_one_link
@@ -19,22 +19,23 @@ from played_media_stand_ins import (
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
-from tatolab.runtime._node_hosting import class_node_members_of
+from tatolab.runtime._node_function_running import NodeFunctionRunning
 from tatolab.stream import (
     Message,
     log,
 )
-from tatolab.stream._class_node_construction import construct_class_node
+from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
 from tatolab.stream.stream_facts import PacketsStreamFacts
-from tatolab.webrtc import WhepPlayer, WhipPublisher
+from tatolab.webrtc import WhepPlayer, WhipPublisher, WhipSessionPublishing
 from tatolab.webrtc.nodes import (
     ENCODED_AUDIO_OUTPUT_PORT,
     ENCODED_VIDEO_OUTPUT_PORT,
-    READER_THREAD_JOIN_TIMEOUT_SECONDS,
     TRACKS_INPUT_PORT,
+    EndpointUrlNotSet,
     PublishedTrack,
     VideoOrAudio,
     _native,
+    _required_url,
     published_track_from_upstream_stream_facts,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
@@ -127,12 +128,30 @@ def test_the_channel_counts_rtp_carries_are_published(channels):
     refuse_audio_rtp_cannot_carry(channels, "encoder/encoded_audio")
 
 
-class PublisherWiredToEncoders:
-    """A set-up `WhipPublisher` whose `tracks` input one link per encoder port feeds.
+def frame_once_every_computed_value_is_built(
+    running: NodeFunctionRunning, frame_ctx: Any, timeout_s: float = 5.0
+) -> None:
+    """Run one frame of `running`, waiting for the builds its body declared, which run off the
+    frame thread, to give their first values."""
+    deadline = time.monotonic() + timeout_s
+    while not running._running.run_frame(lambda: running._per_frame(frame_ctx)):
+        assert time.monotonic() < deadline, "the node's computed values were never built"
+        time.sleep(0.005)
 
-    A helper-process context opened directly on wired links is the same seam
-    `setup()` and `process()` see in a real child, and it needs no runtime and
-    no device.
+
+def wait_until(condition: "Callable[[], bool]", what: str, timeout_s: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not condition():
+        assert time.monotonic() < deadline, f"never: {what}"
+        time.sleep(0.005)
+
+
+class PublisherWiredToEncoders:
+    """A `WhipPublisher` whose `tracks` input one link per encoder port feeds, run as its helper
+    runs it.
+
+    A helper-process context opened directly on wired links is the same seam a node's setup and
+    frames see in a real child, and it needs no runtime and no device.
     """
 
     def __init__(
@@ -170,18 +189,18 @@ class PublisherWiredToEncoders:
             "node-under-test",
             self.parent.escalate_request_to_parent,
         )
-        # Built the way the helper builds it: each value becomes the field of its
-        # name, and `tracks` reads through the port the links feed.
-        members = class_node_members_of(WhipPublisher)
-        assert members is not None
+        # Bound the way the helper binds them: `tracks` reads through the port the links feed.
         pins = bind_the_pins_of_a_class_node(
-            members,
+            WhipPublisher.members,
             link_data_access=tracks_input,
             inputs=link_input_data_reader_of(self.context),
             outputs=link_output_data_writer_of(self.context),
             node_id="node-under-test",
         )
-        self.publisher = construct_class_node(WhipPublisher, field_values=config, pins=pins)
+        self.tracks = pins[TRACKS_INPUT_PORT]
+        self.publisher = NodeFunctionRunning(
+            WhipPublisher, values_to_build_with=config, pins=pins
+        )
         self.publisher.setup(self.context)
 
     def state_stream_facts(
@@ -201,11 +220,33 @@ class PublisherWiredToEncoders:
         link_output_data_writer_of(self.encoder_context).write(
             encoder_output_port, payload, timestamp_ns, starts_group, kind="packets_unit"
         )
-        self.publisher.process(
-            _engine.limited_access_view_of_runtime_context_for_helper_process(
-                self.context
-            )
+        frame_once_every_computed_value_is_built(
+            self.publisher,
+            _engine.limited_access_view_of_runtime_context_for_helper_process(self.context),
         )
+
+    def stop(self) -> None:
+        self.publisher.stop(self.context)
+
+
+@pytest.fixture
+def publishers_to_stop(monkeypatch) -> "Iterator[list[PublisherWiredToEncoders]]":
+    route_every_log_level_to(monkeypatch, discard_log_record)
+    publishers: "list[PublisherWiredToEncoders]" = []
+    yield publishers
+    for publisher in publishers:
+        publisher.stop()
+
+
+def a_publisher_wired_to(
+    request: pytest.FixtureRequest,
+    publishers_to_stop: "list[PublisherWiredToEncoders]",
+    encoder_output_ports: "list[str]",
+    config: "dict[str, Any]",
+) -> PublisherWiredToEncoders:
+    wired = PublisherWiredToEncoders(request, encoder_output_ports, config)
+    publishers_to_stop.append(wired)
+    return wired
 
 
 def numbered_encoder_output_ports(count: int) -> "list[str]":
@@ -217,89 +258,66 @@ AN_ENDPOINT = {"url": "https://example.invalid/whip"}
 
 @pytest.mark.parametrize("inbound_links", [1, 2])
 def test_a_publisher_sets_up_against_the_links_a_session_can_carry(
-    request, inbound_links
+    request, publishers_to_stop, inbound_links
 ):
-    PublisherWiredToEncoders(request, numbered_encoder_output_ports(inbound_links), AN_ENDPOINT)
+    wired = a_publisher_wired_to(
+        request, publishers_to_stop, numbered_encoder_output_ports(inbound_links), AN_ENDPOINT
+    )
+    WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks)
 
 
 def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
-    request,
+    request, publishers_to_stop
 ):
     """A graph that forgot the connect would otherwise open a session and send
     nothing, which looks from the relay's side like a working publisher."""
+    wired = a_publisher_wired_to(
+        request, publishers_to_stop, numbered_encoder_output_ports(0), AN_ENDPOINT
+    )
     with pytest.raises(ValueError, match="nothing is connected"):
-        PublisherWiredToEncoders(request, numbered_encoder_output_ports(0), AN_ENDPOINT)
+        WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks)
 
 
-def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(request):
-    with pytest.raises(ValueError, match="3 links feed"):
-        PublisherWiredToEncoders(request, numbered_encoder_output_ports(3), AN_ENDPOINT)
-
-
-@pytest.mark.parametrize("config", [{"url": ""}, {"url": 7}])
-def test_a_publisher_whose_endpoint_is_not_an_address_is_refused_by_name(
-    request, config
+def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(
+    request, publishers_to_stop
 ):
-    with pytest.raises(ValueError, match="`url` is not set"):
-        PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), config)
-
-
-def test_a_publisher_added_with_no_values_takes_its_defaults_and_names_the_unset_url(request):
-    with pytest.raises(ValueError, match="`url` is not set"):
-        PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), {})
-
-
-def a_node_built_with(node_class: type, field_values: "dict[str, Any]") -> Any:
-    """`node_class` built as its helper builds it, each pin bound to a stand-in."""
-    members = class_node_members_of(node_class)
-    assert members is not None
-    return construct_class_node(
-        node_class,
-        field_values=field_values,
-        pins={member.port: object() for member in members if member.form in ("input_pin", "output_pin")},
+    wired = a_publisher_wired_to(
+        request, publishers_to_stop, numbered_encoder_output_ports(3), AN_ENDPOINT
     )
+    with pytest.raises(ValueError, match="3 links feed"):
+        WhipSessionPublishing(AN_ENDPOINT["url"], None).set_up(wired.tracks)
 
 
-@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_each_setting_reaches_a_node_as_its_field(node_class):
-    """The shape `stream_builder.add(cls, input_values={...})` delivers: each value is the field
-    of its name before `__init__()` reads it."""
-    built = a_node_built_with(
-        node_class, {"url": "https://example.invalid/x", "bearer_token": "a-token"}
-    )
-
-    assert (built.url, built.bearer_token) == ("https://example.invalid/x", "a-token")
+@pytest.mark.parametrize("node_function", [WhipPublisher, WhepPlayer])
+def test_an_unset_endpoint_is_refused_by_its_own_kind(node_function):
+    with pytest.raises(EndpointUrlNotSet, match="`url` is not set"):
+        _required_url("", node_function.__name__)
 
 
-@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_the_bearer_token_is_optional(node_class):
-    assert a_node_built_with(node_class, {"url": "https://example.invalid/x"}).bearer_token is None
-
-
-@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_a_node_added_without_an_endpoint_is_refused_at_construction(node_class):
-    with pytest.raises(ValueError, match="`url` is not set"):
-        a_node_built_with(node_class, {})
-
-
-@pytest.mark.parametrize("node_class", [WhipPublisher, WhepPlayer])
-def test_each_setting_is_read_at_setup_so_a_change_rebuilds_the_node(node_class):
-    """The endpoint and its token are read when the session opens, so each is a setting read at
-    setup: a value or a wire changing it builds the node again on the new endpoint."""
-    from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
-
-    modes = {
-        port["name"]: port["input_mode"]
-        for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
+def the_value_inputs_of(node_function: Any) -> "dict[str, dict[str, Any]]":
+    return {
+        port["name"]: port
+        for port in getattr(node_function, NODE_DECLARATION_INPUT_PORTS_STAMP)
         if port["name"] in ("url", "bearer_token")
     }
-    read_at_setup = {"mode": "setting_only", "read": "at_setup"}
-    assert modes == {"url": read_at_setup, "bearer_token": read_at_setup}
+
+
+@pytest.mark.parametrize("node_function", [WhipPublisher, WhepPlayer])
+def test_the_endpoint_and_its_token_take_a_wire_or_a_value_set_live(node_function):
+    """Mental-revert: declare either one a setting read at setup again, so a change rebuilds the
+    node, and its port says so."""
+    value_inputs = the_value_inputs_of(node_function)
+    assert {name: port["input_mode"] for name, port in value_inputs.items()} == {
+        "url": {"mode": "wire_or_value"},
+        "bearer_token": {"mode": "wire_or_value"},
+    }
+    assert {name: port["pin_default"] for name, port in value_inputs.items()} == {
+        "url": "",
+        "bearer_token": None,
+    }
 
 
 def test_the_publishers_tracks_take_h264_video_and_opus_audio_on_one_pin():
-    from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
-
     (tracks,) = [
         port
         for port in getattr(WhipPublisher, NODE_DECLARATION_INPUT_PORTS_STAMP)
@@ -318,14 +336,20 @@ def test_the_publishers_tracks_take_h264_video_and_opus_audio_on_one_pin():
     assert tracks["delivery_profile"] == "ordered"
 
 
+#: An endpoint `RecordingWhipSession` refuses to connect to, as a relay refuses a session.
+A_REFUSING_ENDPOINT = "https://refusing.example.invalid/whip"
+
+
 class RecordingWhipSession:
     """A `_native.WhipSession` stand-in keeping what the publisher offered and sent."""
 
     constructed: "list[RecordingWhipSession]" = []
 
     def __init__(self, endpoint_url: str, bearer_token: "str | None" = None) -> None:
-        del endpoint_url, bearer_token
+        del bearer_token
+        self.endpoint_url = endpoint_url
         self.is_connected = False
+        self.closed = False
         self.offered: "tuple[bool, bool, int | None] | None" = None
         self.video_access_units: "list[tuple[bytes, int]]" = []
         self.audio_opus_packets: "list[bytes]" = []
@@ -335,6 +359,8 @@ class RecordingWhipSession:
         self, *, video: bool, audio: bool, audio_channels: "int | None" = None
     ) -> None:
         self.offered = (video, audio, audio_channels)
+        if self.endpoint_url == A_REFUSING_ENDPOINT:
+            raise _native.WhipSessionNotOpened("WHIP signalling failed: 403 Forbidden")
         self.is_connected = True
 
     def write_video_access_unit(self, annex_b_access_unit: Buffer, timestamp_ns: int) -> None:
@@ -345,18 +371,19 @@ class RecordingWhipSession:
 
     def close(self) -> None:
         self.is_connected = False
+        self.closed = True
 
 
 def route_every_log_level_to(
-    monkeypatch: pytest.MonkeyPatch, log_record_sink: "Callable[[str], None]"
+    monkeypatch: pytest.MonkeyPatch, log_record_sink: "Callable[..., None]"
 ) -> None:
     """`log` reaches a sink only in the interpreter the runtime starts for a node."""
     for log_level in ("debug", "info", "warn", "error"):
         monkeypatch.setattr(log, log_level, log_record_sink)
 
 
-def discard_log_record(message: str) -> None:
-    del message
+def discard_log_record(message: str, **attributes: Any) -> None:
+    del message, attributes
 
 
 @pytest.fixture
@@ -368,11 +395,11 @@ def recording_whip_session(monkeypatch) -> "type[RecordingWhipSession]":
 
 
 def test_an_access_unit_reaches_the_session_whole_with_its_envelope_stamp(
-    request, recording_whip_session
+    request, publishers_to_stop, recording_whip_session
 ):
     """The envelope's stamp — the one a local reader is promised — places it
     on the RTP clock."""
-    wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+    wired = a_publisher_wired_to(request, publishers_to_stop, ["encoded_video"], AN_ENDPOINT)
     wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
 
     wired.publish("encoded_video", ANNEX_B_ACCESS_UNIT, timestamp_ns=1_234)
@@ -383,9 +410,9 @@ def test_an_access_unit_reaches_the_session_whole_with_its_envelope_stamp(
 
 
 def test_an_opus_packet_offers_the_channel_count_its_stream_facts_name(
-    request, recording_whip_session
+    request, publishers_to_stop, recording_whip_session
 ):
-    wired = PublisherWiredToEncoders(request, ["encoded_audio"], AN_ENDPOINT)
+    wired = a_publisher_wired_to(request, publishers_to_stop, ["encoded_audio"], AN_ENDPOINT)
     wired.state_stream_facts("encoded_audio", opus_stream_facts_of(2))
 
     wired.publish("encoded_audio", OPUS_PACKET)
@@ -396,10 +423,10 @@ def test_an_opus_packet_offers_the_channel_count_its_stream_facts_name(
 
 
 def test_two_links_are_one_video_and_one_audio_track_by_their_stream_facts(
-    request, recording_whip_session
+    request, publishers_to_stop, recording_whip_session
 ):
-    wired = PublisherWiredToEncoders(
-        request, ["encoded_video", "encoded_audio"], AN_ENDPOINT
+    wired = a_publisher_wired_to(
+        request, publishers_to_stop, ["encoded_video", "encoded_audio"], AN_ENDPOINT
     )
     wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
     wired.state_stream_facts("encoded_audio", MONO_OPUS_STREAM_FACTS)
@@ -414,11 +441,11 @@ def test_two_links_are_one_video_and_one_audio_track_by_their_stream_facts(
 
 
 def test_a_link_whose_upstream_states_no_stream_facts_is_refused_before_any_session_opens(
-    request, recording_whip_session
+    request, publishers_to_stop, recording_whip_session
 ):
     """Any port can be wired into `tracks`, and the refusal is the only place
     that wiring mistake is caught."""
-    wired = PublisherWiredToEncoders(request, ["frames"], AN_ENDPOINT)
+    wired = a_publisher_wired_to(request, publishers_to_stop, ["frames"], AN_ENDPOINT)
 
     with pytest.raises(ValueError, match="carries no Packets stream facts") as refused:
         wired.publish("frames", ANNEX_B_ACCESS_UNIT)
@@ -428,7 +455,9 @@ def test_a_link_whose_upstream_states_no_stream_facts_is_refused_before_any_sess
     assert recording_whip_session.constructed[0].offered is None
 
 
-def test_multichannel_stream_facts_are_refused_before_any_session_is_opened(request):
+def test_multichannel_stream_facts_are_refused_before_any_session_is_opened(
+    request, publishers_to_stop
+):
     """The ordering, not just the refusal.
 
     Refusing after the connect would leave a live session at the relay that
@@ -436,8 +465,11 @@ def test_multichannel_stream_facts_are_refused_before_any_session_is_opened(requ
     prevent. The endpoint here is unresolvable, so a connect attempted first
     would raise about signalling instead of about channels.
     """
-    wired = PublisherWiredToEncoders(
-        request, ["encoded_audio"], {"url": "https://unresolvable.invalid/whip"}
+    wired = a_publisher_wired_to(
+        request,
+        publishers_to_stop,
+        ["encoded_audio"],
+        {"url": "https://unresolvable.invalid/whip"},
     )
     wired.state_stream_facts("encoded_audio", opus_stream_facts_of(6))
 
@@ -446,11 +478,11 @@ def test_multichannel_stream_facts_are_refused_before_any_session_is_opened(requ
 
 
 def test_a_video_link_is_entered_at_its_first_group_start(
-    request, recording_whip_session
+    request, publishers_to_stop, recording_whip_session
 ):
     """A delta frame before the first keyframe references pictures the far end
     never had."""
-    wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
+    wired = a_publisher_wired_to(request, publishers_to_stop, ["encoded_video"], AN_ENDPOINT)
     wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
 
     wired.publish("encoded_video", b"\x01delta", timestamp_ns=1, starts_group=False)
@@ -459,6 +491,58 @@ def test_a_video_link_is_entered_at_its_first_group_start(
 
     (session,) = recording_whip_session.constructed
     assert session.video_access_units == [(b"\x02keyframe", 2), (b"\x03delta", 3)]
+
+
+A_SECOND_ENDPOINT = "https://second.example.invalid/whip"
+
+
+def test_a_new_endpoint_opens_beside_the_publishing_session_with_no_stop_and_takes_over(
+    request, publishers_to_stop, recording_whip_session
+):
+    """Mental-revert: read `url` at setup again, and the new value reaches no session until the
+    node is built again; open the new session at its first frame, and its refusal could not
+    leave the old one publishing."""
+    wired = a_publisher_wired_to(request, publishers_to_stop, ["encoded_video"], AN_ENDPOINT)
+    wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
+    wired.publish("encoded_video", b"\x01keyframe", timestamp_ns=1)
+    (first,) = recording_whip_session.constructed
+
+    wired.publisher.write_inputs({"url": A_SECOND_ENDPOINT})
+    wait_until(
+        lambda: len(recording_whip_session.constructed) == 2
+        and recording_whip_session.constructed[1].is_connected,
+        "the second session connected as it was built, off the frames",
+    )
+    (_, second) = recording_whip_session.constructed
+    assert second.endpoint_url == A_SECOND_ENDPOINT
+    assert second.offered == (True, False, None)
+
+    wired.publish("encoded_video", b"\x02delta", timestamp_ns=2, starts_group=False)
+    wired.publish("encoded_video", b"\x03keyframe", timestamp_ns=3)
+
+    wait_until(lambda: first.closed, "the first session closed once frames moved to the second")
+    assert first.video_access_units == [(b"\x01keyframe", 1)]
+    assert second.video_access_units == [(b"\x03keyframe", 3)], "entered at its group start"
+
+
+def test_a_new_endpoint_that_refuses_its_session_leaves_the_old_one_publishing(
+    request, publishers_to_stop, recording_whip_session
+):
+    wired = a_publisher_wired_to(request, publishers_to_stop, ["encoded_video"], AN_ENDPOINT)
+    wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
+    wired.publish("encoded_video", b"\x01keyframe", timestamp_ns=1)
+    (first,) = recording_whip_session.constructed
+
+    wired.publisher.write_inputs({"url": A_REFUSING_ENDPOINT})
+    wait_until(
+        lambda: len(recording_whip_session.constructed) == 2
+        and recording_whip_session.constructed[1].closed,
+        "the refused session was closed by its build",
+    )
+    wired.publish("encoded_video", b"\x02delta", timestamp_ns=2, starts_group=False)
+
+    assert first.is_connected
+    assert first.video_access_units == [(b"\x01keyframe", 1), (b"\x02delta", 2)]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -509,7 +593,7 @@ def video_message(
 def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session):
     """After a loss the next delta frame references a picture the far end never
     received; the group start reporting a loss is itself sent."""
-    tracks = TracksPinReplayingMessages(
+    tracks: Any = TracksPinReplayingMessages(
         ["encoder/encoded_video"],
         H264_VIDEO_STREAM_FACTS,
         [
@@ -521,14 +605,11 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
             video_message(b"delta after it", starts_group=False),
         ],
     )
-    context = cast(Any, None)
-    publisher = construct_class_node(
-        WhipPublisher, field_values=AN_ENDPOINT, pins={TRACKS_INPUT_PORT: tracks}
-    )
-    publisher.setup(context)
+    publishing = WhipSessionPublishing(AN_ENDPOINT["url"], None)
+    publishing.set_up(tracks)
 
     for _ in range(6):
-        publisher.process(context)
+        publishing.publish_the_next_message(tracks)
 
     (session,) = recording_whip_session.constructed
     assert [access_unit for access_unit, _ in session.video_access_units] == [
@@ -577,44 +658,86 @@ def player_wired_to_both_decoders(request, monkeypatch) -> PlayerWiredToBothDeco
     return PlayerWiredToBothDecoders(request)
 
 
-def test_a_started_player_lends_both_outputs_so_python_cannot_write_them(
+#: How long letting go of the reading thread waits for it, as the wheel's Rust waits.
+READING_THREAD_END_WAIT_SECONDS = 2.0
+
+AN_UNANSWERING_WHEP_ENDPOINT = "https://example.invalid/whep"
+
+
+def a_player(**input_values: object) -> NodeFunctionRunning:
+    """A `WhepPlayer` as its helper runs it, each output bound to a stand-in: its thread writes
+    the ports it is lent."""
+    return NodeFunctionRunning(
+        WhepPlayer,
+        values_to_build_with=input_values,
+        pins={ENCODED_VIDEO_OUTPUT_PORT: object(), ENCODED_AUDIO_OUTPUT_PORT: object()},
+    )
+
+
+def stopped_as_its_helper_stops_it(node: NodeFunctionRunning, context: object) -> None:
+    """Note the parent's stop on the context, which the lent thread reads, then stop."""
+    _engine.note_stop_request_from_parent_on_runtime_context(context, True)
+    node.stop(context)
+
+
+def test_a_set_up_player_lends_both_outputs_so_python_cannot_write_them(
     player_wired_to_both_decoders,
 ):
     """The reading thread writes both ports through the module host table with
     no Python attached, so a Python write to either is refused naming it."""
-    player = a_node_built_with(WhepPlayer, {"url": "https://example.invalid/whep"})
+    player = a_player(url=AN_UNANSWERING_WHEP_ENDPOINT)
     context = player_wired_to_both_decoders.player_context
-    player.start(context)
+    player.setup(context)
     try:
         for output_port in (ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT):
             with pytest.raises(Exception, match=output_port):
                 link_output_data_writer_of(context).write(output_port, b"from python")
     finally:
-        player.stop(context)
+        stopped_as_its_helper_stops_it(player, context)
 
 
-def test_a_player_whose_endpoint_never_answers_stops_inside_its_join_budget(
+def test_a_player_whose_endpoint_never_answers_stops_inside_its_budget(
     player_wired_to_both_decoders,
 ):
-    """The thread reconnects with backoff against an endpoint that never
-    answers, and a stop wakes it out of the backoff rather than waiting it out."""
-    player = a_node_built_with(WhepPlayer, {"url": "https://example.invalid/whep"})
+    """The thread redials the first endpoint with backoff while it never answers, and a stop
+    wakes it out of the backoff rather than waiting it out."""
+    player = a_player(url=AN_UNANSWERING_WHEP_ENDPOINT)
     context = player_wired_to_both_decoders.player_context
-    player.start(context)
+    player.setup(context)
     time.sleep(0.2)
     stop_began = time.monotonic()
-    player.stop(context)
-    assert time.monotonic() - stop_began < READER_THREAD_JOIN_TIMEOUT_SECONDS + 0.5
-    assert player._reading_thread is None
+    stopped_as_its_helper_stops_it(player, context)
+    player.teardown(context)
+    assert time.monotonic() - stop_began < READING_THREAD_END_WAIT_SECONDS + 0.5
 
 
-def test_a_player_never_started_stops_and_tears_down_cleanly(
-    player_wired_to_both_decoders,
-):
-    player = a_node_built_with(WhepPlayer, {"url": "https://example.invalid/whep"})
+def test_a_player_never_set_up_stops_and_tears_down_cleanly(player_wired_to_both_decoders):
+    player = a_player(url=AN_UNANSWERING_WHEP_ENDPOINT)
     context = player_wired_to_both_decoders.player_context
     player.stop(context)
     player.teardown(context)
+
+
+def test_an_endpoint_refused_beside_an_open_one_raises_its_own_kind_and_the_first_plays_on(
+    player_wired_to_both_decoders,
+):
+    """The first endpoint is redialled by the thread, since a WHEP endpoint refuses until its
+    publisher starts; one opened beside it is the opening's to refuse."""
+    context = player_wired_to_both_decoders.player_context
+    reading_thread = _native.WhepPlayerThread(
+        context.open_module_host_table(
+            output_ports=[ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT]
+        )
+    )
+    try:
+        first = reading_thread.open_session(AN_UNANSWERING_WHEP_ENDPOINT)
+        with pytest.raises(_native.WhepSessionNotOpened, match="the one playing keeps playing"):
+            reading_thread.open_session("https://second.example.invalid/whep")
+        first.close()
+        first.close()
+    finally:
+        _engine.note_stop_request_from_parent_on_runtime_context(context, True)
+        del reading_thread
 
 
 def test_the_distribution_declares_both_nodes_for_the_node_catalog():
@@ -627,7 +750,7 @@ def test_the_distribution_declares_both_nodes_for_the_node_catalog():
     }
 
     assert set(declared) == {"WhipPublisher", "WhepPlayer"}
-    for node_class in (WhipPublisher, WhepPlayer):
-        entry_point = declared[node_class.__name__]
-        assert entry_point.value == f"{node_class.__module__}:{node_class.__qualname__}"
-        assert entry_point.load() is node_class
+    for node_function in (WhipPublisher, WhepPlayer):
+        entry_point = declared[node_function.__name__]
+        assert entry_point.value == f"{node_function.__module__}:{node_function.__qualname__}"
+        assert entry_point.load() is node_function

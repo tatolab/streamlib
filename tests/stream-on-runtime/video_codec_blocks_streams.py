@@ -6,6 +6,7 @@
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.stream import StreamBuilder, graph_generator
+from tatolab.stream._node_function import NodeFunction
 from tatolab.testpattern import TestPatternSource
 
 from video_codec_blocks_probes import (
@@ -43,8 +44,8 @@ def an_h265_decoder_alone(stream_builder: StreamBuilder) -> None:
 
 def _add_a_codec_round_trip_with_probes(
     stream_builder: StreamBuilder,
-    encoder_class: "type[H264Encoder] | type[H265Encoder]",
-    decoder_class: "type[H264Decoder] | type[H265Decoder]",
+    encoder_class: NodeFunction,
+    decoder_class: NodeFunction,
 ) -> None:
     """A test pattern encoded and decoded back, with no Python in the frame path.
 

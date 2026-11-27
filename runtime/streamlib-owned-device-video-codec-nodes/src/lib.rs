@@ -3,11 +3,11 @@
 
 //! The video codec node bodies `tatolab-h264` and `tatolab-h265` run in their
 //! helpers: a thread reads its node's ports through the module host table and
-//! codes, with no Python attached: with Vulkan Video on Linux, each node's
-//! session in the machine's video codec host, and on Apple's media engine
-//! through VideoToolbox on macOS.
+//! codes, with no Python attached, with the sessions its node's builds open on
+//! it: with Vulkan Video on Linux, each session in the machine's video codec
+//! host, and on Apple's media engine through VideoToolbox on macOS.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,9 @@ mod video_codec_host_tests;
 pub mod video_codec_retry_gate;
 #[cfg(test)]
 mod video_codec_retry_gate_tests;
+pub mod video_coding_sessions;
+#[cfg(test)]
+mod video_coding_sessions_tests;
 #[cfg(target_os = "linux")]
 pub mod video_decode_on_a_device;
 #[cfg(all(test, target_os = "linux"))]
@@ -59,6 +62,9 @@ pub mod vulkan_video_encoder;
 use crate::encoded_video_publication::EncodedVideoOutputPort;
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_codec_retry_gate::VideoCodecRefusal;
+use crate::video_coding_sessions::{
+    VideoCodingSessionCommand, VideoCodingSessionNotOpened, VideoCodingSessionsOfTheThread,
+};
 use crate::video_decoder_opening::VideoDecoderOpening;
 use crate::video_decoder_settings::VideoDecoderSettings;
 use crate::video_encoder_settings::VideoEncoderSettings;
@@ -139,10 +145,25 @@ impl VideoCodecNodeIdentity {
     }
 }
 
-/// A codec node's thread, started over the module host table its node lent
-/// its ports through, and stopped by flag.
-pub struct VideoCodecNodeThread {
+/// How long a build waits for the coding thread to open the session it asked for: the video
+/// codec host answers an opening within its longest answer, and the thread takes a command
+/// between frames.
+const SESSION_OPENING_ANSWER_WAIT: Duration = Duration::from_secs(15);
+
+/// How long dropping the thread waits for it to end: its own wait for a message is bounded at a
+/// tenth of a second, and a coding in flight finishes first.
+const CODING_THREAD_END_WAIT: Duration = Duration::from_secs(2);
+
+/// A codec node's thread, started over the module host table its node lent its ports through,
+/// and coding with the sessions opened on it. It takes no settings: each session carries its
+/// own, so a new setting opens a session beside the old one and the stream never stops.
+/// Dropping it stops the thread.
+pub struct VideoCodecNodeThread<Settings> {
+    node: VideoCodecNodeIdentity,
+    commands: mpsc::Sender<VideoCodingSessionCommand<Settings>>,
+    sessions_opened: AtomicU64,
     stop_requested: Arc<AtomicBool>,
+    /// In a mutex so the thread may be shared: the receiver alone is not `Sync`.
     running: Mutex<Option<VideoCodecNodeThreadEnding>>,
 }
 
@@ -151,13 +172,34 @@ struct VideoCodecNodeThreadEnding {
     ended: mpsc::Receiver<()>,
 }
 
-impl VideoCodecNodeThread {
-    /// Start an encoder thread coding the frames `video` receives onto
-    /// `encoded_video`.
+/// A session open on a codec node's thread, closed when dropped.
+pub struct VideoCodecNodeSession<Settings> {
+    number: u64,
+    commands: mpsc::Sender<VideoCodingSessionCommand<Settings>>,
+}
+
+impl<Settings> VideoCodecNodeSession<Settings> {
+    /// Close the session: the thread drops it before its next frame. A second close does
+    /// nothing.
+    pub fn close(&self) {
+        let _ = self.commands.send(VideoCodingSessionCommand::Close {
+            number: self.number,
+        });
+    }
+}
+
+impl<Settings> Drop for VideoCodecNodeSession<Settings> {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl VideoCodecNodeThread<VideoEncoderSettings> {
+    /// Start an encoder thread coding the frames `video` receives onto `encoded_video` with the
+    /// newest session opened on it.
     pub fn start_encoder(
         node: VideoCodecNodeIdentity,
         module_host: ModuleHost,
-        settings: VideoEncoderSettings,
     ) -> Result<Self, String> {
         let video_input = module_host
             .open_input_port(VIDEO_PORT)
@@ -166,24 +208,25 @@ impl VideoCodecNodeThread {
             .open_output_port(ENCODED_VIDEO_PORT)
             .map_err(|refusal| refusal.to_string())?;
         forward_this_modules_tracing_records_to(&module_host);
-        Self::spawn(node, move |stop_requested| {
+        Self::spawn(node, move |commands, stop_requested| {
             encode_until_stopped(
                 node,
                 &module_host,
                 &video_input,
                 &encoded_video_output,
-                settings,
+                &commands,
                 stop_requested,
             );
         })
     }
+}
 
-    /// Start a decoder thread decoding the access units `encoded_video`
-    /// receives onto `video`.
+impl VideoCodecNodeThread<VideoDecoderSettings> {
+    /// Start a decoder thread decoding the access units `encoded_video` receives onto `video`,
+    /// moving to the newest session opened on it at a group start.
     pub fn start_decoder(
         node: VideoCodecNodeIdentity,
         module_host: ModuleHost,
-        settings: VideoDecoderSettings,
     ) -> Result<Self, String> {
         let encoded_video_input = module_host
             .open_input_port(ENCODED_VIDEO_PORT)
@@ -192,29 +235,34 @@ impl VideoCodecNodeThread {
             .open_output_port(VIDEO_PORT)
             .map_err(|refusal| refusal.to_string())?;
         forward_this_modules_tracing_records_to(&module_host);
-        Self::spawn(node, move |stop_requested| {
+        Self::spawn(node, move |commands, stop_requested| {
             decode_until_stopped(
                 node,
                 &module_host,
                 &encoded_video_input,
                 &video_output,
-                settings,
+                &commands,
                 stop_requested,
             );
         })
     }
+}
 
+impl<Settings: Send + 'static> VideoCodecNodeThread<Settings> {
     fn spawn(
         node: VideoCodecNodeIdentity,
-        body: impl FnOnce(&AtomicBool) + Send + 'static,
+        body: impl FnOnce(mpsc::Receiver<VideoCodingSessionCommand<Settings>>, &AtomicBool)
+        + Send
+        + 'static,
     ) -> Result<Self, String> {
+        let (commands, commands_received) = mpsc::channel();
         let stop_requested = Arc::new(AtomicBool::new(false));
         let stop_requested_of_the_thread = Arc::clone(&stop_requested);
         let (thread_ended, ended) = mpsc::channel();
         let join_handle = std::thread::Builder::new()
             .name(node.node_type_name.to_ascii_lowercase())
             .spawn(move || {
-                body(&stop_requested_of_the_thread);
+                body(commands_received, &stop_requested_of_the_thread);
                 let _ = thread_ended.send(());
             })
             .map_err(|spawn_failure| {
@@ -224,30 +272,64 @@ impl VideoCodecNodeThread {
                 )
             })?;
         Ok(Self {
+            node,
+            commands,
+            sessions_opened: AtomicU64::new(0),
             stop_requested,
             running: Mutex::new(Some(VideoCodecNodeThreadEnding { join_handle, ended })),
         })
     }
 
-    /// Ask the thread to stop and wait up to `timeout` for it: `true` when it
-    /// ended.
-    pub fn stop_and_join(&self, timeout: Duration) -> bool {
+    /// Open a session of `settings` on the thread, beside the ones open there, and wait for it
+    /// to open: the thread codes with it from then on. A refusal leaves the open sessions
+    /// coding.
+    pub fn open_session(
+        &self,
+        settings: Settings,
+    ) -> Result<VideoCodecNodeSession<Settings>, VideoCodingSessionNotOpened> {
+        let node_type_name = self.node.node_type_name;
+        let number = self.sessions_opened.fetch_add(1, Ordering::Relaxed);
+        let (answer, answered) = mpsc::sync_channel(1);
+        self.commands
+            .send(VideoCodingSessionCommand::Open {
+                number,
+                settings,
+                answer,
+            })
+            .map_err(|_| VideoCodingSessionNotOpened::CodingThreadEnded { node_type_name })?;
+        let session = VideoCodecNodeSession {
+            number,
+            commands: self.commands.clone(),
+        };
+        match answered.recv_timeout(SESSION_OPENING_ANSWER_WAIT) {
+            Ok(Ok(())) => Ok(session),
+            // Dropping `session` closes what the thread may still open.
+            Ok(Err(refusal)) => Err(refusal),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(VideoCodingSessionNotOpened::Unanswered {
+                node_type_name,
+                waited: SESSION_OPENING_ANSWER_WAIT,
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(VideoCodingSessionNotOpened::CodingThreadEnded { node_type_name })
+            }
+        }
+    }
+}
+
+impl<Settings> Drop for VideoCodecNodeThread<Settings> {
+    fn drop(&mut self) {
         self.stop_requested.store(true, Ordering::Release);
-        let Ok(mut running) = self.running.lock() else {
-            return false;
+        let Some(ending) = self.running.get_mut().ok().and_then(Option::take) else {
+            return;
         };
-        let Some(ending) = running.take() else {
-            return true;
-        };
-        match ending.ended.recv_timeout(timeout) {
+        match ending.ended.recv_timeout(CODING_THREAD_END_WAIT) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = ending.join_handle.join();
-                true
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                *running = Some(ending);
-                false
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => tracing::warn!(
+                "{}: the coding thread is still finishing a coding, and ends after it",
+                self.node.node_type_name
+            ),
         }
     }
 }
@@ -335,24 +417,17 @@ fn open_the_encoder(
     ))
 }
 
-/// Read, encode and write until the node stops. An encoder that cannot open
-/// keeps draining `video`, so upstream still sees a live consumer.
+/// Read, encode and write until the node stops, with the newest session open. While none is
+/// open, `video` is still drained, so upstream sees a live consumer.
 fn encode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
     video_input: &ModuleHostInputPort,
     encoded_video_output: &ModuleHostOutputPort,
-    settings: VideoEncoderSettings,
+    commands: &mpsc::Receiver<VideoCodingSessionCommand<VideoEncoderSettings>>,
     stop_requested: &AtomicBool,
 ) {
     let node_type_name = node.node_type_name;
-    let mut encoder = match open_the_encoder(node, module_host, settings) {
-        Ok(encoder) => Some(encoder),
-        Err(refusal) => {
-            tracing::error!("{refusal}; every frame is discarded");
-            None
-        }
-    };
     let packets_unit = match packets_unit_payload_descriptor(node.packets_unit_codec_name()) {
         Ok(packets_unit) => packets_unit,
         Err(refusal) => {
@@ -364,8 +439,17 @@ fn encode_until_stopped(
         encoded_video_output,
         packets_unit,
     };
+    let mut sessions = VideoCodingSessionsOfTheThread::default();
+    let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<_>| {
+        sessions.take_the_commands(commands, |settings, _| {
+            open_the_encoder(node, module_host, settings)
+                .map_err(VideoCodingSessionNotOpened::Refused)
+        });
+    };
+    let mut its_producer_was_refused = false;
     let mut frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
+        take_the_commands(&mut sessions);
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
             tracing::error!("{node_type_name}: waiting for a frame was refused: {refusal}");
             return;
@@ -379,12 +463,16 @@ fn encode_until_stopped(
                     return;
                 }
             };
-            let Some(opened_encoder) = encoder.as_mut() else {
+            take_the_commands(&mut sessions);
+            if its_producer_was_refused {
+                continue;
+            }
+            let Some(encoder) = sessions.newest_mut() else {
                 continue;
             };
             let encoded = ImageFrameReadByTheEncoder::of_the_video_message(&message)
                 .map_err(VideoFrameNotEncoded::ThisFrame)
-                .and_then(|frame| opened_encoder.encode_and_publish(&frame, &encoded_video));
+                .and_then(|frame| encoder.encode_and_publish(&frame, &encoded_video));
             match encoded {
                 Ok(()) => {}
                 Err(VideoFrameNotEncoded::ThisFrame(refusal)) => {
@@ -401,7 +489,7 @@ fn encode_until_stopped(
                         );
                     }
                     // Draining on keeps upstream's consumer live until the node is stopped.
-                    encoder = None;
+                    its_producer_was_refused = true;
                 }
             }
         }
@@ -455,28 +543,84 @@ fn open_the_decoder(
     )))
 }
 
-/// Read, decode and publish until the node stops. The decoder opens as the
-/// node starts and, refused for now, again at a later media frame; while it
-/// is not open, `encoded_video` is still drained, so upstream sees a live
-/// consumer.
+/// One decode session on a decoder node's thread: its settings and its decoder's opening. It
+/// says what it decoded as it closes.
+struct VideoDecodeSession {
+    settings: VideoDecoderSettings,
+    opening: VideoDecoderOpening<VideoDecoderOnThisPlatform>,
+}
+
+impl VideoDecodeSession {
+    /// Open a session of `settings` at `now`. Refused for now as the node's only session, it is
+    /// opened again once a retry interval after each refusal, as a decoder brought up before
+    /// the GPU frees what it lacks needs; refused beside another, it is refused, and the other
+    /// keeps decoding.
+    fn open(
+        node: VideoCodecNodeIdentity,
+        module_host: &ModuleHost,
+        settings: VideoDecoderSettings,
+        another_is_open: bool,
+        now: Instant,
+    ) -> Result<Self, VideoCodingSessionNotOpened> {
+        let opening = match open_the_decoder(node, module_host, settings) {
+            Ok(decoder) => VideoDecoderOpening::opened(node.node_type_name, decoder),
+            Err(VideoCodecRefusal::ForNow(refusal)) if !another_is_open => {
+                VideoDecoderOpening::refused_for_now_at(node.node_type_name, now, &refusal)
+            }
+            Err(refusal) => {
+                return Err(VideoCodingSessionNotOpened::Refused(refusal.into_message()));
+            }
+        };
+        Ok(Self { settings, opening })
+    }
+
+    /// The session's decoder, opened again at `now` when it was refused for now and the retry
+    /// interval has passed; `None` while it is not open.
+    fn decoder_at(
+        &mut self,
+        node: VideoCodecNodeIdentity,
+        module_host: &ModuleHost,
+        now: Instant,
+    ) -> Option<&mut VideoDecoderOnThisPlatform> {
+        let settings = self.settings;
+        self.opening
+            .the_decoder_at(now, || open_the_decoder(node, module_host, settings))
+    }
+}
+
+impl Drop for VideoDecodeSession {
+    fn drop(&mut self) {
+        if let Some(decoder) = self.opening.opened_decoder() {
+            decoder.report_at_teardown();
+        }
+    }
+}
+
+/// Read, decode and publish until the node stops, each media frame with the session
+/// [`VideoCodingSessionsOfTheThread::the_session_decoding_a_media_frame`] names. While no
+/// session decodes, `encoded_video` is still drained, so upstream sees a live consumer.
 fn decode_until_stopped(
     node: VideoCodecNodeIdentity,
     module_host: &ModuleHost,
     encoded_video_input: &ModuleHostInputPort,
     video_output: &ModuleHostOutputPort,
-    settings: VideoDecoderSettings,
+    commands: &mpsc::Receiver<VideoCodingSessionCommand<VideoDecoderSettings>>,
     stop_requested: &AtomicBool,
 ) {
     let node_type_name = node.node_type_name;
-    let mut decoder_opening = VideoDecoderOpening::not_yet_opened(node_type_name);
-    decoder_opening.the_decoder_at(Instant::now(), || {
-        open_the_decoder(node, module_host, settings)
-    });
+    let mut sessions = VideoCodingSessionsOfTheThread::default();
+    let take_the_commands = |sessions: &mut VideoCodingSessionsOfTheThread<VideoDecodeSession>| {
+        sessions.take_the_commands(commands, |settings, another_is_open| {
+            VideoDecodeSession::open(node, module_host, settings, another_is_open, Instant::now())
+        });
+    };
+    let mut decoding_with = None;
     let mut media_frames_refused: u64 = 0;
     while !stop_requested.load(Ordering::Acquire) && !module_host.stop_requested() {
+        take_the_commands(&mut sessions);
         if let Err(refusal) = module_host.wait_for_any_input_port(INPUT_PORT_WAIT) {
             tracing::error!("{node_type_name}: waiting for a media frame was refused: {refusal}");
-            break;
+            return;
         }
         loop {
             let media_frame = match encoded_video_input.read() {
@@ -489,9 +633,16 @@ fn decode_until_stopped(
                     return;
                 }
             };
-            let Some(decoder) = decoder_opening.the_decoder_at(Instant::now(), || {
-                open_the_decoder(node, module_host, settings)
-            }) else {
+            take_the_commands(&mut sessions);
+            let now = Instant::now();
+            let Some(session) = sessions.the_session_decoding_a_media_frame(
+                &mut decoding_with,
+                media_frame.starts_group(),
+                |session| session.decoder_at(node, module_host, now).is_some(),
+            ) else {
+                continue;
+            };
+            let Some(decoder) = session.decoder_at(node, module_host, now) else {
                 continue;
             };
             let decoded = refuse_unless_a_packets_unit_of_this_codec(node, &media_frame)
@@ -506,9 +657,6 @@ fn decode_until_stopped(
                 }
             }
         }
-    }
-    if let Some(decoder) = decoder_opening.opened_decoder() {
-        decoder.report_at_teardown();
     }
 }
 

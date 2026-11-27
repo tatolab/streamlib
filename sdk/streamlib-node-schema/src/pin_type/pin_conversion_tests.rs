@@ -72,6 +72,51 @@ fn a_conversion_is_its_one_wired_input_and_its_one_output_beside_any_settings() 
     );
 }
 
+fn a_value_input(name: &str) -> PortDescriptor {
+    PortDescriptor {
+        pin_default: Some(serde_json::json!(4_000_000)),
+        ..a_typed_port(name, PinType::Float { exact_size: None })
+    }
+}
+
+#[test]
+fn a_conversion_written_as_one_function_converts_its_one_input_beside_its_value_inputs() {
+    let descriptor = a_node_type(
+        vec![
+            a_value_input("bitrate_bps"),
+            a_typed_port("tensor", tensor()),
+            a_value_input("fps"),
+        ],
+        vec![a_typed_port("texture", texture())],
+    )
+    .stating_a_conversion();
+    let conversion = descriptor
+        .pin_conversion()
+        .expect("a conversion beside value inputs")
+        .expect("stated");
+    assert_eq!(
+        (
+            conversion.input_port_name.as_str(),
+            conversion.input_pin_type
+        ),
+        ("tensor", tensor())
+    );
+}
+
+#[test]
+fn a_conversion_whose_one_input_is_a_value_input_converts_that_input() {
+    let descriptor = a_node_type(
+        vec![a_value_input("level")],
+        vec![a_typed_port("texture", texture())],
+    )
+    .stating_a_conversion();
+    let conversion = descriptor
+        .pin_conversion()
+        .expect("a conversion of one value input")
+        .expect("stated");
+    assert_eq!(conversion.input_port_name, "level");
+}
+
 #[test]
 fn a_conversion_of_any_other_shape_is_refused_naming_the_node_type() {
     let two_wired_inputs = a_node_type(

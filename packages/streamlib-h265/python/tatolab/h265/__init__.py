@@ -3,7 +3,7 @@
 
 """H.265 encode and decode for StreamLib, on a Vulkan device the module owns.
 
-An extension wheel: the Rust is inside this package and the `@node` classes
+An extension wheel: the Rust is inside this package and the node functions
 below are the binding. Nothing here links the engine — the wheel depends on
 `tatolab-stream`, and the node runs in its own node interpreter like
 any other Python node.

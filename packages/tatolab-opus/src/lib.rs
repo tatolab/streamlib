@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
+use std::sync::{Mutex, PoisonError};
 
 pub mod audio_window;
 pub mod audio_window_to_encoded_packet_encoder;
@@ -39,10 +39,12 @@ fn notices_for_python(notices: Vec<OpusCodecNotice>) -> Vec<OpusCodecNoticeForPy
 
 /// Encodes 20 ms windows of audio into Opus packets.
 ///
-/// One thread drives a node's hooks, so the instance is never shared.
-#[pyclass(name = "AudioWindowToEncodedPacketEncoder", unsendable)]
+/// A node builds one off the frame thread and its frames encode with it, so it
+/// is sendable; the lock only makes it shareable, as every call already holds
+/// pyo3's exclusive borrow of it.
+#[pyclass(name = "AudioWindowToEncodedPacketEncoder")]
 struct AudioWindowToEncodedPacketEncoderForPython {
-    encoder: AudioWindowToEncodedPacketEncoder,
+    encoder: Mutex<AudioWindowToEncodedPacketEncoder>,
 }
 
 #[pymethods]
@@ -51,10 +53,10 @@ impl AudioWindowToEncodedPacketEncoderForPython {
     #[pyo3(signature = (bitrate_bps, application))]
     fn new(bitrate_bps: Option<u32>, application: &str) -> PyResult<Self> {
         Ok(Self {
-            encoder: AudioWindowToEncodedPacketEncoder::new(OpusEncoderConfig {
+            encoder: Mutex::new(AudioWindowToEncodedPacketEncoder::new(OpusEncoderConfig {
                 bitrate_bps,
                 application: OpusEncoderApplication::from_config_spelling(application)?,
-            }),
+            })),
         })
     }
 
@@ -86,7 +88,7 @@ impl AudioWindowToEncodedPacketEncoderForPython {
             sample_count,
             dtype: AudioSampleDtype::from_wire_spelling(dtype)?,
         };
-        let opus_packet_bytes = self.encoder.encode_one_window(&window)?;
+        let opus_packet_bytes = self.encoder_borrowed().encode_one_window(&window)?;
         Ok(opus_packet_bytes.map(|opus_packet_bytes| PyBytes::new(python, &opus_packet_bytes)))
     }
 
@@ -94,19 +96,30 @@ impl AudioWindowToEncodedPacketEncoderForPython {
     fn take_stream_facts_owed_to_the_port(
         &mut self,
     ) -> Option<OpusEncoderPortStreamFactsForPython> {
-        self.encoder
+        self.encoder_borrowed()
             .take_stream_facts_owed_to_the_port()
             .map(|stream_facts| OpusEncoderPortStreamFactsForPython { stream_facts })
     }
 
     /// What the encoder did since the last call, for the node to log.
     fn take_notices(&mut self) -> Vec<OpusCodecNoticeForPython> {
-        notices_for_python(self.encoder.take_notices())
+        notices_for_python(self.encoder_borrowed().take_notices())
     }
 
     #[getter]
     fn packets_encoded(&self) -> u64 {
-        self.encoder.packets_encoded()
+        self.encoder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .packets_encoded()
+    }
+}
+
+impl AudioWindowToEncodedPacketEncoderForPython {
+    fn encoder_borrowed(&mut self) -> &mut AudioWindowToEncodedPacketEncoder {
+        self.encoder
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 

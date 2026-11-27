@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use pyo3::buffer::PyBuffer;
-use pyo3::exceptions::PyValueError;
+use pyo3::create_exception;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
@@ -33,12 +35,33 @@ pub mod whip_session;
 use crate::error::WebRtcExtensionError;
 use crate::whep_player::{
     ENCODED_AUDIO_OUTPUT_PORT, ENCODED_VIDEO_OUTPUT_PORT, MessageTheWhepPlayerWrites,
-    WhepPlayerConnectedSession, WhepPlayerLogLevel, WhepPlayerOutputPort, WhepPlayerOutputPorts,
-    WhepPlayerPacketsStreamFacts, WhepPlayerSessionDialer, WhepPlayerStopSignal,
-    play_until_stopped,
+    WhepPlayerCommand, WhepPlayerConnectedSession, WhepPlayerLogLevel, WhepPlayerOutputPort,
+    WhepPlayerOutputPorts, WhepPlayerPacketsStreamFacts, WhepPlayerSessionDialer,
+    WhepPlayerStopSignal, open_an_endpoint, play_until_stopped, wait_for_a_command_unless_stopped,
 };
 use crate::whep_session::WhepPlayingSession;
 use crate::whip_session::{PublishedMediaSet, WhipPublishingSession};
+
+create_exception!(
+    _native,
+    WhipSessionNotOpened,
+    PyRuntimeError,
+    "The WHIP endpoint refused a session, or the signalling or peer connection failed; the \
+     session already publishing keeps publishing."
+);
+create_exception!(
+    _native,
+    WhepSessionNotOpened,
+    PyRuntimeError,
+    "The WHEP endpoint refused a session, or the signalling or peer connection failed; the \
+     endpoint already playing keeps playing."
+);
+create_exception!(
+    _native,
+    WhepPlayerThreadEnded,
+    PyRuntimeError,
+    "The WHEP player's reading thread has ended, so no session opens on it."
+);
 
 /// Only the first frame of a stream, so that no two frames share a presentation
 /// timestamp. Every later one advances by the gap the messages' own stamps state.
@@ -79,7 +102,8 @@ impl WhipSession {
         }
     }
 
-    /// Offer the media set the publisher's links settled, and set the answer.
+    /// Offer the media set the publisher's links settled, and set the answer;
+    /// a session that does not open raises `WhipSessionNotOpened`.
     #[pyo3(signature = (*, video, audio, audio_channels=None))]
     fn connect(
         &self,
@@ -96,19 +120,23 @@ impl WhipSession {
             audio_channels,
         };
 
-        python.detach(|| {
-            let mut publishing = self.locked_state()?;
-            if publishing.session.is_some() {
-                return Err(WebRtcExtensionError::Refused {
-                    what: "this WHIP session is already connected".to_owned(),
-                });
-            }
-            publishing.session = Some(transport_stack::transport_runtime()?.block_on(
-                WhipPublishingSession::connect(endpoint_url, bearer_token, media),
-            )?);
-            Ok(())
-        })?;
-        Ok(())
+        python
+            .detach(|| {
+                let mut publishing = self.locked_state()?;
+                if publishing.session.is_some() {
+                    return Err(WebRtcExtensionError::Refused {
+                        what: "this WHIP session is already connected".to_owned(),
+                    });
+                }
+                publishing.session = Some(transport_stack::transport_runtime()?.block_on(
+                    WhipPublishingSession::connect(endpoint_url, bearer_token, media),
+                )?);
+                Ok(())
+            })
+            .map_err(|refusal| match refusal {
+                WebRtcExtensionError::Refused { .. } => PyErr::from(refusal),
+                not_opened => WhipSessionNotOpened::new_err(not_opened.to_string()),
+            })
     }
 
     /// Send one Annex-B access unit on the RTP clock `timestamp_ns`, the
@@ -210,14 +238,23 @@ fn connected(
     session.ok_or(WebRtcExtensionError::NotConnected { protocol: "WHIP" })
 }
 
+/// How long letting go of a `WhepPlayerThread` waits for its reading thread to
+/// end; a thread still inside a connect outlives it and closes its session
+/// itself when the connect returns.
+const READING_THREAD_END_WAIT: Duration = Duration::from_secs(2);
+
 /// `WhepPlayer`'s reading thread, started over the module host table its
-/// node lent the two output ports through.
+/// node lent the two output ports through, and playing the newest endpoint
+/// opened on it.
 ///
-/// The thread dials, drains and redials on its own; every frame it receives is
-/// written from that thread with no Python attached, and its log records reach
-/// the node's log through the table.
-#[pyclass]
+/// Every frame it receives is written from that thread with no Python
+/// attached, and its log records reach the node's log through the table.
+#[pyclass(frozen)]
 struct WhepPlayerThread {
+    module_host: ModuleHost,
+    commands: mpsc::Sender<WhepPlayerCommand<WhepSessionDialer>>,
+    endpoints_opened: AtomicU64,
+    endpoints_open: Arc<AtomicUsize>,
     stop_signal: Arc<WhepPlayerStopSignal>,
     reading_thread: Mutex<Option<ReadingThreadEnding>>,
 }
@@ -229,15 +266,11 @@ struct ReadingThreadEnding {
 
 #[pymethods]
 impl WhepPlayerThread {
-    /// Start playing `endpoint_url` onto the ports `module_host_table` lends:
-    /// `encoded_video` and `encoded_audio`.
+    /// Start the thread on the ports `module_host_table` lends:
+    /// `encoded_video` and `encoded_audio`. It writes nothing until an
+    /// endpoint opens on it.
     #[new]
-    #[pyo3(signature = (module_host_table, endpoint_url, bearer_token=None))]
-    fn start(
-        module_host_table: &Bound<'_, PyAny>,
-        endpoint_url: String,
-        bearer_token: Option<String>,
-    ) -> PyResult<Self> {
+    fn start(module_host_table: &Bound<'_, PyAny>) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
         module_host.refuse_while_a_frame_runs(
             ModuleHostCallTooSlowForAFrame::StartsASession,
@@ -249,56 +282,131 @@ impl WhepPlayerThread {
         let stop_signal = Arc::new(WhepPlayerStopSignal::also_set_when(Box::new(move || {
             module_host_for_the_stop_flag.stop_requested()
         })));
-        let dialer = WhepSessionDialer {
-            endpoint_url,
-            bearer_token,
-        };
+        let (commands, received_commands) = mpsc::channel();
         let (thread_ended, ended) = mpsc::channel();
         let stop_signal_of_the_thread = Arc::clone(&stop_signal);
         let join_handle = std::thread::Builder::new()
             .name("whep-player".to_owned())
             .spawn(move || {
                 play_until_stopped(
-                    &dialer,
+                    &received_commands,
                     &output_ports,
                     &stop_signal_of_the_thread,
-                    &mut |delay| stop_signal_of_the_thread.wait_unless_stopped(delay),
+                    &mut |delay| {
+                        wait_for_a_command_unless_stopped(
+                            &received_commands,
+                            &stop_signal_of_the_thread,
+                            delay,
+                        )
+                    },
                 );
                 let _ = thread_ended.send(());
             })
-            .map_err(|spawn_failure| WebRtcExtensionError::Transport {
-                what: format!("the WHEP player's reading thread did not start: {spawn_failure}"),
+            .map_err(|spawn_failure| {
+                WhepPlayerThreadEnded::new_err(format!(
+                    "WhepPlayer: the reading thread did not start: {spawn_failure}"
+                ))
             })?;
         Ok(Self {
+            module_host,
+            commands,
+            endpoints_opened: AtomicU64::new(0),
+            endpoints_open: Arc::new(AtomicUsize::new(0)),
             stop_signal,
             reading_thread: Mutex::new(Some(ReadingThreadEnding { join_handle, ended })),
         })
     }
 
-    /// Ask the thread to stop and wait up to `timeout_seconds` for it: `True`
-    /// when it ended. A thread still inside a connect outlives the wait and
-    /// closes its session itself when the connect returns.
-    fn stop_and_join(&self, python: Python<'_>, timeout_seconds: f64) -> bool {
-        self.stop_signal.set();
-        let timeout = Duration::try_from_secs_f64(timeout_seconds).unwrap_or(Duration::ZERO);
-        python.detach(|| {
-            let Ok(mut reading_thread) = self.reading_thread.lock() else {
-                return false;
-            };
-            let Some(ending) = reading_thread.take() else {
-                return true;
-            };
-            match ending.ended.recv_timeout(timeout) {
-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let _ = ending.join_handle.join();
-                    true
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    *reading_thread = Some(ending);
-                    false
-                }
-            }
+    /// Dial `endpoint_url` and play it from then on, in place of the endpoint
+    /// playing. A refusal raises `WhepSessionNotOpened` and the endpoint
+    /// playing keeps playing; with none open, the thread redials it instead.
+    #[pyo3(signature = (endpoint_url, bearer_token=None))]
+    fn open_session(
+        &self,
+        python: Python<'_>,
+        endpoint_url: String,
+        bearer_token: Option<String>,
+    ) -> PyResult<WhepPlayerSession> {
+        self.module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "WhepPlayerThread.open_session",
+        )?;
+        let number = self.endpoints_opened.fetch_add(1, Ordering::Relaxed) + 1;
+        let dialer = WhepSessionDialer {
+            endpoint_url,
+            bearer_token,
+        };
+        let another_is_open = self.endpoints_open.load(Ordering::Acquire) > 0;
+        let command = python
+            .detach(|| open_an_endpoint(number, dialer, another_is_open))
+            .map_err(|refusal| {
+                WhepSessionNotOpened::new_err(format!(
+                    "WhepPlayer: the session did not open, and the one playing keeps \
+                     playing: {refusal}"
+                ))
+            })?;
+        self.commands.send(command).map_err(|_| {
+            WhepPlayerThreadEnded::new_err(
+                "WhepPlayer: the reading thread has ended, so no session opens on it",
+            )
+        })?;
+        self.endpoints_open.fetch_add(1, Ordering::AcqRel);
+        Ok(WhepPlayerSession {
+            number,
+            commands: self.commands.clone(),
+            endpoints_open: Arc::clone(&self.endpoints_open),
+            closed: AtomicBool::new(false),
         })
+    }
+}
+
+impl Drop for WhepPlayerThread {
+    fn drop(&mut self) {
+        self.stop_signal.set();
+        let Some(ending) = self.reading_thread.get_mut().ok().and_then(Option::take) else {
+            return;
+        };
+        match ending.ended.recv_timeout(READING_THREAD_END_WAIT) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = ending.join_handle.join();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => self.module_host.log(
+                ModuleHostLogLevel::Warn,
+                "tatolab_webrtc::whep_player",
+                "WhepPlayer: the reading thread is still connecting; the session will close \
+                 when that connect returns",
+            ),
+        }
+    }
+}
+
+/// An endpoint open on a `WhepPlayerThread`, closed by `close()` or when let go.
+#[pyclass(frozen)]
+struct WhepPlayerSession {
+    number: u64,
+    commands: mpsc::Sender<WhepPlayerCommand<WhepSessionDialer>>,
+    endpoints_open: Arc<AtomicUsize>,
+    closed: AtomicBool,
+}
+
+#[pymethods]
+impl WhepPlayerSession {
+    /// Close the endpoint: the thread closes its session, and plays the
+    /// endpoint opened before it if that one is still open.
+    fn close(&self) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.endpoints_open.fetch_sub(1, Ordering::AcqRel);
+        let _ = self.commands.send(WhepPlayerCommand::Close {
+            number: self.number,
+        });
+    }
+}
+
+impl Drop for WhepPlayerSession {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -367,18 +475,20 @@ impl WhepPlayerOutputPorts for WhepPlayerOutputPortsLentByTheModuleHost {
     }
 }
 
-/// Dials a fresh WHEP session per attempt.
+/// One WHEP endpoint, dialled for a fresh session per attempt.
 struct WhepSessionDialer {
     endpoint_url: String,
     bearer_token: Option<String>,
 }
 
 impl WhepPlayerSessionDialer for WhepSessionDialer {
-    fn dial(&self) -> Result<Box<dyn WhepPlayerConnectedSession>, WebRtcExtensionError> {
+    type Session = ConnectedWhepPlayingSession;
+
+    fn dial(&self) -> Result<ConnectedWhepPlayingSession, WebRtcExtensionError> {
         let session = transport_stack::transport_runtime()?.block_on(
             WhepPlayingSession::connect(self.endpoint_url.clone(), self.bearer_token.clone()),
         )?;
-        Ok(Box::new(ConnectedWhepPlayingSession { session }))
+        Ok(ConnectedWhepPlayingSession { session })
     }
 }
 
@@ -416,6 +526,20 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(this_wheels_monotonic_now_ns, module)?)?;
     module.add_class::<WhipSession>()?;
     module.add_class::<WhepPlayerThread>()?;
+    module.add_class::<WhepPlayerSession>()?;
+    let python = module.py();
+    module.add(
+        "WhipSessionNotOpened",
+        python.get_type::<WhipSessionNotOpened>(),
+    )?;
+    module.add(
+        "WhepSessionNotOpened",
+        python.get_type::<WhepSessionNotOpened>(),
+    )?;
+    module.add(
+        "WhepPlayerThreadEnded",
+        python.get_type::<WhepPlayerThreadEnded>(),
+    )?;
     Ok(())
 }
 

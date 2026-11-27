@@ -194,11 +194,16 @@ impl NodeDescriptor {
                 why,
             })
         };
-        let wired_inputs: Vec<&PortDescriptor> = self
+        let mut wired_inputs: Vec<&PortDescriptor> = self
             .inputs
             .iter()
             .filter(|input| !input.is_a_setting())
             .collect();
+        // Beside other inputs, a value input, which holds a value of its own until a wire
+        // carries one, is read by the node's builds, and is not what the conversion converts.
+        if wired_inputs.len() > 1 {
+            wired_inputs.retain(|input| input.pin_default.is_none());
+        }
         let ([wired_input], [output]) = (wired_inputs.as_slice(), self.outputs.as_slice()) else {
             return refused(format!(
                 "it has {} inputs besides its settings and {} outputs",
