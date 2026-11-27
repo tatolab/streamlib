@@ -421,6 +421,10 @@ fn a_size_change_frees_the_old_sizes_slots_once_nothing_holds_them() {
     use super::super::release_everything_a_torn_down_helper_held;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
+    // Deeper than one release's scan of the shared pool observes, so the
+    // flag alone frees only some of them and the sweep has to free the rest.
+    const ROTATION_DEPTH: u32 = 16;
+
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
         return;
@@ -430,22 +434,26 @@ fn a_size_change_frees_the_old_sizes_slots_once_nothing_holds_them() {
     let pool_key = format!("size-change-test-{}", Uuid::new_v4().simple());
     let next_frame_of_width = |width: u32| {
         next_node_output_frame_of_width_over_the_escalate_op(
-            &sandbox, &registry, &pool_key, 2, width,
+            &sandbox,
+            &registry,
+            &pool_key,
+            ROTATION_DEPTH,
+            width,
         )
     };
     let allocated_texture_pool_slots =
         || sandbox.host_inner().texture_pool().stats().total_textures;
 
-    next_frame_of_width(64).expect("the first frame allocates its slot");
-    next_frame_of_width(64).expect("the second frame allocates the pool's other slot");
-    let slots_at_one_size = allocated_texture_pool_slots();
+    for _ in 0..ROTATION_DEPTH {
+        next_frame_of_width(64).expect("a frame of the old size");
+    }
+    assert_eq!(allocated_texture_pool_slots(), ROTATION_DEPTH as usize);
 
-    next_frame_of_width(128).expect("a frame of the new size");
-    next_frame_of_width(128).expect("the new size's other frame");
+    next_frame_of_width(128).expect("the first frame of the new size");
     assert_eq!(
         allocated_texture_pool_slots(),
-        slots_at_one_size,
-        "the old size's slots stayed allocated beside the new size's"
+        1,
+        "the old size's slots stayed allocated beside the new size's first"
     );
     #[cfg(target_os = "linux")]
     assert_eq!(
