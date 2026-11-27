@@ -7,10 +7,9 @@
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
-    ArrayFrameCpuAttributeToPack, DataChannelPayloadDescriptor,
+    ArrayFrameCpuAttributeToPack, DataChannelPayloadDescriptor, InputMailboxes, OutputWriter,
     array_frame_payload_of_cpu_attributes,
 };
-use streamlib::sdk::nodes::ReactiveNode;
 
 use super::messages_read_by_a_conversion::channels_block_read_by_a_conversion;
 
@@ -45,16 +44,17 @@ pub const AUDIO_TO_TENSOR_SAMPLES_ATTRIBUTE_NAME: &str = "samples";
                    rate, start sample and channel names are not carried: an Array frame states \
                    none of them."
 )]
-pub struct AudioToTensor;
-
-impl ReactiveNode for AudioToTensor::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(message) = self.inputs.read_raw(CHANNELS_INPUT_PORT)? {
+pub fn audio_to_tensor(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw(CHANNELS_INPUT_PORT)? {
             match array_frame_of_the_channels_block(
                 message.payload_descriptor,
                 message.payload.bytes(),
             ) {
-                Ok((payload_descriptor, payload)) => self.outputs.write_bytes_described_by(
+                Ok((payload_descriptor, payload)) => outputs.write_bytes_described_by(
                     ARRAY_OUTPUT_PORT,
                     &payload,
                     message.timestamp_ns,

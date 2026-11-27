@@ -11,8 +11,8 @@ use streamlib::sdk::iceoryx2::{
 use super::tensor_to_audio::*;
 use crate::pin_type_conversion::audio_to_tensor::array_frame_of_the_channels_block;
 
-fn stereo_at_48_khz() -> TensorToAudioSettings {
-    TensorToAudioSettings {
+fn stereo_at_48_khz() -> TensorToAudioInputs {
+    TensorToAudioInputs {
         channel_names: vec!["left".into(), "right".into()],
         sample_rate: 48_000,
         attribute: "samples".into(),
@@ -26,14 +26,14 @@ fn array_frame_of(
     (DataChannelPayloadDescriptor::array_frame(body), payload)
 }
 
-/// The node catalog lists `TensorToAudio`'s settings, as it registers, after its `array`
-/// port in the order its settings declare them, each an input taking no wire read at setup
+/// The node catalog lists `TensorToAudio`'s value inputs, as it registers, after its `array`
+/// port in the order it declares them, each an input taking no wire read each run
 /// with its default: `attribute` a String, `channel_names` a List of String and `sample_rate`
 /// a 32-bit unsigned Integer. It takes no config.
 ///
 /// Mental-revert: rendering only the declared inputs leaves `array` alone in `inputs`.
 #[test]
-fn the_catalog_lists_its_settings_as_inputs_taking_no_wire_after_its_port() {
+fn the_catalog_lists_its_value_inputs_as_inputs_taking_no_wire_after_its_port() {
     crate::register_media_builtin_node_types();
     let descriptor = streamlib::sdk::nodes::NODE_REGISTRY
         .descriptor(&TensorToAudio::node_class_import_path())
@@ -55,7 +55,7 @@ fn the_catalog_lists_its_settings_as_inputs_taking_no_wire_after_its_port() {
     for name in ["channel_names", "sample_rate", "attribute"] {
         assert_eq!(
             setting(name)["input_mode"],
-            serde_json::json!({"mode": "setting_only", "read": "at_setup"}),
+            serde_json::json!({"mode": "setting_only", "read": "each_run"}),
             "{name}"
         );
     }
@@ -92,7 +92,14 @@ fn the_catalog_lists_its_settings_as_inputs_taking_no_wire_after_its_port() {
         rendered.get("exposable_config_fields").is_none(),
         "a natively compiled type exposes no config field: {rendered}"
     );
-    assert!(descriptor.config_schema.is_none(), "{rendered}");
+    assert!(
+        descriptor
+            .config_schema
+            .as_ref()
+            .and_then(|config_schema| config_schema.get("properties"))
+            .is_none(),
+        "it takes no config: {rendered}"
+    );
 }
 
 #[test]
@@ -134,7 +141,7 @@ fn a_channels_block_converted_to_an_array_and_back_keeps_its_samples() {
 }
 
 #[test]
-fn the_attribute_its_settings_name_is_the_one_read() {
+fn the_attribute_its_input_names_is_the_one_read() {
     let gains = [1.0f32, 2.0, 3.0, 4.0];
     let gain_bytes: Vec<u8> = gains.iter().flat_map(|gain| gain.to_le_bytes()).collect();
     let (descriptor, payload) = array_frame_of(&[
@@ -151,13 +158,12 @@ fn the_attribute_its_settings_name_is_the_one_read() {
             data: &gain_bytes,
         },
     ]);
-    let settings = TensorToAudioSettings {
+    let held = TensorToAudioInputs {
         attribute: "gains".into(),
         ..stereo_at_48_khz()
     };
 
-    let (_, samples) =
-        channels_block_of_the_array_frame(&settings, 0, descriptor, &payload).unwrap();
+    let (_, samples) = channels_block_of_the_array_frame(&held, 0, descriptor, &payload).unwrap();
 
     assert_eq!(samples, gain_bytes);
 }
