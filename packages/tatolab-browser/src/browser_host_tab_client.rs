@@ -285,20 +285,25 @@ impl BrowserHostTabOfOneNode {
     }
 
     /// Connect to the host, open the tab, and map its frame slots.
-    fn open_the_tab_in_the_browser_host(&self) -> Result<OpenBrowserHostTabConnection, String> {
+    fn open_the_tab_in_the_browser_host(
+        &self,
+    ) -> Result<OpenBrowserHostTabConnection, BrowserPageRefused> {
         let endpoint = self.lease.endpoint_socket_path();
         let socket = UnixStream::connect(endpoint).map_err(|failure| {
-            format!(
+            BrowserPageRefused::BrowserHostUnreachable(format!(
                 "the browser host at {} did not accept: {failure}",
                 endpoint.display()
-            )
+            ))
         })?;
         socket
             .set_read_timeout(Some(BROWSER_HOST_TAB_OPEN_TIMEOUT))
-            .map_err(|failure| failure.to_string())?;
-        let socket_whose_read_timeout_ends_once_open =
-            socket.try_clone().map_err(|failure| failure.to_string())?;
-        let writing_half = socket.try_clone().map_err(|failure| failure.to_string())?;
+            .map_err(BrowserPageRefused::of_the_socket)?;
+        let socket_whose_read_timeout_ends_once_open = socket
+            .try_clone()
+            .map_err(BrowserPageRefused::of_the_socket)?;
+        let writing_half = socket
+            .try_clone()
+            .map_err(BrowserPageRefused::of_the_socket)?;
         let mut reader = TabProtocolMessageReader::over(socket);
         let mut writer = TabProtocolMessageWriter::over(writing_half)
             .sending_within(SEND_TO_THE_BROWSER_HOST_BUDGET);
@@ -307,7 +312,8 @@ impl BrowserHostTabOfOneNode {
         #[cfg(target_os = "macos")]
         let painted_iosurface_receiver = paints_into_painted_textures
             .then(checked_in_painted_iosurface_receiver)
-            .transpose()?;
+            .transpose()
+            .map_err(BrowserPageRefused::TabProtocolBroken)?;
         let tab_request = BrowserHostTabRequest {
             paint_into_shared_textures: paints_into_painted_textures,
             #[cfg(target_os = "macos")]
@@ -324,14 +330,20 @@ impl BrowserHostTabOfOneNode {
                 },
                 &[],
             )
-            .map_err(|failure| format!("the tab was not asked for: {failure}"))?;
+            .map_err(|failure| {
+                BrowserPageRefused::BrowserHostUnreachable(format!(
+                    "the tab was not asked for: {failure}"
+                ))
+            })?;
         let frame_slots = match reader.receive::<TabProtocolMessageFromBrowserHost>() {
             Ok(TabProtocolMessageFromBrowserHost::TabOpened {
                 tab_protocol_version,
                 browser_host_process_id,
             }) => {
                 let shared_memory = reader.take_attached_descriptor().map_err(|failure| {
-                    format!("the tab's frame slots did not arrive: {failure}")
+                    BrowserPageRefused::TabProtocolBroken(format!(
+                        "the tab's frame slots did not arrive: {failure}"
+                    ))
                 })?;
                 let frame_slots = BrowserHostTabFrameSlots::map_handed_over(
                     shared_memory,
@@ -339,7 +351,11 @@ impl BrowserHostTabOfOneNode {
                     self.tab_request.width,
                     self.tab_request.height,
                 )
-                .map_err(|failure| format!("the tab's frame slots were not mapped: {failure}"))?;
+                .map_err(|failure| {
+                    BrowserPageRefused::TabProtocolBroken(format!(
+                        "the tab's frame slots were not mapped: {failure}"
+                    ))
+                })?;
                 self.log(
                     ModuleHostLogLevel::Info,
                     &format!(
@@ -351,22 +367,24 @@ impl BrowserHostTabOfOneNode {
                 frame_slots
             }
             Ok(TabProtocolMessageFromBrowserHost::TabRefused { reason }) => {
-                return Err(format!("the browser host refused the page: {reason}"));
+                return Err(BrowserPageRefused::PageRefusedByTheBrowserHost(format!(
+                    "the browser host refused the page: {reason}"
+                )));
             }
             Ok(other) => {
-                return Err(format!(
+                return Err(BrowserPageRefused::TabProtocolBroken(format!(
                     "the browser host answered the open with {other:?}, not tab_opened"
-                ));
+                )));
             }
             Err(failure) => {
-                return Err(format!(
+                return Err(BrowserPageRefused::BrowserHostUnreachable(format!(
                     "the browser host did not answer the open: {failure}"
-                ));
+                )));
             }
         };
         socket_whose_read_timeout_ends_once_open
             .set_read_timeout(None)
-            .map_err(|failure| failure.to_string())?;
+            .map_err(BrowserPageRefused::of_the_socket)?;
         *self.writer() = Some(writer);
         Ok(OpenBrowserHostTabConnection {
             reader,
@@ -972,7 +990,7 @@ impl BrowserHostTabOfOneNode {
                 Ok(ModuleHostSharedNativeServiceState::Running) => {
                     match self.open_the_tab_in_the_browser_host() {
                         Ok(connection) => return Some(connection),
-                        Err(refusal) => last_refusal = refusal,
+                        Err(refusal) => last_refusal = refusal.to_string(),
                     }
                     let refused_since =
                         *refused_by_a_running_browser_host_since.get_or_insert_with(Instant::now);
@@ -1073,6 +1091,48 @@ fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
     }
 }
 
+/// Why a page could not be opened, each refusal its own kind; each displays as its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserPageRefused {
+    /// The url, size, frame rate, sample rate or pool depth is one CEF cannot render with.
+    NotRenderable(String),
+    /// A port the node lent could not be opened.
+    PortRefused(String),
+    /// The runtime did not lease the machine's browser host.
+    BrowserHostNotLeased(String),
+    /// The browser host did not accept the connection, or did not answer the open.
+    BrowserHostUnreachable(String),
+    /// The browser host refused to open the page.
+    PageRefusedByTheBrowserHost(String),
+    /// The browser host answered outside the tab protocol, or the frame slots it handed over
+    /// could not be taken.
+    TabProtocolBroken(String),
+    /// A thread the page needs could not start.
+    ThreadNotStarted(String),
+}
+
+impl BrowserPageRefused {
+    fn of_the_socket(failure: std::io::Error) -> Self {
+        BrowserPageRefused::BrowserHostUnreachable(format!(
+            "the browser host's socket could not be set up: {failure}"
+        ))
+    }
+}
+
+impl std::fmt::Display for BrowserPageRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BrowserPageRefused::NotRenderable(why)
+            | BrowserPageRefused::PortRefused(why)
+            | BrowserPageRefused::BrowserHostNotLeased(why)
+            | BrowserPageRefused::BrowserHostUnreachable(why)
+            | BrowserPageRefused::PageRefusedByTheBrowserHost(why)
+            | BrowserPageRefused::TabProtocolBroken(why)
+            | BrowserPageRefused::ThreadNotStarted(why) => f.write_str(why),
+        }
+    }
+}
+
 /// A page rendering for one node: open from `open` until `close`.
 pub struct BrowserPageRendering {
     tab: Arc<BrowserHostTabOfOneNode>,
@@ -1083,12 +1143,19 @@ pub struct BrowserPageRendering {
 impl BrowserPageRendering {
     /// Lease the machine's browser host, open `config.url` as a tab in it, and
     /// start publishing what it paints and delivering `data` to it.
-    pub fn open(config: BrowserPageConfig, ports: BrowserPagePorts) -> Result<Self, String> {
-        refuse_a_config_cef_cannot_render(&config)?;
+    pub fn open(
+        config: BrowserPageConfig,
+        ports: BrowserPagePorts,
+    ) -> Result<Self, BrowserPageRefused> {
+        refuse_a_config_cef_cannot_render(&config).map_err(BrowserPageRefused::NotRenderable)?;
         let lease = ports
             .module_host
             .lease_shared_native_service(BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME)
-            .map_err(|refusal| format!("the browser host was not leased: {refusal}"))?;
+            .map_err(|refusal| {
+                BrowserPageRefused::BrowserHostNotLeased(format!(
+                    "the browser host was not leased: {refusal}"
+                ))
+            })?;
         let tab_request = BrowserHostTabRequest {
             tenant_stream_id: lease.tenant_stream_id().to_string(),
             url: config.url.clone(),
@@ -1106,7 +1173,9 @@ impl BrowserPageRendering {
                 .map(|page_input_port| page_input_port.track.clone())
                 .collect(),
         };
-        tab_request.refuse_what_cef_cannot_render()?;
+        tab_request
+            .refuse_what_cef_cannot_render()
+            .map_err(BrowserPageRefused::NotRenderable)?;
         let tab = Arc::new(BrowserHostTabOfOneNode {
             config,
             tab_request,
@@ -1132,7 +1201,9 @@ impl BrowserPageRendering {
             })
             .map_err(|failure| {
                 tab.end_the_connection();
-                format!("the tab's connection thread did not start: {failure}")
+                BrowserPageRefused::ThreadNotStarted(format!(
+                    "the tab's connection thread did not start: {failure}"
+                ))
             })?;
         let data_input_thread = std::thread::Builder::new()
             .name("tatolab-browser-inputs".to_string())
@@ -1157,7 +1228,9 @@ impl BrowserPageRendering {
             Ok(data_input_thread) => rendering.data_input_thread = Some(data_input_thread),
             Err(failure) => {
                 rendering.close();
-                return Err(format!("the inputs thread did not start: {failure}"));
+                return Err(BrowserPageRefused::ThreadNotStarted(format!(
+                    "the inputs thread did not start: {failure}"
+                )));
             }
         }
         Ok(rendering)

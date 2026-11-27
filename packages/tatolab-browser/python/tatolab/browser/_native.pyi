@@ -5,7 +5,42 @@
 
 from typing import final
 
-__all__ = ["BrowserPageRendering"]
+__all__ = [
+    "BrowserHostNotLeased",
+    "BrowserHostUnreachable",
+    "BrowserPageNotOpened",
+    "BrowserPageNotRenderable",
+    "BrowserPagePortRefused",
+    "BrowserPageRefusedByTheBrowserHost",
+    "BrowserPageRendering",
+    "BrowserPageThreadNotStarted",
+    "BrowserTabProtocolBroken",
+]
+
+class BrowserPageNotOpened(RuntimeError):
+    """A page could not be opened; each reason is its own subclass."""
+
+class BrowserPageNotRenderable(BrowserPageNotOpened):
+    """The url, size, frame rate, sample rate or pool depth is one CEF cannot render with."""
+
+class BrowserPagePortRefused(BrowserPageNotOpened):
+    """A port the node lent could not be opened."""
+
+class BrowserHostNotLeased(BrowserPageNotOpened):
+    """The runtime did not lease the machine's browser host."""
+
+class BrowserHostUnreachable(BrowserPageNotOpened):
+    """The browser host did not accept the connection, or did not answer the open."""
+
+class BrowserPageRefusedByTheBrowserHost(BrowserPageNotOpened):
+    """The browser host refused to open the page."""
+
+class BrowserTabProtocolBroken(BrowserPageNotOpened):
+    """The browser host answered outside the tab protocol, or its frame slots could not be taken."""
+
+class BrowserPageThreadNotStarted(BrowserPageNotOpened):
+    """A thread the page needs could not start."""
+
 
 @final
 class BrowserPageRendering:
@@ -30,7 +65,8 @@ class BrowserPageRendering:
         audio_sample_rate: int,
         output_pool_rotation_depth: int,
     ) -> BrowserPageRendering:
-        """Lease the machine's browser host and open `url` as a tab in it.
+        """Lease the machine's browser host and open `url` as a tab in it, raising the subclass of
+        `BrowserPageNotOpened` that says why it could not.
 
         `module_host_table` is what `ctx.open_module_host_table(...)` returns with the three
         output ports, the data port and each wired video and audio input lent.
