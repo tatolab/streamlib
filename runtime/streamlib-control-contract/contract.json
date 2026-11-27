@@ -5,7 +5,7 @@
     "version": "4",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 4,
-    "x-contract-revision": 1
+    "x-contract-revision": 2
   },
   "methods": [
     {
@@ -8584,6 +8584,26 @@
           },
           {
             "type": "string",
+            "const": "computed_value_not_yet_built",
+            "description": "A computed value of a node written as one function has no first value yet: its build\nruns, or waits on another computed value's first value. The node runs no frame until it\nhas one."
+          },
+          {
+            "type": "string",
+            "const": "computed_value_build_failed",
+            "description": "The latest build of a computed value returned an error: the words name the value and the\nerror, and say whether the node runs no frame, the build being its first, or runs on its\nprevious value. It builds again once an input it read changes."
+          },
+          {
+            "type": "string",
+            "const": "computed_value_build_panicked",
+            "description": "The latest build of a computed value panicked: the words name the value and the panic,\nand say whether the node runs no frame or runs on its previous value."
+          },
+          {
+            "type": "string",
+            "const": "computed_value_comparison_panicked",
+            "description": "A computed value built, and comparing it with the value it would replace panicked in the\nvalue's `PartialEq`, so the node runs on its previous value, or no frame without one."
+          },
+          {
+            "type": "string",
             "const": "other",
             "description": "A problem of a kind this client does not know; the runtime never sends it. Its `words`\nsay what it is, and its `recovery` what recovers from it."
           }
@@ -8696,6 +8716,11 @@
             "type": "string",
             "const": "wait_for_the_node",
             "description": "Nothing: the node reports itself ready once it is."
+          },
+          {
+            "type": "string",
+            "const": "change_an_input_the_build_read",
+            "description": "Set or wire a new value on an input the failed build read, or fix the code the words\nname; the build runs again from the new value."
           },
           {
             "type": "string",
@@ -10992,7 +11017,7 @@
           {
             "type": "string",
             "const": "raising",
-            "description": "It runs, and its `process()` or function body keeps raising."
+            "description": "It runs, and its `process()` or function body keeps raising, or the latest build of one of\nits computed values failed."
           },
           {
             "type": "string",

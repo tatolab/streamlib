@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 mod common;
 
 use common::Counted;
-use streamlib_scope::{BuildFailure, FrameView, LastBuild, ScopeBeingDeclared, computed};
+use streamlib_scope::{
+    BuildFailure, BuildsOfAComputedValue, FrameView, LastBuild, ScopeBeingDeclared, computed,
+};
 
 /// A kernel built for a tap count, standing in for a compiled blur shader.
 #[derive(Debug, PartialEq)]
@@ -704,6 +706,72 @@ fn a_build_that_panics_fails_with_its_message_and_the_worker_keeps_building() {
 
     scope.write(|writes| writes.write(taps, 3));
     run_frames_until(&mut view, || kernel.get().taps == 3);
+}
+
+/// Mental-revert: a report read from the build's handle alone would name no computed value, and
+/// one that read the view instead of the scope would show the failed first build as building.
+#[test]
+fn the_builds_of_each_computed_value_name_it_and_say_whether_it_holds_a_value() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(4_u32);
+    let declared_on = line!() + 2;
+    let kernel = declared.declare(|| {
+        computed(move || {
+            let taps = *taps.get();
+            if taps.is_multiple_of(2) {
+                return Err(EvenTapCount(taps));
+            }
+            Ok(BlurKernel { taps })
+        })
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    let builds = scope.builds();
+    assert!(scope.wait_until_settled(SETTLE));
+
+    let [failed_first] = builds.of_each_computed_value().try_into().unwrap();
+    assert_eq!(failed_first.declared.at.file(), file!());
+    assert_eq!(failed_first.declared.at.line(), declared_on);
+    assert!(failed_first.declared.holding.ends_with("BlurKernel"));
+    assert!(!failed_first.has_a_value);
+    assert_eq!(
+        failed_first.last_build,
+        LastBuild::Failed {
+            builds: 1,
+            why: BuildFailure::Returned("a blur needs an odd tap count, not 4".to_string())
+        }
+    );
+
+    scope.write(|writes| writes.write(taps, 5));
+    run_frames_until(&mut view, || kernel.get().taps == 5);
+    scope.write(|writes| writes.write(taps, 6));
+    assert!(scope.wait_until_settled(SETTLE));
+    let [failed_again] = builds.of_each_computed_value().try_into().unwrap();
+    assert!(failed_again.has_a_value, "{failed_again:?}");
+    assert!(matches!(
+        failed_again.last_build,
+        LastBuild::Failed {
+            builds: 3,
+            why: BuildFailure::Returned(_)
+        }
+    ));
+}
+
+/// Mental-revert: a reader holding the scope strongly would keep reporting a node's builds after
+/// its body's scope is dropped.
+#[test]
+fn the_builds_of_a_closed_scope_read_none() {
+    let mut declared = ScopeBeingDeclared::new();
+    let taps = declared.input(3_u32);
+    declared.declare(|| computed(move || Ok::<_, String>(BlurKernel { taps: *taps.get() })));
+    let (scope, view) = declared.start().unwrap();
+    let builds = scope.builds();
+    let pending: Vec<BuildsOfAComputedValue> = builds.of_each_computed_value();
+    assert_eq!(pending.len(), 1);
+
+    drop(scope);
+    assert!(builds.of_each_computed_value().is_empty());
+    drop(view);
+    assert!(builds.of_each_computed_value().is_empty());
 }
 
 #[test]

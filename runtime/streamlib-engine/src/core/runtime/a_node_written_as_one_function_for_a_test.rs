@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A node type for tests written as one function: one value input, `gain`, and one computed
-//! value built from it, which each frame reads. It records each run of its body, the `gain`
+//! value built from it, which each frame reads; a gain below zero fails the build. It records each run of its body, the `gain`
 //! each build read, the value the latest frame read and each built value dropped, for a test of
 //! a value set live reaching a node that is never rebuilt. One node of the type runs at a time.
 
-use std::convert::Infallible;
 use std::sync::Once;
 
 use parking_lot::{Condvar, Mutex};
@@ -24,7 +23,7 @@ pub struct WhatTheNodeFunctionRan {
     pub bodies_run: usize,
     /// How many builds of its computed value started, held or not.
     pub builds_started: usize,
-    /// The `gain` each build of its computed value read, in the order built.
+    /// The `gain` each build of its computed value that landed read, in the order built.
     pub gains_built_from: Vec<i32>,
     /// How many frames ran.
     pub frames_run: usize,
@@ -80,8 +79,11 @@ fn a_node_written_as_one_function(
             BUILDS_LET_GO.wait(&mut held);
         }
         drop(held);
+        if gain < 0 {
+            return Err(format!("a gain below zero, {gain}, amplifies nothing"));
+        }
         RAN.lock().gains_built_from.push(gain);
-        Ok::<_, Infallible>(BuiltFromAGain { gain })
+        Ok(BuiltFromAGain { gain })
     });
     move |_ctx| {
         // Counted before the read, so a frame run before the first build is counted too.

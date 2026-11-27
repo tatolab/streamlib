@@ -14,9 +14,9 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, Location, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError, TryLockError};
+use std::sync::{Arc, PoisonError, TryLockError, Weak};
 
 /// What the scope's threads meet through: std's locks and threads, or loom's in a loom model
 /// build.
@@ -209,7 +209,9 @@ fn declare_slot(scope_id: ScopeId, slots: &mut Vec<Slot>, slot: Slot) -> SlotOf 
 }
 
 /// Declare a value `build` computes from what it reads with `.get()`, into the scope being
-/// declared on this thread. Refused outside [`ScopeBeingDeclared::declare`].
+/// declared on this thread, named in its node's diagnostics by the type it holds and where it is
+/// declared. Refused outside [`ScopeBeingDeclared::declare`].
+#[track_caller]
 pub fn computed<T, E, B>(build: B) -> Computed<T>
 where
     T: PartialEq + Send + Sync + 'static,
@@ -226,6 +228,10 @@ where
             build,
             read_at: Vec::new(),
             last_build: LastBuild::NotYetBuilt,
+            declared: ComputedValueDeclared {
+                holding: std::any::type_name::<T>(),
+                at: Location::caller(),
+            },
         },
         value: None,
         changed_at: 0,
@@ -292,6 +298,68 @@ impl LastBuild {
     }
 }
 
+/// A computed value as its node's diagnostics name it: the type it holds and where it is declared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComputedValueDeclared {
+    /// The type the value holds, as [`std::any::type_name`] names it.
+    pub holding: &'static str,
+    /// Where its [`computed`] is called.
+    pub at: &'static Location<'static>,
+}
+
+impl fmt::Display for ComputedValueDeclared {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}` declared at {}", self.holding, self.at)
+    }
+}
+
+/// How the builds of one computed value stand, for its node's diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildsOfAComputedValue {
+    pub declared: ComputedValueDeclared,
+    /// Whether it holds a value: its first build landed.
+    pub has_a_value: bool,
+    pub last_build: LastBuild,
+}
+
+/// A reader of how the builds of each computed value of a scope stand, which holds the scope
+/// open no longer than its [`Scope`] and [`FrameView`]: once they are dropped it reads none.
+#[derive(Clone)]
+pub struct BuildsOfAScope {
+    shared: Weak<ScopeAcrossThreads>,
+}
+
+impl BuildsOfAScope {
+    /// How the builds of each computed value stand, in declaration order; none once the scope
+    /// closes.
+    #[must_use]
+    pub fn of_each_computed_value(&self) -> Vec<BuildsOfAComputedValue> {
+        let Some(shared) = self.shared.upgrade() else {
+            return Vec::new();
+        };
+        let slots = lock(&shared.slots);
+        if slots.closing {
+            return Vec::new();
+        }
+        slots
+            .slots
+            .iter()
+            .filter_map(|slot| match &slot.role {
+                SlotRole::Input => None,
+                SlotRole::Computed {
+                    last_build,
+                    declared,
+                    ..
+                } => Some(BuildsOfAComputedValue {
+                    declared: *declared,
+                    has_a_value: slot.value.is_some(),
+                    last_build: last_build.clone(),
+                }),
+            })
+            .collect()
+    }
+}
+
 /// A slot a build read, and the revision it had changed at when the build started.
 struct Read {
     slot: usize,
@@ -304,6 +372,7 @@ enum SlotRole {
         build: BuildOfAnyValue,
         read_at: Vec<Read>,
         last_build: LastBuild,
+        declared: ComputedValueDeclared,
     },
 }
 
@@ -700,6 +769,14 @@ impl Scope {
         }
         drop(superseded);
         drop(written);
+    }
+
+    /// A reader of how the builds of each computed value stand, for the node's diagnostics.
+    #[must_use]
+    pub fn builds(&self) -> BuildsOfAScope {
+        BuildsOfAScope {
+            shared: Arc::downgrade(&self.shared),
+        }
     }
 
     /// How the last build of `computed` went.

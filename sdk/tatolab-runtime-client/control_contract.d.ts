@@ -626,7 +626,7 @@ export interface DiagnosticOnTheWire {
  * What a problem is. The set grows: a kind a client does not know reads as `other`, shown by
  * its `words` and recovered by its `recovery`.
  */
-export type DiagnosticKindOnTheWire = "project_venv_not_made" | "load_refused" | "start_refused" | "node_type_not_described" | "link_refused" | "keeps_crashing_the_runtime" | "recorded_by_an_earlier_runtime" | "node_failed" | "node_raising" | "node_not_ready" | "edit_not_live" | "link_not_wired" | "other";
+export type DiagnosticKindOnTheWire = "project_venv_not_made" | "load_refused" | "start_refused" | "node_type_not_described" | "link_refused" | "keeps_crashing_the_runtime" | "recorded_by_an_earlier_runtime" | "node_failed" | "node_raising" | "node_not_ready" | "edit_not_live" | "link_not_wired" | "computed_value_not_yet_built" | "computed_value_build_failed" | "computed_value_build_panicked" | "computed_value_comparison_panicked" | "other";
 
 /**
  * Where a problem applies.
@@ -667,7 +667,7 @@ export type DiagnosticPlaceOnTheWire = {
  * What recovers from a problem. The set grows: a recovery a client does not know reads as
  * `retry_the_load`.
  */
-export type DiagnosticRecoveryOnTheWire = "fix_the_code" | "fix_the_dependencies" | "fix_the_link" | "restart_the_playback" | "remove_the_stream" | "wait_for_the_node" | "retry_the_load";
+export type DiagnosticRecoveryOnTheWire = "fix_the_code" | "fix_the_dependencies" | "fix_the_link" | "restart_the_playback" | "remove_the_stream" | "wait_for_the_node" | "change_an_input_the_build_read" | "retry_the_load";
 
 /**
  * A capture device the platform gates behind a privacy prompt, as `list_streams` spells it.
@@ -7714,7 +7714,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 4;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 1;
+export declare const CONTROL_CONTRACT_REVISION: 2;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];
