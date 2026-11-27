@@ -10,10 +10,11 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY, MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32,
-    MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16, MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES,
-    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK,
-    MODULE_HOST_TABLE_STATUS_REFUSED, MODULE_HOST_TABLE_STATUS_TIMED_OUT,
-    MODULE_HOST_TABLE_TIMESTAMP_NOW,
+    MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16, MODULE_HOST_TABLE_CALL_CREATES_A_KERNEL,
+    MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE, MODULE_HOST_TABLE_CALL_STARTS_A_SESSION,
+    MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES, MODULE_HOST_TABLE_STATUS_EMPTY,
+    MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
+    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW,
     MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER,
     ModuleHostTableAudioBlockRequestedByDevice, ModuleHostTableAudioBlockRequestedByDeviceCallback,
     ModuleHostTableAudioCaptureStreamRequest, ModuleHostTableAudioPlaybackStreamRequest,
@@ -30,11 +31,11 @@ use tatolab_module_sdk::module_host_table_abi::{
 use tatolab_module_sdk::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, ModuleHost,
     ModuleHostAudioCaptureStreamRequest, ModuleHostAudioPlaybackStreamRequest,
-    ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat, ModuleHostColorInfo, ModuleHostError,
-    ModuleHostForeignDmaBuf, ModuleHostForeignIOSurface, ModuleHostHostMemoryPixels,
-    ModuleHostHostMemoryPixelsToFill, ModuleHostLogLevel, ModuleHostNodeOutputTextureRequest,
-    ModuleHostSharedNativeServiceState, ModuleHostTable, ModuleHostVirtualCameraFramePresentation,
-    refuse_a_module_host_table_this_module_cannot_read,
+    ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat, ModuleHostCallTooSlowForAFrame,
+    ModuleHostColorInfo, ModuleHostError, ModuleHostForeignDmaBuf, ModuleHostForeignIOSurface,
+    ModuleHostHostMemoryPixels, ModuleHostHostMemoryPixelsToFill, ModuleHostLogLevel,
+    ModuleHostNodeOutputTextureRequest, ModuleHostSharedNativeServiceState, ModuleHostTable,
+    ModuleHostVirtualCameraFramePresentation, refuse_a_module_host_table_this_module_cannot_read,
 };
 
 mod audio_and_virtual_camera_stream_tests;
@@ -70,6 +71,7 @@ struct StoodUpNodeHost {
     node_failure_reasons: Mutex<Vec<String>>,
     virtual_camera_calls: Mutex<Vec<String>>,
     given_up_group_declarations: Mutex<Vec<(u64, u64)>>,
+    calls_asked_about_in_a_frame: Mutex<Vec<(u32, String)>>,
 }
 
 /// What the stood-up host knows of the one playback stream it opens.
@@ -614,25 +616,50 @@ unsafe extern "C" fn declare_given_up_groups_refusing_none(
     MODULE_HOST_TABLE_STATUS_OK
 }
 
-unsafe extern "C" fn a_verb_added_at_minor_13(_node_host: *mut c_void) -> u32 {
-    13
+/// Record each call asked about, and refuse every call that opens a device, as a host whose node
+/// is running a frame on the calling thread refuses one.
+unsafe extern "C" fn refuse_a_device_opened_in_a_frame(
+    node_host: *mut c_void,
+    call_does: u32,
+    call: ModuleHostTableUtf8,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let call = unsafe { call.as_str() }.unwrap().to_string();
+    node_host_of(node_host)
+        .calls_asked_about_in_a_frame
+        .lock()
+        .unwrap()
+        .push((call_does, call.clone()));
+    if call_does == MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE {
+        unsafe { (*error_message).write(&format!("device_opened_in_a_frame: `{call}`")) };
+        return MODULE_HOST_TABLE_STATUS_REFUSED;
+    }
+    if call == "gone" {
+        unsafe { (*error_message).write("the node host is gone") };
+        return MODULE_HOST_TABLE_STATUS_REFUSED;
+    }
+    MODULE_HOST_TABLE_STATUS_OK
 }
 
-/// v1.12's fields, then one verb a later minor appended.
+unsafe extern "C" fn a_verb_added_at_minor_14(_node_host: *mut c_void) -> u32 {
+    14
+}
+
+/// v1.13's fields, then one verb a later minor appended.
 #[repr(C)]
-struct ModuleHostTableAtMinor13 {
-    fields_of_minor_12: ModuleHostTable,
-    a_verb_added_at_minor_13: unsafe extern "C" fn(*mut c_void) -> u32,
+struct ModuleHostTableAtMinor14 {
+    fields_of_minor_13: ModuleHostTable,
+    a_verb_added_at_minor_14: unsafe extern "C" fn(*mut c_void) -> u32,
 }
 
 fn stood_up_node_host() -> &'static StoodUpNodeHost {
     Box::leak(Box::new(StoodUpNodeHost::default()))
 }
 
-fn v1_12_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
+fn v1_13_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
     ModuleHostTable {
         abi_major: 1,
-        abi_minor: 12,
+        abi_minor: 13,
         table_size_bytes: std::mem::size_of::<ModuleHostTable>() as u64,
         node_host: std::ptr::from_ref(node_host).cast_mut().cast(),
         node_host_retain: retain,
@@ -684,5 +711,6 @@ fn v1_12_table_over(node_host: &'static StoodUpNodeHost) -> ModuleHostTable {
         surface_gpu_pool_slot_frame: gpu_pool_slot_frame_naming_the_handle,
         output_port_declare_groups_given_up_before_the_next_write:
             declare_given_up_groups_refusing_none,
+        call_refused_while_a_frame_runs: refuse_a_device_opened_in_a_frame,
     }
 }

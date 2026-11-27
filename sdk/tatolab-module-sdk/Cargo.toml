@@ -8,7 +8,7 @@
 [package]
 name = "tatolab-module-sdk"
 # The module host table's ABI major.minor; a patch release never changes the table.
-version = "1.12.0"
+version = "1.13.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -30,7 +30,7 @@ function-node = ["dep:tatolab-module-sdk-macros"]
 [dependencies]
 tracing = { version = "0.1.44", optional = true }
 pyo3 = { version = "0.29.0", optional = true, default-features = false, features = ["macros"] }
-tatolab-module-sdk-macros = { path = "../tatolab-module-sdk-macros", version = "1.12.0", optional = true }
+tatolab-module-sdk-macros = { path = "../tatolab-module-sdk-macros", version = "1.13.0", optional = true }
 
 [dev-dependencies]
 pyo3 = { version = "0.29.0", features = ["auto-initialize"] }

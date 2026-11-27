@@ -715,7 +715,7 @@ fn get_outside_a_build_or_a_frame_is_refused() {
 }
 
 #[test]
-#[should_panic(expected = "`.get()` reads only in a build or a frame")]
+#[should_panic(expected = "`.get()` can't read in the node's body, which runs once")]
 fn get_in_the_body_is_refused() {
     let mut declared = ScopeBeingDeclared::new();
     let taps = declared.input(3_u32);

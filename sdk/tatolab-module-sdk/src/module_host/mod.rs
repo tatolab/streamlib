@@ -6,18 +6,21 @@
 
 use std::time::Duration;
 
+use crate::module_host_call_refused_in_a_frame::ModuleHostCallTooSlowForAFrame;
+
 use crate::module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,
     MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
     MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
     MODULE_HOST_TABLE_LOG_LEVEL_TRACE, MODULE_HOST_TABLE_LOG_LEVEL_WARN,
-    MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_TIMED_OUT, ModuleHostTable,
-    ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
-    ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels,
-    ModuleHostTableHostMemoryPixelsToFill, ModuleHostTableIOSurfaceImport,
-    ModuleHostTableMutableBytes, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableStatus,
-    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
+    MODULE_HOST_TABLE_STATUS_TIMED_OUT, ModuleHostTable, ModuleHostTableBytes,
+    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
+    ModuleHostTableHostMemoryPixels, ModuleHostTableHostMemoryPixelsToFill,
+    ModuleHostTableIOSurfaceImport, ModuleHostTableMutableBytes,
+    ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePayloadDescriptor,
+    ModuleHostTablePortHandle, ModuleHostTableStatus, ModuleHostTableSurfaceHandle,
+    ModuleHostTableUtf8,
 };
 
 mod input_port;
@@ -52,6 +55,13 @@ pub enum ModuleHostError {
     },
     /// A verb was refused by the host, naming why.
     VerbRefused { verb: &'static str, refusal: String },
+    /// A call too slow to run every frame, the module's own or a verb's, was refused because a
+    /// frame of the node's runs on the calling thread, in the host's words, which lead with the
+    /// refusal's code and show the fix.
+    CallRefusedInAFrame {
+        does: ModuleHostCallTooSlowForAFrame,
+        refusal: String,
+    },
     /// What the Python half handed over is not the module host table capsule.
     NotAModuleHostTableCapsule { refusal: String },
 }
@@ -96,7 +106,8 @@ impl std::fmt::Display for ModuleHostError {
                  {size_the_module_reads_bytes} bytes its minor states"
             ),
             Self::VerbRefused { verb, refusal } => write!(formatter, "{verb}: {refusal}"),
-            Self::NotAModuleHostTableCapsule { refusal } => formatter.write_str(refusal),
+            Self::CallRefusedInAFrame { refusal, .. }
+            | Self::NotAModuleHostTableCapsule { refusal } => formatter.write_str(refusal),
         }
     }
 }
@@ -835,6 +846,11 @@ pub(crate) fn refuse_unless_ok(
         return Ok(());
     }
     let refusal = error_message.message();
+    if status == MODULE_HOST_TABLE_STATUS_REFUSED
+        && let Some(does) = ModuleHostCallTooSlowForAFrame::leading(&refusal)
+    {
+        return Err(ModuleHostError::CallRefusedInAFrame { does, refusal });
+    }
     Err(ModuleHostError::VerbRefused {
         verb,
         refusal: if refusal.is_empty() {

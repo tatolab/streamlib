@@ -31,15 +31,19 @@ __all__ = [
     "MODULE_HOST_TABLE_ABI_MAJOR",
     "MODULE_HOST_TABLE_ABI_MINOR",
     "ComputeKernelReleased",
+    "DeviceOpenedInAFrame",
     "FunctionNodeEvaluatedAsAStandaloneNode",
+    "KernelCreatedInAFrame",
     "LastBuildOfANodeScopeComputedValue",
     "NodeScopeBeingDeclared",
     "NodeScopeComputedOutsideADeclaration",
     "NodeScopeComputedValueNotYetBuilt",
     "NodeScopeHandleOfAnotherScope",
     "NodeScopeInput",
+    "NodeScopeReadInTheBody",
     "NodeScopeReadOutsideABuildOrAFrame",
     "RunningNodeScope",
+    "SessionStartedInAFrame",
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
@@ -109,6 +113,18 @@ class ComputeKernelReleased(RuntimeError):
 
 class NodeScopeReadOutsideABuildOrAFrame(RuntimeError):
     """`.get()` reads only in a computed value's build or in the per-frame function."""
+
+class NodeScopeReadInTheBody(RuntimeError):
+    """`.get()` can't read in the node's body, which runs once; read it in a computed value's build or in the per-frame function."""
+
+class KernelCreatedInAFrame(RuntimeError):
+    """A kernel was created in the per-frame function; create it in a computed value instead."""
+
+class DeviceOpenedInAFrame(RuntimeError):
+    """A device was opened in the per-frame function; open it in a computed value instead."""
+
+class SessionStartedInAFrame(RuntimeError):
+    """A session was started in the per-frame function; start it in a computed value instead."""
 
 class NodeScopeHandleOfAnotherScope(RuntimeError):
     """The handle belongs to another node's scope than the one it was handed to."""

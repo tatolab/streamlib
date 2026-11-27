@@ -21,7 +21,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tatolab_module_sdk::{
     ModuleHost, ModuleHostAudioCaptureStream, ModuleHostAudioCaptureStreamRequest,
-    ModuleHostAudioSampleFormat, ModuleHostCapturedAudioBlock, ModuleHostLogLevel,
+    ModuleHostAudioSampleFormat, ModuleHostCallTooSlowForAFrame, ModuleHostCapturedAudioBlock,
+    ModuleHostLogLevel,
 };
 
 use captured_audio_block_hand_off_ring::CapturedAudioBlockHandOffRing;
@@ -73,6 +74,10 @@ impl MicrophoneCapture {
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+            "MicrophoneCapture",
+        )?;
         let capture_stream = python
             .detach(|| {
                 module_host.open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest {

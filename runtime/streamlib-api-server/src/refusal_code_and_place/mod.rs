@@ -310,6 +310,7 @@ impl RefusalCodeAndPlace {
             | Error::StreamFactsOfAnotherPinType(_)
             | Error::Configuration(_)
             | Error::CaptureDeviceAccessNeverAskedFor { .. }
+            | Error::CallRefusedInAFrame(_)
             | Error::Config(_)
             | Error::NotSupported(_)
             | Error::NotFound(_)

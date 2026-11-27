@@ -392,7 +392,11 @@ fn the_v1_12_table_appends_its_given_up_groups_declaration_after_every_v1_11_fie
         ),
         16 + 47 * POINTER
     );
-    assert_eq!(size_of::<ModuleHostTable>(), 16 + 48 * POINTER);
+    assert_eq!(
+        offset_of!(ModuleHostTable, call_refused_while_a_frame_runs),
+        16 + 48 * POINTER
+    );
+    assert_eq!(size_of::<ModuleHostTable>(), 16 + 49 * POINTER);
 }
 
 /// A payload descriptor lays out as the engine's 64-byte channel-sample

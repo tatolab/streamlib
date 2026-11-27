@@ -166,3 +166,77 @@ fn acquire_storage_buffer_via_limited_access() {
         byte_size
     );
 }
+
+/// A kernel created in a node's per-frame function is refused before any
+/// GPU work, naming the call and showing it wrapped in a computed value; the
+/// same creation in the node's body and in a build builds the kernel.
+///
+/// Mental revert: drop the frame check from `create_compute_kernel`, and
+/// the frame builds a kernel every frame.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — kernel construction needs GPU"
+)]
+#[test]
+fn a_kernel_created_in_a_frame_is_refused_and_one_created_in_the_body_or_a_build_is_built() {
+    use crate::core::rhi::{ComputeBindingSpec, ComputeKernelDescriptor};
+
+    let gpu = match GpuContext::init_for_platform() {
+        Ok(g) => g,
+        Err(_) => {
+            println!("Skipping - no GPU device available");
+            return;
+        }
+    };
+    let limited = GpuContextLimitedAccess::new(gpu);
+    let create_a_kernel = |limited: &GpuContextLimitedAccess| {
+        limited.escalate(|full| {
+            full.create_compute_kernel(&ComputeKernelDescriptor {
+                entry_point: "main",
+                label: "kernel_created_in_a_frame",
+                spv: include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/color_convert_nv12_buffer_to_rgba.spv"
+                )),
+                bindings: &[
+                    ComputeBindingSpec::storage_buffer(0),
+                    ComputeBindingSpec::storage_image(1),
+                ],
+                push_constant_size: 96,
+                specialization_constants: &[],
+            })
+        })
+    };
+
+    let mut declared = streamlib_scope::ScopeBeingDeclared::new();
+    let limited_of_the_build = limited.clone();
+    let built_in_a_build = declared.declare(|| {
+        create_a_kernel(&limited).expect("a kernel is built in the body");
+        streamlib_scope::computed(move || create_a_kernel(&limited_of_the_build).map(|_| true))
+    });
+    let (scope, mut view) = declared.start().unwrap();
+    assert!(scope.wait_until_settled(std::time::Duration::from_secs(30)));
+
+    let refusal = view
+        .run_frame(|| {
+            assert!(*built_in_a_build.get(), "a kernel is built in a build");
+            create_a_kernel(&limited).err()
+        })
+        .expect("every computed value is built")
+        .expect("a kernel created in a frame is refused");
+
+    assert!(matches!(
+        &refusal,
+        Error::CallRefusedInAFrame(streamlib_scope::CallRefusedInAFrame {
+            does: streamlib_scope::CallTooSlowForAFrame::CreatesAKernel,
+            call,
+        })
+            if call == "create_compute_kernel"
+    ));
+    assert!(
+        refusal
+            .to_string()
+            .contains("`let kernel = computed(move || … create_compute_kernel(…));`"),
+        "{refusal}"
+    );
+}

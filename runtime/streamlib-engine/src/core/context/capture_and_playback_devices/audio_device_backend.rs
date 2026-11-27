@@ -10,6 +10,8 @@
 
 use std::sync::{Arc, OnceLock};
 
+use streamlib_scope::CallTooSlowForAFrame;
+
 use crate::core::Result;
 use crate::core::context::capture_and_playback_devices::audio_capture_device_listing::{
     AudioCaptureDeviceListing, capture_request_with_the_default_output_monitor_resolved,
@@ -119,6 +121,8 @@ pub fn open_capture_stream_in_requested_format(
     backend: &dyn AudioDeviceBackend,
     request: &AudioDeviceStreamRequest,
 ) -> Result<Box<dyn AudioCaptureStream>> {
+    CallTooSlowForAFrame::OpensADevice
+        .refused_while_a_frame_runs("open_capture_stream_in_requested_format")?;
     let resolved_request =
         capture_request_with_the_default_output_monitor_resolved(backend, request)?;
     let request = resolved_request.as_ref().unwrap_or(request);
@@ -138,6 +142,8 @@ pub fn open_playback_stream_in_requested_format(
     backend: &dyn AudioDeviceBackend,
     request: &AudioDeviceStreamRequest,
 ) -> Result<Box<dyn AudioPlaybackStream>> {
+    CallTooSlowForAFrame::OpensADevice
+        .refused_while_a_frame_runs("open_playback_stream_in_requested_format")?;
     let playback_stream = backend.open_playback_stream(request)?;
     refuse_a_stream_outside_the_requested_format(
         backend,
@@ -592,6 +598,83 @@ mod tests {
         )
         .expect("the null stream opens at the pacing clock's rate, mono, f32");
         assert_eq!(capture_stream.stream_format().sample_rate, 48_000);
+    }
+
+    #[test]
+    fn a_device_opened_in_a_frame_is_refused_showing_it_wrapped_in_a_computed_value() {
+        let (_scope, mut view) = streamlib_scope::ScopeBeingDeclared::new().start().unwrap();
+        let request = a_request_for_silence(
+            CaptureDeviceAccessPrompting::MayAskTheUser,
+            RequestedAudioStreamFormat::default(),
+        );
+
+        let refusals = view
+            .run_frame(|| {
+                [
+                    open_capture_stream_in_requested_format(
+                        &SilentNullAudioDeviceBackend,
+                        &request,
+                    )
+                    .err(),
+                    open_playback_stream_in_requested_format(
+                        &SilentNullAudioDeviceBackend,
+                        &request,
+                    )
+                    .err(),
+                ]
+            })
+            .expect("a scope of no computed value runs its frame");
+
+        let [Some(capture_refusal), Some(playback_refusal)] = refusals else {
+            panic!("a device opened in a frame opened");
+        };
+        assert!(matches!(
+            &capture_refusal,
+            crate::core::Error::CallRefusedInAFrame(
+                streamlib_scope::CallRefusedInAFrame { does: CallTooSlowForAFrame::OpensADevice, call }
+            ) if call == "open_capture_stream_in_requested_format"
+        ));
+        assert!(matches!(
+            &playback_refusal,
+            crate::core::Error::CallRefusedInAFrame(
+                streamlib_scope::CallRefusedInAFrame { does: CallTooSlowForAFrame::OpensADevice, call }
+            ) if call == "open_playback_stream_in_requested_format"
+        ));
+        assert!(
+            capture_refusal.to_string().contains(
+                "`let device = computed(move || … open_capture_stream_in_requested_format(…));`"
+            ),
+            "{capture_refusal}"
+        );
+    }
+
+    #[test]
+    fn a_device_opens_in_a_nodes_body_and_in_a_build() {
+        let mut declared = streamlib_scope::ScopeBeingDeclared::new();
+        let opened_in_a_build = declared.declare(|| {
+            open_capture_stream_in_requested_format(
+                &SilentNullAudioDeviceBackend,
+                &a_request_for_silence(
+                    CaptureDeviceAccessPrompting::MayAskTheUser,
+                    RequestedAudioStreamFormat::default(),
+                ),
+            )
+            .expect("a device opens in the body");
+            streamlib_scope::computed(|| {
+                open_playback_stream_in_requested_format(
+                    &SilentNullAudioDeviceBackend,
+                    &a_request_for_silence(
+                        CaptureDeviceAccessPrompting::MayAskTheUser,
+                        RequestedAudioStreamFormat::default(),
+                    ),
+                )
+                .map(|_| true)
+            })
+        });
+        let (scope, mut view) = declared.start().unwrap();
+
+        assert!(scope.wait_until_settled(std::time::Duration::from_secs(5)));
+        assert_eq!(view.run_frame(|| *opened_in_a_build.get()), Some(true));
     }
 
     #[test]

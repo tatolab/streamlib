@@ -23,7 +23,7 @@ use pyo3::prelude::*;
 use tatolab_module_sdk::{
     ModuleHost, ModuleHostAudioBlockRequestedByDevice, ModuleHostAudioPlaybackStream,
     ModuleHostAudioPlaybackStreamRequest, ModuleHostAudioSampleFormat, ModuleHostAudioStreamFormat,
-    ModuleHostLogLevel,
+    ModuleHostCallTooSlowForAFrame, ModuleHostLogLevel,
 };
 
 use audio_block_draining::{AudioBlockDraining, SPEAKER_LOG_TARGET};
@@ -137,6 +137,10 @@ impl SpeakerPlayback {
         let sample_format = sample_format_named(sample_format)?;
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+            "SpeakerPlayback",
+        )?;
         let playback_stream = python
             .detach(|| {
                 module_host.open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest {

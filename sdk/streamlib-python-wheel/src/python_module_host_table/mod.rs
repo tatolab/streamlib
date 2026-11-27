@@ -25,8 +25,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use streamlib::sdk::context::CaptureDeviceAccessPrompting;
 use streamlib::sdk::iceoryx2::{InputMailboxesInner, OutputWriterInner};
+use streamlib_scope::CallTooSlowForAFrame;
 use tatolab_module_sdk::module_host_table_abi::{
-    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
+    MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,
+    MODULE_HOST_TABLE_CALL_CREATES_A_KERNEL, MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE,
+    MODULE_HOST_TABLE_CALL_STARTS_A_SESSION, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
     MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
     MODULE_HOST_TABLE_LOG_LEVEL_WARN, MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK,
@@ -54,6 +57,7 @@ use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_helper_stream_clock::helper_stream_time_ns_of_a_machine_instant;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_node_link_data_access::HelperProcessDataPlaneLentToNativeCode;
+use crate::python_node_scope::worded_while_a_frame_runs;
 
 use audio_capture_streams::{
     AudioCaptureStreamsOpenedForOneNode, audio_capture_stream_close, audio_capture_stream_liveness,
@@ -221,6 +225,7 @@ fn module_host_of_one_node(
                 output_port_write_described,
                 surface_gpu_pool_slot_frame,
                 output_port_declare_groups_given_up_before_the_next_write,
+                call_refused_while_a_frame_runs,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -292,6 +297,18 @@ unsafe fn refuse(
         error_message.write(refusal);
     }
     MODULE_HOST_TABLE_STATUS_REFUSED
+}
+
+/// The refusal of `call` a verb answers while a frame of the node's runs on this thread, written
+/// to `error_message`; `None` in the node's body, in a build, and anywhere else.
+unsafe fn refused_while_a_frame_runs(
+    error_message: *mut ModuleHostTableErrorMessage,
+    does: CallTooSlowForAFrame,
+    call: &str,
+) -> Option<ModuleHostTableStatus> {
+    worded_while_a_frame_runs(does, call)
+        .err()
+        .map(|refusal| unsafe { refuse(error_message, &refusal) })
 }
 
 unsafe extern "C" fn surface_gpu_pool_slot_frame(
@@ -563,12 +580,50 @@ unsafe extern "C" fn surface_read_into_host_memory(
     }
 }
 
+unsafe extern "C" fn call_refused_while_a_frame_runs(
+    _node_host: *mut c_void,
+    call_does: u32,
+    call: ModuleHostTableUtf8,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands a view live for the call.
+    let Ok(call) = (unsafe { call.as_str() }) else {
+        return unsafe { refuse(error_message, "the call's name is not UTF-8") };
+    };
+    let does = match call_does {
+        MODULE_HOST_TABLE_CALL_CREATES_A_KERNEL => CallTooSlowForAFrame::CreatesAKernel,
+        MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE => CallTooSlowForAFrame::OpensADevice,
+        MODULE_HOST_TABLE_CALL_STARTS_A_SESSION => CallTooSlowForAFrame::StartsASession,
+        unknown => {
+            return unsafe {
+                refuse(
+                    error_message,
+                    &format!("{unknown} names nothing a call too slow for a frame does"),
+                )
+            };
+        }
+    };
+    // SAFETY: the SDK hands an error message live for the call, or null.
+    unsafe { refused_while_a_frame_runs(error_message, does, call) }
+        .unwrap_or(MODULE_HOST_TABLE_STATUS_OK)
+}
+
 unsafe extern "C" fn shared_native_service_lease_acquire(
     node_host: *mut c_void,
     service_name: ModuleHostTableUtf8,
     granted_lease: *mut ModuleHostTableSharedNativeServiceLease,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands an error message live for the call, or null.
+    if let Some(refused) = unsafe {
+        refused_while_a_frame_runs(
+            error_message,
+            CallTooSlowForAFrame::StartsASession,
+            "lease_shared_native_service",
+        )
+    } {
+        return refused;
+    }
     // SAFETY: the SDK hands a retained node host.
     let node_host = unsafe { node_host_of(node_host) };
     // SAFETY: the SDK hands a view live for the call.
