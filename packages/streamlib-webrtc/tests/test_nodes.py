@@ -199,7 +199,11 @@ class PublisherWiredToEncoders:
         )
         self.tracks = pins[TRACKS_INPUT_PORT]
         self.publisher = NodeFunctionRunning(
-            WhipPublisher, values_to_build_with=config, pins=pins
+            WhipPublisher,
+            values_to_build_with=config,
+            pins=pins,
+            bind_pins=lambda members: {},
+            slot_counts={},
         )
         self.publisher.setup(self.context)
 
@@ -671,6 +675,8 @@ def a_player(**input_values: object) -> NodeFunctionRunning:
         WhepPlayer,
         values_to_build_with=input_values,
         pins={ENCODED_VIDEO_OUTPUT_PORT: object(), ENCODED_AUDIO_OUTPUT_PORT: object()},
+        bind_pins=lambda members: {},
+        slot_counts={},
     )
 
 

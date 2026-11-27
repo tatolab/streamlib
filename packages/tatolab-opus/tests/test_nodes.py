@@ -143,6 +143,8 @@ def an_opus_node_on_its_links(
             outputs=link_output_data_writer_of(ctx),
             node_id=node_function.__name__,
         ),
+        bind_pins=lambda members: {},
+        slot_counts={},
     )
     running.setup(ctx)
     return running

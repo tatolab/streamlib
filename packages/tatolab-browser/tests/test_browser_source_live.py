@@ -71,6 +71,8 @@ def playing() -> "Any":
         BrowserSource,
         values_to_build_with={"url": FIRST_PAGE, "width": 640, "height": 360},
         pins=pins,
+        bind_pins=lambda members: {},
+        slot_counts={},
     )
     running.setup(ctx)
     wait_until(lambda: WHAT_THE_TABS_DID == [("opened", FIRST_PAGE, 640, 360, ())])
