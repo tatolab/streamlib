@@ -69,6 +69,11 @@ pub enum ControlOperationRefusalCode {
     /// A check of the project's views and controls found no extension SDK kit to check them
     /// against; the runtime's words name each place it looked.
     ExtensionSdkNotFound,
+    /// A fused group of shader nodes cannot be built into the one island a node evaluates: a
+    /// live edit leaving it was refused whole, and a group already running goes on running as it
+    /// was; `refused_node` names the node that would evaluate it, and the runtime's words say
+    /// why it does not build.
+    ShaderNodeFusedGroupNotBuilt,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.

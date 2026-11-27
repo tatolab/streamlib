@@ -133,7 +133,7 @@ export interface ControlOperationRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "link_streams_into_a_setting" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "extension_sdk_not_found" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "link_streams_into_a_setting" | "file_not_found" | "file_changed_since_it_was_read" | "check_ran_out_of_time" | "extension_sdk_not_found" | "shader_node_fused_group_not_built" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -7714,7 +7714,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 4;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 3;
+export declare const CONTROL_CONTRACT_REVISION: 4;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

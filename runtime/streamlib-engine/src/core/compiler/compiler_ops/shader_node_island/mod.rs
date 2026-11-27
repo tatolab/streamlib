@@ -8,6 +8,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use super::running_node_restart::RunningNodesALiveEditRestarts;
 use super::shader_node_island_program::{
     ShaderNodeIslandMember, ShaderNodeIslandMemberInput, ShaderNodeIslandProgram,
@@ -21,10 +23,37 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe,
 };
 
-/// The island a shader node evaluates, on the node whose Image leaves it.
+/// The island a shader node evaluates, on the node whose Image leaves it, with where its
+/// evaluator, once running, takes the island placed on it anew.
 pub(crate) struct ShaderNodeIslandHostedHereComponent {
     pub(crate) island: ShaderNodeIslandProgram,
     pub(crate) fused_group: Arc<ShaderNodeFusedGroupOfAnIsland>,
+    pub(crate) handed_to_its_evaluator: Arc<ShaderNodeIslandHandedToItsEvaluator>,
+}
+
+/// An island with the fused group it is evaluated as, handed over to a running evaluator.
+pub(crate) struct ShaderNodeIslandWithItsFusedGroup {
+    pub(crate) island: ShaderNodeIslandProgram,
+    pub(crate) fused_group: Arc<ShaderNodeFusedGroupOfAnIsland>,
+}
+
+/// An island, with its fused group, handed to the evaluator that runs on its host, which takes
+/// it in place of the one it evaluates at its next read.
+#[derive(Default)]
+pub(crate) struct ShaderNodeIslandHandedToItsEvaluator(
+    Mutex<Option<ShaderNodeIslandWithItsFusedGroup>>,
+);
+
+impl ShaderNodeIslandHandedToItsEvaluator {
+    /// Hand `handed_over` over, in place of any handed before and not taken.
+    pub(crate) fn hand_over(&self, handed_over: ShaderNodeIslandWithItsFusedGroup) {
+        *self.0.lock() = Some(handed_over);
+    }
+
+    /// The island and fused group last handed over and not yet taken.
+    pub(crate) fn take(&self) -> Option<ShaderNodeIslandWithItsFusedGroup> {
+        self.0.lock().take()
+    }
 }
 
 /// On a shader node fused into the island another node evaluates.
@@ -48,7 +77,7 @@ fn the_shader_node_a_shader_node_is_fused_into(
     if !is_a_shader_node(graph, node_id) {
         return None;
     }
-    let links_out: Vec<&Link> = graph.traversal().v(node_id).out_e().iter().collect();
+    let links_out: Vec<&Link> = the_links_out_of_that_stand(graph, node_id);
     let [only_link_out] = links_out.as_slice() else {
         return None;
     };
@@ -56,9 +85,66 @@ fn the_shader_node_a_shader_node_is_fused_into(
     is_a_shader_node(graph, reader).then(|| reader.clone())
 }
 
-/// Whether `link` is a call inside one shader node island.
+/// The links out of `node_id` that stand, which the islands of the graph are read through: a
+/// link or node pending deletion is gone once the edit that removes it is compiled.
+fn the_links_out_of_that_stand<'graph>(
+    graph: &'graph Graph,
+    node_id: &NodeRunId,
+) -> Vec<&'graph Link> {
+    graph
+        .traversal()
+        .v(node_id)
+        .out_e()
+        .iter()
+        .filter(|link| graph.stands(link))
+        .collect()
+}
+
+/// The links into `node_id` that stand, as [`the_links_out_of_that_stand`] reads them.
+fn the_links_into_that_stand<'graph>(
+    graph: &'graph Graph,
+    node_id: &NodeRunId,
+) -> Vec<&'graph Link> {
+    graph
+        .traversal()
+        .v(node_id)
+        .in_e()
+        .iter()
+        .filter(|link| graph.stands(link))
+        .collect()
+}
+
+/// Every link into or out of `node_id`, standing or not.
+fn the_links_of<'graph>(
+    graph: &'graph Graph,
+    node_id: &NodeRunId,
+) -> impl Iterator<Item = &'graph Link> + 'graph {
+    graph
+        .traversal()
+        .v(node_id)
+        .in_e()
+        .iter()
+        .chain(graph.traversal().v(node_id).out_e().iter())
+}
+
+/// Whether `link`, which stands, is a call inside one shader node island.
 pub(crate) fn is_a_call_inside_a_shader_node_island(graph: &Graph, link: &Link) -> bool {
     the_shader_node_a_shader_node_is_fused_into(graph, link.source().node_run_id()).is_some()
+}
+
+/// Whether `link` is wired as a call inside a shader node island as the islands are placed now:
+/// its source was placed fused into the island of another.
+pub(crate) fn is_wired_as_a_call_inside_a_shader_node_island(graph: &Graph, link: &Link) -> bool {
+    was_placed_fused_into_the_island_of_another(graph, link.source().node_run_id())
+}
+
+/// Whether `node_id` was placed fused into the island another node evaluates.
+fn was_placed_fused_into_the_island_of_another(graph: &Graph, node_id: &NodeRunId) -> bool {
+    graph
+        .traversal()
+        .v(node_id)
+        .first()
+        .is_some_and(|node| node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>())
 }
 
 /// The node evaluating the island `node_id` belongs to; `node_id` itself when
@@ -126,8 +212,7 @@ pub(crate) fn the_members_of_the_shader_node_island_hosted_by(
     let mut next_to_walk = 0;
     while let Some(member_id) = members.get(next_to_walk).cloned() {
         next_to_walk += 1;
-        let links_in: Vec<&Link> = graph.traversal().v(&member_id).in_e().iter().collect();
-        for link in links_in {
+        for link in the_links_into_that_stand(graph, &member_id) {
             let source = link.source().node_run_id();
             if is_a_call_inside_a_shader_node_island(graph, link) && !members.contains(source) {
                 members.push(source.clone());
@@ -137,20 +222,20 @@ pub(crate) fn the_members_of_the_shader_node_island_hosted_by(
     members
 }
 
-/// Where a link from outside an island into one of its members is read: the
-/// host's input port it is wired to.
+/// Where a link from outside an island into one of its members is read, as the islands are
+/// placed now: the input port of the host its reader was placed in the island of.
 pub(crate) fn where_a_link_into_a_fused_shader_node_is_read(
     graph: &Graph,
     link: &Link,
 ) -> Option<InputLinkPortRef> {
     let reader = link.to_port().node_run_id();
-    if is_a_call_inside_a_shader_node_island(graph, link)
-        || !is_fused_into_the_shader_node_island_of_another(graph, reader)
+    if is_wired_as_a_call_inside_a_shader_node_island(graph, link)
+        || !was_placed_fused_into_the_island_of_another(graph, reader)
     {
         return None;
     }
     Some(the_host_input_port_a_fused_shader_node_input_is_read_at(
-        &the_host_of_the_shader_node_island_of(graph, reader),
+        &the_host_the_island_of_a_fused_node_was_placed_on(graph, reader)?,
         reader,
         link.to_port().port_name(),
     ))
@@ -171,8 +256,25 @@ pub(crate) fn the_shader_node_island_hosted_by(
         &mut members,
         &mut member_nodes_in_evaluation_order,
     )?;
-    let island = ShaderNodeIslandProgram::of_the_members(members).map_err(Error::Configuration)?;
+    let island = ShaderNodeIslandProgram::of_the_members(members)
+        .map_err(|why| the_refusal_of_a_fused_group_not_built(graph, host_id, why))?;
     Ok((island, member_nodes_in_evaluation_order))
+}
+
+/// The refusal of the fused group `host_id` evaluates, which cannot be built for `why`.
+fn the_refusal_of_a_fused_group_not_built(
+    graph: &Graph,
+    host_id: &NodeRunId,
+    why: String,
+) -> Error {
+    Error::ShaderNodeFusedGroupNotBuilt {
+        evaluated_by: graph
+            .traversal()
+            .v(host_id)
+            .first()
+            .map_or_else(|| host_id.to_string(), |host| host.display_name.clone()),
+        why,
+    }
 }
 
 fn add_the_member_after_every_member_it_reads(
@@ -191,12 +293,17 @@ fn add_the_member_after_every_member_it_reads(
         .node_types_this_stream_resolves()
         .shader_node_program_of(&node.node_type)
         .ok_or_else(|| {
-            Error::Configuration(format!(
-                "shader node `{}` is of type `{}`, which this stream holds no shader program for",
-                node.display_name, node.node_type
-            ))
+            the_refusal_of_a_fused_group_not_built(
+                graph,
+                host_id,
+                format!(
+                    "shader node `{}` is of type `{}`, which this stream holds no shader \
+                     program for",
+                    node.display_name, node.node_type
+                ),
+            )
         })?;
-    let links_in: Vec<&Link> = graph.traversal().v(node_id).in_e().iter().collect();
+    let links_in: Vec<&Link> = the_links_into_that_stand(graph, node_id);
     let mut inputs = Vec::with_capacity(program.inputs.len());
     for signature_input in &program.inputs {
         let link_in = links_in
@@ -266,16 +373,18 @@ pub(crate) struct ShaderNodesPlacedOnTheirIslands {
     pub(crate) in_a_cycle_no_node_evaluates: Vec<NodeRunId>,
 }
 
-/// Place the island of each shader node of `nodes_to_add` on the node that evaluates it. A
-/// shader node reading its own Image through the shader nodes it feeds is failed with why on
-/// its node, rather than the compile refused, so the rest of the stream plays.
+/// Place the island of each shader node of `nodes_to_place` on the node that evaluates it: the
+/// nodes a compile adds, and the running ones a live edit places anew. A host already placed
+/// keeps where its running evaluator takes the island placed on it now. A shader node reading
+/// its own Image through the shader nodes it feeds is failed with why on its node, rather than
+/// the compile refused, so the rest of the stream plays.
 pub(crate) fn place_each_shader_node_island_on_its_host(
     graph: &mut Graph,
-    nodes_to_add: &[NodeRunId],
+    nodes_to_place: &[NodeRunId],
 ) -> Result<ShaderNodesPlacedOnTheirIslands> {
     let mut placed = ShaderNodesPlacedOnTheirIslands::default();
     let mut islands_read = Vec::new();
-    for node_id in nodes_to_add {
+    for node_id in nodes_to_place {
         if !is_a_shader_node(graph, node_id) {
             continue;
         }
@@ -329,138 +438,321 @@ pub(crate) fn place_each_shader_node_island_on_its_host(
             }
         }
         if let Some(host) = graph.traversal_mut().v(&host_id).first_mut() {
+            let handed_to_its_evaluator = host
+                .get::<ShaderNodeIslandHostedHereComponent>()
+                .map(|hosted| Arc::clone(&hosted.handed_to_its_evaluator))
+                .unwrap_or_default();
             host.insert_component_without_rendering_it(ShaderNodeIslandHostedHereComponent {
                 island,
                 fused_group,
+                handed_to_its_evaluator,
             });
         }
     }
     Ok(placed)
 }
 
-/// The running shader nodes whose islands a link added or removed while the
-/// stream runs changes — one between two shader nodes, or one into or out of a
-/// node fused into another's island — with every running shader node linked
-/// to them through other shader nodes, and every other link into or out of
-/// them. A shader node holds no state, so each is stopped and built again
-/// with its island placed anew. A link going with a node the same edit
-/// removes changes no island that keeps running.
+/// What a live edit changes of the shader node islands already running, read before the edit
+/// changes anything, so a fused group that would not build refuses the edit whole.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShaderNodeIslandsALiveEditPlacesAnew {
+    /// Each running host that hosts an island after the edit too: its evaluator keeps running
+    /// and takes the island placed on it anew.
+    pub(crate) hosts_handed_their_island_anew: Vec<NodeRunId>,
+    /// Each running shader node fused into the island of another before and after the edit,
+    /// placed in the island it is fused into now.
+    pub(crate) fused_nodes_placed_anew: Vec<NodeRunId>,
+    /// Each running shader node whose place changes: a host now fused into another's island,
+    /// or in a cycle, whose evaluator stops, or a node now evaluating an island of its own,
+    /// whose evaluator is built.
+    pub(crate) nodes_whose_place_changes: Vec<NodeRunId>,
+    /// Each link of the running shader nodes placed anew that the edit neither adds nor removes
+    /// and that is wired another way once they are, or joins a node whose place changes: closed
+    /// as it was wired and wired again.
+    pub(crate) links_wired_anew: Vec<LinkUniqueId>,
+}
+
+impl ShaderNodeIslandsALiveEditPlacesAnew {
+    /// Each running shader node the edit places anew, whatever its place.
+    pub(crate) fn the_running_nodes_placed_anew(&self) -> Vec<NodeRunId> {
+        [
+            self.hosts_handed_their_island_anew.as_slice(),
+            self.fused_nodes_placed_anew.as_slice(),
+            self.nodes_whose_place_changes.as_slice(),
+        ]
+        .concat()
+    }
+
+    /// The nodes whose place changes, to stop where they ran and build where they run now,
+    /// with the links wired anew, closed and wired again with them.
+    pub(crate) fn the_nodes_and_links_built_again_in_their_new_place(
+        &self,
+    ) -> RunningNodesALiveEditRestarts {
+        RunningNodesALiveEditRestarts {
+            nodes: self.nodes_whose_place_changes.clone(),
+            links: self.links_wired_anew.clone(),
+        }
+    }
+}
+
+/// How a link touching a shader node island is wired.
+#[derive(Debug, PartialEq, Eq)]
+enum HowALinkOfAShaderNodeIslandIsWired {
+    /// As a call between two members of one island.
+    AsACallInsideTheIsland,
+    /// Through a channel into this input port of the host of its reader's island.
+    IntoTheHostOfItsReader(InputLinkPortRef),
+    /// Through a channel between its two ends' own ports.
+    BetweenItsOwnEnds,
+}
+
+/// How `link` is wired as the islands are placed now.
+fn how_a_link_of_a_shader_node_island_is_wired_now(
+    graph: &Graph,
+    link: &Link,
+) -> HowALinkOfAShaderNodeIslandIsWired {
+    if is_wired_as_a_call_inside_a_shader_node_island(graph, link) {
+        return HowALinkOfAShaderNodeIslandIsWired::AsACallInsideTheIsland;
+    }
+    where_a_link_into_a_fused_shader_node_is_read(graph, link).map_or(
+        HowALinkOfAShaderNodeIslandIsWired::BetweenItsOwnEnds,
+        HowALinkOfAShaderNodeIslandIsWired::IntoTheHostOfItsReader,
+    )
+}
+
+/// How `link`, which stands, is wired once the islands are placed as the links that stand read
+/// them.
+fn how_a_link_of_a_shader_node_island_is_wired_once_placed_anew(
+    graph: &Graph,
+    link: &Link,
+) -> HowALinkOfAShaderNodeIslandIsWired {
+    if is_a_call_inside_a_shader_node_island(graph, link) {
+        return HowALinkOfAShaderNodeIslandIsWired::AsACallInsideTheIsland;
+    }
+    let reader = link.to_port().node_run_id();
+    if !is_fused_into_the_shader_node_island_of_another(graph, reader) {
+        return HowALinkOfAShaderNodeIslandIsWired::BetweenItsOwnEnds;
+    }
+    HowALinkOfAShaderNodeIslandIsWired::IntoTheHostOfItsReader(
+        the_host_input_port_a_fused_shader_node_input_is_read_at(
+            &the_host_of_the_shader_node_island_of(graph, reader),
+            reader,
+            link.to_port().port_name(),
+        ),
+    )
+}
+
+/// The running shader node islands a live edit places anew: every running shader node linked,
+/// through shader nodes, to a shader node whose Image a link added or removed changes the
+/// readers of, or to a node the edit removes. Each fused group the edit leaves, of those and of
+/// the shader nodes it adds, is built first, so one that does not build refuses the edit with
+/// [`Error::ShaderNodeFusedGroupNotBuilt`] before anything changes.
 ///
-/// Refused by name, changing nothing, when one of those links joins a function
-/// node, whose wiring into an island is placed once, when its reader starts.
-pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
+/// A host that stays one keeps its evaluator, which takes its new island; a node whose place
+/// changes is stopped where it ran and built where it runs now; nothing else restarts.
+pub(crate) fn the_shader_node_islands_a_live_edit_places_anew(
     graph: &Graph,
     nodes_to_add: &[NodeRunId],
     nodes_to_remove: &[NodeRunId],
     links_changed: &[LinkUniqueId],
-) -> Result<RunningNodesALiveEditRestarts> {
+) -> Result<ShaderNodeIslandsALiveEditPlacesAnew> {
+    let shader_nodes_reached =
+        the_shader_nodes_an_edit_reaches(graph, nodes_to_add, nodes_to_remove, links_changed);
+    let place_of: Vec<(&NodeRunId, ShaderNodePlaceOnceEdited)> = shader_nodes_reached
+        .iter()
+        .map(|node_id| (node_id, the_place_once_edited_of(graph, node_id)))
+        .collect();
+    refuse_unless_each_fused_group_reached_builds(graph, &place_of)?;
+
     let already_running =
         |node_id: &NodeRunId| !nodes_to_add.contains(node_id) && !nodes_to_remove.contains(node_id);
-    let mut shader_nodes_to_visit: Vec<NodeRunId> = Vec::new();
-    for link_id in links_changed {
-        let Some(link) = graph.traversal().e(link_id).first() else {
+    let mut placed_anew = ShaderNodeIslandsALiveEditPlacesAnew::default();
+    for (node_id, place) in place_of
+        .iter()
+        .filter(|(node_id, _)| already_running(node_id))
+    {
+        let Some(node) = graph.traversal().v(*node_id).first() else {
             continue;
         };
-        let (source_id, reader_id) = (link.source().node_run_id(), link.to_port().node_run_id());
-        if nodes_to_remove.contains(source_id) || nodes_to_remove.contains(reader_id) {
-            continue;
-        }
-        let ends_in_a_running_island = [source_id, reader_id].into_iter().any(|node_id| {
-            already_running(node_id)
-                && graph.traversal().v(node_id).first().is_some_and(|node| {
-                    node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
-                })
-        });
-        let joins_running_shader_nodes = is_a_shader_node(graph, source_id)
-            && is_a_shader_node(graph, reader_id)
-            && (already_running(source_id) || already_running(reader_id));
-        if ends_in_a_running_island || joins_running_shader_nodes {
-            shader_nodes_to_visit.extend(
-                [source_id, reader_id]
-                    .into_iter()
-                    .filter(|node_id| is_a_shader_node(graph, node_id))
-                    .cloned(),
-            );
-        }
-    }
-
-    let mut shader_nodes_visited: HashSet<NodeRunId> = HashSet::new();
-    let mut nodes = Vec::new();
-    while let Some(node_id) = shader_nodes_to_visit.pop() {
-        if nodes_to_remove.contains(&node_id) || !shader_nodes_visited.insert(node_id.clone()) {
-            continue;
-        }
-        if already_running(&node_id) {
-            nodes.push(node_id.clone());
-        }
-        let linked_shader_nodes = graph
-            .traversal()
-            .v(&node_id)
-            .out_e()
-            .iter()
-            .map(|link| link.to_port().node_run_id().clone())
-            .chain(
-                graph
-                    .traversal()
-                    .v(&node_id)
-                    .in_e()
-                    .iter()
-                    .map(|link| link.source().node_run_id().clone()),
-            )
-            .filter(|linked| is_a_shader_node(graph, linked))
-            .collect::<Vec<_>>();
-        shader_nodes_to_visit.extend(linked_shader_nodes);
-    }
-    nodes.sort();
-
-    let mut links = Vec::new();
-    for node_id in &nodes {
-        let links_of_the_node: Vec<&Link> = graph
-            .traversal()
-            .v(node_id)
-            .in_e()
-            .iter()
-            .chain(graph.traversal().v(node_id).out_e().iter())
-            .collect();
-        for link in links_of_the_node {
-            if links.contains(&link.id) {
-                continue;
+        let to_list = match place {
+            ShaderNodePlaceOnceEdited::HostsAnIsland
+                if node.has::<ShaderNodeIslandHostedHereComponent>() =>
+            {
+                &mut placed_anew.hosts_handed_their_island_anew
             }
+            ShaderNodePlaceOnceEdited::FusedInto(_)
+                if node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>() =>
+            {
+                &mut placed_anew.fused_nodes_placed_anew
+            }
+            _ => &mut placed_anew.nodes_whose_place_changes,
+        };
+        to_list.push((*node_id).clone());
+    }
+    placed_anew.links_wired_anew =
+        the_links_wired_anew(graph, &placed_anew, links_changed, already_running);
+    Ok(placed_anew)
+}
+
+/// Where a shader node is placed once an edit is compiled, as the links that stand read it.
+#[derive(Debug, PartialEq, Eq)]
+enum ShaderNodePlaceOnceEdited {
+    /// It evaluates an island of its own.
+    HostsAnIsland,
+    /// It is fused into the island this host evaluates.
+    FusedInto(NodeRunId),
+    /// It is fused into a cycle of shader nodes, which no island evaluates.
+    InACycle,
+}
+
+fn the_place_once_edited_of(graph: &Graph, node_id: &NodeRunId) -> ShaderNodePlaceOnceEdited {
+    let host_id = the_host_of_the_shader_node_island_of(graph, node_id);
+    if is_fused_into_the_shader_node_island_of_another(graph, &host_id) {
+        ShaderNodePlaceOnceEdited::InACycle
+    } else if host_id == *node_id {
+        ShaderNodePlaceOnceEdited::HostsAnIsland
+    } else {
+        ShaderNodePlaceOnceEdited::FusedInto(host_id)
+    }
+}
+
+/// Every shader node, sorted, linked through shader nodes to a shader node whose Image a link
+/// in `links_changed` changes the readers of, to a node in `nodes_to_remove`, or to a shader
+/// node in `nodes_to_add`; the nodes removed are left out.
+fn the_shader_nodes_an_edit_reaches(
+    graph: &Graph,
+    nodes_to_add: &[NodeRunId],
+    nodes_to_remove: &[NodeRunId],
+    links_changed: &[LinkUniqueId],
+) -> Vec<NodeRunId> {
+    let mut shader_nodes_to_visit: Vec<NodeRunId> = Vec::new();
+    for link in links_changed
+        .iter()
+        .filter_map(|link_id| graph.traversal().e(link_id).first())
+        .chain(
+            nodes_to_remove
+                .iter()
+                .flat_map(|node_id| the_links_of(graph, node_id)),
+        )
+    {
+        let (source_id, reader_id) = (link.source().node_run_id(), link.to_port().node_run_id());
+        if is_a_shader_node(graph, source_id) {
+            shader_nodes_to_visit.push(source_id.clone());
+            if is_a_shader_node(graph, reader_id) {
+                shader_nodes_to_visit.push(reader_id.clone());
+            }
+        }
+    }
+    shader_nodes_to_visit.extend(
+        nodes_to_add
+            .iter()
+            .filter(|node_id| is_a_shader_node(graph, node_id))
+            .cloned(),
+    );
+
+    let mut shader_nodes_reached = HashSet::new();
+    while let Some(node_id) = shader_nodes_to_visit.pop() {
+        if nodes_to_remove.contains(&node_id) || !shader_nodes_reached.insert(node_id.clone()) {
+            continue;
+        }
+        shader_nodes_to_visit.extend(
+            the_links_of(graph, &node_id)
+                .map(|link| {
+                    if link.source().node_run_id() == &node_id {
+                        link.to_port().node_run_id().clone()
+                    } else {
+                        link.source().node_run_id().clone()
+                    }
+                })
+                .filter(|linked| is_a_shader_node(graph, linked)),
+        );
+    }
+    let mut shader_nodes_reached: Vec<NodeRunId> = shader_nodes_reached.into_iter().collect();
+    shader_nodes_reached.sort();
+    shader_nodes_reached
+}
+
+/// Build the island of each host among `place_of`, refusing with
+/// [`Error::ShaderNodeFusedGroupNotBuilt`] at the first that does not build.
+fn refuse_unless_each_fused_group_reached_builds(
+    graph: &Graph,
+    place_of: &[(&NodeRunId, ShaderNodePlaceOnceEdited)],
+) -> Result<()> {
+    let mut hosts_built = HashSet::new();
+    for (node_id, place) in place_of {
+        let host_id = match place {
+            ShaderNodePlaceOnceEdited::HostsAnIsland => *node_id,
+            ShaderNodePlaceOnceEdited::FusedInto(host_id) => host_id,
+            ShaderNodePlaceOnceEdited::InACycle => continue,
+        };
+        if hosts_built.insert(host_id) {
+            the_shader_node_island_hosted_by(graph, host_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// Each link, sorted, of the running shader nodes `placed_anew` places that the edit leaves
+/// standing and does not change itself, between two running nodes, and that joins a node whose
+/// place changes or is wired another way once the islands are placed anew.
+fn the_links_wired_anew(
+    graph: &Graph,
+    placed_anew: &ShaderNodeIslandsALiveEditPlacesAnew,
+    links_changed: &[LinkUniqueId],
+    already_running: impl Fn(&NodeRunId) -> bool,
+) -> Vec<LinkUniqueId> {
+    let mut links_wired_anew: Vec<LinkUniqueId> = Vec::new();
+    for node_id in placed_anew.the_running_nodes_placed_anew() {
+        for link in the_links_of(graph, &node_id) {
             let (source_id, reader_id) =
                 (link.source().node_run_id(), link.to_port().node_run_id());
-            if nodes_to_remove.contains(source_id) || nodes_to_remove.contains(reader_id) {
+            if links_changed.contains(&link.id)
+                || links_wired_anew.contains(&link.id)
+                || !graph.stands(link)
+                || !already_running(source_id)
+                || !already_running(reader_id)
+                || graph.the_pin_types_of_the_link_differ(&link.id)
+            {
                 continue;
             }
-            let function_node_joined =
-                [source_id, reader_id].into_iter().find(|node_id| {
-                    graph.traversal().v(*node_id).first().is_some_and(|node| {
-                        matches!(node.node_kind(), Some(NodeKind::Function { .. }))
-                    })
-                });
-            if let Some(function_node_id) = function_node_joined {
-                let name_of = |node_id: &NodeRunId| {
-                    graph
-                        .traversal()
-                        .v(node_id)
-                        .first()
-                        .map_or_else(|| node_id.to_string(), |node| node.display_name.clone())
-                };
-                return Err(Error::Configuration(format!(
-                    "the edit changes the fused group of running shader node `{}`, and its link \
-                     `{}` joins function node `{}`, whose place in an island is read once, when \
-                     its nodes start. To fix: stop the stream, make the edit, and run it again",
-                    name_of(node_id),
-                    link.id,
-                    name_of(function_node_id),
-                )));
-            }
-            if !links_changed.contains(&link.id) {
-                links.push(link.id.clone());
+            let joins_a_node_whose_place_changes = [source_id, reader_id]
+                .into_iter()
+                .any(|end| placed_anew.nodes_whose_place_changes.contains(end));
+            if joins_a_node_whose_place_changes
+                || how_a_link_of_a_shader_node_island_is_wired_now(graph, link)
+                    != how_a_link_of_a_shader_node_island_is_wired_once_placed_anew(graph, link)
+            {
+                links_wired_anew.push(link.id.clone());
             }
         }
     }
-    links.sort();
-    Ok(RunningNodesALiveEditRestarts { nodes, links })
+    links_wired_anew.sort();
+    links_wired_anew
+}
+
+/// Hand the evaluator running on each of `hosts` the island placed on its host now, which it
+/// takes in place of the one it evaluates at its next read.
+pub(crate) fn hand_each_running_host_the_island_placed_on_it(graph: &Graph, hosts: &[NodeRunId]) {
+    for host_id in hosts {
+        let Some(hosted) = graph
+            .traversal()
+            .v(host_id)
+            .first()
+            .and_then(|host| host.get::<ShaderNodeIslandHostedHereComponent>())
+        else {
+            continue;
+        };
+        tracing::info!(
+            "Handing `{host_id}` the fused group of shader nodes this edit placed on it, which \
+             it takes at its next frame"
+        );
+        hosted
+            .handed_to_its_evaluator
+            .hand_over(ShaderNodeIslandWithItsFusedGroup {
+                island: hosted.island.clone(),
+                fused_group: Arc::clone(&hosted.fused_group),
+            });
+    }
 }
 
 /// The node evaluating the island fused shader node `node_id` was placed in at
