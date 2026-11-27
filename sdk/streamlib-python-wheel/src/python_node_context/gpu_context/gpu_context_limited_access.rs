@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
@@ -16,6 +17,11 @@ use crate::python_helper_process_pixel_exchange::{
 use crate::python_node_context::format_vocabulary::parse_pixel_format_name;
 use crate::python_node_context::gpu_surface_check_out_lease::PythonGpuSurfaceCheckOutLease;
 use crate::python_node_context::gpu_surface_handle::PythonGpuSurfaceHandle;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_node_context::kernel_wire_encoding::{
+    declared_compute_bindings_to_wire, encode_lowercase_hex,
+};
+use crate::python_node_context::kernels::PythonComputeKernel;
 use crate::python_node_context::{
     escalate_scope_cannot_cross_the_process_boundary_error,
     gpu_unreachable_from_a_helper_process_error,
@@ -233,6 +239,57 @@ impl PythonGpuContextLimitedAccess {
                 rotation_depth,
             }),
         )
+    }
+
+    /// Build a compute kernel from Slang source, or from pre-compiled SPIR-V.
+    ///
+    /// Built in a node's body, or in a computed value's build so the kernel is
+    /// built again when an input it reads changes; the kernel a build replaces
+    /// is released when its `close()` runs. The engine compiles `source` and
+    /// reflects the shader at construction, taking its binding names from
+    /// it — those names are what `dispatch` resolves against. Re-creating an
+    /// identical kernel is free of compilation.
+    #[pyo3(signature = (source = None, spirv = None, push_constant_size = 0, bindings = None, entry_point = "main"))]
+    fn create_compute_kernel(
+        &self,
+        python: Python<'_>,
+        source: Option<&str>,
+        spirv: Option<&[u8]>,
+        push_constant_size: u32,
+        bindings: Option<&Bound<'_, PyDict>>,
+        entry_point: &str,
+    ) -> PyResult<PythonComputeKernel> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let declared = declared_compute_bindings_to_wire(python, bindings)?;
+            // Neither and both are refused engine-side, in the one place the
+            // rule is written; forwarding both fields keeps the wheel from
+            // becoming a second spelling of it that can drift.
+            let spirv_hex = spirv.map(encode_lowercase_hex).unwrap_or_default();
+            let (kernel_id, reflected_binding_kinds) = exchange_client.register_compute_kernel(
+                python,
+                source.unwrap_or_default(),
+                &spirv_hex,
+                entry_point,
+                push_constant_size,
+                declared.as_any(),
+            )?;
+            return Ok(PythonComputeKernel::registered(
+                kernel_id,
+                push_constant_size,
+                reflected_binding_kinds,
+                Arc::clone(exchange_client),
+            ));
+        }
+        let _ = (
+            python,
+            source,
+            spirv,
+            push_constant_size,
+            bindings,
+            entry_point,
+        );
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.

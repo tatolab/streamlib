@@ -254,7 +254,7 @@ class AlphaOverCompositor:
             }
             bindings[_COMPOSITE_OUTPUT_BINDING_NAME] = "storage_image"
             self._compute_kernel_by_texture_count[texture_count] = (
-                ctx.gpu_full_access.create_compute_kernel(
+                ctx.gpu_limited_access.create_compute_kernel(
                     source=alpha_over_compute_kernel_slang(texture_count),
                     push_constant_size=_LAYER_PLACEMENT_STRUCT.size * texture_count,
                     bindings=bindings,

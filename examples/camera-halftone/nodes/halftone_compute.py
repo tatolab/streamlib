@@ -164,7 +164,7 @@ class HalftoneCompute:
         self.halftone_frame_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
-        self.halftone_kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.halftone_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=HALFTONE_COMPUTE_SLANG,
             push_constant_size=HALFTONE_DIAL_SIZE,
             # Asserted against the shader's own reflection, so a binding renamed

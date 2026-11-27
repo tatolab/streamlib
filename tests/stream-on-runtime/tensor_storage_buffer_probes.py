@@ -392,7 +392,7 @@ class TensorStorageBufferKernelBindingProbe:
                 .reshape(KERNEL_WRITTEN_TENSOR_SHAPE)
                 .to(NATURAL_TORCH_DEVICE_TYPE)
             )
-            compute_kernel = gpu.create_compute_kernel(
+            compute_kernel = ctx.gpu_limited_access.create_compute_kernel(
                 source=WRITE_INDEX_PATTERN_SLANG
             )
             with (

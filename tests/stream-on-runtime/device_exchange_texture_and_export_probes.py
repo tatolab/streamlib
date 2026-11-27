@@ -103,7 +103,7 @@ class TextureHandleRoundTripProbe:
         observation["limited_surface_mints_no_raw_handle"] = not hasattr(
             ctx.gpu_limited_access, "export_opaque_fd"
         ) and not hasattr(ctx.gpu_limited_access, "export_dma_buf")
-        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+        fill_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=FILL_CONSTANT_SLANG,
             bindings={"output_image": "storage_image"},
         )
@@ -342,7 +342,7 @@ class OpaqueFdExportHandoffProbe:
         if socket_path is None:
             return {"failure": "STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET is not set"}
         observation = {}
-        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+        fill_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=FILL_CONSTANT_SLANG,
             bindings={"output_image": "storage_image"},
         )

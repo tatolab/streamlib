@@ -204,23 +204,6 @@ class GpuContextLimitedAccess(_GpuContextMembersBothCapabilitiesShare, Protocol)
         """
         ...
 
-    def escalate(
-        self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]
-    ) -> _EscalateResult:
-        """Refuses: the callback's one atomic privileged scope cannot span a
-        process boundary. The operations it wrapped are methods on this
-        capability and on `ctx.gpu_full_access` — call them directly."""
-        ...
-
-
-@runtime_backed_protocol
-class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
-    """The privileged GPU capability a full-access hook receives.
-
-    Each method is its own escalate round trip to the parent, which runs the
-    privileged work against the engine and answers with a handle.
-    """
-
     def create_compute_kernel(
         self,
         source: str | None = None,
@@ -231,7 +214,9 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
     ) -> ComputeKernel:
         """Build a compute kernel from Slang `source`, or from pre-compiled SPIR-V.
 
-        Constructed once in `setup()`, dispatched per frame in `process()`. The
+        Built in the node's body, or in a computed value's build so the kernel
+        is built again when an input the build reads changes; the kernel a
+        build replaces is released when the node's scope closes it. The
         engine compiles the source and reflects the shader at construction,
         taking its binding names from it — those names are what `dispatch`
         resolves against. Re-creating an identical kernel is free of
@@ -249,6 +234,23 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         raises here, naming the driver.
         """
         ...
+
+    def escalate(
+        self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]
+    ) -> _EscalateResult:
+        """Refuses: the callback's one atomic privileged scope cannot span a
+        process boundary. The operations it wrapped are methods on this
+        capability and on `ctx.gpu_full_access` — call them directly."""
+        ...
+
+
+@runtime_backed_protocol
+class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
+    """The privileged GPU capability a full-access hook receives.
+
+    Each method is its own escalate round trip to the parent, which runs the
+    privileged work against the engine and answers with a handle.
+    """
 
     def create_graphics_kernel(
         self,
@@ -496,14 +498,23 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
 class ComputeKernel(Protocol):
     """A compute kernel the engine built and holds, dispatched by name.
 
-    Constructed in `setup()` where the capability is Full, dispatched per frame
-    in `process()`. No kernel handle string, fence, timeline or slot number
-    reaches Python — the object is the handle.
+    Built with `ctx.gpu_limited_access.create_compute_kernel` in the node's body
+    or in a computed value's build, dispatched per frame. No kernel handle
+    string, fence, timeline or slot number reaches Python — the object is the
+    handle. `close()` releases the engine's kernel, and dropping the object
+    releases it when nothing closed it.
     """
 
     @property
     def binding_names(self) -> list[str]:
         """The shader's own names for this kernel's bindings, in slot order."""
+        ...
+
+    def close(self) -> None:
+        """Release the engine's kernel; its pipeline goes once no other kernel
+        built from the same shader holds it. A node's scope closes a kernel a
+        build replaced. A dispatch after this raises `ComputeKernelReleased`;
+        closing again does nothing."""
         ...
 
     def dispatch(

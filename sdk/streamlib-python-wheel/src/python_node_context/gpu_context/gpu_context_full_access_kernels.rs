@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The kernels and acceleration structures `GpuContextFullAccess` creates.
+//! The graphics and ray-tracing kernels and the acceleration structures
+//! `GpuContextFullAccess` creates.
 
 use std::sync::Arc;
 
@@ -18,70 +19,19 @@ use crate::python_node_context::gpu_unreachable_from_a_helper_process_error;
 use crate::python_node_context::kernel_wire_encoding::{
     GRAPHICS_BINDING_KIND_WIRE_NAMES, GRAPHICS_SHADER_STAGE_WIRE_BITS,
     GraphicsPipelineStateArguments, RAY_TRACING_BINDING_KIND_WIRE_NAMES,
-    RAY_TRACING_SHADER_STAGE_WIRE_BITS, declared_compute_bindings_to_wire,
-    declared_staged_kernel_bindings_to_wire, encode_little_endian_f32_hex,
-    encode_little_endian_u32_hex, encode_lowercase_hex, graphics_pipeline_state_to_wire,
-    ray_tracing_shader_groups_to_wire, ray_tracing_stages_to_wire, tlas_instances_to_wire,
+    RAY_TRACING_SHADER_STAGE_WIRE_BITS, declared_staged_kernel_bindings_to_wire,
+    encode_little_endian_f32_hex, encode_little_endian_u32_hex, encode_lowercase_hex,
+    graphics_pipeline_state_to_wire, ray_tracing_shader_groups_to_wire, ray_tracing_stages_to_wire,
+    tlas_instances_to_wire,
 };
 use crate::python_node_context::kernels::{
-    PythonAccelerationStructureHandle, PythonComputeKernel, PythonGraphicsKernel,
-    PythonRayTracingKernel,
+    PythonAccelerationStructureHandle, PythonGraphicsKernel, PythonRayTracingKernel,
 };
 
 use super::PythonGpuContextFullAccess;
 
 #[pymethods]
 impl PythonGpuContextFullAccess {
-    /// Build a compute kernel from Slang source, or from pre-compiled SPIR-V.
-    ///
-    /// Constructed once in `setup()`, dispatched per frame in `process()`.
-    /// The engine compiles `source` and reflects the shader at construction,
-    /// taking its binding names from it — those names are what `dispatch`
-    /// resolves against. Re-creating an identical kernel is free of
-    /// compilation.
-    #[pyo3(signature = (source = None, spirv = None, push_constant_size = 0, bindings = None, entry_point = "main"))]
-    fn create_compute_kernel(
-        &self,
-        python: Python<'_>,
-        source: Option<&str>,
-        spirv: Option<&[u8]>,
-        push_constant_size: u32,
-        bindings: Option<&Bound<'_, PyDict>>,
-        entry_point: &str,
-    ) -> PyResult<PythonComputeKernel> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let declared = declared_compute_bindings_to_wire(python, bindings)?;
-            // Neither and both are refused engine-side, in the one place the
-            // rule is written; forwarding both fields keeps the wheel from
-            // becoming a second spelling of it that can drift.
-            let spirv_hex = spirv.map(encode_lowercase_hex).unwrap_or_default();
-            let (kernel_id, reflected_binding_kinds) = exchange_client.register_compute_kernel(
-                python,
-                source.unwrap_or_default(),
-                &spirv_hex,
-                entry_point,
-                push_constant_size,
-                declared.as_any(),
-            )?;
-            return Ok(PythonComputeKernel {
-                kernel_id,
-                push_constant_size,
-                reflected_binding_kinds,
-                helper_process_exchange_client: Arc::clone(exchange_client),
-            });
-        }
-        let _ = (
-            python,
-            source,
-            spirv,
-            push_constant_size,
-            bindings,
-            entry_point,
-        );
-        Err(gpu_unreachable_from_a_helper_process_error())
-    }
-
     /// Build a graphics kernel from Slang source, or from pre-compiled SPIR-V.
     ///
     /// Constructed once in `setup()`, drawn per frame in `process()`. The

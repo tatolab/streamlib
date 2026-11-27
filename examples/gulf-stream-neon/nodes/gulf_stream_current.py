@@ -281,8 +281,8 @@ class GulfStreamCurrent:
         self.take_clock = TakeClock()
         gpu = ctx.gpu_full_access
         size = WORLD_TEXTURE_SIZE
-        self.fade_kernel = gpu.create_compute_kernel(source=FADE_SLANG, push_constant_size=FADE_DIALS.size)
-        self.current_kernel = gpu.create_compute_kernel(source=CURRENT_SLANG, push_constant_size=CURRENT_DIALS.size)
+        self.fade_kernel = ctx.gpu_limited_access.create_compute_kernel(source=FADE_SLANG, push_constant_size=FADE_DIALS.size)
+        self.current_kernel = ctx.gpu_limited_access.create_compute_kernel(source=CURRENT_SLANG, push_constant_size=CURRENT_DIALS.size)
         self.field = gpu.acquire_texture(size, size, FIELD_FORMAT, LAYER_USAGE)
         self.field.lock(read_only=False)
         self.field.as_numpy().reshape(size * size, 4)[:] = baked_currents(size)

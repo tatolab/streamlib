@@ -56,7 +56,7 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
-        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+        fill_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=FILL_FLOAT_SLANG,
             bindings={"output_image": "storage_image"},
         )
@@ -105,7 +105,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
-        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+        fill_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=FILL_CONSTANT_SLANG,
             bindings={"output_image": "storage_image"},
         )
@@ -275,7 +275,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
-        copy_kernel = ctx.gpu_full_access.create_compute_kernel(
+        copy_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=COPY_TEXEL_FOR_TEXEL_SLANG,
             bindings={"source_image": "sampled_texture", "output_image": "storage_image"},
         )

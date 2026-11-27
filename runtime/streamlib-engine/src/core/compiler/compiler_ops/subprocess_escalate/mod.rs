@@ -220,9 +220,9 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::CopyDeviceExportStagingBackToSurface(req) => Some(
             export_staging::handle_copy_device_export_staging_back_to_surface(sandbox, rid, req),
         ),
-        EscalateRequest::RegisterComputeKernel(req) => {
-            Some(compute::handle_register_compute_kernel(sandbox, rid, req))
-        }
+        EscalateRequest::RegisterComputeKernel(req) => Some(
+            compute::handle_register_compute_kernel(sandbox, registry, rid, req),
+        ),
         EscalateRequest::RunComputeKernel(req) => {
             Some(compute::handle_run_compute_kernel(sandbox, rid, req))
         }

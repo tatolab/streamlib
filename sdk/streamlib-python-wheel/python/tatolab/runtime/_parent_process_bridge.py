@@ -33,6 +33,7 @@ RELEASE_OWED_BY_AN_ANSWER_TO_ESCALATE_OP = {
     "acquire_storage_buffer": ("release_handle", "handle_id"),
     "register_acceleration_structure_blas": ("release_handle", "handle_id"),
     "register_acceleration_structure_tlas": ("release_handle", "handle_id"),
+    "register_compute_kernel": ("release_handle", "handle_id"),
 }
 
 

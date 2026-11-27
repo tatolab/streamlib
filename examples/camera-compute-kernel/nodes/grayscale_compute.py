@@ -120,7 +120,7 @@ class GrayscaleCompute:
         self.grayscale_frame_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
-        self.grayscale_kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.grayscale_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=GRAYSCALE_COMPUTE_SLANG,
             push_constant_size=GRAYSCALE_STRENGTH_SIZE,
             # Asserted against the shader's reflection, so a binding renamed on

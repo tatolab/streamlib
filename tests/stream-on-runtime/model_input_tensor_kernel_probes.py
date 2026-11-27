@@ -229,7 +229,7 @@ class ModelInputTensorMatrixProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self._kernels = {
             case: ModelInputTensorKernel.compile(
-                ctx.gpu_full_access,
+                ctx.gpu_limited_access,
                 width=FIT_CASES[case[0]]["width"],
                 height=FIT_CASES[case[0]]["height"],
                 fit=FIT_CASES[case[0]]["fit"],
@@ -290,7 +290,7 @@ class NonRgbaSourceRefusalProbe:
         self._reported = False
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.kernel = ModelInputTensorKernel.compile(ctx.gpu_full_access, width=32, height=24)
+        self.kernel = ModelInputTensorKernel.compile(ctx.gpu_limited_access, width=32, height=24)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = self.video_from_upstream.read()
@@ -343,7 +343,7 @@ class PadBottomRightExtentChangeProbe:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.kernel = ModelInputTensorKernel.compile(
-            ctx.gpu_full_access,
+            ctx.gpu_limited_access,
             fit="pad_bottom_right",
             pad_to_multiple_of=16,
             scale=SCALE,

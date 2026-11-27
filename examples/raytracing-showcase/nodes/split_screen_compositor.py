@@ -245,7 +245,7 @@ class SplitScreenCompositor:
         self.output_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
-        self.split_screen_kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.split_screen_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=_split_screen_compute_slang(self.left_label, self.right_label),
             push_constant_size=SPLIT_PUSH_CONSTANT_SIZE,
             bindings={

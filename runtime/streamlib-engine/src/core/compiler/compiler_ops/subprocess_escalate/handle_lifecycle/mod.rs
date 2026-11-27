@@ -17,7 +17,7 @@ pub(crate) use node_output_pools_of_one_helper::{
 };
 use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
@@ -163,6 +163,11 @@ pub(crate) struct EscalateHandleRegistry {
     /// released; they live in `GpuContext`'s own registry, so this is how a
     /// torn-down helper's structures are found again.
     acceleration_structures_built_for_the_helper: Mutex<HashSet<String>>,
+    /// How many registrations of each compute kernel this helper holds and has
+    /// not released; the kernels live in `GpuContext`'s cache, which counts
+    /// every helper's registrations, so this is how a torn-down helper's are
+    /// let go of.
+    compute_kernel_registrations_held_for_the_helper: Mutex<HashMap<String, usize>>,
 }
 
 impl EscalateHandleRegistry {
@@ -271,6 +276,44 @@ impl EscalateHandleRegistry {
         std::mem::take(&mut *self.locked_acceleration_structures_built_for_the_helper())
     }
 
+    /// Hold one more registration of the compute kernel `kernel_id` for the
+    /// helper, so its teardown releases the registration when the helper never
+    /// did.
+    pub(super) fn hold_compute_kernel_registration_for_the_helper(&self, kernel_id: &str) {
+        *self
+            .locked_compute_kernel_registrations_held_for_the_helper()
+            .entry(kernel_id.to_string())
+            .or_default() += 1;
+    }
+
+    /// Stop holding one registration of the compute kernel `kernel_id`,
+    /// answering whether the helper held one.
+    fn forget_compute_kernel_registration_the_helper_released(&self, kernel_id: &str) -> bool {
+        let mut held = self.locked_compute_kernel_registrations_held_for_the_helper();
+        let Some(registrations) = held.get_mut(kernel_id) else {
+            return false;
+        };
+        *registrations -= 1;
+        if *registrations == 0 {
+            held.remove(kernel_id);
+        }
+        true
+    }
+
+    fn take_compute_kernel_registrations_held_for_the_helper(&self) -> HashMap<String, usize> {
+        std::mem::take(&mut *self.locked_compute_kernel_registrations_held_for_the_helper())
+    }
+
+    /// Taken for one insert, removal or drain, so it recovers rather than
+    /// panics when poisoned.
+    fn locked_compute_kernel_registrations_held_for_the_helper(
+        &self,
+    ) -> MutexGuard<'_, HashMap<String, usize>> {
+        self.compute_kernel_registrations_held_for_the_helper
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Taken for one insert, removal or drain, so it recovers rather than
     /// panics when poisoned.
     fn locked_acceleration_structures_built_for_the_helper(
@@ -329,8 +372,9 @@ impl EscalateHandleRegistry {
     }
 }
 
-/// Release one handle a helper process holds — a registry entry, or an
-/// acceleration structure registered against `GpuContext`.
+/// Release one handle a helper process holds — a registry entry, an
+/// acceleration structure registered against `GpuContext`, or one registration
+/// of a compute kernel cached there.
 pub(super) fn handle_release_handle(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -352,16 +396,9 @@ pub(super) fn handle_release_handle(
     if let Some(removed_handle) = removed_handle {
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }
-    // An acceleration structure is registered against `GpuContext`
-    // rather than against the per-subprocess handle registry, so its id
-    // reaches the same release verb through the device gate.
-    let released = removed || {
-        let released_a_structure = release_acceleration_structure(sandbox, &handle_id);
-        if released_a_structure {
-            registry.forget_acceleration_structure_the_helper_released(&handle_id);
-        }
-        released_a_structure
-    };
+    let released = removed
+        || release_an_acceleration_structure_the_helper_built(sandbox, registry, &handle_id)
+        || release_a_compute_kernel_registration_the_helper_holds(sandbox, registry, &handle_id);
     if released {
         EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
@@ -374,6 +411,32 @@ pub(super) fn handle_release_handle(
             message: format!("handle_id '{handle_id}' not found in registry"),
         })
     }
+}
+
+/// An acceleration structure is registered against `GpuContext` rather than
+/// against the per-subprocess handle registry, so its id reaches the same
+/// release verb through the device gate.
+fn release_an_acceleration_structure_the_helper_built(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    handle_id: &str,
+) -> bool {
+    let released_a_structure = release_acceleration_structure(sandbox, handle_id);
+    if released_a_structure {
+        registry.forget_acceleration_structure_the_helper_released(handle_id);
+    }
+    released_a_structure
+}
+
+/// A compute kernel's id is its cache key, so one id can name several
+/// registrations: each release lets one of this helper's go.
+fn release_a_compute_kernel_registration_the_helper_holds(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    kernel_id: &str,
+) -> bool {
+    registry.forget_compute_kernel_registration_the_helper_released(kernel_id)
+        && release_compute_kernel_registration(sandbox, kernel_id)
 }
 
 /// Drop `GpuContext`'s strong reference to an acceleration structure, answering
@@ -396,6 +459,26 @@ pub(super) fn release_acceleration_structure(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (sandbox, handle_id);
+        false
+    }
+}
+
+/// Let one registration of the compute kernel `kernel_id` go in `GpuContext`'s
+/// cache, answering whether one held it; the kernel's pipeline goes with the
+/// last.
+pub(super) fn release_compute_kernel_registration(
+    sandbox: &GpuContextLimitedAccess,
+    kernel_id: &str,
+) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        sandbox
+            .escalate(|full| Ok(full.release_compute_kernel(kernel_id)))
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (sandbox, kernel_id);
         false
     }
 }
@@ -460,6 +543,13 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
     }
     for acceleration_structure_id in registry.take_acceleration_structures_built_for_the_helper() {
         release_acceleration_structure(sandbox, &acceleration_structure_id);
+    }
+    for (kernel_id, registrations) in
+        registry.take_compute_kernel_registrations_held_for_the_helper()
+    {
+        for _ in 0..registrations {
+            release_compute_kernel_registration(sandbox, &kernel_id);
+        }
     }
 }
 

@@ -3,7 +3,7 @@
 
 """Probes for named N-binding compute dispatch, from where a kernel really runs.
 
-A kernel is an object: built in `setup()` where the capability is Full,
+A kernel is an object: built in `setup()` on the limited capability,
 dispatched per frame in `process()`. Every probe runs in its own helper
 process and reports one `MARKER:PROBE_RESULT` JSON line.
 
@@ -107,7 +107,7 @@ class _ComputeKernelProbeBase:
             # a surface and asking whether it takes a write-back.
             self._gpu_full_access = gpu
             self._gpu_limited_access = ctx.gpu_limited_access
-            kernel = gpu.create_compute_kernel(
+            kernel = ctx.gpu_limited_access.create_compute_kernel(
                 source=READ_ONE_WRITE_ANOTHER_SLANG,
                 push_constant_size=4,
                 # The declaration asserts what the shader must reflect; a
@@ -167,7 +167,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         push_constants = b"\x00\x00\x00\x00"
 
         wrong_declaration = _refusal_of(
-            lambda: self._gpu_full_access.create_compute_kernel(
+            lambda: self._gpu_limited_access.create_compute_kernel(
                 source=READ_ONE_WRITE_ANOTHER_SLANG,
                 push_constant_size=4,
                 bindings={"sharpen_amount": "storage_buffer"},
@@ -381,8 +381,8 @@ class _TwoPassProbeBase:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             self._gpu_full_access = gpu
-            self._brighten = gpu.create_compute_kernel(source=BRIGHTEN_SLANG)
-            self._double = gpu.create_compute_kernel(source=DOUBLE_SLANG)
+            self._brighten = ctx.gpu_limited_access.create_compute_kernel(source=BRIGHTEN_SLANG)
+            self._double = ctx.gpu_limited_access.create_compute_kernel(source=DOUBLE_SLANG)
             usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
             self._source = gpu.acquire_texture(
                 SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
@@ -562,7 +562,7 @@ class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
 
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
-        gpu = self._gpu_full_access
+        gpu = self._gpu_limited_access
         return {
             "neither": _refusal_of(lambda: gpu.create_compute_kernel()),
             "both": _refusal_of(

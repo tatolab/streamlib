@@ -80,7 +80,7 @@ class SolidPremultipliedColourSource:
         self._frame_ring = NodeOutputTextureRing("rgba8_unorm", ["storage_binding", "texture_binding"])
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self._fill_kernel: ComputeKernel = ctx.gpu_full_access.create_compute_kernel(
+        self._fill_kernel: ComputeKernel = ctx.gpu_limited_access.create_compute_kernel(
             source=_FILL_KERNEL_SLANG,
             push_constant_size=len(self._fill_push_constants),
             bindings={"filled_frame": "storage_image"},

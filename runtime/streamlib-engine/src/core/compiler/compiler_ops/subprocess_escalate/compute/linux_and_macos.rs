@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::hex_encoded_wire_bytes::decode_hex;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::surface_bound_kernel_binding::{
@@ -58,6 +59,8 @@ pub(super) fn compute_binding_kind_to_wire(
 /// Reflection derives the binding shape and its names; the request's own
 /// declaration is checked against it rather than replacing it. Re-registering
 /// an identical kernel is a cache hit and answers with the same `kernel_id`.
+/// Each registration is the helper's to release with `release_handle`, and its
+/// teardown releases the ones it never did.
 ///
 /// The shader arrives as Slang `source` the engine compiles, or as the
 /// pre-compiled `spv_hex` escape hatch.
@@ -74,6 +77,7 @@ pub(super) fn compute_binding_kind_to_wire(
 /// 7. Push-constant size mismatch, or pipeline build failure.
 pub(in super::super) fn handle_register_compute_kernel(
     sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
     rid: String,
     req: EscalateRequestRegisterComputeKernel,
 ) -> EscalateResponse {
@@ -140,12 +144,17 @@ pub(in super::super) fn handle_register_compute_kernel(
 
     let registered = sandbox
         .escalate(|full| {
-            full.create_or_reuse_compute_kernel(
+            let (kernel_id, kernel) = full.create_or_reuse_compute_kernel(
                 &spv,
                 req.push_constant_size,
                 &declared,
                 shader_source.entry_point(),
-            )
+            )?;
+            // Held inside the escalate: its trailing device-idle wait can fail
+            // after the cache counted the registration, which would leave it
+            // held by nobody.
+            registry.hold_compute_kernel_registration_for_the_helper(&kernel_id);
+            Ok((kernel_id, kernel))
         })
         .and_then(|(kernel_id, kernel)| {
             // The caller dispatches by name and only the shader knows which

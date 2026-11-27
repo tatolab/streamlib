@@ -6,12 +6,12 @@ string.
 
 ## The model this example teaches
 
-**A kernel is an object.** It is built once in `setup()`, where the capability
-is Full, and dispatched per frame in `process()`. No handle string, fence,
+**A kernel is an object.** It is built once in `setup()`, on the limited
+capability every node holds, and dispatched per frame in `process()`. No handle string, fence,
 timeline or slot number ever reaches Python — the object is the handle:
 
 ```python
-self.grayscale_kernel = ctx.gpu_full_access.create_compute_kernel(
+self.grayscale_kernel = ctx.gpu_limited_access.create_compute_kernel(
     source=GRAYSCALE_COMPUTE_SLANG,
     push_constant_size=GRAYSCALE_STRENGTH_SIZE,
     bindings={"camera_frame": "sampled_texture", "grayscale_frame": "storage_image"},

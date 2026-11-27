@@ -345,22 +345,47 @@ impl HelperProcessGpuExchangeClient {
     /// Hand an acceleration structure this helper built back to the parent,
     /// which drops the registry's strong reference and with it the device
     /// memory the structure holds.
-    ///
-    /// Best-effort: this runs from the handle's drop, which has no caller to
-    /// raise into — so a failure is logged, never raised.
     pub(crate) fn release_acceleration_structure(
         &self,
         python: Python<'_>,
         acceleration_structure_id: &str,
     ) {
+        self.release_to_the_parent_logging_a_failure(
+            python,
+            acceleration_structure_id,
+            "acceleration structure",
+            "its device memory",
+        );
+    }
+
+    /// Hand one registration of a compute kernel back to the parent, whose
+    /// cache drops the kernel, and its pipeline, with its last registration.
+    pub(crate) fn release_compute_kernel(&self, python: Python<'_>, kernel_id: &str) {
+        self.release_to_the_parent_logging_a_failure(
+            python,
+            kernel_id,
+            "compute kernel",
+            "its pipeline",
+        );
+    }
+
+    /// Best-effort: a release runs from a close or a drop, which has no caller
+    /// to raise into — so a failure is logged, never raised.
+    fn release_to_the_parent_logging_a_failure(
+        &self,
+        python: Python<'_>,
+        handle_id: &str,
+        what_the_handle_names: &str,
+        what_stays_allocated: &str,
+    ) {
         if let Err(release_failure) = hand_a_release_handle_to_the_release_worker(
             python,
             &self.release_to_parent_without_waiting,
-            acceleration_structure_id,
+            handle_id,
         ) {
             tracing::warn!(
-                "releasing acceleration structure {acceleration_structure_id} to the parent \
-                 failed ({release_failure}); its device memory stays allocated until the runtime \
+                "releasing {what_the_handle_names} {handle_id} to the parent failed \
+                 ({release_failure}); {what_stays_allocated} stays allocated until the runtime \
                  stops"
             );
         }

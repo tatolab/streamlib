@@ -13,7 +13,8 @@ like a loop, and it is unmistakably running rather than pre-rendered.
 
 **Three kernel kinds, one stream, and every one of them an object.** Each node
 lives in its own module under `nodes/` and runs in its own child interpreter.
-Each kernel is built once in `setup()`, where the capability is Full, and used
+Each kernel is built once in `setup()`, the compute kernel on the limited
+capability and the graphics and ray-tracing kernels on the full one, and used
 per frame in `process()`:
 
 | Node | Kernel | What it does |
