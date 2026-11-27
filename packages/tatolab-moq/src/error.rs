@@ -21,6 +21,21 @@ pub enum MoqModuleError {
     #[error("{what}")]
     Relay { what: String },
 
+    /// A thread started for a node found its services held by the thread before, which did
+    /// not end in time to give them up.
+    #[error(
+        "the thread holding `{holding}` before did not end within {within:?}, so its services \
+         are not taken from it"
+    )]
+    HolderDidNotEnd {
+        holding: String,
+        within: std::time::Duration,
+    },
+
+    /// A native half used after its node closed it.
+    #[error("{what} was used after it was closed")]
+    Closed { what: &'static str },
+
     /// The port or log the runtime lent this node.
     #[error("{what}")]
     ModuleHost { what: String },
