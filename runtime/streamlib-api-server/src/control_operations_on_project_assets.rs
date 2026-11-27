@@ -16,10 +16,10 @@ use streamlib_asset_media_facts::{
     AssetMediaFactsCacheOfAProject, AssetMediaFactsCachedInTheProject,
 };
 use streamlib_project_repository::{
-    AppliedProjectTransaction, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectActionIdempotencyKey,
-    ProjectAsset, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetKind,
-    ProjectAssetOperation, ProjectOperation, ProjectRepositoryRefusal,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAsset, ProjectAssetAction,
+    ProjectAssetImportSource, ProjectAssetKind, ProjectAssetOperation, ProjectOperation,
+    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
@@ -566,12 +566,7 @@ pub(crate) fn bring_the_loaded_streams_in_line_with_the_stream_documents_of(
                     stream, path, to, ..
                 },
             ) => {
-                let file_name = path.file_name();
-                let display_name = to.as_deref().unwrap_or_else(|| {
-                    file_name
-                        .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
-                        .unwrap_or(file_name)
-                });
+                let display_name = to.as_deref().unwrap_or_else(|| path.stream_name());
                 operations_on_the_loaded_streams.show_the_stream_of_a_stream_asset_under(
                     project,
                     *stream,

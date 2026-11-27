@@ -30,6 +30,13 @@ impl<OneUnbrokenRun> Default for BagsAGapInTheNumberingSaysWereLost<OneUnbrokenR
 }
 
 impl<OneUnbrokenRun: Copy + PartialEq> BagsAGapInTheNumberingSaysWereLost<OneUnbrokenRun> {
+    /// Whether `sequence_number` in `run` is the number this reader received last: the same
+    /// message sent again for a reader that connected after it, which this reader holds.
+    pub fn is_the_last_number_received(&self, run: OneUnbrokenRun, sequence_number: u64) -> bool {
+        self.last
+            .is_some_and(|last| last.run == run && last.sequence_number == sequence_number)
+    }
+
     /// How many bags were lost before the one numbered `sequence_number` in
     /// `run`, remembering it as the last received.
     ///
@@ -113,6 +120,18 @@ mod tests {
             what_a_run_of(&[(7, 0), (7, 0), (3, 0), (4, 0)]),
             [0, 0, 0, 0]
         );
+    }
+
+    /// Only the number received last, in its own run, is the message received again.
+    #[test]
+    fn only_the_number_received_last_in_its_run_is_one_received_again() {
+        let mut lost = BagsAGapInTheNumberingSaysWereLost::default();
+        assert!(!lost.is_the_last_number_received(0, 7));
+        lost.how_many_were_lost_before(0, 7);
+        assert!(lost.is_the_last_number_received(0, 7));
+        assert!(!lost.is_the_last_number_received(0, 6));
+        assert!(!lost.is_the_last_number_received(0, 8));
+        assert!(!lost.is_the_last_number_received(1, 7));
     }
 
     /// The counting survives the numbering wrapping: a number is a `u64` that

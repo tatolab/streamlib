@@ -12,6 +12,9 @@
 compile_error!("tatolab-browser runs on Linux and macOS");
 
 pub mod browser_host_tab_client;
+#[cfg(test)]
+mod browser_host_tab_client_tests;
+pub mod browser_page_refused;
 pub mod page_audio_blocks;
 pub mod page_audio_silence_watch;
 #[cfg(test)]
@@ -23,6 +26,7 @@ pub mod painted_textures_adopted_by_the_node;
 
 use std::sync::atomic::Ordering;
 
+use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
@@ -32,6 +36,82 @@ use tatolab_browser_tab_protocol::{PageInputTrack, PageInputTrackKind};
 use crate::browser_host_tab_client::{
     BrowserPageConfig, BrowserPagePorts, BrowserPageRendering, PageInputPort,
 };
+use crate::browser_page_refused::BrowserPageRefused;
+
+create_exception!(
+    tatolab.browser._native,
+    BrowserPageNotOpened,
+    PyRuntimeError,
+    "A page could not be opened; each reason is its own subclass."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserPageNotRenderable,
+    BrowserPageNotOpened,
+    "The url, size, frame rate, sample rate or pool depth is one CEF cannot render with."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserPagePortRefused,
+    BrowserPageNotOpened,
+    "A port the node lent could not be opened."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserHostNotLeased,
+    BrowserPageNotOpened,
+    "The runtime did not lease the machine's browser host."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserHostUnreachable,
+    BrowserPageNotOpened,
+    "The browser host did not accept the connection, or did not answer the open."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserPageRefusedByTheBrowserHost,
+    BrowserPageNotOpened,
+    "The browser host refused to open the page."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserTabProtocolBroken,
+    BrowserPageNotOpened,
+    "The browser host answered outside the tab protocol, or its frame slots could not be taken."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserPageNodeSetUpNothingToOpenItOn,
+    BrowserPageNotOpened,
+    "What the node sets up on its own side to open a page on could not be set up."
+);
+create_exception!(
+    tatolab.browser._native,
+    BrowserPageThreadNotStarted,
+    BrowserPageNotOpened,
+    "A thread the page needs could not start."
+);
+
+impl From<BrowserPageRefused> for PyErr {
+    fn from(refusal: BrowserPageRefused) -> Self {
+        let why = refusal.to_string();
+        match refusal {
+            BrowserPageRefused::NotRenderable(_) => BrowserPageNotRenderable::new_err(why),
+            BrowserPageRefused::PortRefused(_) => BrowserPagePortRefused::new_err(why),
+            BrowserPageRefused::BrowserHostNotLeased(_) => BrowserHostNotLeased::new_err(why),
+            BrowserPageRefused::BrowserHostUnreachable(_) => BrowserHostUnreachable::new_err(why),
+            BrowserPageRefused::PageRefusedByTheBrowserHost(_) => {
+                BrowserPageRefusedByTheBrowserHost::new_err(why)
+            }
+            BrowserPageRefused::TabProtocolBroken(_) => BrowserTabProtocolBroken::new_err(why),
+            BrowserPageRefused::NodeSetUpNothingToOpenItOn(_) => {
+                BrowserPageNodeSetUpNothingToOpenItOn::new_err(why)
+            }
+            BrowserPageRefused::ThreadNotStarted(_) => BrowserPageThreadNotStarted::new_err(why),
+        }
+    }
+}
 
 /// A web page rendering as a tab in the machine's browser host, publishing its frames on
 /// `video`, its audio on `audio` and its published objects on `events`, and
@@ -83,58 +163,56 @@ impl PythonBrowserPageRendering {
             ModuleHostCallTooSlowForAFrame::StartsASession,
             "BrowserPageRendering",
         )?;
-        let rendering = python
-            .detach(|| -> Result<BrowserPageRendering, String> {
-                let tracks = video_input_ports
-                    .into_iter()
-                    .map(|input_port_name| (input_port_name, PageInputTrackKind::Video))
-                    .chain(
-                        audio_input_ports
-                            .into_iter()
-                            .map(|input_port_name| (input_port_name, PageInputTrackKind::Audio)),
-                    );
-                let mut page_input_ports = Vec::new();
-                for (input_port_name, kind) in tracks {
-                    page_input_ports.push(PageInputPort {
-                        input_port: module_host
-                            .open_input_port(&input_port_name)
-                            .map_err(|refusal| refusal.to_string())?,
-                        track: PageInputTrack {
-                            input_port_name,
-                            kind,
-                        },
-                    });
-                }
-                let ports = BrowserPagePorts {
-                    video_output_port: module_host
-                        .open_output_port(&video_output_port)
-                        .map_err(|refusal| refusal.to_string())?,
-                    events_output_port: module_host
-                        .open_output_port(&events_output_port)
-                        .map_err(|refusal| refusal.to_string())?,
-                    audio_output_port: module_host
-                        .open_output_port(&audio_output_port)
-                        .map_err(|refusal| refusal.to_string())?,
-                    data_input_port: module_host
-                        .open_input_port(&data_input_port)
-                        .map_err(|refusal| refusal.to_string())?,
-                    page_input_ports,
-                    module_host,
-                };
-                BrowserPageRendering::open(
-                    BrowserPageConfig {
-                        url,
-                        width,
-                        height,
-                        frame_rate,
-                        transparent_background,
-                        audio_sample_rate,
-                        output_pool_rotation_depth,
+        let rendering = python.detach(|| -> Result<BrowserPageRendering, BrowserPageRefused> {
+            let tracks = video_input_ports
+                .into_iter()
+                .map(|input_port_name| (input_port_name, PageInputTrackKind::Video))
+                .chain(
+                    audio_input_ports
+                        .into_iter()
+                        .map(|input_port_name| (input_port_name, PageInputTrackKind::Audio)),
+                );
+            let mut page_input_ports = Vec::new();
+            for (input_port_name, kind) in tracks {
+                page_input_ports.push(PageInputPort {
+                    input_port: module_host
+                        .open_input_port(&input_port_name)
+                        .map_err(|refusal| BrowserPageRefused::PortRefused(refusal.to_string()))?,
+                    track: PageInputTrack {
+                        input_port_name,
+                        kind,
                     },
-                    ports,
-                )
-            })
-            .map_err(PyRuntimeError::new_err)?;
+                });
+            }
+            let ports = BrowserPagePorts {
+                video_output_port: module_host
+                    .open_output_port(&video_output_port)
+                    .map_err(|refusal| BrowserPageRefused::PortRefused(refusal.to_string()))?,
+                events_output_port: module_host
+                    .open_output_port(&events_output_port)
+                    .map_err(|refusal| BrowserPageRefused::PortRefused(refusal.to_string()))?,
+                audio_output_port: module_host
+                    .open_output_port(&audio_output_port)
+                    .map_err(|refusal| BrowserPageRefused::PortRefused(refusal.to_string()))?,
+                data_input_port: module_host
+                    .open_input_port(&data_input_port)
+                    .map_err(|refusal| BrowserPageRefused::PortRefused(refusal.to_string()))?,
+                page_input_ports,
+                module_host,
+            };
+            BrowserPageRendering::open(
+                BrowserPageConfig {
+                    url,
+                    width,
+                    height,
+                    frame_rate,
+                    transparent_background,
+                    audio_sample_rate,
+                    output_pool_rotation_depth,
+                },
+                ports,
+            )
+        })?;
         Ok(Self { rendering })
     }
 
@@ -235,5 +313,42 @@ impl PythonBrowserPageRendering {
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PythonBrowserPageRendering>()?;
+    let python = module.py();
+    module.add(
+        "BrowserPageNotOpened",
+        python.get_type::<BrowserPageNotOpened>(),
+    )?;
+    module.add(
+        "BrowserPageNotRenderable",
+        python.get_type::<BrowserPageNotRenderable>(),
+    )?;
+    module.add(
+        "BrowserPagePortRefused",
+        python.get_type::<BrowserPagePortRefused>(),
+    )?;
+    module.add(
+        "BrowserHostNotLeased",
+        python.get_type::<BrowserHostNotLeased>(),
+    )?;
+    module.add(
+        "BrowserHostUnreachable",
+        python.get_type::<BrowserHostUnreachable>(),
+    )?;
+    module.add(
+        "BrowserPageRefusedByTheBrowserHost",
+        python.get_type::<BrowserPageRefusedByTheBrowserHost>(),
+    )?;
+    module.add(
+        "BrowserTabProtocolBroken",
+        python.get_type::<BrowserTabProtocolBroken>(),
+    )?;
+    module.add(
+        "BrowserPageNodeSetUpNothingToOpenItOn",
+        python.get_type::<BrowserPageNodeSetUpNothingToOpenItOn>(),
+    )?;
+    module.add(
+        "BrowserPageThreadNotStarted",
+        python.get_type::<BrowserPageThreadNotStarted>(),
+    )?;
     Ok(())
 }

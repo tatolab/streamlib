@@ -105,6 +105,18 @@ impl RegisteredHandle {
         }
     }
 
+    /// Whether this handle's resource is an entry of the shared texture or
+    /// pixel buffer pools, which free an unheld entry only when swept.
+    pub(crate) fn is_drawn_from_a_shared_pool(&self) -> bool {
+        match self {
+            Self::Texture { .. } | Self::PixelBuffer(_) => true,
+            #[cfg(target_os = "linux")]
+            Self::Image { .. } => false,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::StorageBuffer { .. } => false,
+        }
+    }
+
     /// Free this handle's shared pool entry as soon as nothing holds it,
     /// without waiting out the idle window — for a helper torn down.
     pub(crate) fn flag_its_shared_pool_entry_freed_as_soon_as_unheld(
@@ -546,10 +558,7 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
         .node_output_pools()
         .drain_at_the_helpers_teardown(sandbox.host_inner());
     for released_slot in unheld_node_output_pool_slots {
-        released_slot
-            .registered_handle
-            .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
-        release_node_output_pool_slot(sandbox, released_slot);
+        release_node_output_pool_slot_freed_as_soon_as_unheld(sandbox, released_slot);
     }
     // A node downstream may bind the last frame it read into each draw until
     // a new one comes, from the node's rebuilt helper or none; taking that
@@ -572,6 +581,19 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
             .iter()
             .map(|(kernel_id, registrations)| (kernel_id.as_str(), *registrations)),
     );
+}
+
+/// Release a node output pool slot no producer will publish into again,
+/// flagging its shared pool entry freed as soon as nothing holds it rather
+/// than handed back for reuse.
+pub(crate) fn release_node_output_pool_slot_freed_as_soon_as_unheld(
+    sandbox: &GpuContextLimitedAccess,
+    released_slot: ReleasedNodeOutputPoolSlot,
+) {
+    released_slot
+        .registered_handle
+        .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
+    release_node_output_pool_slot(sandbox, released_slot);
 }
 
 pub(crate) fn release_node_output_pool_slot(

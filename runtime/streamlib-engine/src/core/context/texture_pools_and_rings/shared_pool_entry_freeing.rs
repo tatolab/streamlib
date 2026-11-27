@@ -26,9 +26,10 @@ use crate::core::runtime::LoadedStreamTag;
 pub(crate) const SHARED_POOL_ENTRY_IDLE_WINDOW_BEFORE_IT_IS_FREED: Duration =
     Duration::from_secs(5);
 
-/// The longest a stopping stream waits for the GPU work naming the shared pool
-/// entries it frees; entries whose work outlasts it are destroyed later.
-pub(crate) const LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK: Duration =
+/// The longest a sweep of the shared pools — a stopping stream's, or a node
+/// output pool's size change — waits for the GPU work naming the entries it
+/// frees; entries whose work outlasts it are destroyed later.
+pub(crate) const LONGEST_A_SHARED_POOL_SWEEP_WAITS_FOR_ITS_ENTRIES_GPU_WORK: Duration =
     Duration::from_secs(1);
 
 /// The longest a stopping stream waits for the checkout leases naming the

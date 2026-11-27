@@ -3,6 +3,13 @@
 
 use super::*;
 
+/// How many slots a sweep of the shared pools destroyed, in each pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SharedPoolSlotsDestroyed {
+    pub(crate) texture_pool_slots: usize,
+    pub(crate) pixel_buffer_pool_slots: usize,
+}
+
 impl GpuContext {
     /// Acquire a pixel buffer from the shared pool.
     ///
@@ -393,18 +400,32 @@ impl GpuContext {
                 ),
             }
         }
-        let destroyed_texture_pool_slot_count = self
-            .texture_pool
-            .free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work();
-        let destroyed_pixel_buffer_pool_slot_count = self
-            .pixel_buffer_pool_manager
-            .free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work();
+        let SharedPoolSlotsDestroyed {
+            texture_pool_slots,
+            pixel_buffer_pool_slots,
+        } = self.free_every_unheld_shared_pool_entry_due_to_be_freed_waiting_for_its_gpu_work();
         tracing::debug!(
             stream = %stream,
-            destroyed_texture_pool_slot_count,
-            destroyed_pixel_buffer_pool_slot_count,
+            destroyed_texture_pool_slot_count = texture_pool_slots,
+            destroyed_pixel_buffer_pool_slot_count = pixel_buffer_pool_slots,
             "freed the shared pool entries a stopped stream last acquired"
         );
+    }
+
+    /// Free every unheld shared pool entry due to be freed, flagged or idle
+    /// past the window, in the texture pool and the pixel buffer pools,
+    /// waiting a bounded time for the GPU work naming them.
+    pub(crate) fn free_every_unheld_shared_pool_entry_due_to_be_freed_waiting_for_its_gpu_work(
+        &self,
+    ) -> SharedPoolSlotsDestroyed {
+        SharedPoolSlotsDestroyed {
+            texture_pool_slots: self
+                .texture_pool
+                .free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work(),
+            pixel_buffer_pool_slots: self
+                .pixel_buffer_pool_manager
+                .free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work(),
+        }
     }
 
     /// Free the shared pool entry behind a helper's one-off pixel buffer as

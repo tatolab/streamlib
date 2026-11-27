@@ -337,3 +337,36 @@ fn a_link_an_end_refused_whose_handover_fails_again_stays_refused_and_fails_no_c
         vec![refused.link_id.clone()]
     );
 }
+
+/// Each retry of a link an end refused restamps its state without adding to what renders it, so
+/// a link a far side refuses for hours renders no slower than it did at first.
+///
+/// Mental-revert: registering a renderer on each restamp grows the link's renderers by one each
+/// retry, every one of them run on each render of the graph.
+#[test]
+fn a_link_restamped_by_each_retry_keeps_one_renderer_for_each_type_of_component() {
+    let refused = a_link_its_reader_refused_closed_to_be_wired_again();
+    refused
+        .reader_side
+        .refuses_links
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let renderers = || {
+        refused
+            .graph
+            .read()
+            .traversal()
+            .e(&refused.link_id)
+            .first()
+            .expect("held")
+            .component_renderers()
+            .len()
+    };
+    refused.wire_the_links_the_plan_adds();
+    let after_one_retry = renderers();
+
+    unwire_each_link_an_end_refused_keeping_it(&mut refused.graph.write(), &refused.plan, &[])
+        .expect("the refused link is closed");
+    refused.wire_the_links_the_plan_adds();
+
+    assert_eq!(renderers(), after_one_retry);
+}

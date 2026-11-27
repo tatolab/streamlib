@@ -72,7 +72,7 @@ pub struct OutputWriterInner {
 /// reached the port.
 struct KeptOutputPortMessage {
     payload_bytes: Vec<u8>,
-    /// Its header as written; a send numbers it again.
+    /// Its header as written; a send again numbers it as the send that carried it.
     user_header: DataChannelSampleUserHeader,
     /// Whether the last send of it again failed, so the next failure in a row is not warned.
     the_last_send_again_failed: bool,
@@ -315,7 +315,11 @@ impl OutputWriterInner {
             {
                 continue;
             }
-            match egress.send_bytes(port, &kept_message.payload_bytes, kept_message.user_header) {
+            match egress.send_again_to_the_readers_its_last_send_missed(
+                port,
+                &kept_message.payload_bytes,
+                kept_message.user_header,
+            ) {
                 Ok(()) => kept_message.the_last_send_again_failed = false,
                 Err(refusal @ Error::PayloadExceedsChannelCeiling { .. }) => {
                     tracing::warn!(
@@ -529,6 +533,10 @@ impl OutputWriterInner {
 
     /// [`Self::write_bytes_with_timestamp`], the message's header carrying
     /// `payload_descriptor` — a pooled GPU frame's, for one.
+    ///
+    /// A port that keeps its last message keeps this one whether or not its send reached a
+    /// reader, so a send again carries the message its number was given to; one past the
+    /// channel's ceiling is refused on every send, and is not kept.
     pub fn write_bytes_described_by(
         &self,
         port: &str,
@@ -544,18 +552,26 @@ impl OutputWriterInner {
             payload_descriptor,
         );
         let mut channels = self.channels.lock();
-        if let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? {
-            if egress.a_loan_is_open.load(Ordering::Acquire) {
-                return Err(the_open_loan_refuses(port, "a write"));
-            }
-            egress.send_bytes(port, payload_bytes, user_header)?;
+        let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
+            self.keep_as_the_last_message_of(
+                port,
+                BytesKeptAsTheLastMessage::CopiedFrom(payload_bytes),
+                user_header,
+            );
+            return Ok(());
+        };
+        if egress.a_loan_is_open.load(Ordering::Acquire) {
+            return Err(the_open_loan_refuses(port, "a write"));
         }
-        self.keep_as_the_last_message_of(
-            port,
-            BytesKeptAsTheLastMessage::CopiedFrom(payload_bytes),
-            user_header,
-        );
-        Ok(())
+        let sent = egress.send_bytes(port, payload_bytes, user_header);
+        if !matches!(sent, Err(Error::PayloadExceedsChannelCeiling { .. })) {
+            self.keep_as_the_last_message_of(
+                port,
+                BytesKeptAsTheLastMessage::CopiedFrom(payload_bytes),
+                user_header,
+            );
+        }
+        sent
     }
 
     /// Loan a sample of `payload_byte_len` bytes on `port` for its writer to

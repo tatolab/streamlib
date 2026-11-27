@@ -292,3 +292,55 @@ fn a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link() {
         std::collections::BTreeMap::from([("L-portless".to_string(), 2)]),
     );
 }
+
+/// An `ordered` reader that read a port's last message reads it once, though the port sends
+/// it again for a reader that connected after it: the repeat carries the number the reader
+/// received last, is passed over and counted taken, and is told as no loss.
+///
+/// Fail-without-fix: the reader reads the last message twice, as the counter's first reader did
+/// when a second reader was linked to it live.
+#[test]
+fn an_ordered_reader_reads_once_a_message_sent_again_for_a_later_reader() {
+    let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+        .open_or_create_service(&unique_suffix("sent-again-for-a-later-reader"), 3, 16)
+        .unwrap();
+    let mailboxes = InputMailboxesInner::new();
+    mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
+    mailboxes.add_channel_subscriber(
+        "in",
+        "L-first",
+        &InboundLinkName::from("psource/out"),
+        channel.create_subscriber(16).unwrap(),
+        crate::iceoryx2::BundleMembersAtTheRead::default(),
+    );
+    let output_writer = output_writer_publishing_onto(&channel, "out");
+    output_writer.keep_the_last_message_of_output_ports(["out".to_string()]);
+    write_starting_a_group(&output_writer, "one");
+    write_starting_a_group(&output_writer, "two");
+    assert_eq!(
+        payloads_and_losses_read_off(&mailboxes, "in"),
+        [("one".to_string(), 0), ("two".to_string(), 0)]
+    );
+
+    let later_reader = channel.create_subscriber(16).unwrap();
+    output_writer.send_each_kept_message_to_a_reader_it_missed();
+    write_starting_a_group(&output_writer, "three");
+
+    assert_eq!(
+        payloads_and_losses_read_off(&mailboxes, "in"),
+        [("three".to_string(), 0)]
+    );
+    assert_eq!(
+        mailboxes
+            .dropped_bag_counts_by_inbound_link()
+            .taken_bag_count_snapshot_by_inbound_link()
+            .get("L-first")
+            .copied(),
+        Some(4)
+    );
+    let mut later_reader_read = Vec::new();
+    while let Some(sample) = later_reader.receive().unwrap() {
+        later_reader_read.push(sample.user_header().sequence_number);
+    }
+    assert_eq!(later_reader_read, [1, 2]);
+}

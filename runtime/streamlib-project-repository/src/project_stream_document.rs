@@ -29,10 +29,7 @@ pub struct ProjectStreamDocument {
 impl ProjectStreamDocument {
     /// The stream's name: the document's file name without `.graph.json`.
     pub fn stream_name(&self) -> &str {
-        let file_name = self.path.file_name();
-        file_name
-            .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
-            .unwrap_or(file_name)
+        self.path.stream_name()
     }
 
     /// The name the stream is shown under: the one its document writes, or, while it writes

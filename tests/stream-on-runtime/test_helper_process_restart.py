@@ -171,6 +171,7 @@ from tatolab.stream import (
 )
 
 STARTS_COUNTED_IN = Path(__file__).with_name("reader_starts")
+LINK_CONNECTED_IN_THE_SECOND_SETUP = Path(__file__).with_name("link_connected")
 
 
 @node(execution="continuous", interval_ms=10)
@@ -185,7 +186,8 @@ class KeepsRunning:
 
 @node(execution="continuous", interval_ms=10)
 class DiesInItsSecondSetup:
-    """Ends its first process on its tenth callback, and its second in its setup."""
+    """Ends its first process on its tenth callback, and its second in its setup once the test
+    has connected the link."""
 
     def __init__(self) -> None:
         self._callbacks = 0
@@ -200,7 +202,12 @@ class DiesInItsSecondSetup:
         STARTS_COUNTED_IN.write_text(str(self._start))
         log.info("MARKER:READER_SETTING_UP " + json.dumps({"start": self._start}))
         if self._start == 2:
-            time.sleep(4.0)
+            deadline = time.monotonic() + 30.0
+            while (
+                not LINK_CONNECTED_IN_THE_SECOND_SETUP.exists()
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
             os._exit(18)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -268,6 +275,7 @@ def test_a_link_its_reader_refused_by_dying_in_setup_is_wired_again_once_its_nex
             "mode": "live",
         },
     )
+    (project_directory / "nodes" / "link_connected").write_text("")
 
     tatolabd.await_marker(
         "READER_SETTING_UP", occurrence=3, timeout=REFUSED_LINK_WIRED_AGAIN_TIMEOUT_SECONDS

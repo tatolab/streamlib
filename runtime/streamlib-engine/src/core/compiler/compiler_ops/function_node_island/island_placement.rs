@@ -25,9 +25,8 @@ use super::{
 /// "config": {setting: value}, "pins": {input: value}, "links_into": [{"port", "from": {"node",
 /// "port"} or {"reader_input_port"}}]}]}`, where `"reads_members_over_its_pin": true` beside
 /// `"reader_input_port"` marks a bundle input fed member by member, whose reader port carries the
-/// members its links have carried, each newest, to put over the input's pin; a stateful node's
-/// `"node_uuid"` and `"state_fields"` beside its `"node"`. `"config"` holds the input values
-/// naming no input port of the node; `"pins"` holds those naming one.
+/// members its links have carried, each newest, to put over the input's pin. `"config"` holds the
+/// input values naming no input port of the node; `"pins"` holds those naming one.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -160,32 +159,13 @@ fn place_a_function_node_after_what_it_reads(
     on_the_path_from_the_output.pop();
 
     placed.insert(node_id.clone());
-    let mut island_node = serde_json::json!({
+    nodes_each_after_what_it_reads.push(serde_json::json!({
         "node": node_id.to_string(),
         "name": node_name,
         "import_path": import_path,
         "config": config,
         "pins": pins,
         "links_into": links_into,
-    });
-    let state_fields = the_state_fields_of_a_function_node(graph, &node.node_type);
-    if !state_fields.is_empty() {
-        island_node["node_uuid"] = serde_json::json!(node.node_uuid);
-        island_node["state_fields"] = serde_json::json!(state_fields);
-    }
-    nodes_each_after_what_it_reads.push(island_node);
+    }));
     Ok(())
-}
-
-/// The state record fields a function node of `node_type` carries; none for a
-/// stateless one.
-pub(crate) fn the_state_fields_of_a_function_node(
-    graph: &Graph,
-    node_type: &crate::core::descriptors::NodeClassImportPath,
-) -> Vec<String> {
-    graph
-        .node_types_this_stream_resolves()
-        .descriptor(node_type)
-        .map(|descriptor| descriptor.function_node_state_fields)
-        .unwrap_or_default()
 }

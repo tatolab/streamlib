@@ -45,6 +45,7 @@ use crate::mcp::tests::{first_text_block_json, tool_call_result};
 use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
+mod an_edit_a_placement_refuses_tests;
 mod an_edit_recorded_before_the_update_tests;
 mod built_in_value_input_set_while_playing_tests;
 mod bundle_frame_link_tests;
@@ -550,6 +551,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
                     streamlib_project_repository::graph_document_as_its_project_reads_it(
                         project.path(),
                         &project.the_graph_document_of(stream_name),
+                        &streamlib_project_repository::StreamDocumentsAnEditStaged::default(),
                     )
                     .expect("each stream fragment of the graph document resolves"),
                 )

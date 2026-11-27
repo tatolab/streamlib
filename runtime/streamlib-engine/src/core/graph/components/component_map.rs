@@ -30,9 +30,40 @@ impl<T: StorableComponent + GraphRenders<GraphLinkComponentsOnTheWire>> LinkComp
 /// TypeMap for component storage (Send + Sync).
 pub type ComponentMap = Map<dyn anymap2::any::Any + Send + Sync>;
 
-/// Closure that renders one component of the map onto what `graph` renders of its node or link,
-/// `Rendered`.
-pub type ComponentRenderer<Rendered> = Box<dyn Fn(&ComponentMap, &mut Rendered) + Send + Sync>;
+/// What renders one type of component of the map onto what `graph` renders of its node or link,
+/// `Rendered`; a node or link holds one for each type it was ever given, however often it was
+/// given a new value of it.
+pub struct ComponentRenderer<Rendered> {
+    renders: std::any::TypeId,
+    render: Box<dyn Fn(&ComponentMap, &mut Rendered) + Send + Sync>,
+}
+
+impl<Rendered> ComponentRenderer<Rendered> {
+    /// Add a renderer of components of type `C` to `renderers`, unless they hold one already.
+    pub(crate) fn render_components_of_this_type_once<C>(
+        renderers: &mut Vec<ComponentRenderer<Rendered>>,
+    ) where
+        C: StorableComponent + GraphRenders<Rendered>,
+    {
+        let renders = std::any::TypeId::of::<C>();
+        if renderers.iter().any(|renderer| renderer.renders == renders) {
+            return;
+        }
+        renderers.push(ComponentRenderer {
+            renders,
+            render: Box::new(|map, rendered| {
+                if let Some(component) = map.get::<C>() {
+                    component.render_onto(rendered);
+                }
+            }),
+        });
+    }
+
+    /// Render the component of `map` this renders, if `map` holds one, onto `rendered`.
+    pub(crate) fn render(&self, map: &ComponentMap, rendered: &mut Rendered) {
+        (self.render)(map, rendered);
+    }
+}
 
 pub fn default_components() -> ComponentMap {
     ComponentMap::new()
