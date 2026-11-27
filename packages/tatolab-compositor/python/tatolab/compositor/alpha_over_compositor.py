@@ -277,6 +277,9 @@ class AlphaOverCompositing:
         if backmost_frame is None:
             return
         self._layer_landing_textures[0].land(gpu_limited_access, backmost_frame, 0)
+        if not kernels.dispatches:
+            # Kernels built for no layer: the first layer wired waits for the kernels of its count.
+            return
         composite = self._composite(gpu_limited_access, kernels, layers, canvas)
         write(
             TextureToWrite.of_texture(composite, backmost_frame.colour),

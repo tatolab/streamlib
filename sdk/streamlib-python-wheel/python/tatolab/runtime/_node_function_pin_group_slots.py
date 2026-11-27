@@ -5,8 +5,8 @@
 
 The engine shapes a node's groups from its links and its values: a group that follows its wires
 up to the last slot a link or an island reaches, its empty slot drawn and never built, and a
-group whose count is set as many as its count input says, never fewer than reach its last
-linked slot. A node function's helper follows the same wiring as it changes, so a link wired
+group whose count is set as many as its count input says, which the engine never lets leave
+out a linked slot. A node function's helper follows the same wiring as it changes, so a link wired
 into a new slot, the last slot's link taken out or a count set gives the node its slots while
 it plays, and nothing rebuilds it: each new slot's ports are declared, its fields held, and the
 group's input in the node's scope written with the slots it holds now.

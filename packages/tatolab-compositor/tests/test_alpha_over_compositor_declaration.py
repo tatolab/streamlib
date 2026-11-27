@@ -293,6 +293,17 @@ def test_a_compositor_with_no_layer_wired_writes_nothing():
     assert (gpu.kernels, gpu.dispatches, written) == ([], [], [])
 
 
+def test_a_first_layer_wired_while_playing_waits_for_the_kernels_of_its_count():
+    """Mental-revert: composite with the kernels built for no layer, and no dispatch writes a
+    composite to publish."""
+    gpu = _RecordingGpu()
+    kernels_of_none = AlphaOverKernels(gpu, 0)  # type: ignore[arg-type]
+
+    written = _composite_one_frame(gpu, kernels_of_none, _layers(1, frames_on={0}))
+
+    assert (gpu.dispatches, written) == ([], [])
+
+
 def test_the_node_is_written_as_one_function():
     assert isinstance(AlphaOverCompositor, NodeFunction)
     (layers,) = AlphaOverCompositor.pin_groups

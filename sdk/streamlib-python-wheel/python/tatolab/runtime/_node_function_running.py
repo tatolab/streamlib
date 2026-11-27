@@ -18,6 +18,7 @@ every value a build made.
 from __future__ import annotations
 
 import copy
+import threading
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -114,7 +115,8 @@ class NodeFunctionRunning:
             self._arguments[member.attribute] = scope_input
         self._slots_of_each_group: "dict[str, _SlotsOfAPinGroup]" = {}
         self._input_of_each_group: "dict[str, NodeScopeInput]" = {}
-        for pin_group in node_function.pin_groups:
+        # A `NodeFunction` of a `tatolab-stream` that predates pin groups holds none.
+        for pin_group in getattr(node_function, "pin_groups", ()):
             slots = _SlotsOfAPinGroup(node_function, pin_group, bind_pins)
             slots.take_values(values_to_build_with)
             slots.hold(slot_counts.get(pin_group.name, 0))
@@ -126,6 +128,9 @@ class NodeFunctionRunning:
         self._written_before_the_scope_started: "dict[str, object]" = {}
         self._groups_reshaped_before_the_scope_started: "set[str]" = set()
         self._per_frame: "Optional[Callable[[Any], object]]" = None
+        # Held across each write and each reshape of the groups: a wire's value is written on
+        # the frame thread, a slot held or dropped on the thread the parent's commands run on.
+        self._writes_and_reshapes = threading.RLock()
 
     def setup(self, ctx: Any) -> None:
         """Run the body once, with every computed value it declares declared into the node's
@@ -156,14 +161,18 @@ class NodeFunctionRunning:
                 f"when a computed value publishes on its own"
             )
         self._per_frame = returned
-        self._declaring = None
-        self._running = declaring.start()
-        written, self._written_before_the_scope_started = self._written_before_the_scope_started, {}
-        reshaped, self._groups_reshaped_before_the_scope_started = (
-            self._groups_reshaped_before_the_scope_started,
-            set(),
-        )
-        self._write(written, groups_changed=reshaped)
+        with self._writes_and_reshapes:
+            self._declaring = None
+            self._running = declaring.start()
+            written, self._written_before_the_scope_started = (
+                self._written_before_the_scope_started,
+                {},
+            )
+            reshaped, self._groups_reshaped_before_the_scope_started = (
+                self._groups_reshaped_before_the_scope_started,
+                set(),
+            )
+            self._write(written, groups_changed=reshaped)
 
     def _paces_itself(self) -> bool:
         execution = getattr(self._node_function, NODE_DECLARATION_EXECUTION_STAMP, None)
@@ -203,15 +212,17 @@ class NodeFunctionRunning:
                 f"{', '.join(f'`{port}`' for port in self._input_of_each_port) or 'none'}"
                 f"{self._and_its_groups_slot_fields()}"
             )
-        if self._running is None:
-            if self._declaring is not None:
-                self._written_before_the_scope_started.update(values)
-            return
-        self._write(values, groups_changed=set())
+        with self._writes_and_reshapes:
+            if self._running is None:
+                if self._declaring is not None:
+                    self._written_before_the_scope_started.update(values)
+                return
+            self._write(values, groups_changed=set())
 
     def slot_counts(self) -> "dict[str, int]":
         """How many slots each pin group holds now, by its name."""
-        return {name: slots.count for name, slots in self._slots_of_each_group.items()}
+        with self._writes_and_reshapes:
+            return {name: slots.count for name, slots in self._slots_of_each_group.items()}
 
     def hold_slot_counts(
         self, slot_counts: "Mapping[str, int]", values: "Mapping[str, object]"
@@ -227,29 +238,30 @@ class NodeFunctionRunning:
                 f"{', '.join(f'`{name}`' for name in undeclared)}; its pin groups are "
                 f"{', '.join(f'`{name}`' for name in self._slots_of_each_group) or 'none'}"
             )
-        count_before_of_each_group = {
-            name: slots.count for name, slots in self._slots_of_each_group.items()
-        }
-        reshaped: "set[str]" = set()
-        try:
-            for name, count in slot_counts.items():
-                slots = self._slots_of_each_group[name]
-                if count == slots.count:
-                    continue
-                slots.take_values(values)
-                slots.hold(count)
-                slots.slots()
-                reshaped.add(name)
-        except BaseException:
-            # A slot that does not build leaves every group holding the slots it held.
-            for name, count in count_before_of_each_group.items():
-                self._slots_of_each_group[name].count = count
-            raise
-        if self._running is None:
-            if self._declaring is not None:
-                self._groups_reshaped_before_the_scope_started.update(reshaped)
-            return
-        self._write({}, groups_changed=reshaped)
+        with self._writes_and_reshapes:
+            count_before_of_each_group = {
+                name: slots.count for name, slots in self._slots_of_each_group.items()
+            }
+            reshaped: "set[str]" = set()
+            try:
+                for name, count in slot_counts.items():
+                    slots = self._slots_of_each_group[name]
+                    if count == slots.count:
+                        continue
+                    slots.take_values(values)
+                    slots.hold(count)
+                    slots.slots()
+                    reshaped.add(name)
+            except BaseException:
+                # A slot that does not build leaves every group holding the slots it held.
+                for name, count in count_before_of_each_group.items():
+                    self._slots_of_each_group[name].count = count
+                raise
+            if self._running is None:
+                if self._declaring is not None:
+                    self._groups_reshaped_before_the_scope_started.update(reshaped)
+                return
+            self._write({}, groups_changed=reshaped)
 
     def _write(self, values: "Mapping[str, object]", *, groups_changed: "set[str]") -> None:
         running = self._running

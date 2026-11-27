@@ -317,7 +317,9 @@ def _host_a_node_function(
             node_id=node_run_id,
         )
 
-    members_of_each_slot = the_members_of_each_slot_built(node_function.pin_groups, slot_counts)
+    members_of_each_slot = the_members_of_each_slot_built(
+        class_node_pin_groups_of(node_function), slot_counts
+    )
     fields = ClassNodeFields(
         (
             *node_function.members,

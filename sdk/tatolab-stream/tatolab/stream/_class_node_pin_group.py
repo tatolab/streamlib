@@ -213,12 +213,13 @@ def read_a_pin_group(
 
 def refuse_a_pin_group_on_a_function_node(function_name: str, parameter: str, annotation: Any) -> None:
     """Refuse `parameter` of pure function node `function_name` when it is a `PinGroup`, which
-    only a node under `@node(...)` takes."""
+    only a class under bare `@node` or a node function under `@node(...)` takes."""
     if not a_pin_group_written_in(annotation):
         return
     raise NodeDeclarationRefusal(
         f"`{function_name}` takes `{parameter}` as a `PinGroup`, and a pure function node's "
-        f"inputs are fixed by its signature: only a node under `@node(...)` takes a pin group. "
+        f"inputs are fixed by its signature: only a class under bare `@node` or a node "
+        f"function under `@node(...)` takes a pin group. "
         f"To fix: write it under `@node(...)`, its `{parameter}: PinGroup[...]` read with "
         f"`.get()`, or take a `list[...]` value.",
         finding_code="pin_group_on_a_function_node",
