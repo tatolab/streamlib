@@ -38,16 +38,7 @@ mod tests {
         execution = manual,
         output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
     )]
-    pub(super) struct AddLocalSource;
-
-    impl crate::core::ManualNode for AddLocalSource::Node {
-        fn start(
-            &mut self,
-            _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-        ) -> crate::core::error::Result<()> {
-            Ok(())
-        }
-    }
+    pub(super) fn add_local_source() {}
 
     /// A Rust node holds no config, so a type added locally refuses every config key at add,
     /// naming it.

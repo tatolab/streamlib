@@ -33,13 +33,7 @@ pub(super) struct InputValueTestNodeConfig {
     output("level", pin_type = Float),
     output("count", pin_type = Integer),
 )]
-pub(super) struct InputValueTestNode;
-
-impl ManualNode for InputValueTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(super) fn input_value_test_node() {}
 
 /// Register [`InputValueTestNode`] with the node registry, once per test binary.
 pub(super) fn register_the_input_value_test_node_once() {

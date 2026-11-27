@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
-use streamlib::sdk::nodes::ReactiveNode;
+use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, NodeNotRunningBecauseOnTheWire,
 };
@@ -30,11 +30,11 @@ const READ_WITHIN: Duration = Duration::from_secs(10);
     input("go", pin_type = Trigger),
     output("fired", pin_type = Trigger)
 )]
-pub struct StreamToolsTestTriggerReader;
-
-impl ReactiveNode for StreamToolsTestTriggerReader::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(event) = self.inputs.read_raw("go")? {
+pub(super) fn stream_tools_test_trigger_reader(
+    inputs: InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(event) = inputs.read_raw("go")? {
             assert_eq!(
                 event.payload.bytes(),
                 [0x80],

@@ -45,13 +45,9 @@ const TOKEN_OF_THE_SECOND_STREAMS_NODE_THREAD: &str = "token-of-the-second-strea
 
 /// A source that counts its own ticks, for the first stream.
 #[crate::node(execution = continuous(interval_ms = 5))]
-pub(crate) struct TickCountingInTheFirstStream;
-
-impl crate::core::ContinuousNode for TickCountingInTheFirstStream::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
+pub(crate) fn tick_counting_in_the_first_stream()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
         if TICKS_IN_THE_FIRST_STREAM.fetch_add(1, Ordering::SeqCst) == 0 {
             tracing::info!("{TOKEN_OF_THE_FIRST_STREAMS_NODE_THREAD}");
         }
@@ -61,13 +57,9 @@ impl crate::core::ContinuousNode for TickCountingInTheFirstStream::Node {
 
 /// A source that counts its own ticks, for the second stream.
 #[crate::node(execution = continuous(interval_ms = 5))]
-pub(crate) struct TickCountingInTheSecondStream;
-
-impl crate::core::ContinuousNode for TickCountingInTheSecondStream::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
+pub(crate) fn tick_counting_in_the_second_stream()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
         if TICKS_IN_THE_SECOND_STREAM.fetch_add(1, Ordering::SeqCst) == 0 {
             tracing::info!("{TOKEN_OF_THE_SECOND_STREAMS_NODE_THREAD}");
         }

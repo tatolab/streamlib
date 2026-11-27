@@ -20,14 +20,12 @@ static RECORDS_READ: Mutex<Vec<Value>> = Mutex::new(Vec::new());
     execution = reactive,
     input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
-pub(crate) struct GraphInputTestRecordsRecorder;
-
-impl crate::core::ReactiveNode for GraphInputTestRecordsRecorder::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        while let Some(message) = self.inputs.read_raw("cue")? {
+pub(crate) fn graph_input_test_records_recorder(
+    inputs: crate::iceoryx2::InputMailboxes,
+) -> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
+{
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw("cue")? {
             let record: Value =
                 rmp_serde::from_slice(message.payload.bytes()).expect("a Records message decodes");
             RECORDS_READ.lock().push(record);

@@ -2,32 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use streamlib_engine::core::GeneratedNode;
-use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
 /// Declared in a nested module, because that is the part the crate name alone
 /// cannot prove: the capture has to carry the author's module path, not just
 /// the crate.
 mod video_filters {
-    use super::*;
 
     #[streamlib::sdk::node(execution = manual)]
-    pub struct BlurNode;
-
-    impl streamlib_engine::ManualNode for BlurNode::Node {
-        fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-            Ok(())
-        }
-    }
+    pub(crate) fn blur_node() {}
 }
 
 #[streamlib::sdk::node(execution = manual)]
-pub struct CrateRootNode;
-
-impl streamlib_engine::ManualNode for CrateRootNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn crate_root_node() {}
 
 fn import_path_of<P: GeneratedNode>() -> String {
     P::descriptor()

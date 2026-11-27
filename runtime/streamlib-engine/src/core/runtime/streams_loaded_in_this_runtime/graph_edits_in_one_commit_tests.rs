@@ -37,15 +37,10 @@ use crate::core::test_support::{
     execution = reactive,
     input("audio", delivery_profile = "ordered", pin_type = Audio),
 )]
-pub(crate) struct PlainAudioConsumerOfAGraphEditTest;
-
-impl crate::core::ReactiveNode for PlainAudioConsumerOfAGraphEditTest::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+pub(crate) fn plain_audio_consumer_of_a_graph_edit_test()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
+{
+    |_ctx| Ok(())
 }
 
 fn the_uuid_of(name: &str) -> Uuid {

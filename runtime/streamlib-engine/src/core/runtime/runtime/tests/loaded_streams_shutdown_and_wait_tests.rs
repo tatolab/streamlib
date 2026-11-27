@@ -732,13 +732,9 @@ static THE_HELD_CALLBACK_MAY_RETURN: AtomicBool = AtomicBool::new(false);
 /// A source whose first callback does not return until the test lets it,
 /// or for a minute.
 #[crate::node(execution = continuous(interval_ms = 5))]
-pub(crate) struct CallbackHeldUntilTheTestLetsGo;
-
-impl crate::core::ContinuousNode for CallbackHeldUntilTheTestLetsGo::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
+pub(crate) fn callback_held_until_the_test_lets_go()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
         THE_HELD_CALLBACK_HAS_BEGUN.store(true, Ordering::SeqCst);
         let held_until = std::time::Instant::now() + Duration::from_secs(60);
         while !THE_HELD_CALLBACK_MAY_RETURN.load(Ordering::SeqCst)

@@ -78,13 +78,7 @@ impl<'de> Deserialize<'de> for CrashOnDemandTestNodeConfig {
 #[streamlib::sdk::node(
     execution = manual,
 )]
-pub(crate) struct CrashOnDemandTestNode;
-
-impl ManualNode for CrashOnDemandTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn crash_on_demand_test_node() {}
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_crash_on_demand_test_node() {

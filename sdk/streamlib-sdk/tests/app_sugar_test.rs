@@ -7,37 +7,27 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::{
     the_location_of_a_stream_of_the_test_project_at,
 };
 
-use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::descriptors::NodeClassImportPath;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::nodes::{Config, GeneratedNode, ManualNode, NodeSpec};
+use streamlib::sdk::error::Error;
+use streamlib::sdk::nodes::{Config, GeneratedNode, NodeSpec};
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner};
 use streamlib::sdk::{App, THE_STREAM_ID_AN_APP_LOADS};
 
+/// A manual node written as one function that does nothing, named after `$function_name` in
+/// UpperCamelCase.
 macro_rules! manual_fixture {
-    ($struct_name:ident) => {
+    ($function_name:ident) => {
         #[streamlib::sdk::node(execution = manual)]
-        struct $struct_name;
-        impl ManualNode for $struct_name::Node {
-            fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-                Ok(())
-            }
-            fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-                Ok(())
-            }
-            fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-                Ok(())
-            }
-        }
+        fn $function_name() {}
     };
 }
 
-manual_fixture!(EquivAlpha);
-manual_fixture!(EquivBeta);
-manual_fixture!(PassthroughNode);
-manual_fixture!(MaterializeNode);
-manual_fixture!(IgnoredConnectNode);
-manual_fixture!(DisplayNamedNode);
+manual_fixture!(equiv_alpha);
+manual_fixture!(equiv_beta);
+manual_fixture!(passthrough_node);
+manual_fixture!(materialize_node);
+manual_fixture!(ignored_connect_node);
+manual_fixture!(display_named_node);
 
 /// An engine with one empty stream loaded under the name an `App` gives its
 /// own, its project in `project_directory`.

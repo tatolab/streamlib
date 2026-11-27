@@ -7,32 +7,34 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_str
 
 use parking_lot::Mutex;
 use serial_test::serial;
-use streamlib::sdk::nodes::NodeSpec;
+use streamlib::sdk::nodes::{NodeSpec, computed};
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeStatus};
+use streamlib_engine::core::Result;
 use streamlib_engine::core::nodes::NODE_REGISTRY;
-use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
-/// Longer than the native join budget, so the thread is still inside `stop()`
-/// when it is abandoned — and short enough not to outlive the test binary by
-/// much.
-const STOP_CALLBACK_THAT_IGNORES_SHUTDOWN: Duration = Duration::from_secs(20);
+/// Longer than the native join budget, so the thread is still dropping what the
+/// node made when it is abandoned — and short enough not to outlive the test
+/// binary by much.
+const DROP_THAT_IGNORES_SHUTDOWN: Duration = Duration::from_secs(20);
 
 /// The native join budget the engine chooses, which these tests measure against.
 const NATIVE_NODE_THREAD_JOIN_BUDGET: Duration = Duration::from_secs(5);
 
+/// The computed value of a [`StopIgnoringShutdownTestNode`], whose drop, as its stream stops,
+/// ignores the shutdown for longer than the join budget.
+#[derive(PartialEq)]
+struct IgnoresShutdownAsItDrops;
+
+impl Drop for IgnoresShutdownAsItDrops {
+    fn drop(&mut self) {
+        std::thread::sleep(DROP_THAT_IGNORES_SHUTDOWN);
+    }
+}
+
 #[streamlib::sdk::node(execution = manual)]
-pub struct StopIgnoringShutdownTestNode;
-
-impl streamlib_engine::ManualNode for StopIgnoringShutdownTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        std::thread::sleep(STOP_CALLBACK_THAT_IGNORES_SHUTDOWN);
-        Ok(())
-    }
+pub fn stop_ignoring_shutdown_test_node() {
+    computed(|| Ok::<_, String>(IgnoresShutdownAsItDrops));
 }
 
 fn a_running_stream_with_a_node_that_ignores_shutdown(
@@ -112,8 +114,7 @@ fn stopping_the_stream_abandons_the_thread_and_names_the_node() {
     let stopped_in = started.elapsed();
 
     assert!(
-        stopped_in >= NATIVE_NODE_THREAD_JOIN_BUDGET
-            && stopped_in < STOP_CALLBACK_THAT_IGNORES_SHUTDOWN,
+        stopped_in >= NATIVE_NODE_THREAD_JOIN_BUDGET && stopped_in < DROP_THAT_IGNORES_SHUTDOWN,
         "the stop took {stopped_in:?}, not the native join budget"
     );
     assert!(

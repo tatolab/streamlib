@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
-use streamlib::sdk::nodes::ReactiveNode;
 
 use super::graph_input_retyped_through_transact_tests::transact_by_alice;
 use super::input_value_set_tests::{InputValueTestNode, register_the_input_value_test_node_once};
@@ -37,11 +36,11 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
     execution = reactive,
     input("word", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
-pub struct StreamToolsTestConstantReader;
-
-impl ReactiveNode for StreamToolsTestConstantReader::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(message) = self.inputs.read_raw("word")? {
+pub(super) fn stream_tools_test_constant_reader(
+    inputs: streamlib::sdk::iceoryx2::InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw("word")? {
             let word: Value =
                 rmp_serde::from_slice(message.payload.bytes()).expect("a String message decodes");
             STRINGS_READ.lock().push(word);

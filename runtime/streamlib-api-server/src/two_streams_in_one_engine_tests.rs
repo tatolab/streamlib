@@ -11,9 +11,7 @@ use std::sync::Arc;
 #[cfg(feature = "machine-directories-under-a-test-root")]
 use crate::control_plane_stub_support::http_post_over_the_local_api_socket;
 use serde_json::{Value, json};
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY, NodeSpec};
+use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, Runner, StreamLocation,
@@ -29,13 +27,7 @@ use crate::mcp::tests::{first_text_block_json, resource_document, tool_call_resu
 /// A native node with nothing to do, added to each stream so each graph has a
 /// node of its own to tell it apart.
 #[streamlib::sdk::node(execution = manual)]
-pub struct TwoStreamsTestIdleNode;
-
-impl ManualNode for TwoStreamsTestIdleNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn two_streams_test_idle_node() {}
 
 /// An engine with the streams `first` and `second` loaded, each holding one
 /// idle node named after its stream.

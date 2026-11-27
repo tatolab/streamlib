@@ -9,8 +9,8 @@
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::iceoryx2::MessageGroupBoundary;
-use streamlib::sdk::nodes::{ContinuousNode, NODE_REGISTRY};
+use streamlib::sdk::iceoryx2::{MessageGroupBoundary, OutputWriter};
+use streamlib::sdk::nodes::NODE_REGISTRY;
 
 /// Every how many messages one opens a group.
 pub(crate) const MESSAGES_PER_GROUP: u64 = 3;
@@ -23,21 +23,20 @@ pub(crate) const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
     output("numbers", pin_type = String, flow = Stream),
     output("more_numbers", pin_type = String, flow = Stream),
 )]
-pub struct NumberedMessageWriterTestNode {
-    next_message_number: u64,
-}
-
-impl ContinuousNode for NumberedMessageWriterTestNode::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let message_number = self.next_message_number;
-        self.next_message_number += 1;
+pub fn numbered_message_writer_test_node(
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    let mut next_message_number = 0u64;
+    move |_ctx| {
+        let message_number = next_message_number;
+        next_message_number += 1;
         let group_boundary = if message_number.is_multiple_of(MESSAGES_PER_GROUP) {
             MessageGroupBoundary::StartsGroup
         } else {
             MessageGroupBoundary::ContinuesGroup
         };
         for port in ["numbers", "more_numbers"] {
-            self.outputs.write_bytes_with_timestamp(
+            outputs.write_bytes_with_timestamp(
                 port,
                 format!("message {message_number}").as_bytes(),
                 message_number as i64 * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,

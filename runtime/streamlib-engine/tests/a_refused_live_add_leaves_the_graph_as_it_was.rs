@@ -11,18 +11,12 @@ use serial_test::serial;
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeOperations};
-use streamlib_engine::core::{Result, RuntimeContextFullAccess};
+use streamlib_engine::core::Result;
 use streamlib_project_repository::{StreamGraphDocumentNode, StreamGraphOperation};
 use uuid::Uuid;
 
 #[streamlib::sdk::node(execution = manual)]
-pub struct RefusedLiveAddTestNode;
-
-impl streamlib_engine::ManualNode for RefusedLiveAddTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn refused_live_add_test_node() {}
 
 fn a_stream_holding_one_node(
     started: bool,

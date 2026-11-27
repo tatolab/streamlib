@@ -22,13 +22,7 @@ use super::*;
     input("gain", delivery_profile = "newest", pin_type = Float),
     input("flash", delivery_profile = "newest", pin_type = Float, lifetime = reset),
 )]
-pub(super) struct InputLifetimeTestNode;
-
-impl ManualNode for InputLifetimeTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(super) fn input_lifetime_test_node() {}
 
 fn register_the_input_lifetime_test_node_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();

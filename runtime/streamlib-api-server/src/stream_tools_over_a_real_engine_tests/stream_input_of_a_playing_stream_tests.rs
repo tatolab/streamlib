@@ -8,7 +8,6 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
-use streamlib::sdk::nodes::ReactiveNode;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, ControlOperationRefusalOnTheWire, NodeNotRunningBecauseOnTheWire,
 };
@@ -27,11 +26,11 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(10);
     execution = reactive,
     input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
-pub struct StreamToolsTestRecordsRecorder;
-
-impl ReactiveNode for StreamToolsTestRecordsRecorder::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(message) = self.inputs.read_raw("cue")? {
+pub(super) fn stream_tools_test_records_recorder(
+    inputs: streamlib::sdk::iceoryx2::InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw("cue")? {
             let record: Value =
                 rmp_serde::from_slice(message.payload.bytes()).expect("a Records message decodes");
             RECORDS_READ.lock().push(record);

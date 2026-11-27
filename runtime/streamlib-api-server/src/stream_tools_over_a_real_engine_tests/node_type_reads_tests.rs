@@ -26,13 +26,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperation
     output("array", pin_type = Tensor),
 )]
 #[meta(conversion = true)]
-struct AudioToTensorTestConversion;
-
-impl ManualNode for AudioToTensorTestConversion::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+fn audio_to_tensor_test_conversion() {}
 
 /// Register [`AudioToTensorTestConversion`] with the node registry, once per test binary.
 fn register_the_audio_to_tensor_test_conversion_once() {

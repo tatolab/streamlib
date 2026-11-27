@@ -527,19 +527,7 @@ fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
     output("level", pin_type = Float),
     output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-struct ValueAndStreamSource;
-
-impl crate::core::ManualNode for ValueAndStreamSource::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+fn value_and_stream_source() {}
 
 /// A node's Value output keeps its last message from before any link, and sends it to the
 /// reader of the port's first link; its Stream output keeps none.

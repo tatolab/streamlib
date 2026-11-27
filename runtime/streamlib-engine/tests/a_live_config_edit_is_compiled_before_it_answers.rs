@@ -10,7 +10,7 @@ use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeOperations};
 use streamlib::sdk::schemars::JsonSchema;
-use streamlib_engine::core::{Result, RuntimeContextFullAccess};
+use streamlib_engine::core::Result;
 use streamlib_project_repository::StreamGraphOperation;
 use uuid::Uuid;
 
@@ -24,13 +24,7 @@ pub struct FrameWidthTakingTestNodeConfig {
 #[streamlib::sdk::node(
     execution = manual,
 )]
-pub struct FrameWidthTakingTestNode;
-
-impl streamlib_engine::ManualNode for FrameWidthTakingTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn frame_width_taking_test_node() {}
 
 fn a_running_stream_with_a_frame_width_taking_node() -> (
     tempfile::TempDir,

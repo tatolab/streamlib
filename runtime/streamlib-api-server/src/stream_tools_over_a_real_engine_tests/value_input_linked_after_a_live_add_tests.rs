@@ -11,7 +11,6 @@ use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::descriptors::PinType;
 use streamlib::sdk::iceoryx2::MessageGroupBoundary;
-use streamlib::sdk::nodes::{ContinuousNode, ReactiveNode};
 use streamlib::sdk::pin_value_packing::{PackedPinValueRef, pack_pin_value, unpack_pin_value};
 
 use super::graph_input_retyped_through_transact_tests::transact_by_alice;
@@ -37,17 +36,17 @@ static LEVELS_READ: Mutex<Vec<f64>> = Mutex::new(Vec::new());
     execution = continuous(interval_ms = 5),
     output("level", pin_type = Float)
 )]
-pub struct StreamToolsTestLevelWriter;
-
-impl ContinuousNode for StreamToolsTestLevelWriter::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+pub(super) fn stream_tools_test_level_writer(
+    outputs: streamlib::sdk::iceoryx2::OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
         let packed = pack_pin_value(
             &PinType::Float { exact_size: None },
             &json!(THE_LEVEL_WRITTEN),
             0,
         )
         .expect("a Float packs");
-        self.outputs.write_bytes_described_by(
+        outputs.write_bytes_described_by(
             "level",
             &packed.payload,
             0,
@@ -62,11 +61,11 @@ impl ContinuousNode for StreamToolsTestLevelWriter::Node {
     execution = reactive,
     input("level", delivery_profile = "newest", pin_type = Float)
 )]
-pub struct StreamToolsTestLevelReader;
-
-impl ReactiveNode for StreamToolsTestLevelReader::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(message) = self.inputs.read_raw("level")? {
+pub(super) fn stream_tools_test_level_reader(
+    inputs: streamlib::sdk::iceoryx2::InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw("level")? {
             let level = unpack_pin_value(
                 &PinType::Float { exact_size: None },
                 PackedPinValueRef {

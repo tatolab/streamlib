@@ -6,19 +6,12 @@
 //! fails after it took a node out puts that node back.
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
-use streamlib::sdk::nodes::ReactiveNode;
 
 use super::*;
 
 /// A native source of Channels on its output `audio`, with nothing to do.
 #[streamlib::sdk::node(execution = manual, output("audio", pin_type = Audio))]
-pub struct StreamToolsTestAudioSource;
-
-impl ManualNode for StreamToolsTestAudioSource::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(super) fn stream_tools_test_audio_source() {}
 
 /// A native reader of Channels on its input `audio`, declaring no window, so the channel it is
 /// first wired to is created shallower than a windowed ring.
@@ -26,12 +19,9 @@ impl ManualNode for StreamToolsTestAudioSource::Node {
     execution = reactive,
     input("audio", delivery_profile = "ordered", pin_type = Audio)
 )]
-pub struct StreamToolsTestPlainAudioReader;
-
-impl ReactiveNode for StreamToolsTestPlainAudioReader::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
+pub(super) fn stream_tools_test_plain_audio_reader()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 /// A native reader of Channels on its input `audio`, declaring a window.
@@ -50,12 +40,9 @@ impl ReactiveNode for StreamToolsTestPlainAudioReader::Node {
         pin_type = Audio,
     )
 )]
-pub struct StreamToolsTestWindowedAudioReader;
-
-impl ReactiveNode for StreamToolsTestWindowedAudioReader::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
+pub(super) fn stream_tools_test_windowed_audio_reader()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 fn register_the_audio_nodes_once() {
