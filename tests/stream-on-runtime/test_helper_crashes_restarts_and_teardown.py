@@ -52,6 +52,9 @@ pytestmark = pytest.mark.requires_gpu
 # is what separates "the ladder ran" from "the thirty-second callback did".
 LADDER_BUDGET_SECONDS = 15.0
 
+#: How long a crashed helper's restart may take to log its new helper starting.
+HELPER_RESTART_BUDGET_SECONDS = 30.0
+
 HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT = "its helper process died before it finished setting up"
 
 #: A build id no build of this checkout mints: its nonce is all zeros.
@@ -253,6 +256,21 @@ def test_a_function_node_run_as_python_that_crashes_its_reader_moves_out_of_it(
     assert crasher["components"]["ran_compiled"] is False, crasher
 
 
+def await_a_helper_started_past(
+    tatolabd: TatolabdUnderTest, helpers_started_before: "list[int]"
+) -> int:
+    """The pid of the first helper `tatolabd` logs starting past `helpers_started_before`."""
+    deadline = time.monotonic() + HELPER_RESTART_BUDGET_SECONDS
+    while time.monotonic() < deadline:
+        helpers_started = helper_process_ids_started_in(tatolabd.stderr_text)
+        if len(helpers_started) > len(helpers_started_before):
+            return helpers_started[len(helpers_started_before)]
+        time.sleep(0.05)
+    raise AssertionError(
+        f"no helper started past {helpers_started_before}:\n{tatolabd.recent_stderr()}"
+    )
+
+
 def test_a_stateful_function_node_counts_on_through_a_crash_of_its_own_helper_and_a_restart(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
     start_tatolabd: Callable[..., TatolabdUnderTest],
@@ -281,15 +299,18 @@ def test_a_stateful_function_node_counts_on_through_a_crash_of_its_own_helper_an
         f"the counter runs in a helper of its own beside its reader's {readers_pid}, and "
         f"tatolabd started {helpers_before_the_kill}:\n{tatolabd.recent_stderr()}"
     )
-    batches_read_before_the_kill = len(tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER"))
     highest_count_read_before_the_kill = max(
         max(batch["counts"]) for batch in tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER")
     )
     os.kill(counters_helper_pids[0], signal.SIGKILL)
     tatolabd.await_stderr_containing(f"its helper process (pid={counters_helper_pids[0]}) died")
     tatolabd.await_stderr_containing("a new one starts in")
+    await_a_helper_started_past(tatolabd, helpers_before_the_kill)
+    batches_read_by_the_new_helpers_start = len(
+        tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER")
+    )
     batch_read_after_the_restart = tatolabd.await_marker(
-        "COUNT_BATCH_READ_IN_ORDER", occurrence=batches_read_before_the_kill + 2
+        "COUNT_BATCH_READ_IN_ORDER", occurrence=batches_read_by_the_new_helpers_start + 2
     )
     local_api = tatolabd.local_api_client()
     graph = local_api.call_tool("graph", {"stream": stream_id})

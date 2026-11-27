@@ -21,6 +21,7 @@ from tatolab.runtime._function_node_carried_values import (
     NAMED_VALUE_TYPE,
     PART_VALUE_TYPES,
     PinValueCarried,
+    StatefulFunctionNodeInAnIsland,
     pin_value_carried,
 )
 from tatolab.runtime._function_node_preparation import (
@@ -80,6 +81,7 @@ class FunctionNodeIslandsFedToTheirPorts:
             island_node["node"]: self._prepared(island_node["import_path"])
             for island_node in island["nodes"]
         }
+        _refuse_a_stateful_node_in_an_island(input_port, prepared_by_node_id)
         inputs_waiting_for_a_value = _the_island_node_inputs_no_value_reaches(
             island["nodes"], prepared_by_node_id
         )
@@ -187,6 +189,19 @@ def _the_inputs_read_from_links_from_outside_the_island(
                 )
             )
     return inputs_read
+
+
+def _refuse_a_stateful_node_in_an_island(
+    input_port: str, prepared_by_node_id: "dict[str, FunctionNodeReadyToEvaluate]"
+) -> None:
+    """Refuse an island holding a stateful node: its state would be one copy per island."""
+    for node_id, prepared in prepared_by_node_id.items():
+        if prepared.is_stateful:
+            raise StatefulFunctionNodeInAnIsland(
+                f"stateful function node `{node_id}` was handed to the island feeding "
+                f"`{input_port}`, and an island evaluates only stateless function nodes: the "
+                f"runtime runs each stateful one in a helper process of its own"
+            )
 
 
 def _the_island_node_inputs_no_value_reaches(

@@ -108,9 +108,9 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     node_id: &NodeRunId,
 ) -> bool {
     graph.traversal().v(node_id).first().is_some_and(|node| {
-        is_a_function_node_of_its_kind(node)
+        is_a_function_node_in_the_graph(node)
             && !node.has::<FunctionNodePromotedToItsOwnProcessComponent>()
-            && !is_a_stateful_function_node(graph, node)
+            && the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
     })
 }
 
@@ -119,11 +119,12 @@ pub(crate) fn is_a_stateful_function_node(
     graph: &Graph,
     node: &crate::core::graph::GraphNode,
 ) -> bool {
-    is_a_function_node_of_its_kind(node)
+    is_a_function_node_in_the_graph(node)
         && !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
 }
 
-fn is_a_function_node_of_its_kind(node: &crate::core::graph::GraphNode) -> bool {
+/// Whether `node` is a function node.
+fn is_a_function_node_in_the_graph(node: &crate::core::graph::GraphNode) -> bool {
     node.node_kind()
         .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
 }
@@ -154,10 +155,11 @@ pub(crate) fn is_a_previous_value_node(graph: &Graph, node_id: &NodeRunId) -> bo
 /// Whether `node_id` is a function node, inside its readers' islands or
 /// promoted out of them.
 pub(crate) fn is_a_function_node(graph: &Graph, node_id: &NodeRunId) -> bool {
-    graph.traversal().v(node_id).first().is_some_and(|node| {
-        node.node_kind()
-            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
-    })
+    graph
+        .traversal()
+        .v(node_id)
+        .first()
+        .is_some_and(is_a_function_node_in_the_graph)
 }
 
 /// How `link_id` is wired, by whether each of its ends runs inside the read

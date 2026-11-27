@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import ctypes
 import struct
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import pytest
@@ -22,19 +21,19 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeDoesNotCompile,
     feed_each_input_port_from_its_function_node_island,
 )
+from tatolab.runtime._function_node_carried_values import StatefulFunctionNodeInAnIsland
 from tatolab.stream import (
     Asset,
     Color,
     PreviousValue,
     Rectangle,
-    State,
-    Stateful,
     Transform,
     Vector2,
     node,
 )
 
 from function_node_test_nodes import (
+    WeightedSum,
     WeightedSumCountingItsCalls,
     _EVALUATE_ENTRY_TYPE,
     a_rust_function_node_declaration,
@@ -43,9 +42,9 @@ from function_node_test_nodes import (
     lfo,
     measure_its_own_spelling,
     remap,
-    remember_each_call_by_a_letter,
     run_as_python,
     tally,
+    wave,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -56,20 +55,20 @@ pytestmark = pytest.mark.usefixtures(
 
 _FUNCTION_NODES_BY_IMPORT_PATH = {
     f"{__name__}:{function_node.__qualname__}": function_node
-    for function_node in (remap, lfo, amplify, WeightedSumCountingItsCalls)
+    for function_node in (remap, wave, lfo, amplify, WeightedSum, WeightedSumCountingItsCalls)
 }
 
 
-def an_island_of_lfo_then_remap_feeding(input_port: str) -> "dict[str, Any]":
+def an_island_of_wave_then_remap_feeding(input_port: str) -> "dict[str, Any]":
     return {
         "input_port": input_port,
         "link_id": "L-island",
         "output": {"node": "remap-1", "port": "result"},
         "nodes": [
             {
-                "node": "lfo-1",
+                "node": "wave-1",
                 "breadcrumb_number": 0,
-                "import_path": f"{__name__}:lfo",
+                "import_path": f"{__name__}:wave",
                 "config": None,
                 "links_into": [],
             },
@@ -78,7 +77,7 @@ def an_island_of_lfo_then_remap_feeding(input_port: str) -> "dict[str, Any]":
                 "breadcrumb_number": 1,
                 "import_path": f"{__name__}:remap",
                 "config": None,
-                "links_into": [{"port": "x", "from": {"node": "lfo-1", "port": "result"}}],
+                "links_into": [{"port": "x", "from": {"node": "wave-1", "port": "result"}}],
             },
         ],
     }
@@ -89,23 +88,23 @@ def test_an_island_feeds_its_port_one_f64_sample_evaluated_at_the_read():
     data_plane.declare_ports(["brightness"], [])
     fed = feed_each_input_port_from_its_function_node_island(
         data_plane,
-        [an_island_of_lfo_then_remap_feeding("brightness")],
+        [an_island_of_wave_then_remap_feeding("brightness")],
         _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
     )
     assert len(fed.function_node_types_kept_alive) == 2
-    assert fed.ran_compiled_by_node_id == {"lfo-1": True, "remap-1": True}
+    assert fed.ran_compiled_by_node_id == {"wave-1": True, "remap-1": True}
     assert data_plane.input_port_has_data("brightness")
 
     payload = data_plane.read_from_input_port("brightness")
     assert payload is not None
     (brightness,) = struct.unpack("<d", bytes(payload))
-    assert 0.0 <= brightness <= 1.0
+    assert -1.0 <= brightness <= 1.0, "remap over 0..1 hands the wave on as it is"
 
 
 def test_an_island_with_an_input_no_value_reaches_holds_until_a_later_feed_gives_it_one():
     """A Rust function node's `x` declares no default, which a Python one always does."""
-    island = an_island_of_lfo_then_remap_feeding("brightness")
-    island["nodes"][1]["import_path"] = f"{__name__}:WeightedSumCountingItsCalls"
+    island = an_island_of_wave_then_remap_feeding("brightness")
+    island["nodes"][1]["import_path"] = f"{__name__}:WeightedSum"
     linked_x = island["nodes"][1]["links_into"]
     island["nodes"][1]["links_into"] = []
     data_plane = _engine.open_node_link_data_access_for_helper_process()
@@ -127,6 +126,23 @@ def test_an_island_with_an_input_no_value_reaches_holds_until_a_later_feed_gives
     )
 
 
+@pytest.mark.parametrize("stateful_import_path", ["lfo", "WeightedSumCountingItsCalls"])
+def test_an_island_holding_a_stateful_node_is_refused_by_name_and_feeds_nothing(
+    stateful_import_path: str,
+):
+    """The runtime runs each stateful function node in a helper of its own; an island holding
+    one would keep a copy of its state per island."""
+    island = an_island_of_wave_then_remap_feeding("brightness")
+    island["nodes"][0]["import_path"] = f"{__name__}:{stateful_import_path}"
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["brightness"], [])
+    with pytest.raises(StatefulFunctionNodeInAnIsland, match="stateful function node `wave-1`"):
+        feed_each_input_port_from_its_function_node_island(
+            data_plane, [island], _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__
+        )
+    assert data_plane.read_from_input_port("brightness") is None
+
+
 def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_port():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["weighted"], [])
@@ -136,9 +152,9 @@ def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_p
         "output": {"node": "weighted-1", "port": "result"},
         "nodes": [
             {
-                "node": "lfo-1",
+                "node": "wave-1",
                 "breadcrumb_number": 0,
-                "import_path": f"{__name__}:lfo",
+                "import_path": f"{__name__}:wave",
                 "config": None,
                 "links_into": [],
             },
@@ -147,21 +163,21 @@ def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_p
                 "breadcrumb_number": 1,
                 "import_path": f"{__name__}:tally",
                 "config": None,
-                "links_into": [{"port": "x", "from": {"node": "lfo-1", "port": "result"}}],
+                "links_into": [{"port": "x", "from": {"node": "wave-1", "port": "result"}}],
             },
             {
                 "node": "weighted-1",
                 "breadcrumb_number": 2,
-                "import_path": f"{__name__}:WeightedSumCountingItsCalls",
+                "import_path": f"{__name__}:WeightedSum",
                 "config": {"weight": 4.0},
                 "links_into": [{"port": "x", "from": {"node": "tally-1", "port": "result"}}],
             },
         ],
     }
     function_nodes_by_import_path = {
-        f"{__name__}:lfo": lfo,
+        f"{__name__}:wave": wave,
         f"{__name__}:tally": tally,
-        f"{__name__}:WeightedSumCountingItsCalls": WeightedSumCountingItsCalls,
+        f"{__name__}:WeightedSum": WeightedSum,
     }
     feed_each_input_port_from_its_function_node_island(
         data_plane, [island], function_nodes_by_import_path.__getitem__
@@ -266,30 +282,22 @@ def test_an_island_runs_a_body_that_does_not_compile_as_python_inside_the_read()
     assert struct.unpack("<d", bytes(payload)) == (3.0,)
 
 
-@dataclass(frozen=True)
-class EvaluationsSoFar:
-    evaluations: float = 0.0
-
-
 @node
-def count_each_evaluation(
-    step: float = 1.0, *, previous: State[EvaluationsSoFar]
-) -> Stateful[float, EvaluationsSoFar]:
-    evaluations = previous.evaluations + step
-    return evaluations, EvaluationsSoFar(evaluations)
+def answer_its_step(step: float = 1.0) -> float:
+    return step
 
 
-_FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH = {
+_FUNCTION_NODES_FED_IN_TURN_BY_IMPORT_PATH = {
     f"{__name__}:{function_node.__qualname__}": function_node
-    for function_node in (count_each_evaluation, remember_each_call_by_a_letter, remap)
+    for function_node in (answer_its_step, remap)
 }
 
 
-def an_island_of_the_counter_feeding(input_port: str, *, then_remap_it: bool) -> "dict[str, Any]":
+def an_island_of_the_step_feeding(input_port: str, *, then_remap_it: bool) -> "dict[str, Any]":
     counter = {
         "node": "counter-1",
         "breadcrumb_number": 0,
-        "import_path": f"{__name__}:count_each_evaluation",
+        "import_path": f"{__name__}:answer_its_step",
         "config": None,
         "links_into": [],
     }
@@ -328,8 +336,8 @@ def test_a_port_an_island_stops_feeding_reads_nothing_and_names_no_node():
     data_plane.declare_ports(["count"], [])
     fed = feed_each_input_port_from_its_function_node_island(
         data_plane,
-        [an_island_of_the_counter_feeding("count", then_remap_it=False)],
-        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
+        [an_island_of_the_step_feeding("count", then_remap_it=False)],
+        _FUNCTION_NODES_FED_IN_TURN_BY_IMPORT_PATH.__getitem__,
     )
 
     assert fed.stop_feeding_an_input_port("count") is True
@@ -398,7 +406,7 @@ def test_a_port_fed_again_by_an_island_of_another_node_forgets_the_raise_of_the_
         [an_island_feeding_the_level_its_pin_sets(-1.0)],
         {
             raising_path: build_an_object_then_answer_the_level_raising_on_a_negative_one,
-            **_FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH,
+            **_FUNCTION_NODES_FED_IN_TURN_BY_IMPORT_PATH,
         }.__getitem__,
     )
     assert data_plane.read_from_input_port("level") is None
@@ -407,7 +415,7 @@ def test_a_port_fed_again_by_an_island_of_another_node_forgets_the_raise_of_the_
     ) == ["beat-1"]
 
     fed.feed_an_input_port_from_its_island(
-        an_island_of_the_counter_feeding("level", then_remap_it=False)
+        an_island_of_the_step_feeding("level", then_remap_it=False)
     )
 
     assert _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane) == {}
@@ -426,12 +434,12 @@ def test_an_unlinked_input_takes_its_pin_value_before_its_default():
 
 
 def test_an_island_node_input_with_no_link_pin_or_default_holds_its_port():
-    import_path = f"{__name__}:WeightedSumCountingItsCalls"
+    import_path = f"{__name__}:WeightedSum"
     island = an_island_of_one_node("level", import_path, None, "weighted-1")
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["level"], [])
     fed = feed_each_input_port_from_its_function_node_island(
-        data_plane, [island], {import_path: WeightedSumCountingItsCalls}.__getitem__
+        data_plane, [island], {import_path: WeightedSum}.__getitem__
     )
     assert data_plane.read_from_input_port("level") is None
     island["nodes"][0]["pins"] = {"x": 0.5}
