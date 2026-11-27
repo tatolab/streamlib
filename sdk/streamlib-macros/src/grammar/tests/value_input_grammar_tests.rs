@@ -176,3 +176,15 @@ fn a_port_stating_a_default_is_told_a_port_takes_none() {
     });
     assert!(msg.contains("a port takes no `default`"), "got: {msg}");
 }
+
+#[test]
+fn a_bundle_choice_on_a_port_is_an_error_even_when_false() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("x", pin_type = Float, among_the_bundles_its_stream_declares = false),
+    });
+    assert!(
+        msg.contains("port `x` declares `among_the_bundles_its_stream_declares`"),
+        "got: {msg}"
+    );
+}

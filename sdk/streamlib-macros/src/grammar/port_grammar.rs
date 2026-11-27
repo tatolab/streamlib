@@ -104,9 +104,8 @@ pub(super) fn parse_port(
     let mut value_type: Option<syn::Type> = None;
     let mut value_default: Option<syn::Expr> = None;
     let mut options: Option<(proc_macro2::Span, Vec<LitStr>)> = None;
-    let mut among_the_bundles_its_stream_declares: Option<proc_macro2::Span> = None;
-    // The first key but `description`, `value` and `default`, which a value input takes no
-    // other of.
+    let mut among_the_bundles_its_stream_declares: Option<(proc_macro2::Span, bool)> = None;
+    // The first key but those only a value input states, which a value input takes no other of.
     let mut first_port_key: Option<(String, proc_macro2::Span)> = None;
 
     while !content.is_empty() {
@@ -166,9 +165,7 @@ pub(super) fn parse_port(
                     key_span,
                 )?;
                 let stated: syn::LitBool = content.parse()?;
-                if stated.value {
-                    among_the_bundles_its_stream_declares = Some(key_span);
-                }
+                among_the_bundles_its_stream_declares = Some((key_span, stated.value));
             }
             "delivery_profile" => {
                 let lit: LitStr = content.parse()?;
@@ -296,8 +293,12 @@ pub(super) fn parse_port(
             value_default,
             first_port_key,
         )?;
-        let chosen_from =
-            value_input_chosen_from(&name, options, among_the_bundles_its_stream_declares)?;
+        let chosen_from = value_input_chosen_from(
+            &name,
+            options,
+            among_the_bundles_its_stream_declares
+                .and_then(|(key_span, stated)| stated.then_some(key_span)),
+        )?;
         return Ok(DeclaredPort::Value(ParsedValueInput {
             declared_ident: declared_marker_ident,
             cast_name,
@@ -310,7 +311,7 @@ pub(super) fn parse_port(
     if let Some((key_span, _)) = &options {
         return Err(reject_a_choice_on_a_port(&name, "options", *key_span));
     }
-    if let Some(key_span) = among_the_bundles_its_stream_declares {
+    if let Some((key_span, _)) = among_the_bundles_its_stream_declares {
         return Err(reject_a_choice_on_a_port(
             &name,
             "among_the_bundles_its_stream_declares",

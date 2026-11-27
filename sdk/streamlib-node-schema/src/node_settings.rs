@@ -57,7 +57,7 @@ pub trait NodeSettings: Default + Serialize + DeserializeOwned + Send + 'static 
 /// The pin type a setting holding a value of this Rust type is declared with.
 #[diagnostic::on_unimplemented(
     message = "a setting of type `{Self}` has no pin type",
-    note = "a setting is a bool, a String, an integer of 8, 16 or 32 bits, an f32 or f64, a Vec of one, or an `Option<PinType>` choosing a pin type; a String chosen from a list states `options = [\"…\", …]`"
+    note = "a setting is a bool, a String, an integer of 8, 16 or 32 bits, an f32 or f64, a Vec of one, or an `Option<PinType>` choosing a pin type; and a value input of a node written as one function chooses a String from a list with `options = [\"…\", …]`"
 )]
 pub trait SettingPinType {
     /// The pin type a setting of this type holds.

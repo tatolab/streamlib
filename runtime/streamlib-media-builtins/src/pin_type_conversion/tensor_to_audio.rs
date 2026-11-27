@@ -95,8 +95,13 @@ pub fn tensor_to_audio(
         Ok::<_, Error>(held)
     });
     let mut next_start_sample = 0;
+    let mut sample_rate_counted_in = None;
     move |_ctx| {
         let held = held.get();
+        // A start sample counts samples of one rate, so a new rate starts the count again.
+        if sample_rate_counted_in.replace(held.sample_rate) != Some(held.sample_rate) {
+            next_start_sample = 0;
+        }
         while let Some(message) = inputs.read_raw(ARRAY_INPUT_PORT)? {
             let (payload_descriptor, payload) = match channels_block_of_the_array_frame(
                 &held,

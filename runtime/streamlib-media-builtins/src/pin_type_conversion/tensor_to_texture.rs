@@ -94,7 +94,9 @@ pub fn tensor_to_texture(
     outputs: OutputWriter,
     ctx: &RuntimeContextFullAccess<'_>,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    let image_format = computed(move || image_format_named(&format.get()));
+    // One build reads both, so a frame never pairs a new attribute with the format it replaced.
+    let attribute_and_format =
+        computed(move || Ok::<_, Error>((attribute.get(), image_format_named(&format.get())?)));
     let node_run_id_of_this_node = ctx
         .node_run_id()
         .unwrap_or_else(|| "TensorToTexture".to_string());
@@ -102,12 +104,12 @@ pub fn tensor_to_texture(
         .gpu_full_access()
         .create_node_output_pixel_buffer_pool_for_a_native_node(&node_run_id_of_this_node);
     move |_ctx| {
-        let image_format = *image_format.get();
-        let attribute = attribute.get();
+        let attribute_and_format = attribute_and_format.get();
+        let (attribute, image_format) = &*attribute_and_format;
         while let Some(message) = inputs.read_raw(ARRAY_INPUT_PORT)? {
             match image_frame_of_the_array_frame(
-                &attribute,
-                image_format,
+                attribute,
+                *image_format,
                 message.payload_descriptor,
                 message.payload.bytes(),
                 |width, height, pixel_format| {
