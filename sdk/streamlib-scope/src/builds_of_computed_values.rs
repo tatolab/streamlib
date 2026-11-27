@@ -100,10 +100,12 @@ pub struct BuildsOfAScope {
 /// How the builds of each computed value stand, kept apart from the slots so a reader of it
 /// holds no value.
 pub(crate) struct BuildsReported {
+    /// Which report this is, counted from 1 in the order the reports were taken.
+    pub(crate) taken: u64,
     /// Set as the scope closes.
     pub(crate) closed: bool,
-    /// Each computed value's builds, by the slot it is declared in, in declaration order.
-    pub(crate) of_each: Vec<(usize, BuildsOfAComputedValue)>,
+    /// Each computed value's builds, in declaration order.
+    pub(crate) of_each: Vec<BuildsOfAComputedValue>,
 }
 
 impl BuildsOfAScope {
@@ -115,10 +117,6 @@ impl BuildsOfAScope {
         if reported.closed {
             return Vec::new();
         }
-        reported
-            .of_each
-            .iter()
-            .map(|(_, builds)| builds.clone())
-            .collect()
+        reported.of_each.clone()
     }
 }

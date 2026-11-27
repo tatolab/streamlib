@@ -277,6 +277,8 @@ struct ScopeSlots {
     slots: Vec<Slot>,
     /// Set by the writer as the scope closes; the worker starts no build once it sees it.
     closing: bool,
+    /// How many reports of the builds were taken, so an older one never replaces a newer one.
+    reports_taken: u64,
 }
 
 /// A build to run off the lock: the slot it builds and the slots' values and revisions as it
@@ -309,6 +311,19 @@ impl ScopeSlots {
 
     fn values(&self) -> Vec<Option<AnyValue>> {
         self.slots.iter().map(|slot| slot.value.clone()).collect()
+    }
+
+    /// A report of how the builds of each computed value stand, to publish once the lock is let
+    /// go: a write or a landed build can leave any of them to build again.
+    fn take_a_report_of_the_builds(&mut self) -> BuildsReported {
+        self.reports_taken += 1;
+        BuildsReported {
+            taken: self.reports_taken,
+            closed: false,
+            of_each: (0..self.slots.len())
+                .filter_map(|index| self.builds_of(index))
+                .collect(),
+        }
     }
 
     fn any_changed_since(&self, read_at: &[Read]) -> bool {
@@ -464,7 +479,7 @@ struct ScopeAcrossThreads {
     scope_id: ScopeId,
     slots: Mutex<ScopeSlots>,
     hand_over: Mutex<Vec<HandOver>>,
-    /// Taken after `slots`, never before.
+    /// Never held with another of the scope's locks.
     builds_reported: Arc<Mutex<BuildsReported>>,
 }
 
@@ -560,19 +575,15 @@ impl ScopeBeingDeclared {
             .slots
             .iter()
             .any(|slot| matches!(slot.role, SlotRole::Computed { .. }));
-        let slots = ScopeSlots {
+        let mut slots = ScopeSlots {
             revision: 0,
             slots: self.slots,
             closing: false,
+            reports_taken: 0,
         };
         let initial = slots.values();
         let slot_count = initial.len();
-        let builds_reported = BuildsReported {
-            closed: false,
-            of_each: (0..slot_count)
-                .filter_map(|index| Some((index, slots.builds_of(index)?)))
-                .collect(),
-        };
+        let builds_reported = slots.take_a_report_of_the_builds();
         let shared = Arc::new(ScopeAcrossThreads {
             scope_id: self.scope_id,
             slots: Mutex::new(slots),
@@ -679,8 +690,9 @@ impl Scope {
             return;
         }
         let superseded = self.shared.hand_over(changed);
-        self.shared.report_the_builds(&slots);
+        let report = slots.take_a_report_of_the_builds();
         drop(slots);
+        self.shared.publish(report);
         if let Some(worker) = &self.worker {
             worker.thread().unpark();
         }
@@ -706,13 +718,18 @@ impl Scope {
         }
     }
 
-    /// Wait up to `timeout` until no computed value is left to build, for tests; whether it
-    /// settled.
+    /// Wait up to `timeout` until no computed value is left to build and the builds' newest
+    /// report is published, for tests; whether it settled.
     #[must_use]
     pub fn wait_until_settled(&self, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if lock_if_free(&self.shared.slots).is_some_and(|slots| slots.is_settled()) {
+            let settled_at_report = lock_if_free(&self.shared.slots)
+                .filter(|slots| slots.is_settled())
+                .map(|slots| slots.reports_taken);
+            if settled_at_report
+                .is_some_and(|taken| lock(&self.shared.builds_reported).taken >= taken)
+            {
                 return true;
             }
             if std::time::Instant::now() >= deadline {
@@ -810,14 +827,12 @@ impl ScopeAcrossThreads {
         released
     }
 
-    /// Report how the builds of each computed value stand, as `slots` hold them: a write or a
-    /// landed build can leave any of them to build again.
-    fn report_the_builds(&self, slots: &ScopeSlots) {
+    /// Publish `report` for the node's diagnostics, unless a report taken after it already is.
+    fn publish(&self, report: BuildsReported) {
         let mut reported = lock(&self.builds_reported);
-        for (index, held) in &mut reported.of_each {
-            if let Some(builds) = slots.builds_of(*index) {
-                *held = builds;
-            }
+        if report.taken > reported.taken {
+            reported.taken = report.taken;
+            reported.of_each = report.of_each;
         }
     }
 
@@ -878,8 +893,9 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         let superseded = slots
             .record_build(next.index, read_at, &built)
             .map(|value| shared.hand_over(std::iter::once((next.index, value))));
-        shared.report_the_builds(&slots);
+        let report = slots.take_a_report_of_the_builds();
         drop(slots);
+        shared.publish(report);
         // An equal, superseded or thrown-away value is released only after the lock, in case its
         // Drop is slow.
         drop(superseded);
