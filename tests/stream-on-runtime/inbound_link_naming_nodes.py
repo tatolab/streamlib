@@ -35,7 +35,7 @@ def ReportsWhichLinkEachBagCameFrom(
     it reads the one port and asks each message which link it arrived on.
     """
 
-    # Links are wired before setup() runs, so a sink knows here — before a
+    # Links are wired before the body runs, so a sink knows here — before a
     # single message has arrived — how many producers it owes.
     links_at_setup = sorted(tracks.inbound_link_names())
 

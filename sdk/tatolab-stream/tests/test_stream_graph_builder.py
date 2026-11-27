@@ -424,7 +424,7 @@ def test_an_instance_is_refused_naming_the_class_itself() -> None:
     with pytest.raises(
         TypeError, match="pass it itself rather than an instance"
     ):
-        StreamBuilder("rig").add(FrameInverter())  # pyright: ignore[reportCallIssue, reportArgumentType]
+        StreamBuilder("rig").add(FrameFilters.FrameDarkener())  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize(

@@ -9,11 +9,12 @@ process can import.
 """
 
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 from tatolab.stream import (
     Color,
     EncodedVideo,
+    Input,
     InputPin,
     Int8,
     NumberRange,
@@ -30,30 +31,34 @@ def remap_onto_a_range(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> f
     return low + x * (high - low)
 
 
-@node
-class FrameInverter:
+@node(execution="reactive")
+def FrameInverter(
+    *,
+    strength: Input[int] = Input(1),
+    video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+    video_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Inverts each frame it reads."""
 
-    strength: int = 1
-
-    video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-    video_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = video_from_upstream.read()
         if frame is not None:
-            self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
+            video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
+
+    return each_frame
 
 
-@node
-class BrightnessReader:
+@node(execution="reactive")
+def BrightnessReader(
+    *,
+    video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads each frame it receives and writes nothing."""
 
-    video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        video_from_upstream.read()
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.video_from_upstream.read()
+    return each_frame
 
 
 class FrameFilters:
@@ -73,16 +78,18 @@ class FrameFilters:
                 self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
 
 
-@node
-class RigMonitor:
+@node(execution="reactive")
+def RigMonitor(
+    *,
+    name: Input[str] = Input(""),
+    video: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Shows each frame it reads under the name it is set to."""
 
-    name: str = ""
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        video.read()
 
-    video: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.video.read()
+    return each_frame
 
 
 @node

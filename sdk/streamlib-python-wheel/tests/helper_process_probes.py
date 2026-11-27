@@ -70,7 +70,7 @@ def WritesOnceInSetupProbe(
     *,
     frames_to_downstream: OutputPin[EncodedVideo],
 ) -> None:
-    """Writes one record in `setup`, before any link reaches its output, and never again;
+    """Writes one record as its body runs, before any link reaches its output, and never again;
     its interval is long enough that it never runs again inside a test."""
 
     frames_to_downstream.write(json.dumps({"written": "once"}).encode())
@@ -89,7 +89,7 @@ def ImportsADmaBufOffLinuxProbe(
     frames_to_downstream: OutputPin[EncodedVideo],
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
+    """Adopts a DMA-BUF in its body, off Linux, and fails with the refusal."""
 
     ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
 
@@ -99,7 +99,7 @@ def RefusesSetupProbe(
     *,
     frames_to_downstream: OutputPin[EncodedVideo],
 ) -> None:
-    """Raises out of `setup`, which the parent must hear about."""
+    """Raises out of its body, which the parent must hear about."""
 
     raise RuntimeError("this node cannot set itself up")
 
@@ -203,7 +203,7 @@ def ContinuousPacingProbe(
     *,
     frames_to_downstream: OutputPin[EncodedVideo],
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """Records when each `process()` ran, so the interval the loop kept is
+    """Records when each frame ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
@@ -222,7 +222,7 @@ def RaisesUntilToldNotToProbe(
     *,
     frames_to_downstream: OutputPin[EncodedVideo],
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """Raises on every `process()` until a test clears
+    """Raises on every frame until a test clears
     `RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES`, then runs cleanly."""
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
@@ -286,7 +286,7 @@ def double_a_level(x: float = 0.0) -> float:
     return 2.0 * x
 
 
-# What each `process()` of the island-reading probe read from `level`, `None`
+# What each frame of the island-reading probe read from `level`, `None`
 # when nothing fed it. A test reads it to see which island fed the port.
 LEVELS_THE_ISLAND_READING_PROBE_READ: "list[float | None]" = []
 
@@ -296,7 +296,7 @@ def IslandReadingProbe(
     *,
     level: InputPin[float],
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """Records the control value each `process()` reads from `level`."""
+    """Records the control value each frame reads from `level`."""
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         LEVELS_THE_ISLAND_READING_PROBE_READ.append(level.read())
@@ -321,15 +321,16 @@ CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT: "list[Any]" = []
 
 
 @node(execution="manual")
-class ReportedFromAnotherThreadProbe:
-    """Keeps the context `start()` is handed in
+def ReportedFromAnotherThreadProbe(
+    *,
+    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """Keeps the context its body is handed in
     `CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT`, so a test reports
     the node not ready or ready from a thread of its own."""
 
-    video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
-
-    def start(self, ctx) -> None:
-        CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT.append(ctx)
+    CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT.append(ctx)
 
 
 NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY = [True]
@@ -341,7 +342,7 @@ def NotReadyUntilToldOtherwiseProbe(
     *,
     video: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """Reports itself not ready from each `process()` until a test clears
+    """Reports itself not ready from each frame until a test clears
     `NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY`, then ready."""
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
