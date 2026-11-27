@@ -159,11 +159,11 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Callable
 
 from tatolab.stream import (
     InputPin,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     Trigger,
     log,
@@ -175,45 +175,39 @@ LINK_CONNECTED_IN_THE_SECOND_SETUP = Path(__file__).with_name("link_connected")
 
 
 @node(execution="continuous", interval_ms=10)
-class KeepsRunning:
+def KeepsRunning(*, ticks: OutputPin[Trigger]) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Does nothing, for as long as the stream runs."""
 
-    ticks: OutputPin[Trigger]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         pass
+
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class DiesInItsSecondSetup:
-    """Ends its first process on its tenth callback, and its second in its setup once the test
+def DiesInItsSecondSetup(
+    *,
+    ticks_from_upstream: InputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Ends its first process on its tenth frame, and its second in its body once the test
     has connected the link."""
+    start = (int(STARTS_COUNTED_IN.read_text()) if STARTS_COUNTED_IN.exists() else 0) + 1
+    STARTS_COUNTED_IN.write_text(str(start))
+    log.info("MARKER:READER_SETTING_UP " + json.dumps({"start": start}))
+    if start == 2:
+        deadline = time.monotonic() + 30.0
+        while not LINK_CONNECTED_IN_THE_SECOND_SETUP.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        os._exit(18)
+    frames = 0
 
-    def __init__(self) -> None:
-        self._callbacks = 0
-        self._start = 0
-
-    ticks_from_upstream: InputPin[Trigger]
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self._start = (
-            int(STARTS_COUNTED_IN.read_text()) if STARTS_COUNTED_IN.exists() else 0
-        ) + 1
-        STARTS_COUNTED_IN.write_text(str(self._start))
-        log.info("MARKER:READER_SETTING_UP " + json.dumps({"start": self._start}))
-        if self._start == 2:
-            deadline = time.monotonic() + 30.0
-            while (
-                not LINK_CONNECTED_IN_THE_SECOND_SETUP.exists()
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
-            os._exit(18)
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self._callbacks += 1
-        if self._start == 1 and self._callbacks == 10:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames
+        frames += 1
+        if start == 1 and frames == 10:
             os._exit(17)
+
+    return each_frame
 '''
 
 DIES_IN_ITS_SECOND_SETUP_STREAM_SOURCE = '''\
