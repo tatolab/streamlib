@@ -1,112 +1,62 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+//! A node written as one function whose computed value panics while `panic_in_its_build` is
+//! set, so an integration test can confirm a panic in a build is reported on the node and the
+//! frames run on the value built before it. It records the level each frame reads; one node of
+//! the type runs at a time.
+
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::nodes::{ContinuousNode, ManualNode};
+use streamlib::sdk::nodes::{Input, computed};
 
-/// The settings [`PanickingManualLifecycle`] reads at setup.
-#[streamlib::sdk::node_settings]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PanickingManualLifecycleSettings {
-    #[description = "The lifecycle hook that panics: `setup`, `start`, `stop`, `teardown`, `on_pause` or `on_resume`; any other name panics in none."]
-    pub panic_at_hook: String,
+/// The level each frame of the node read, in order, since a test last forgot it.
+static LEVELS_THE_FRAMES_READ: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+fn levels_the_frames_read() -> MutexGuard<'static, Vec<i32>> {
+    LEVELS_THE_FRAMES_READ
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
+
+/// The level each frame of the [`PanickingLifecycle`] node read, in order.
+pub fn levels_the_frames_of_the_panicking_node_read() -> Vec<i32> {
+    levels_the_frames_read().clone()
+}
+
+/// Forget the levels the frames of the [`PanickingLifecycle`] node read, for a test starting
+/// afresh.
+pub fn forget_the_levels_the_frames_of_the_panicking_node_read() {
+    levels_the_frames_read().clear();
+}
+
+/// The computed value: the level it was built from.
+#[derive(Debug, PartialEq, Eq)]
+struct LevelBuilt(i32);
 
 #[streamlib::sdk::node(
-    execution = manual,
-    settings = crate::panicking_lifecycle_node::PanickingManualLifecycleSettings,
+    execution = continuous(interval_ms = 5),
+    input("level", description = "The level its computed value is built from.", value = i32, default = 0),
+    input("panic_in_its_build", description = "Whether the build of its computed value panics.", value = bool, default = false),
 )]
 #[meta(
-    description = "Panic-injection Manual fixture. Panics in the lifecycle hook its `panic_at_hook` setting names (setup / start / stop / teardown / on_pause / on_resume); the host's panic-safety net is expected to absorb the panic and keep the runtime alive."
+    description = "Panic-injection fixture. Its computed value panics while panic_in_its_build is set; the scope reports the panic on the node, and the frames run on the value built before it."
 )]
-pub struct PanickingManualLifecycle {}
-
-impl ManualNode for PanickingManualLifecycle::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "setup" {
-            panic!("PanickingManualLifecycle: injected panic at setup");
+pub fn panicking_lifecycle(
+    level: Input<i32>,
+    panic_in_its_build: Input<bool>,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    let level_built = computed(move || {
+        let level = *level.get();
+        if *panic_in_its_build.get() {
+            panic!("PanickingLifecycle: injected panic in the build of level {level}");
         }
-        Ok(())
-    }
-
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "start" {
-            panic!("PanickingManualLifecycle: injected panic at start");
-        }
-        Ok(())
-    }
-
-    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "stop" {
-            panic!("PanickingManualLifecycle: injected panic at stop");
-        }
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "teardown" {
-            panic!("PanickingManualLifecycle: injected panic at teardown");
-        }
-        Ok(())
-    }
-
-    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "on_pause" {
-            panic!("PanickingManualLifecycle: injected panic at on_pause");
-        }
-        Ok(())
-    }
-
-    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "on_resume" {
-            panic!("PanickingManualLifecycle: injected panic at on_resume");
-        }
-        Ok(())
-    }
-}
-
-/// The settings [`PanickingContinuousLifecycle`] reads at setup.
-#[streamlib::sdk::node_settings]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PanickingContinuousLifecycleSettings {
-    #[description = "The lifecycle hook that panics: `process`; any other name panics in none."]
-    pub panic_at_hook: String,
-}
-
-#[streamlib::sdk::node(
-    execution = continuous,
-    settings = crate::panicking_lifecycle_node::PanickingContinuousLifecycleSettings,
-)]
-#[meta(
-    description = "Panic-injection Continuous fixture. Panics in the lifecycle hook its `panic_at_hook` setting names, only `process`; the host's panic-safety net is expected to absorb the panic and keep the runtime alive."
-)]
-pub struct PanickingContinuousLifecycle {}
-
-impl ContinuousNode for PanickingContinuousLifecycle::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        if self.settings.panic_at_hook == "process" {
-            panic!("PanickingContinuousLifecycle: injected panic at process");
-        }
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok::<_, String>(LevelBuilt(level))
+    });
+    move |_ctx| {
+        levels_the_frames_read().push(level_built.get().0);
         Ok(())
     }
 }
