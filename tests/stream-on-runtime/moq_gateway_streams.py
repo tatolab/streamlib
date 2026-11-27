@@ -20,6 +20,8 @@ FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE = "STREAMLIB_FIXTURE_RELAY_URL"
 SENDING_BROADCAST = "suite-gateway-sender"
 RECEIVING_BROADCAST = "suite-gateway-receiver"
 COUNT_TRACK = "counts"
+#: The name a test renames `count_track`'s track to while the stream plays.
+RENAMED_COUNT_TRACK = "recounts"
 
 
 @graph_generator

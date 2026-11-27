@@ -38,8 +38,54 @@ pub struct MoqTrackDeclarationThread {
 
 impl MoqTrackDeclarationThread {
     /// Publish `declared`'s description and declare it on its gateway every
-    /// second until stopped.
+    /// second until stopped. A declaration of the same track node this process
+    /// runs already is stopped first, so a track renamed declares its new name
+    /// alone.
     pub fn spawn(ipc: MoqNodeIpc, declared: MoqTrackDeclared) -> Result<Self> {
+        let holding = ipc.service_names.track_description(&declared.track_node);
+        let thread = MoqNodeThread::spawn_holding(
+            &holding,
+            "moq-track-declaration",
+            A_THREAD_BEFORE_ENDS_WITHIN,
+            || MoqTrackDeclarationOpened::open(ipc, &declared),
+            |opened, stop_signal| loop {
+                match publish_slice(&opened.control, (), &opened.declaration) {
+                    Ok(()) => {
+                        let _ = opened.gateway_wake.notify();
+                    }
+                    Err(refusal) => {
+                        tracing::debug!("MoqTrack: the declaration was not sent: {refusal}")
+                    }
+                }
+                if stop_signal.wait_for_a_stop_up_to(A_TRACK_IS_DECLARED_AGAIN_EVERY) {
+                    return;
+                }
+            },
+        )?;
+        Ok(Self { thread })
+    }
+
+    /// Stop declaring the track and wait up to `timeout` for the thread; whether it ended.
+    pub fn stop_and_join(&mut self, timeout: Duration) -> bool {
+        self.thread.stop_and_join(timeout)
+    }
+}
+
+/// How long a declaration of the same track node this one takes over from has to end.
+const A_THREAD_BEFORE_ENDS_WITHIN: Duration = Duration::from_secs(2);
+
+/// What a track node's declaration thread holds while it declares.
+struct MoqTrackDeclarationOpened {
+    _ipc: MoqNodeIpc,
+    _description: MoqNodeSlicePublisher<()>,
+    control: MoqNodeSlicePublisher<()>,
+    gateway_wake: Notifier<ipc_threadsafe::Service>,
+    declaration: Vec<u8>,
+}
+
+impl MoqTrackDeclarationOpened {
+    /// Publish `declared`'s description and open what declares it on its gateway.
+    fn open(ipc: MoqNodeIpc, declared: &MoqTrackDeclared) -> Result<Self> {
         let description = ipc.track_description_publisher(&declared.track_node)?;
         let description_payload = serde_json::to_vec(&MoqTrackDescription {
             gateway_node: declared.gateway_node.clone(),
@@ -54,28 +100,13 @@ impl MoqTrackDeclarationThread {
             catalog_entry: declared.catalog_entry.clone(),
         })
         .map_err(refused_serialization)?;
-        let thread = MoqNodeThread::spawn("moq-track-declaration", move |stop_signal| {
-            let _held_while_the_track_is_declared = (ipc, description);
-            loop {
-                match publish_slice(&control, (), &declaration) {
-                    Ok(()) => {
-                        let _ = gateway_wake.notify();
-                    }
-                    Err(refusal) => {
-                        tracing::debug!("MoqTrack: the declaration was not sent: {refusal}")
-                    }
-                }
-                if stop_signal.wait_for_a_stop_up_to(A_TRACK_IS_DECLARED_AGAIN_EVERY) {
-                    return;
-                }
-            }
-        })?;
-        Ok(Self { thread })
-    }
-
-    /// Stop declaring the track and wait for the thread.
-    pub fn stop_and_join(&mut self) {
-        self.thread.stop_and_join(Duration::from_secs(2));
+        Ok(Self {
+            _ipc: ipc,
+            _description: description,
+            control,
+            gateway_wake,
+            declaration,
+        })
     }
 }
 

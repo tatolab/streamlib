@@ -43,6 +43,11 @@ const CONTENT_SAMPLES_A_PASS_WRITES_PER_TRACK: usize = 64;
 /// How long after a read ends a fresh one starts for the same request.
 const A_READ_THAT_ENDED_STARTS_AGAIN_AFTER: Duration = Duration::from_secs(1);
 
+/// How long a gateway this one takes its node's services from has to close its
+/// session and end: its pass wakes every 20 ms, and its async runtime is given
+/// a second to shut down.
+const A_GATEWAY_BEFORE_IT_ENDS_WITHIN: Duration = Duration::from_secs(3);
+
 /// How long a session that never connects is held before it is dialed afresh.
 const A_SESSION_THAT_NEVER_CONNECTS_IS_REDIALED_AFTER: Duration = Duration::from_secs(10);
 
@@ -57,24 +62,32 @@ pub struct MoqGatewayThread {
 
 impl MoqGatewayThread {
     /// Start the gateway named `gateway_node` on `ipc`, dialing what
-    /// `settings_source` hands it.
+    /// `settings_source` hands it. A gateway of the same node this process runs
+    /// already is stopped first, and its relay session closed, so this one takes
+    /// its services and dials afresh.
     pub fn spawn(
         ipc: MoqNodeIpc,
         gateway_node: String,
         settings_source: MoqGatewaySettingsSource,
     ) -> Result<Self> {
-        let async_runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("moq-gateway-relay")
-            .enable_all()
-            .build()
-            .map_err(|refusal| MoqModuleError::Relay {
-                what: format!("no async runtime builds for the gateway: {refusal}"),
-            })?;
-        let gateway = MoqGatewayPasses::open(ipc, gateway_node, settings_source, async_runtime)?;
-        let thread = MoqNodeThread::spawn("moq-gateway", move |stop_signal| {
-            gateway.run_until(stop_signal)
-        })?;
+        let holding = ipc.service_names.gateway_control(&gateway_node);
+        let thread = MoqNodeThread::spawn_holding(
+            &holding,
+            "moq-gateway",
+            A_GATEWAY_BEFORE_IT_ENDS_WITHIN,
+            || {
+                let async_runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name("moq-gateway-relay")
+                    .enable_all()
+                    .build()
+                    .map_err(|refusal| MoqModuleError::Relay {
+                        what: format!("no async runtime builds for the gateway: {refusal}"),
+                    })?;
+                MoqGatewayPasses::open(ipc, gateway_node, settings_source, async_runtime)
+            },
+            |gateway, stop_signal| gateway.run_until(stop_signal),
+        )?;
         Ok(Self { thread })
     }
 
