@@ -135,7 +135,8 @@ class HelperProcessLifecycle:
         on a steady beat: each tick tells the parent whether the node is ready,
         since a node's own thread may report either; and while it is not paused
         takes the values a node function's wires gave since the last, as a
-        frame of any other node does, and, while it is not ready, sends a
+        frame of any other node does, telling the parent when a function node
+        that read called starts or stops raising, and, while it is not ready, sends a
         transparent frame on each of its Image outputs."""
         tick_seconds = 1.0 / PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE
         while self._a_manual_node_runs():
@@ -146,6 +147,7 @@ class HelperProcessLifecycle:
             self._tell_the_parent_whether_the_node_is_ready()
             if not self._paused:
                 self._take_the_new_values_at_a_tick()
+                self._tell_the_parent_when_a_function_node_starts_or_stops_raising()
                 self._send_transparent_frames_while_the_node_is_not_ready()
             select.select([self._bridge.lifecycle_command_arrival_fd()], [], [], tick_seconds)
         return self._bridge.next_lifecycle_command()
