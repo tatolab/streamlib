@@ -440,17 +440,27 @@ impl PythonRunningNodeScope {
 
 #[pymethods]
 impl PythonRunningNodeScope {
-    /// Write `value` to `input`; a value equal to the one it holds builds nothing.
+    /// Write each `(input, value)` of `writes` in one write, so a build or a frame sees all of
+    /// them or none, and a computed value reading several builds once; a value equal to the one
+    /// its input holds builds nothing.
     fn write(
         &self,
         python: Python<'_>,
-        input: &PythonNodeScopeInput,
-        value: Py<PyAny>,
+        writes: Vec<(PyRef<'_, PythonNodeScopeInput>, Py<PyAny>)>,
     ) -> PyResult<()> {
-        self.refuse_a_handle_declared_elsewhere(input.declared_in)?;
-        let value = PythonValueInANodeScope::an_input_value(value);
+        let writes = writes
+            .into_iter()
+            .map(|(input, value)| {
+                self.refuse_a_handle_declared_elsewhere(input.declared_in)?;
+                Ok((input.input, PythonValueInANodeScope::an_input_value(value)))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
         self.with_the_scope_detached(python, |scope| {
-            scope.write(|writes| writes.write(input.input, value));
+            scope.write(|written| {
+                for (input, value) in writes {
+                    written.write(input, value);
+                }
+            });
         })
     }
 

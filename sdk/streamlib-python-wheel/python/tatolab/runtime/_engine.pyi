@@ -21,7 +21,7 @@ conformance gate prints as its allowlist.
 """
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
@@ -161,8 +161,8 @@ class RunningNodeScope:
     one the garbage collector can see. A scope left open is closed at interpreter exit.
     """
 
-    def write(self, input: NodeScopeInput, value: Any) -> None:
-        """Write `value` to `input`; a value equal to the one it holds builds nothing."""
+    def write(self, writes: Sequence[tuple[NodeScopeInput, Any]]) -> None:
+        """Write each `(input, value)` of `writes` in one write, so a build or a frame sees all of them or none, and a computed value reading several builds once; a value equal to the one its input holds builds nothing."""
     def run_frame(self, frame: Callable[[], object]) -> bool:
         """Take the values built since the last frame, then call `frame` with `get()` reading them, once every computed value has its first value; whether `frame` ran."""
     def last_build_of(self, computed_value: _stream_node_function.NodeScopeComputedValue[Any]) -> LastBuildOfANodeScopeComputedValue:

@@ -135,7 +135,8 @@ class NodeFunctionRunning:
         self._close()
 
     def write_inputs(self, values: "Mapping[str, object]") -> None:
-        """Write each of `values`, by its port's name, to the input of the node's scope it names."""
+        """Write each of `values`, by its port's name, to the input of the node's scope it names,
+        all in one write: a computed value reading several of them builds once."""
         unknown = sorted(set(values) - set(self._input_of_each_port))
         if unknown:
             raise NodeFunctionInputNotDeclared(
@@ -148,8 +149,7 @@ class NodeFunctionRunning:
             if self._declaring is not None:
                 self._written_before_the_scope_started.update(values)
             return
-        for port, value in values.items():
-            running.write(self._input_of_each_port[port], value)
+        running.write([(self._input_of_each_port[port], value) for port, value in values.items()])
 
     def _close(self) -> None:
         running, self._running, self._per_frame = self._running, None, None
