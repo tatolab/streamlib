@@ -5,14 +5,15 @@
 //! wires again by itself rather than leave them carrying nothing until the stream starts again.
 
 use super::{Graph, GraphEdgeWithComponents, Link, LinkUniqueId, NodeRunId};
+use crate::core::compiler::compiler_ops::function_node_island::the_readers_a_link_into_reaches;
 use crate::core::graph::{
-    LinkPinTypesDifferComponent, LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent,
-    LinkState, LinkStateComponent, OutOfProcessLinkWireRepliesComponent,
+    LinkPinTypesDifferComponent, LinkState, LinkStateComponent,
+    OutOfProcessLinkWireRepliesComponent,
 };
 
 impl Graph {
-    /// Each link into or out of `node_run_id`, or read through it as the reader of a function
-    /// node island, that an end out of process refused to open, in the order the graph holds
+    /// Each link into or out of `node_run_id`, or into a function node of an island it reads,
+    /// that an end out of process refused to open, in the order the graph holds
     /// them, each once.
     pub(crate) fn the_links_of_a_node_an_end_refused(
         &self,
@@ -20,13 +21,8 @@ impl Graph {
     ) -> Vec<LinkUniqueId> {
         let mut refused: Vec<LinkUniqueId> = Vec::new();
         let read_through_the_node = |link: &&Link| {
-            link.get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
-                .is_some_and(|read_through| {
-                    read_through
-                        .reads_by_island_link
-                        .iter()
-                        .any(|read| read.reader_input_port.node_run_id() == node_run_id)
-                })
+            the_readers_a_link_into_reaches(self, link.to_port().node_run_id())
+                .contains(node_run_id)
         };
         for link in self
             .traversal()

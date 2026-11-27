@@ -18,6 +18,7 @@ use crate::iceoryx2::{HelperPlacedNodeLossCounts, Iceoryx2Node};
 use serde_json::Value as JsonValue;
 
 mod links_its_far_side_refused;
+use links_its_far_side_refused::refuse_every_link_waiting_behind_the_setup_command;
 
 /// How a link wired after a far side's setup command reaches that far side,
 /// which opens its own port for it — implemented by the far side's transport,
@@ -239,25 +240,6 @@ fn link_id_of(link_wiring: &JsonValue) -> Option<String> {
         .get("link_id")
         .and_then(JsonValue::as_str)
         .map(str::to_string)
-}
-
-impl LinkAwaitingHandoverBehindTheSetupCommand {
-    fn refuse_because(self, reason: &str) {
-        self.answer_cell.note_the_far_sides_answer(
-            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
-                reason: reason.to_string(),
-            },
-        );
-    }
-}
-
-fn refuse_every_link_waiting_behind_the_setup_command(
-    waiting: Vec<LinkAwaitingHandoverBehindTheSetupCommand>,
-    reason: &str,
-) {
-    for waiting_link in waiting {
-        waiting_link.refuse_because(reason);
-    }
 }
 
 /// One function node a far side's islands call, by its id and its name in the
@@ -650,12 +632,12 @@ impl OutOfProcessLinkWiringEnvelope {
         match &recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
                 let answer_cell = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-                delivery.hand_over_a_function_node_island_wired_after_setup(
+                let handed_over = delivery.hand_over_a_function_node_island_wired_after_setup(
                     &function_node_island,
                     Arc::clone(&answer_cell),
-                )?;
-                recorded.keep_the_answer_owed_for(island_link_id, Arc::clone(&answer_cell));
-                Ok(Some(answer_cell))
+                );
+                recorded.keep_the_answer_owed_after(island_link_id, &answer_cell, &handed_over);
+                handed_over.map(|()| Some(answer_cell))
             }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
@@ -1191,13 +1173,11 @@ impl OutOfProcessLinkWiringEnvelope {
                     waiting_link.link_wiring,
                     waiting_link.answer_cell,
                 ),
-                Err(handover_failure) => {
-                    recorded.keep_the_answer_owed_for(
-                        link_id_of(&waiting_link.link_wiring),
-                        Arc::clone(&waiting_link.answer_cell),
-                    );
-                    waiting_link.refuse_because(&handover_failure.to_string());
-                }
+                Err(handover_failure) => recorded.keep_the_answer_owed_after(
+                    link_id_of(&waiting_link.link_wiring),
+                    &waiting_link.answer_cell,
+                    &Err(handover_failure),
+                ),
             }
         }
         recorded.how_a_link_reaches_the_far_side =
@@ -1265,5 +1245,7 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 }
 
+#[cfg(test)]
+mod links_its_far_side_refused_tests;
 #[cfg(test)]
 mod tests;
