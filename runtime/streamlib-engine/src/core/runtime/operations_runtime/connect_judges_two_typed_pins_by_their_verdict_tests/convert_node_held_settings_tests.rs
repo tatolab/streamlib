@@ -281,6 +281,16 @@ fn a_format_a_wired_link_does_not_take_marks_the_link_differing_until_it_takes_i
                 "{through_a_following_node}: {differing:?}"
             );
             assert!(differing[0].contains("bgra8_unorm"), "{differing:?}");
+            assert_eq!(
+                graph
+                    .traversal()
+                    .e(())
+                    .iter()
+                    .filter(|link| link.has::<LinkPinTypesDifferComponent>())
+                    .count(),
+                1,
+                "{through_a_following_node}: the link the format no longer fits is marked"
+            );
 
             let differing = set_the_format_and_judge(graph, &fixture.convert_node, "rgba8_unorm");
             assert!(
