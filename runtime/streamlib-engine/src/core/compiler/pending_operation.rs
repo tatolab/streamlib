@@ -20,6 +20,12 @@ pub(crate) enum PendingOperation {
     /// read at setup as the graph holds it now.
     RebuildNode(NodeRunId),
 
+    /// Judge again each link the type choices of a node reach, since one of its inputs changed:
+    /// a link whose two ends no longer connect is unwired and kept, carrying nothing, and one
+    /// that connects again is wired again. Neither node is rebuilt. A link that is a call inside
+    /// an island has no channel to close: it is marked, and runs on until the stream starts again.
+    JudgeTheLinksTheTypeChoicesOfTheNodeReach(NodeRunId),
+
     /// Move a function node whose call crashed or stalled its reader's helper,
     /// and every function node downstream of it, out of that reader's islands
     /// into a helper process of its own.
@@ -39,6 +45,9 @@ impl std::fmt::Display for PendingOperation {
             PendingOperation::AddLink(id) => write!(f, "AddLink({})", id),
             PendingOperation::RemoveLink(id) => write!(f, "RemoveLink({})", id),
             PendingOperation::RebuildNode(id) => write!(f, "RebuildNode({})", id),
+            PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(id) => {
+                write!(f, "JudgeTheLinksTheTypeChoicesOfTheNodeReach({id})")
+            }
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,
                 reader_id,

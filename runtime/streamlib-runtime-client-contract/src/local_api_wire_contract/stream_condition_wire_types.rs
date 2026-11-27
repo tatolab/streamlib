@@ -180,6 +180,10 @@ pub enum DiagnosticKindOnTheWire {
     /// A link the running graph holds that could not be wired, so its reader reads nothing
     /// from it: the words say why, in the words of the end that refused it.
     LinkNotWired,
+    /// A link whose two ends no longer carry types that connect, since an input choosing one
+    /// end's type changed: it carries nothing until the input is changed back or the link is
+    /// removed. The words name both pin types.
+    LinkPinTypesDiffer,
     /// A computed value of a node written as one function has no first value yet: its first
     /// build runs, or runs again from a new input after it failed. The node runs no frame until
     /// every computed value has one.
@@ -214,7 +218,7 @@ impl DiagnosticKindOnTheWire {
             Self::StartRefused | Self::NodeFailed | Self::EditNotLive | Self::LinkNotWired => {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
-            Self::LinkRefused => DiagnosticRecoveryOnTheWire::FixTheLink,
+            Self::LinkRefused | Self::LinkPinTypesDiffer => DiagnosticRecoveryOnTheWire::FixTheLink,
             Self::KeepsCrashingTheRuntime | Self::Other => {
                 DiagnosticRecoveryOnTheWire::RetryTheLoad
             }

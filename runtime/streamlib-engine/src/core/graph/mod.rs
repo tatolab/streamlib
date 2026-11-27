@@ -48,10 +48,10 @@ pub(crate) use data_structure::{
 pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
-    ALinkConnected, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
-    refuse_a_link_its_pin_types_refuse, refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
-    refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse,
-    the_bundle_frame_type_an_output_may_carry, the_ends_a_link_is_judged_by,
+    ALinkConnected, LinksATypeChoiceJudgedAgain, TheEndsALinkIsJudgedBy,
+    a_link_made_now_would_be_refused, a_type_choice_of_the_node_types_a_port,
+    refuse_a_link_its_pin_types_refuse, the_bundle_frame_type_an_output_may_carry,
+    the_ends_a_link_is_judged_by, the_nodes_whose_type_choices_reach_the_link,
     the_verdict_of_a_link_between_declared_ports, the_verdict_on_a_link_between_typed_ends,
 };
 pub(crate) use pin_type_resolution::{
@@ -66,7 +66,6 @@ pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 pub(crate) use values_port_facts_read::the_values_port_facts_read;
 
-pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{
     ComponentMap, ComponentRenderer, DeviceMatchedAudioWindowContractsComponent,
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
@@ -85,6 +84,7 @@ pub use components::{
     StepProgressReadingOfOneNode, StorableComponent, ThreadHandleComponent,
     default_component_renderers, default_components,
 };
+pub(crate) use components::{HowOneReadersHelperRanEachFunctionNode, LinkPinTypesDifferComponent};
 pub(crate) use components::{
     NodeInstanceWithItsOutOfProcessLinkWiring, SourceSideHeldOpenForAReaderOutsideItsStream,
     SourceSideOfALinkWiredOn,

@@ -10,6 +10,7 @@ mod function_node_promoted_to_its_own_process_component;
 mod function_node_ran_compiled_component;
 mod iceoryx2_services_held_open_for_link_component;
 mod link_carried_through_the_function_node_pool_component;
+mod link_pin_types_differ_component;
 mod link_read_through_the_reader_of_its_function_node_island_component;
 mod link_state_component;
 mod node_instance_component;
@@ -42,6 +43,7 @@ pub use function_node_ran_compiled_component::{
 };
 pub use iceoryx2_services_held_open_for_link_component::Iceoryx2ServicesHeldOpenForLinkComponent;
 pub use link_carried_through_the_function_node_pool_component::LinkCarriedThroughTheFunctionNodePoolComponent;
+pub(crate) use link_pin_types_differ_component::LinkPinTypesDifferComponent;
 pub use link_read_through_the_reader_of_its_function_node_island_component::{
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent,
     ReadOfALinkByTheReaderOfAFunctionNodeIsland,

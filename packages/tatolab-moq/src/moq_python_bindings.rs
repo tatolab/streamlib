@@ -10,8 +10,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostInputPort, ModuleHostOutputPort, ModuleHostTablePayloadDescriptor,
-    packets_unit_payload_descriptor,
+    ModuleHost, ModuleHostCallTooSlowForAFrame, ModuleHostInputPort, ModuleHostOutputPort,
+    ModuleHostTablePayloadDescriptor, packets_unit_payload_descriptor,
 };
 
 use crate::error::MoqModuleError;
@@ -73,6 +73,10 @@ impl MoqGatewayThread {
         config_settings: &Bound<'_, PyDict>,
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "MoqGatewayThread",
+        )?;
         forward_this_modules_tracing_records_to(&module_host);
         let settings_input = module_host.open_input_port(GATEWAY_SETTINGS_INPUT_PORT)?;
         let serde_json::Value::Object(config_settings) = json_of(config_settings.as_any())? else {

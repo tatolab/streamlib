@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -9,7 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
 use tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to;
 use tatolab_module_sdk::{
-    ModuleHost, ModuleHostLogLevel, ModuleHostOutputPort, packets_unit_payload_descriptor,
+    ModuleHost, ModuleHostCallTooSlowForAFrame, ModuleHostLogLevel, ModuleHostOutputPort,
+    packets_unit_payload_descriptor,
 };
 
 pub mod error;
@@ -239,6 +239,10 @@ impl WhepPlayerThread {
         bearer_token: Option<String>,
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "WhepPlayerThread",
+        )?;
         let output_ports = WhepPlayerOutputPortsLentByTheModuleHost::open(&module_host)?;
         forward_this_modules_tracing_records_to(&module_host);
         let module_host_for_the_stop_flag = module_host.clone();

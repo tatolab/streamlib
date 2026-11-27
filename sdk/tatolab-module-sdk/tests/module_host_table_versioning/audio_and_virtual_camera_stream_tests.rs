@@ -9,7 +9,7 @@ use super::*;
 #[test]
 fn a_capture_stream_carries_the_request_and_reports_the_format_it_opened_in() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let capture_stream = module_host
@@ -40,7 +40,7 @@ fn a_capture_stream_carries_the_request_and_reports_the_format_it_opened_in() {
 #[test]
 fn a_capture_request_naming_nothing_asks_for_the_default_device_in_its_own_format() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let _capture_stream = module_host
@@ -58,7 +58,7 @@ fn a_capture_request_naming_nothing_asks_for_the_default_device_in_its_own_forma
 #[test]
 fn a_capture_stream_the_host_refuses_carries_its_message() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -77,7 +77,7 @@ fn a_capture_stream_the_host_refuses_carries_its_message() {
 #[test]
 fn captured_blocks_reach_the_hand_off_until_delivery_stops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut capture_stream = module_host
         .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
@@ -114,7 +114,7 @@ fn captured_blocks_reach_the_hand_off_until_delivery_stops() {
 #[test]
 fn a_capture_stream_reports_the_failure_that_ended_it() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let capture_stream = module_host
         .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
@@ -135,7 +135,7 @@ fn a_capture_stream_reports_the_failure_that_ended_it() {
 #[test]
 fn a_dropped_capture_stream_is_closed_and_releases_its_reference() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut capture_stream = module_host
         .open_audio_capture_stream(&ModuleHostAudioCaptureStreamRequest::default())
@@ -157,7 +157,7 @@ fn a_dropped_capture_stream_is_closed_and_releases_its_reference() {
 #[test]
 fn a_playback_stream_carries_the_request_and_reports_the_format_and_period_it_opened_with() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let playback_stream = module_host
@@ -192,7 +192,7 @@ fn a_playback_stream_carries_the_request_and_reports_the_format_and_period_it_op
 #[test]
 fn a_playback_stream_whose_host_reports_no_period_reports_none() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let playback_stream = module_host
@@ -209,7 +209,7 @@ fn a_playback_stream_whose_host_reports_no_period_reports_none() {
 #[test]
 fn a_playback_stream_the_host_refuses_carries_its_message() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -228,7 +228,7 @@ fn a_playback_stream_the_host_refuses_carries_its_message() {
 #[test]
 fn the_hand_off_fills_the_devices_own_buffer_until_requesting_stops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut playback_stream = module_host
         .open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest::default())
@@ -262,7 +262,7 @@ fn the_hand_off_fills_the_devices_own_buffer_until_requesting_stops() {
 #[test]
 fn a_playback_stream_reports_the_failure_that_ended_it() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let playback_stream = module_host
         .open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest::default())
@@ -281,7 +281,7 @@ fn a_playback_stream_reports_the_failure_that_ended_it() {
 #[test]
 fn a_dropped_playback_stream_is_closed_and_releases_its_reference() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let mut playback_stream = module_host
         .open_audio_playback_stream(&ModuleHostAudioPlaybackStreamRequest::default())
@@ -303,7 +303,7 @@ fn a_dropped_playback_stream_is_closed_and_releases_its_reference() {
 #[test]
 fn a_virtual_camera_offers_an_extent_writes_rows_and_is_closed_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let camera = module_host
@@ -335,7 +335,7 @@ fn a_virtual_camera_offers_an_extent_writes_rows_and_is_closed_once_when_it_drop
 #[test]
 fn a_virtual_camera_the_host_cannot_open_is_refused_in_its_words() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host.open_virtual_camera_stream("").unwrap_err();

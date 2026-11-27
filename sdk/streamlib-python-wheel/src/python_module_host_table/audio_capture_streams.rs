@@ -14,6 +14,7 @@ use streamlib::sdk::context::{
     RequestedAudioStreamFormat, SharedAudioClock, open_capture_stream_in_requested_format,
     platform_audio_clock_for_one_stream, probe_audio_device_backend,
 };
+use streamlib_scope::CallTooSlowForAFrame;
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_ANY, MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_F32,
     MODULE_HOST_TABLE_AUDIO_SAMPLE_FORMAT_I16, MODULE_HOST_TABLE_STATUS_ENDED,
@@ -23,7 +24,7 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableErrorMessage, ModuleHostTableStatus,
 };
 
-use super::{node_host_of, refuse};
+use super::{node_host_of, refuse, refused_while_a_frame_runs};
 
 /// The capture streams one node's native code opened, by handle.
 pub(super) struct AudioCaptureStreamsOpenedForOneNode {
@@ -213,6 +214,16 @@ pub(super) unsafe extern "C" fn audio_capture_stream_open(
     opened_format: *mut ModuleHostTableAudioStreamFormat,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands an error message live for the call, or null.
+    if let Some(refused) = unsafe {
+        refused_while_a_frame_runs(
+            error_message,
+            CallTooSlowForAFrame::OpensADevice,
+            "open_audio_capture_stream",
+        )
+    } {
+        return refused;
+    }
     let node_host = unsafe { node_host_of(node_host) };
     // SAFETY: the SDK hands a request and slots live for the call, or null.
     let (Some(request), Some(opened_stream), Some(opened_format)) = (unsafe {

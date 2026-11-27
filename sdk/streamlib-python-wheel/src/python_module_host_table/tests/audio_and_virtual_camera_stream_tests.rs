@@ -11,7 +11,7 @@ use tatolab_module_sdk::module_host_table_abi::ModuleHostTableVirtualCameraStrea
 use super::*;
 
 /// A host over a node that lent nothing: the audio verbs need no port.
-fn module_host_lending_no_port(label: &str) -> ModuleHost {
+pub(super) fn module_host_lending_no_port(label: &str) -> ModuleHost {
     Python::initialize();
     Python::attach(|python| {
         let (source, _destination) = one_wired_link(python, label);

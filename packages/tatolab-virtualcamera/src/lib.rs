@@ -7,7 +7,9 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use tatolab_module_sdk::{ModuleHost, ModuleHostVirtualCameraStream};
+use tatolab_module_sdk::{
+    ModuleHost, ModuleHostCallTooSlowForAFrame, ModuleHostVirtualCameraStream,
+};
 
 fn refused(refusal: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(refusal.to_string())
@@ -39,6 +41,10 @@ impl PipeWireCameraDoor {
     fn new(module_host_table: &Bound<'_, PyAny>, camera_name: String) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)
             .map_err(refused)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+            "PipeWireCameraDoor",
+        )?;
         let virtual_camera_stream = module_host
             .open_virtual_camera_stream(&camera_name)
             .map_err(refused)?;

@@ -185,3 +185,39 @@ assert released == [{"op": "release_handle", "handle_id": "kernel-of:unbound clo
 "#,
     );
 }
+
+#[test]
+fn a_kernel_created_in_a_frame_is_refused_showing_it_wrapped_in_a_computed_value() {
+    run_against_a_stand_in_parent(
+        r#"
+declared = NodeScopeBeingDeclared()
+width = declared.input(8)
+body_kernel, kernel = declared.declare(
+    lambda: (
+        gpu.create_compute_kernel(source="body"),
+        computed(lambda: gpu.create_compute_kernel(source=f"width {width.get()}")),
+    )
+)
+scope = declared.start()
+run_frames_until(scope, lambda: kernel.get().binding_names == ["filled_image"])
+registered_before_the_frame = list(registered)
+
+refusals = []
+def create_a_kernel_every_frame():
+    try:
+        gpu.create_compute_kernel(source="every frame")
+    except KernelCreatedInAFrame as refused:
+        refusals.append(str(refused))
+
+assert scope.run_frame(create_a_kernel_every_frame)
+assert refusals == [
+    "`create_compute_kernel` creates a kernel and can't run every frame; wrap it in a computed "
+    "value in the node's body: `kernel = computed(lambda: … create_compute_kernel(…))`, then "
+    "read `kernel.get()` in the per-frame function"
+], refusals
+assert [source for source, _ in registered] == ["body", "width 8"], registered
+assert registered == registered_before_the_frame, "the refused kernel reached the parent"
+scope.close()
+"#,
+    );
+}

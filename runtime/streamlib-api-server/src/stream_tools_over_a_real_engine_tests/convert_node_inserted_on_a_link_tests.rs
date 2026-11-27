@@ -415,17 +415,18 @@ async fn a_tensor_to_texture_holding_no_format_is_judged_by_the_format_it_writes
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
-/// A `TensorToTexture` wired into an input that takes only `rgba8_unorm` keeps writing it: a
-/// `set_node_input_value` choosing `bgra8_unorm` for its `format` setting is refused naming the
-/// wired link, and the document keeps the format it held; one keeping `rgba8_unorm` is taken.
+/// A `TensorToTexture` wired into an input that takes only `rgba8_unorm` takes a
+/// `set_node_input_value` choosing `bgra8_unorm` for its `format` setting, never refused for the
+/// wired link: the document holds the new format and keeps the link, which is held unwired, and
+/// setting `rgba8_unorm` back is taken too.
 ///
-/// Mental-revert: checking a set only by the pin type the node's output states takes
-/// `bgra8_unorm`, since it states one Texture whatever it holds.
+/// Mental-revert: refusing the set for the link it no longer fits leaves the document holding
+/// the old format.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_tensor_to_texture_format_its_wired_link_refuses_is_refused() {
+async fn a_tensor_to_texture_format_its_wired_link_no_longer_fits_is_taken_keeping_the_link() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_camera_and_a_model();
-    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
     engine
         .the_answer_or_the_refusal_of(
@@ -440,29 +441,37 @@ async fn a_tensor_to_texture_format_its_wired_link_refuses_is_refused() {
         )
         .await
         .unwrap_or_else(|refusal| panic!("the node writes rgba8_unorm: {refusal:?}"));
-    let saved_before = project.the_graph_document_of("main");
-    let by_hand = the_inserted_node_in(&saved_before)["id"].clone();
-
-    let refusal = engine
-        .the_answer_or_the_refusal_of(
-            "set_node_input_value",
-            json!({ "stream": stream_asset, "node": by_hand, "input": "format",
-                    "value": "bgra8_unorm", "mode": "commit", "author": an_agent_named("alice") }),
-        )
-        .await
-        .expect_err("the wired input takes only rgba8_unorm");
-    assert!(
-        refusal.runtime_words.contains("rgba_video"),
-        "the refusal names the wired link: {refusal:?}"
-    );
-    assert_eq!(project.the_graph_document_of("main"), saved_before);
+    let by_hand = the_inserted_node_in(&project.the_graph_document_of("main"))["id"].clone();
+    let set_the_format = |format: &'static str| {
+        json!({ "stream": stream_asset, "node": by_hand, "input": "format",
+                "value": format, "mode": "commit", "author": an_agent_named("alice") })
+    };
 
     engine
-        .the_answer_or_the_refusal_of(
-            "set_node_input_value",
-            json!({ "stream": stream_asset, "node": by_hand, "input": "format",
-                    "value": "rgba8_unorm", "mode": "commit", "author": an_agent_named("alice") }),
-        )
+        .the_answer_or_the_refusal_of("set_node_input_value", set_the_format("bgra8_unorm"))
+        .await
+        .unwrap_or_else(|refusal| panic!("a format is never refused for its links: {refusal:?}"));
+    let saved = project.the_graph_document_of("main");
+    assert_eq!(
+        the_inserted_node_in(&saved)["input_values"]["format"],
+        "bgra8_unorm",
+        "{saved}"
+    );
+    assert!(
+        saved["links"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|link| link["target"]["port"] == "rgba_video"),
+        "the link it no longer fits is kept: {saved}"
+    );
+    assert_the_graph_document_equals_the_running_graph(
+        &saved,
+        &engine.the_live_graph_of(&stream_id),
+    );
+
+    engine
+        .the_answer_or_the_refusal_of("set_node_input_value", set_the_format("rgba8_unorm"))
         .await
         .unwrap_or_else(|refusal| panic!("rgba8_unorm is what the input takes: {refusal:?}"));
 }

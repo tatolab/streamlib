@@ -1,12 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A node's health read with the links into it: a link into the node that could not be wired
-//! leaves the node reading nothing from that input, so a node its state calls healthy reads not
-//! ready, with one diagnostic placed at each such link.
+//! A node's health read with the links into it: a link into the node that is not wired, since
+//! an end refused it or its two ends no longer carry types that connect, leaves the node reading
+//! nothing from that input, so a node its state calls healthy reads not ready, with one
+//! diagnostic of that failure's kind placed at each such link.
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire, NodeHealthOnTheWire,
+    DiagnosticOnTheWire, DiagnosticPlaceOnTheWire, NodeHealthOnTheWire,
 };
 
 use super::{Graph, GraphNode};
@@ -32,8 +33,9 @@ impl Graph {
         Some((health, diagnostics))
     }
 
-    /// One diagnostic for each link into `node` that could not be wired, placed at the link and
-    /// in the words of the end that refused it.
+    /// One diagnostic for each link into `node` that is not wired, of the kind of its failure,
+    /// placed at the link and naming why: both pin types of one whose ends no longer connect, the
+    /// words of the end that refused any other.
     fn the_diagnostic_of_each_link_into_the_node_not_wired(
         &self,
         node: &GraphNode,
@@ -51,7 +53,7 @@ impl Graph {
             .filter_map(|link| {
                 let why = why_the_link_is_not_wired(link)?;
                 Some(DiagnosticOnTheWire::of(
-                    DiagnosticKindOnTheWire::LinkNotWired,
+                    why.kind(),
                     DiagnosticPlaceOnTheWire::Link {
                         from_node: name_of(link.source().node_run_id()),
                         from_port: link.source().port_name().to_owned(),
@@ -59,9 +61,10 @@ impl Graph {
                         to_port: link.to_port().port_name().to_owned(),
                     },
                     format!(
-                        "its input `{}` reads nothing: the link into it could not be wired: \
-                         {why}. To fix: stop the stream and start it again",
-                        link.to_port().port_name()
+                        "its input `{}` reads nothing: the link into it is not wired: {why}. To \
+                         fix: {}",
+                        link.to_port().port_name(),
+                        why.fix()
                     ),
                 ))
             })

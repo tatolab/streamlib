@@ -9,6 +9,7 @@ use std::sync::Arc;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use streamlib_scope::CallTooSlowForAFrame;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::{
@@ -27,6 +28,7 @@ use crate::python_node_context::kernel_wire_encoding::{
 use crate::python_node_context::kernels::{
     PythonAccelerationStructureHandle, PythonGraphicsKernel, PythonRayTracingKernel,
 };
+use crate::python_node_scope::raised_while_a_frame_runs;
 
 use super::PythonGpuContextFullAccess;
 
@@ -89,6 +91,10 @@ impl PythonGpuContextFullAccess {
         color_blend: Option<&Bound<'_, PyDict>>,
         dynamic_state: &str,
     ) -> PyResult<PythonGraphicsKernel> {
+        raised_while_a_frame_runs(
+            CallTooSlowForAFrame::CreatesAKernel,
+            "create_graphics_kernel",
+        )?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let declared = declared_staged_kernel_bindings_to_wire(
@@ -194,6 +200,10 @@ impl PythonGpuContextFullAccess {
         bindings: Option<&Bound<'_, PyDict>>,
         label: &str,
     ) -> PyResult<PythonRayTracingKernel> {
+        raised_while_a_frame_runs(
+            CallTooSlowForAFrame::CreatesAKernel,
+            "create_ray_tracing_kernel",
+        )?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let wire_stages = ray_tracing_stages_to_wire(python, stages)?;

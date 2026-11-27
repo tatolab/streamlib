@@ -6,7 +6,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyCapsuleMethods};
+use pyo3::types::{PyCapsule, PyCapsuleMethods, PyType};
 
 use crate::module_host::{ModuleHost, ModuleHostError};
 use crate::module_host_table_abi::{MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable};
@@ -48,8 +48,35 @@ impl ModuleHost {
     }
 }
 
+/// The module the host's exceptions are raised from.
+const HOST_EXCEPTIONS_MODULE: &str = "tatolab.runtime._engine";
+
 impl From<ModuleHostError> for PyErr {
     fn from(module_host_error: ModuleHostError) -> Self {
-        PyRuntimeError::new_err(module_host_error.to_string())
+        match module_host_error {
+            ModuleHostError::CallRefusedInAFrame { does, refusal } => {
+                raised_as_the_hosts_own(does.python_exception_name(), does.code(), refusal)
+            }
+            module_host_error => PyRuntimeError::new_err(module_host_error.to_string()),
+        }
     }
+}
+
+/// `refusal`, led by `code`, raised as the host's exception named `exception_name`, so a module's
+/// refusal is caught as the host's own; a `RuntimeError` showing the code where the host has none.
+fn raised_as_the_hosts_own(exception_name: &str, code: &str, refusal: String) -> PyErr {
+    Python::attach(|python| {
+        let the_hosts_own = python
+            .import(HOST_EXCEPTIONS_MODULE)
+            .and_then(|module| module.getattr(exception_name))
+            .ok()
+            .and_then(|exception| exception.cast_into::<PyType>().ok());
+        let words = refusal
+            .strip_prefix(code)
+            .and_then(|words| words.strip_prefix(": "));
+        match (the_hosts_own, words) {
+            (Some(exception), Some(words)) => PyErr::from_type(exception, words.to_owned()),
+            _ => PyRuntimeError::new_err(refusal),
+        }
+    })
 }

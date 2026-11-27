@@ -113,7 +113,7 @@ def test_stopping_the_node_closes_every_value_its_builds_made(stand_in_parent: A
 @pytest.mark.parametrize(
     ("probe", "refusal"),
     [
-        ("ReadsItsLevelInItsBodyProbe", "NodeScopeReadOutsideABuildOrAFrame"),
+        ("ReadsItsLevelInItsBodyProbe", "NodeScopeReadInTheBody"),
         ("ReturnsANumberProbe", "NodeFunctionBodyReturnedNoPerFrameFunction"),
         (
             "PacesItselfAndReturnsAFunctionProbe",
