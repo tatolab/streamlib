@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from tatolab.stream._node_declaration import NODE_DECLARATION_EXECUTION_STAMP
 from tatolab.stream._pin_declaration import NO_DEFAULT
 
-from tatolab.runtime._engine import NodeScopeBeingDeclared, NodeScopeInput, RunningNodeScope
+from tatolab.runtime._engine import (
+    BuildsOfANodeScopeComputedValue,
+    NodeScopeBeingDeclared,
+    NodeScopeInput,
+    RunningNodeScope,
+)
 
 if TYPE_CHECKING:
     from tatolab.stream._node_function import NodeFunction
@@ -169,6 +174,12 @@ class NodeFunctionRunning:
                 self._written_before_the_scope_started.update(values)
             return
         running.write([(self._input_of_each_port[port], value) for port, value in values.items()])
+
+    def builds_of_each_computed_value(self) -> "list[BuildsOfANodeScopeComputedValue]":
+        """How the builds of each computed value of the node's scope stand, in the order its body
+        declared them; none before the scope starts or once it is closed."""
+        running = self._running
+        return [] if running is None else running.builds_of_each_computed_value()
 
     def _close(self) -> None:
         running, self._running, self._per_frame = self._running, None, None

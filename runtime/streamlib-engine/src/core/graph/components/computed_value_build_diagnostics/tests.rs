@@ -10,6 +10,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DiagnosticRecoveryOnTheWire, NodeHealthOnTheWire,
 };
 
+use super::BuildsOfItsComputedValues;
 use crate::core::graph::components::ObservableNodeState;
 use crate::core::nodes::NodeState;
 
@@ -36,7 +37,9 @@ fn a_scope_of_one_computed_value_reported_to(
         })
     });
     let (scope, view) = declaring.start().expect("the scope starts");
-    state.read_the_builds_of_its_computed_values_from(scope.builds());
+    state.read_the_builds_of_its_computed_values_from(BuildsOfItsComputedValues::OfItsScope(
+        scope.builds(),
+    ));
     (scope, view, gain_input)
 }
 
@@ -155,7 +158,9 @@ fn a_pending_first_build_shows_the_node_not_ready_and_a_closed_scope_shows_nothi
     let (scope, view) = declaring.start().expect("the scope starts");
     // Declared after the scope, so it opens before the scope joins its worker on an unwind.
     let gate = gate;
-    state.read_the_builds_of_its_computed_values_from(scope.builds());
+    state.read_the_builds_of_its_computed_values_from(BuildsOfItsComputedValues::OfItsScope(
+        scope.builds(),
+    ));
 
     let (health, pending) = the_one_diagnostic_of(&state, &place);
     assert_eq!(health, NodeHealthOnTheWire::NotReady);
@@ -236,7 +241,9 @@ fn a_failed_first_build_building_again_from_a_new_input_shows_as_building() {
     let (scope, _view) = declaring.start().expect("the scope starts");
     // Declared after the scope, so it opens before the scope joins its worker on an unwind.
     let gate = gate;
-    state.read_the_builds_of_its_computed_values_from(scope.builds());
+    state.read_the_builds_of_its_computed_values_from(BuildsOfItsComputedValues::OfItsScope(
+        scope.builds(),
+    ));
     assert!(scope.wait_until_settled(SETTLED_WITHIN));
     assert_eq!(
         the_one_diagnostic_of(&state, &place).1.kind,

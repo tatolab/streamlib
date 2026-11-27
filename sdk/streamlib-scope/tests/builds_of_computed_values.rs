@@ -13,7 +13,8 @@ mod common;
 
 use common::Counted;
 use streamlib_scope::{
-    BuildFailure, BuildsOfAComputedValue, FrameView, LastBuild, ScopeBeingDeclared, computed,
+    BuildFailure, BuildsOfAComputedValue, ComputedValueDeclared, FrameView, LastBuild,
+    ScopeBeingDeclared, computed,
 };
 
 /// A kernel built for a tap count, standing in for a compiled blur shader.
@@ -54,9 +55,15 @@ fn the_builds_of_each_computed_value_name_it_and_say_whether_it_holds_a_value() 
     assert!(scope.wait_until_settled(SETTLE));
 
     let [failed_first] = builds.of_each_computed_value().try_into().unwrap();
-    assert_eq!(failed_first.declared.at.file(), file!());
-    assert_eq!(failed_first.declared.at.line(), declared_on);
-    assert!(failed_first.declared.holding.ends_with("BlurKernel"));
+    let ComputedValueDeclared::InRust { holding, at } = failed_first.declared.clone() else {
+        panic!(
+            "a value `computed` declares is declared in Rust: {:?}",
+            failed_first.declared
+        );
+    };
+    assert_eq!(at.file(), file!());
+    assert_eq!(at.line(), declared_on);
+    assert!(holding.ends_with("BlurKernel"));
     assert!(!failed_first.has_a_value);
     assert_eq!(
         failed_first.last_build,

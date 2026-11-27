@@ -19,7 +19,9 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
     EscalateResponseErr, EscalateResponseOk,
 };
 use crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneNode;
-use crate::core::graph::HowOneReadersHelperRanEachFunctionNode;
+use crate::core::graph::{
+    ComputedValueBuildsItsHelperReports, HowOneReadersHelperRanEachFunctionNode,
+};
 use crate::core::output_port_stream_facts::{
     StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
@@ -33,6 +35,7 @@ pub(crate) struct WhatAHelperPlacedNodeReaches {
     pub(crate) process_raising_the_node_reports: Arc<ProcessRaisingTheNodeReports>,
     pub(crate) how_its_islands_ran_each_function_node: Arc<HowOneReadersHelperRanEachFunctionNode>,
     pub(crate) node_not_ready_reports: Arc<NodeNotReadyReports>,
+    pub(crate) computed_value_builds_its_helper_reports: Arc<ComputedValueBuildsItsHelperReports>,
     pub(crate) output_frames_kept_by_its_output_links:
         Arc<OutputFramesKeptByTheOutputLinksOfOneNode>,
     /// The node's own keys of its project's store; `None` for a helper no node's context spawned.

@@ -20,8 +20,8 @@ use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib_scope::{
-    BuildFailure, Computed, FrameView, Input, LastBuild, ReadRefused, Scope, ScopeBeingDeclared,
-    computed, fail_this_build_on_a_computed_value_not_yet_built,
+    BuildFailure, Computed, ComputedValueDeclared, FrameView, Input, LastBuild, ReadRefused, Scope,
+    ScopeBeingDeclared, computed_declared_as, fail_this_build_on_a_computed_value_not_yet_built,
 };
 
 use crate::python_attached_from_any_thread::attached_from_any_thread;
@@ -203,6 +203,7 @@ impl PythonNodeScopeComputedValue {
 /// declares on this thread.
 #[pyfunction(name = "computed")]
 pub(crate) fn declare_a_computed_value_of_a_python_node(
+    python: Python<'_>,
     build: Py<PyAny>,
 ) -> PyResult<PythonNodeScopeComputedValue> {
     let Some(declared) = NODE_SCOPE_DECLARED_ON_THIS_THREAD.with_borrow(Clone::clone) else {
@@ -210,15 +211,34 @@ pub(crate) fn declare_a_computed_value_of_a_python_node(
             "`computed` declares only while a node's body declares its scope; call it in the body",
         ));
     };
+    let named_in_diagnostics = how_a_build_function_is_named(build.bind(python));
     let worker_thread = declared.worker_thread;
     let build = PythonBuildFunction(Some(build));
     Ok(PythonNodeScopeComputedValue {
         declared_in: declared.identity,
-        computed: computed(move || {
+        computed: computed_declared_as(named_in_diagnostics, move || {
             worker_thread.get_or_init(|| std::thread::current().id());
             build_with_the_python_function(&build)
         }),
     })
+}
+
+/// A computed value as its node's diagnostics name it: its build function's name, and the file
+/// and line its code starts at when the function has code.
+fn how_a_build_function_is_named(build: &Bound<'_, PyAny>) -> ComputedValueDeclared {
+    let named = build
+        .getattr("__qualname__")
+        .and_then(|name| name.extract::<String>())
+        .unwrap_or_else(|_| "a build function".to_owned());
+    let at = build.getattr("__code__").ok().and_then(|code| {
+        let file = code.getattr("co_filename").ok()?.extract::<String>().ok()?;
+        let line = code.getattr("co_firstlineno").ok()?.extract::<u32>().ok()?;
+        Some(Arc::from(format!("{file}:{line}")))
+    });
+    ComputedValueDeclared::ThroughABinding {
+        named: named.into(),
+        at,
+    }
 }
 
 /// A Python node's scope while its body declares it: its inputs, then its computed values.
@@ -287,9 +307,11 @@ impl PythonNodeScopeBeingDeclared {
 }
 
 /// How the last build of a computed value went, for a node's diagnostics.
+#[derive(Clone)]
 #[pyclass(
     frozen,
     get_all,
+    skip_from_py_object,
     name = "LastBuildOfANodeScopeComputedValue",
     module = "tatolab.runtime._engine"
 )]
@@ -323,7 +345,7 @@ impl From<LastBuild> for PythonLastBuildOfANodeScopeComputedValue {
             LastBuild::Failed { builds, why } => Self {
                 state: "failed",
                 builds,
-                failure: Some(match why {
+                failure: Some(match &why {
                     BuildFailure::Returned(_) => "raised",
                     BuildFailure::ReadAComputedValueNotYetBuilt => {
                         "read_a_computed_value_not_yet_built"
@@ -331,10 +353,34 @@ impl From<LastBuild> for PythonLastBuildOfANodeScopeComputedValue {
                     BuildFailure::Panicked(_) => "panicked",
                     BuildFailure::ComparisonPanicked(_) => "comparison_panicked",
                 }),
-                why: Some(why.to_string()),
+                why: Some(match why {
+                    BuildFailure::Returned(why)
+                    | BuildFailure::Panicked(why)
+                    | BuildFailure::ComparisonPanicked(why) => why,
+                    BuildFailure::ReadAComputedValueNotYetBuilt => why.to_string(),
+                }),
             },
         }
     }
+}
+
+/// How the builds of one computed value of a scope stand, for its node's diagnostics.
+#[pyclass(
+    frozen,
+    get_all,
+    name = "BuildsOfANodeScopeComputedValue",
+    module = "tatolab.runtime._engine"
+)]
+pub(crate) struct PythonBuildsOfANodeScopeComputedValue {
+    /// The computed value, as its node's diagnostics name it: its build function and where it is
+    /// declared.
+    declared: String,
+    /// Whether its first build landed.
+    has_a_value: bool,
+    /// Whether it is left to build again.
+    building_again: bool,
+    /// Its latest build, as `last_build_of` answers it.
+    last_build: PythonLastBuildOfANodeScopeComputedValue,
 }
 
 /// A running scope, shared by its Python object and the close made at interpreter exit.
@@ -499,6 +545,24 @@ impl PythonRunningNodeScope {
             .into())
     }
 
+    /// How the builds of each computed value stand, in declaration order.
+    fn builds_of_each_computed_value(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<Vec<PythonBuildsOfANodeScopeComputedValue>> {
+        let builds =
+            self.with_the_scope_detached(python, |scope| scope.builds().of_each_computed_value())?;
+        Ok(builds
+            .into_iter()
+            .map(|builds| PythonBuildsOfANodeScopeComputedValue {
+                declared: builds.declared.to_string(),
+                has_a_value: builds.has_a_value,
+                building_again: builds.building_again,
+                last_build: builds.last_build.into(),
+            })
+            .collect())
+    }
+
     /// Wait up to `timeout_seconds` until no computed value is left to build; whether it settled.
     fn wait_until_settled(&self, python: Python<'_>, timeout_seconds: f64) -> PyResult<bool> {
         let timeout = Duration::try_from_secs_f64(timeout_seconds)
@@ -566,6 +630,7 @@ pub(crate) fn add_the_node_scope_to(module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_class::<PythonNodeScopeComputedValue>()?;
     module.add_class::<PythonRunningNodeScope>()?;
     module.add_class::<PythonLastBuildOfANodeScopeComputedValue>()?;
+    module.add_class::<PythonBuildsOfANodeScopeComputedValue>()?;
     module.add_function(wrap_pyfunction!(
         declare_a_computed_value_of_a_python_node,
         module

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 mod acquisition;
 mod compute;
+mod computed_value_builds_reports;
 mod device_idle;
 mod export_staging;
 mod failure_the_node_reported_of_itself;
@@ -30,6 +31,7 @@ mod surface_copy;
 
 pub(crate) use acquisition::*;
 pub(crate) use compute::*;
+pub(crate) use computed_value_builds_reports::*;
 pub(crate) use device_idle::*;
 pub(crate) use export_staging::*;
 pub(crate) use failure_the_node_reported_of_itself::*;
@@ -145,6 +147,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "set_not_ready_because")]
     SetNotReadyBecause(EscalateRequestSetNotReadyBecause),
+
+    #[serde(rename = "set_computed_value_builds")]
+    SetComputedValueBuilds(EscalateRequestSetComputedValueBuilds),
 
     #[serde(rename = "set_output_port_stream_facts")]
     SetOutputPortStreamFacts(EscalateRequestSetOutputPortStreamFacts),

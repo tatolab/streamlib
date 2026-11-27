@@ -42,6 +42,26 @@ class StandInParent:
             return None
         return json.loads(payload.decode("utf-8"))
 
+    def receive_answering_each_escalate(
+        self, timeout_seconds: float = 5.0, escalates_answered: "list | None" = None
+    ):
+        """The next frame that is neither a log nor an escalate request, or `None` if
+        none arrives inside the deadline; each escalate request on the way is
+        answered `ok`, and kept in `escalates_answered` when one is given."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            frame = self.receive(max(deadline - time.monotonic(), 0.0))
+            if frame is None:
+                return None
+            if frame.get("rpc") == "escalate_request":
+                if escalates_answered is not None:
+                    escalates_answered.append(frame)
+                self.send(
+                    {"rpc": "escalate_response", "request_id": frame["request_id"], "result": "ok"}
+                )
+            elif frame.get("op") != "log":
+                return frame
+
     def _read_exactly(self, byte_count: int, deadline: float):
         collected = bytearray()
         while len(collected) < byte_count:
