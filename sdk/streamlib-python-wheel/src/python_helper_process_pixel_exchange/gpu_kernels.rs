@@ -125,7 +125,15 @@ impl HelperProcessGpuExchangeClient {
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let kernel_id: String = response_field(&response, "handle_id")?.extract()?;
-        Ok((kernel_id, reflected_kernel_bindings_in(&response)?))
+        match reflected_kernel_bindings_in(&response) {
+            Ok(bindings) => Ok((kernel_id, bindings)),
+            Err(unreadable) => {
+                // The parent holds the registration whether or not its answer
+                // reads, and no kernel object will ever release it.
+                self.release_compute_kernel(python, &kernel_id);
+                Err(unreadable)
+            }
+        }
     }
 
     /// Dispatch a registered compute kernel with its bindings supplied by name.

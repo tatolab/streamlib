@@ -396,9 +396,11 @@ pub(super) fn handle_release_handle(
     if let Some(removed_handle) = removed_handle {
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }
+    // The kernel is asked first: the helper's own count answers it without an
+    // escalate, where an acceleration structure is looked up through one.
     let released = removed
-        || release_an_acceleration_structure_the_helper_built(sandbox, registry, &handle_id)
-        || release_a_compute_kernel_registration_the_helper_holds(sandbox, registry, &handle_id);
+        || release_a_compute_kernel_registration_the_helper_holds(sandbox, registry, &handle_id)
+        || release_an_acceleration_structure_the_helper_built(sandbox, registry, &handle_id);
     if released {
         EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,

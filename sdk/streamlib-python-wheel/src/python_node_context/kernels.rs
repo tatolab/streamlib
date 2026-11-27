@@ -419,7 +419,6 @@ impl PythonKernelDispatchBatch {
     fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
             for entry in &recorded {
                 entry.kernel.get().refuse_if_released()?;
             }
