@@ -21,7 +21,7 @@ use super::node_interpreter_shutdown_ladder::{
 };
 use super::subprocess_bridge::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, HelperProcessShutdownCommand,
-    SubprocessBridge, spawn_fd_line_reader,
+    LifecycleCommandSent, LifecycleReplyNotReceived, SubprocessBridge, spawn_fd_line_reader,
 };
 use super::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::descriptors::NodeDescriptor;
@@ -215,6 +215,9 @@ pub(crate) struct NodeInterpreterSpawnHost {
     /// Set once this helper has been through the shutdown ask, so the ladder's
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
+    /// The `stop` and `teardown` this helper was sent, whose replies the
+    /// shutdown ladder waits on.
+    shutdown_commands_sent: Vec<LifecycleCommandSent>,
     link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
     /// Whether the helper evaluates the function node it runs as a standalone node once as it
     /// sets up, as [`FunctionNodePromotedToItsOwnProcessComponent::evaluated_at_setup`] says.
@@ -243,35 +246,42 @@ fn reported_reason(reply: &serde_json::Value) -> &str {
         .unwrap_or("it reported no reason")
 }
 
-/// Wait up to `slice` for the reply this command is answered with, reading
-/// past whatever the helper sent ahead of it.
+/// Wait up to `slice` for the reply to `command`, one of `shutdown_commands_sent`.
 ///
-/// Draining rather than taking the first frame: both commands are on the wire
-/// at once, so the helper answers `stopped` and then `done`, and a rung that
-/// claimed whatever arrived first would read the `stop` reply as the teardown
-/// it is timing.
+/// Both commands are on the wire at once, and the ladder moves to `teardown`
+/// whether or not `stop` was answered, so waiting on `teardown` abandons the
+/// reply to `stop`: a `stopped` arriving late is then dropped by its id.
 fn await_the_reply_to(
     bridge: &SubprocessBridge,
+    shutdown_commands_sent: &[LifecycleCommandSent],
     command: HelperProcessShutdownCommand,
     slice: Duration,
 ) -> LifecycleReplyAwaited {
-    let deadline = Instant::now() + slice;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return LifecycleReplyAwaited::SliceElapsed;
+    let sent_for = |shutdown_command: HelperProcessShutdownCommand| {
+        shutdown_commands_sent
+            .iter()
+            .find(|sent| sent.command == shutdown_command.lifecycle_command())
+            .copied()
+    };
+    if command == HelperProcessShutdownCommand::Teardown
+        && let Some(stop_sent) = sent_for(HelperProcessShutdownCommand::Stop)
+    {
+        bridge.abandon_the_reply_to(stop_sent);
+    }
+    let Some(awaited) = sent_for(command) else {
+        return LifecycleReplyAwaited::NoReplyCanArrive;
+    };
+    match bridge.await_the_reply_to(awaited, slice) {
+        Ok(_reply) => LifecycleReplyAwaited::Arrived,
+        Err(LifecycleReplyNotReceived::DeadlinePassed { .. }) => {
+            LifecycleReplyAwaited::SliceElapsed
         }
-        match bridge.recv_lifecycle_timeout(remaining) {
-            Ok(reply) if lifecycle_reply_tag(&reply) == Some(command.reply_tag()) => {
-                return LifecycleReplyAwaited::Arrived;
-            }
-            Ok(_reply_to_an_earlier_command) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                return LifecycleReplyAwaited::SliceElapsed;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return LifecycleReplyAwaited::NoReplyCanArrive;
-            }
+        Err(LifecycleReplyNotReceived::HelperProcessCanNoLongerAnswer { .. }) => {
+            LifecycleReplyAwaited::NoReplyCanArrive
+        }
+        Err(out_of_step) => {
+            tracing::error!("[{}] {out_of_step}", bridge.node_run_id());
+            LifecycleReplyAwaited::NoReplyCanArrive
         }
     }
 }
@@ -707,6 +717,7 @@ pub(crate) fn spawn_host_for_graph_node(
         why_the_helper_process_died_on_its_own: None,
         function_node_call_that_lost_the_helper: None,
         shutdown_was_already_asked_of_this_helper: false,
+        shutdown_commands_sent: Vec::new(),
         what_the_node_reaches: WhatAHelperPlacedNodeReaches {
             stream_facts_of_its_output_ports: Arc::clone(node.stream_facts_of_output_ports()),
             upstream_stream_facts_by_its_inbound_links: Arc::clone(

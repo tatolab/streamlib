@@ -11,7 +11,9 @@ use std::thread::{self, JoinHandle};
 
 use crate::core::error::{Error, Result};
 use crate::core::logging::carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe;
-use crate::core::nodes::LinksAwaitingTheirOutOfProcessWireReply;
+use crate::core::nodes::{
+    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessCommandId, OutOfProcessLinkWireAnswerNoted,
+};
 
 use crate::core::compiler::compiler_ops::subprocess_escalate::{
     envelope_request, handle_id_of_an_enveloped_ok_response, refusal_of_an_escalate_request,
@@ -149,24 +151,25 @@ fn reader_loop(
         // fall through to the lifecycle queue, which is the exact failure this
         // classification exists to prevent.
         match classify_an_incoming_subprocess_frame(&msg) {
-            IncomingSubprocessFrame::LinkWireAnswer { link_id, outcome } => {
-                if !parent_side
-                    .links_awaiting_their_wire_reply
-                    .note_the_far_sides_answer_for_link(&link_id, outcome)
-                {
-                    tracing::warn!(
-                        "[{}] its helper process answered for link '{}', which no link is \
-                         waiting on",
-                        node_run_id,
-                        link_id
-                    );
-                }
+            IncomingSubprocessFrame::LinkWireAnswer {
+                command_id,
+                link_id,
+                outcome,
+            } => {
+                log_an_answer_that_settled_no_link_wire_attempt(
+                    node_run_id,
+                    command_id,
+                    &link_id,
+                    parent_side
+                        .links_awaiting_their_wire_reply
+                        .note_the_far_sides_answer_to(command_id, &link_id, outcome),
+                );
                 continue;
             }
-            IncomingSubprocessFrame::LinkWireAnswerNamingNoLink => {
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommandOrNoLink => {
                 tracing::warn!(
-                    "[{}] its helper process answered a wire with no link named, so the link it \
-                     meant stays unanswered",
+                    "[{}] its helper process answered a wire naming no command or no link, so \
+                     it settles no link",
                     node_run_id
                 );
                 continue;
@@ -429,6 +432,40 @@ fn native_escalate_worker_loop(
                  {write_failure}"
             );
             return;
+        }
+    }
+}
+
+/// Say why an answer to a `wire_link` or `feed_island` settled nothing; an
+/// answer that settled its attempt says nothing.
+fn log_an_answer_that_settled_no_link_wire_attempt(
+    node_run_id: &str,
+    command_id: OutOfProcessCommandId,
+    link_id: &str,
+    noted: OutOfProcessLinkWireAnswerNoted,
+) {
+    match noted {
+        OutOfProcessLinkWireAnswerNoted::SettledItsAttempt => {}
+        OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt => {
+            tracing::debug!(
+                "[{node_run_id}] its helper process answered command {command_id} for link \
+                 '{link_id}', an attempt a newer one or the link's unwiring cancelled; dropped"
+            );
+        }
+        OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToNoCommandAwaited => {
+            tracing::warn!(
+                "[{node_run_id}] its helper process answered command {command_id} for link \
+                 '{link_id}', which no link is waiting on; dropped"
+            );
+        }
+        OutOfProcessLinkWireAnswerNoted::DroppedForNamingAnotherLink {
+            link_id_the_command_wired,
+        } => {
+            tracing::warn!(
+                "[{node_run_id}] its helper process answered command {command_id}, which wired \
+                 link '{link_id_the_command_wired}', for link '{link_id}'; dropped, so the \
+                 link stays unanswered"
+            );
         }
     }
 }

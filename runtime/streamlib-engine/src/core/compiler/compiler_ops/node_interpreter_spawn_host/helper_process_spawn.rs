@@ -11,8 +11,8 @@ use crate::core::child_process_lifetime::{
     give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::compiler::compiler_ops::subprocess_bridge::{
-    EscalateTransport, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
-    spawn_fd_line_reader,
+    EscalateTransport, LifecycleCommandAwaitingItsReply, LifecycleCommandSent,
+    LifecycleReplyNotReceived, SubprocessBridge, spawn_fd_line_reader,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
@@ -58,11 +58,6 @@ impl NodeInterpreterSpawnHost {
             .map(|output_port| output_port.name.as_str())
             .collect();
         serde_json::json!({
-            // The engine's own constant: the escalate dispatch reads
-            // this exact spelling to decide that a window may be
-            // minted, and a rename on one side alone would refuse
-            // every window silently.
-            "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
             "capability": "full",
             "input_values": self.node_input_values,
             "node_run_id": self.node_run_id,
@@ -160,11 +155,15 @@ impl NodeInterpreterSpawnHost {
         }
     }
 
-    /// Wait for the child's `ready`, killing it if the deadline passes.
+    /// Wait for the reply to `setup_sent`, killing the child if the deadline
+    /// passes.
     ///
     /// An unbounded wait here is what turns a class that blocks at import time
     /// into a graph that never comes up and never says why.
-    pub(super) fn await_child_registration(&mut self) -> Result<()> {
+    pub(super) fn await_child_registration(
+        &mut self,
+        setup_sent: LifecycleCommandSent,
+    ) -> Result<()> {
         let bridge = self
             .bridge
             .as_ref()
@@ -203,11 +202,18 @@ impl NodeInterpreterSpawnHost {
                     self.node_class_import_path,
                 )));
             }
-            match bridge.recv_lifecycle_timeout(remaining) {
+            match bridge.await_the_reply_to(setup_sent, remaining) {
                 Ok(reply) => break reply,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(LifecycleReplyNotReceived::DeadlinePassed { .. }) => continue,
+                Err(LifecycleReplyNotReceived::HelperProcessCanNoLongerAnswer { .. }) => {
                     return Err(self.refuse_the_helper_process_that_died_while_setting_up());
+                }
+                Err(out_of_step) => {
+                    self.take_the_helper_process_group_down();
+                    return Err(Error::Runtime(format!(
+                        "[{}] {out_of_step}",
+                        self.node_display_name
+                    )));
                 }
             }
         };
@@ -434,29 +440,43 @@ impl NodeInterpreterSpawnHost {
 
         // Through the envelope, so the links it carries go out with this
         // command and every link held behind it is handed over after.
+        let mut setup_sent = None;
         let setup_command_sent = self
             .link_wiring
             .send_the_setup_command_then_hand_every_later_link_over(
                 |ports| {
-                    bridge.send(&self.the_setup_command_to_its_helper(
-                        ports,
-                        loss_count_board,
-                        stream_clock_named_to_the_helper,
-                    ))
+                    setup_sent = Some(bridge.send_a_lifecycle_command_awaiting_its_reply(
+                        LifecycleCommandAwaitingItsReply::Setup,
+                        self.the_setup_command_to_its_helper(
+                            ports,
+                            loss_count_board,
+                            stream_clock_named_to_the_helper,
+                        ),
+                    )?);
+                    Ok(())
                 },
                 bridge.link_delivery_to_this_subprocess(&self.node_display_name),
             );
         self.bridge = Some(bridge);
-        if let Err(setup_command_send_failure) = setup_command_sent {
-            // The child's end is already closed: it refused its own start
-            // before reading anything.
-            tracing::debug!(
-                "[{}] could not send its helper process the setup command: \
-                 {setup_command_send_failure}",
-                self.node_display_name
-            );
-            return Err(self.refuse_the_helper_process_that_died_while_setting_up());
-        }
-        self.await_child_registration()
+        let setup_sent = match (setup_command_sent, setup_sent) {
+            (Ok(()), Some(setup_sent)) => setup_sent,
+            (Ok(()), None) => {
+                return Err(Error::Runtime(format!(
+                    "[{}] its wiring envelope never sent its helper process the setup command",
+                    self.node_display_name
+                )));
+            }
+            (Err(setup_command_send_failure), _) => {
+                // The child's end is already closed: it refused its own start
+                // before reading anything.
+                tracing::debug!(
+                    "[{}] could not send its helper process the setup command: \
+                     {setup_command_send_failure}",
+                    self.node_display_name
+                );
+                return Err(self.refuse_the_helper_process_that_died_while_setting_up());
+            }
+        };
+        self.await_child_registration(setup_sent)
     }
 }

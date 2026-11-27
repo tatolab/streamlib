@@ -71,7 +71,9 @@ pub(crate) use node_types_one_stream_resolves::{
     HowANodeOfADescribedTypeRuns, chooses_among_the_bundles_its_stream_declares,
 };
 pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
-pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
+pub(crate) use out_of_process_link_wire_reply::{
+    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessCommandId, OutOfProcessLinkWireAnswerNoted,
+};
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 pub(crate) use placed_stream_node_type::{
     the_setting_of_a_placed_stream_named, the_settings_of_a_placed_stream,

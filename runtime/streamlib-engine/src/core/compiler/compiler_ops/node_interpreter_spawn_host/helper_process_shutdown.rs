@@ -52,22 +52,30 @@ impl NodeInterpreterSpawnHost {
         if self.bridge.is_none() {
             return;
         }
+        // Whatever was still waiting on a reply was given up on by its waiter:
+        // a `setup` cut short by shutdown answers after `stop` is on the wire.
+        if let Some(bridge) = &self.bridge {
+            bridge.abandon_the_reply_to_every_lifecycle_command_still_owed_one();
+        }
         // Warned once rather than per command: a helper that did not take the
         // first will not take the second either, and one unusable child owes
         // one line, which is the posture `exchange_with_child` already keeps.
         for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
-            let asked = self.send_to_child(&serde_json::json!({
-                "cmd": command.command_tag(),
-                "capability": "full",
-            }));
-            if let Err(unreachable_helper) = asked {
-                tracing::warn!(
-                    "[{}] its helper process did not take the {} command, so neither it nor \
-                     anything after it was asked for: {unreachable_helper}",
-                    self.node_display_name,
-                    command.command_tag(),
-                );
-                return;
+            let lifecycle_command = command.lifecycle_command();
+            match self.send_to_child_a_command_awaiting_its_reply(
+                lifecycle_command,
+                serde_json::json!({"capability": "full"}),
+            ) {
+                Ok(sent) => self.shutdown_commands_sent.push(sent),
+                Err(unreachable_helper) => {
+                    tracing::warn!(
+                        "[{}] its helper process did not take the {} command, so neither it \
+                         nor anything after it was asked for: {unreachable_helper}",
+                        self.node_display_name,
+                        lifecycle_command.command_tag(),
+                    );
+                    return;
+                }
             }
         }
     }
@@ -79,6 +87,7 @@ impl NodeInterpreterSpawnHost {
         self.ask_the_helper_to_stop_and_tear_down();
         let outcome = self.child.take().map(|child| {
             let bridge = self.bridge.as_ref();
+            let shutdown_commands_sent = &self.shutdown_commands_sent;
             HelperProcessShutdownLadder::taking_over(
                 self.node_display_name.clone(),
                 child,
@@ -87,7 +96,7 @@ impl NodeInterpreterSpawnHost {
                     .clone(),
             )
             .walk_every_rung(|command, slice| match bridge {
-                Some(bridge) => await_the_reply_to(bridge, command, slice),
+                Some(bridge) => await_the_reply_to(bridge, shutdown_commands_sent, command, slice),
                 None => LifecycleReplyAwaited::NoReplyCanArrive,
             })
         });

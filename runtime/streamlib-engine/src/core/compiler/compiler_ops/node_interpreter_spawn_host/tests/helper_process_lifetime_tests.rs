@@ -207,16 +207,15 @@ fn every_path_onto_the_ladder_asks_the_helper_to_stop_and_tear_down_exactly_once
 }
 
 #[test]
-fn the_two_shutdown_commands_are_the_ones_the_helper_answers() {
-    // One pairing, in one place: the command the parent writes and the
-    // reply tag the rung waits on come from the same value, so a rename of
-    // either cannot leave the ladder waiting for a tag nobody sends.
+fn the_two_shutdown_commands_are_sent_as_stop_then_teardown() {
     let [stop, teardown] = HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM;
 
-    assert_eq!((stop.command_tag(), stop.reply_tag()), ("stop", "stopped"));
     assert_eq!(
-        (teardown.command_tag(), teardown.reply_tag()),
-        ("teardown", "done")
+        (
+            stop.lifecycle_command().command_tag(),
+            teardown.lifecycle_command().command_tag()
+        ),
+        ("stop", "teardown")
     );
 }
 

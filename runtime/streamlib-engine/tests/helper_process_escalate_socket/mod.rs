@@ -116,7 +116,7 @@ pub fn send_lifecycle_command_and_let_the_helper_read_it(
     lifecycle_command: &str,
 ) {
     bridge
-        .send(&json!({ "cmd": lifecycle_command, "capability": "full" }))
+        .send_a_command_answered_by_nothing(&json!({ "cmd": lifecycle_command, "capability": "full" }))
         .expect("the parent's lifecycle command reaches the helper");
     let received = helper.read_one_frame();
     assert_eq!(

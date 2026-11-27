@@ -32,8 +32,8 @@ pytestmark = pytest.mark.usefixtures(
 
 
 def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
-    """A helper that replied to `run` would desynchronize every later command:
-    the parent reads that reply as the answer to whatever it sends next."""
+    """The parent waits on no reply to `run`: one would end the wait of the
+    next command it sends, as a reply to a command it is not waiting on."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -605,6 +605,48 @@ def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
+
+
+def test_every_answer_echoes_the_id_of_the_command_it_answers(stand_in_parent):
+    """The parent matches each answer to its command by the id it stamped on
+    that command, never by arrival order, so the helper echoes the id on every
+    command it answers, and on nothing it does not."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "command_id": 11, "capability": "full", "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready", "command_id": 11}
+    stand_in_parent.send({"cmd": "on_pause", "command_id": 12, "capability": "limited"})
+    assert stand_in_parent.receive() == {"rpc": "ok", "command_id": 12}
+    stand_in_parent.send({"cmd": "on_resume", "command_id": 13, "capability": "limited"})
+    assert stand_in_parent.receive() == {"rpc": "ok", "command_id": 13}
+    stand_in_parent.send(
+        {
+            "cmd": "wire_link",
+            "command_id": 14,
+            "direction": "sideways",
+            "link": {"link_id": "L-sideways"},
+        }
+    )
+    assert stand_in_parent.receive() == {
+        "rpc": "link_wire_failed",
+        "command_id": 14,
+        "link_id": "L-sideways",
+        "reason": "unknown link direction 'sideways'",
+    }
+    stand_in_parent.send({"cmd": "carry_links", "command_id": 15, "carries": []})
+    refused = stand_in_parent.receive()
+    assert (refused["rpc"], refused["command_id"]) == ("error", 15)
+
+    stand_in_parent.send({"cmd": "stop", "command_id": 16, "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "command_id": 17, "capability": "full"})
+    assert stand_in_parent.receive() == {"rpc": "stopped", "command_id": 16}
+    assert stand_in_parent.receive() == {"rpc": "done", "command_id": 17}
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
 
 
 def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_parent):
