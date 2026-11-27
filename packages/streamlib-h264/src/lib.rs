@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::time::Duration;
 
 use pyo3::exceptions::PyRuntimeError;
@@ -9,7 +8,7 @@ use pyo3::prelude::*;
 use streamlib_owned_device_video_codec_nodes::video_decoder_settings::VideoDecoderSettings;
 use streamlib_owned_device_video_codec_nodes::video_encoder_settings::VideoEncoderSettings;
 use streamlib_owned_device_video_codec_nodes::{VideoCodecNodeIdentity, VideoCodecNodeThread};
-use tatolab_module_sdk::ModuleHost;
+use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
 
 /// `H264Encoder`'s encoding thread, started over the module host table its
 /// node lent `video` and `encoded_video` through.
@@ -51,6 +50,10 @@ impl H264EncoderThread {
             effort_level,
         };
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "H264EncoderThread",
+        )?;
         let encoding_thread = VideoCodecNodeThread::start_encoder(
             VideoCodecNodeIdentity::H264_ENCODER,
             module_host,
@@ -86,6 +89,10 @@ impl H264DecoderThread {
         max_height: Option<u32>,
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "H264DecoderThread",
+        )?;
         let decoding_thread = VideoCodecNodeThread::start_decoder(
             VideoCodecNodeIdentity::H264_DECODER,
             module_host,

@@ -25,7 +25,7 @@ use std::sync::atomic::Ordering;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use tatolab_module_sdk::ModuleHost;
+use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
 
 use tatolab_browser_tab_protocol::{PageInputTrack, PageInputTrackKind};
 
@@ -79,6 +79,10 @@ impl PythonBrowserPageRendering {
         output_pool_rotation_depth: u32,
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "BrowserPageRendering",
+        )?;
         let rendering = python
             .detach(|| -> Result<BrowserPageRendering, String> {
                 let tracks = video_input_ports
