@@ -32,9 +32,10 @@ from tatolab.stream import (
     StreamBuilder,
     graph_generator,
 )
+from tatolab.stream._node_function import NodeFunction
 from tatolab.testpattern import TestPatternSource
 
-_ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
+_ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[NodeFunction, NodeFunction]] = {
     "h264": (H264Encoder, H264Decoder),
     "h265": (H265Encoder, H265Decoder),
 }

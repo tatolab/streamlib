@@ -7,31 +7,34 @@ Both sit on the encoded side of the codec blocks and touch no raw frame, no
 surface and no GPU: `WhipPublisher` consumes the Annex-B access units and Opus
 packets `H264Encoder` and `OpusEncoder` publish, and `WhepPlayer` writes the
 ones `H264Decoder` and `OpusDecoder` consume, each bare and stamped on its
-message. The codec, the
-coded extent and the channel count ride the ports' stream facts. Each runs
-in its own helper process. The publisher calls this wheel's own Rust from its
-`process()`; the player lends its two output ports to a thread of this wheel's
-Rust through the module host table, which writes every frame with no Python
-attached. The engine is never on the data path.
+message. The codec, the coded extent and the channel count ride the ports'
+stream facts. Each is one function, running in its own helper process, and its
+`url` and `bearer_token` are live: a new value opens a session of it beside the
+one running, and the old one closes once the new one has opened. The publisher
+calls this wheel's own Rust from its per-frame function; the player lends its two
+output ports to a thread of this wheel's Rust through the module host table,
+which writes every frame with no Python attached. The engine is never on the
+data path.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Annotated, Any, Literal, NamedTuple
+from collections.abc import Callable, Mapping
+from typing import Annotated, Literal, NamedTuple
 
 from tatolab.stream import (
     Description,
     EncodedAudio,
     EncodedCodecs,
     EncodedVideo,
+    Input,
     InputPin,
     Message,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
+    computed,
     log,
     node,
 )
@@ -46,10 +49,6 @@ ENCODED_AUDIO_OUTPUT_PORT = "encoded_audio"
 #: One WHIP session carries at most one video track and one audio track, so a
 #: publisher's inbound links cannot outnumber them.
 HIGHEST_TRACKS_IN_ONE_SESSION = 2
-
-#: How long `stop()` waits for the reading thread. The thread's own media wait
-#: is bounded, so this only expires when it is still inside a connect.
-READER_THREAD_JOIN_TIMEOUT_SECONDS = 1.0
 
 #: How often the publisher says it is still working, on the cadence the player's
 #: reading thread reports on too.
@@ -157,17 +156,20 @@ def refuse_audio_rtp_cannot_carry(channels: "int | None", inbound_link: str) -> 
         )
 
 
-def _required_url(url: Any, node_name: str) -> str:
-    if not isinstance(url, str) or not url:
-        raise ValueError(
-            f"{node_name}: `url` is not set; it takes the endpoint's address, "
-            f"got {url!r}"
+class EndpointUrlNotSet(ValueError):
+    """`url` is empty, and a session is opened at the endpoint it names."""
+
+
+def _required_url(url: str, node_name: str) -> str:
+    if not url:
+        raise EndpointUrlNotSet(
+            f"{node_name}: `url` is not set; it takes the endpoint's address"
         )
     return url
 
 
-def _optional_bearer_token(bearer_token: Any) -> "str | None":
-    return bearer_token if isinstance(bearer_token, str) and bearer_token else None
+def _optional_bearer_token(bearer_token: "str | None") -> "str | None":
+    return bearer_token or None
 
 
 PublishedTracks = InputPin[
@@ -184,8 +186,8 @@ track per inbound link, read in order."""
 class WhipSessionPublishing:
     """One WHIP session, publishing what the `tracks` pin of the node running it reads.
 
-    `WhipPublisher` runs one at the endpoint its `url` names, and a node naming its endpoint
-    another way runs one of its own.
+    `WhipPublisher` builds one at the endpoint its `url` names each time that changes, and a
+    node naming its endpoint another way builds one of its own.
     """
 
     def __init__(self, url: str, bearer_token: "str | None") -> None:
@@ -198,11 +200,21 @@ class WhipSessionPublishing:
         self._media_frames_published = 0
         self._media_frames_discarded_awaiting_a_group_start = 0
 
-    def set_up(self, tracks: PublishedTracks) -> None:
-        """Make the session against the links feeding `tracks`, which are wired before `setup()`
-        runs, so the track count is known before a message has arrived and before anything is
-        offered."""
-        self._inbound_links = tracks.inbound_link_names()
+    def set_up(
+        self,
+        inbound_links: "list[str]",
+        *,
+        tracks_of_a_connected_session: "Mapping[str, PublishedTrack] | None" = None,
+    ) -> None:
+        """Make the session against the links feeding the `tracks` pin, which are wired before
+        the node is set up, so the track count is known before a message has arrived and before
+        anything is offered.
+
+        Given the tracks a connected session it replaces publishes, it connects here when they
+        name every link, so that a refusal raises `WhipSessionNotOpened` here and the connected
+        one keeps publishing; each link still enters the new session at its next group start.
+        """
+        self._inbound_links = list(inbound_links)
         if not self._inbound_links:
             raise ValueError(
                 "WhipPublisher: nothing is connected to `tracks`, so there is "
@@ -219,6 +231,23 @@ class WhipSessionPublishing:
         self._inbound_links_awaiting_a_group_start = set(self._inbound_links)
 
         self._session = _native.WhipSession(self._url, self._bearer_token)
+        if tracks_of_a_connected_session is not None and all(
+            inbound_link in tracks_of_a_connected_session for inbound_link in self._inbound_links
+        ):
+            self._track_by_inbound_link = {
+                inbound_link: tracks_of_a_connected_session[inbound_link]
+                for inbound_link in self._inbound_links
+            }
+            published = list(self._track_by_inbound_link.values())
+            audio = next((track for track in published if track.kind == "audio"), None)
+            self._connect(audio or published[0], when="as the session is set up")
+
+    @property
+    def tracks_published(self) -> "Mapping[str, PublishedTrack] | None":
+        """The track each link publishes as, once the session has connected."""
+        if self._session is None or not self._session.is_connected:
+            return None
+        return dict(self._track_by_inbound_link)
 
     def publish_the_next_message(self, tracks: PublishedTracks) -> None:
         """Send the next message `tracks` holds, if any, on its link's track."""
@@ -234,7 +263,7 @@ class WhipSessionPublishing:
             refuse_audio_rtp_cannot_carry(track.channels, message.inbound_link)
         if not self._enters_or_continues_a_group(message):
             return
-        self._connect_on_the_first_media_frame(track)
+        self._connect(track, when="on the first media frame")
 
         session = self._connected_session()
         try:
@@ -255,7 +284,7 @@ class WhipSessionPublishing:
             self._session.close()
             self._session = None
         log.info(
-            f"WhipPublisher: teardown, "
+            f"WhipPublisher: session closed, "
             f"media_frames_published={self._media_frames_published}, "
             f"media_frames_discarded_awaiting_a_group_start="
             f"{self._media_frames_discarded_awaiting_a_group_start}"
@@ -307,8 +336,8 @@ class WhipSessionPublishing:
         self._inbound_links_awaiting_a_group_start.discard(inbound_link)
         return True
 
-    def _connect_on_the_first_media_frame(self, track: PublishedTrack) -> None:
-        """Open the session, offering the media the wiring settled.
+    def _connect(self, track: PublishedTrack, *, when: str) -> None:
+        """Open the session, unless it is open, offering the media the wiring settled.
 
         With one link the offer carries the medium that link's entry names.
         With two it carries both, because a second link of either medium is
@@ -323,7 +352,7 @@ class WhipSessionPublishing:
         video = carries_both or track.kind == "video"
         audio = carries_both or track.kind == "audio"
         log.info(
-            f"WhipPublisher: opening a session on the first media frame "
+            f"WhipPublisher: opening a session {when} "
             f"(video={video}, audio={audio}, links={len(self._inbound_links)})"
         )
         session.connect(
@@ -348,20 +377,42 @@ class WhipSessionPublishing:
     ),
 )
 @node(paced_by_real_time=True)
-class WhipPublisher:
+def WhipPublisher(
+    *,
+    url: Input[
+        Annotated[
+            str,
+            Description(
+                "The WHIP endpoint to publish to; until it is set, the node shows `EndpointUrlNotSet`, "
+                "naming `url`, and publishes nothing."
+            ),
+        ]
+    ] = Input(""),
+    bearer_token: Input[
+        Annotated[
+            str | None,
+            Description("Sent as `Authorization: Bearer` when the endpoint wants one."),
+        ]
+    ] = Input(None),
+    tracks: PublishedTracks,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Media frames in, one WHIP session out.
 
     One fan-in input, and each inbound link is one track whose medium the
-    upstream port's stream facts name. Its settings are `url`, and an optional
-    `bearer_token`, each an input that takes a wire.
+    upstream port's stream facts name.
 
     Each link enters at a message that starts a group — a keyframe, or any
     Opus packet — and after a read reports a loss it discards up to the next
     one, so the far end is never sent a picture whose references it lacks.
 
-    The session opens on the first media frame rather than in `setup()`,
-    because a relay round trip inside `setup()` spends the helper's start-up
-    budget and a relay outage there takes the whole graph down with it.
+    `url` and `bearer_token` are live. The first session opens on the first
+    media frame rather than as the node is set up, because a relay round trip
+    there spends the helper's start-up budget and a relay outage there takes
+    the whole graph down with it. A new value opens its session off the frame
+    thread while the old one keeps publishing; once it has opened the old one
+    closes and each link enters the new one at its next group start, so video
+    pauses until the next keyframe. A session the endpoint refuses raises
+    `WhipSessionNotOpened` on the node, and the old one keeps publishing.
 
     One known offset: video reaches the far end presenting roughly one frame
     interval later than audio. The RTP payloader applies a sample's duration to
@@ -372,39 +423,72 @@ class WhipPublisher:
     zero.
     """
 
-    url: Annotated[
-        str,
-        SettingOnly(),
-        Description("The WHIP endpoint to publish to; the node fails, naming `url`, until it is set."),
-    ] = ""
-    bearer_token: Annotated[
-        str | None,
-        SettingOnly(),
-        Description("Sent as `Authorization: Bearer` when the endpoint wants one."),
-    ] = None
-    tracks: PublishedTracks
+    # Read once, as the node is set up: the links are wired before it is.
+    inbound_links = tracks.inbound_link_names()
+    last_built: "WhipSessionPublishing | None" = None
 
-    def __init__(self) -> None:
-        self._publishing = WhipSessionPublishing(
-            _required_url(self.url, "WhipPublisher"), _optional_bearer_token(self.bearer_token)
+    def publishing_at_the_endpoint() -> WhipSessionPublishing:
+        nonlocal last_built
+        publishing = WhipSessionPublishing(
+            _required_url(url.get(), "WhipPublisher"), _optional_bearer_token(bearer_token.get())
         )
+        try:
+            # The first session connects on its first media frame, and so does one replacing a
+            # session that never connected: only a connected session has frames to keep
+            # publishing while its replacement is refused, and its tracks are what the new one
+            # offers, read off it rather than off the pin the frames read.
+            publishing.set_up(
+                inbound_links,
+                tracks_of_a_connected_session=(
+                    None if last_built is None else last_built.tracks_published
+                ),
+            )
+        except BaseException:
+            publishing.close()
+            raise
+        last_built = publishing
+        return publishing
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._publishing.set_up(self.tracks)
+    publishing = computed(publishing_at_the_endpoint)
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def publish_the_next_message(ctx: RuntimeContextLimitedAccess) -> None:
         del ctx
-        self._publishing.publish_the_next_message(self.tracks)
+        publishing.get().publish_the_next_message(tracks)
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._publishing.close()
+    return publish_the_next_message
 
 
 @node.meta(description="Plays encoded video and audio back from a WHEP endpoint")
 @node(execution="manual")
-class WhepPlayer:
+def WhepPlayer(
+    *,
+    url: Input[
+        Annotated[
+            str,
+            Description(
+                "The WHEP endpoint to play from; until it is set, the node shows `EndpointUrlNotSet`, "
+                "naming `url`, and plays nothing."
+            ),
+        ]
+    ] = Input(""),
+    bearer_token: Input[
+        Annotated[
+            str | None,
+            Description("Sent as `Authorization: Bearer` when the endpoint wants one."),
+        ]
+    ] = Input(None),
+    encoded_video: OutputPin[
+        Annotated[
+            EncodedVideo,
+            EncodedCodecs("h264"),
+            Description("H.264 access units, Annex-B, one per message"),
+        ]
+    ],
+    encoded_audio: OutputPin[
+        Annotated[EncodedAudio, EncodedCodecs("opus"), Description("Opus packets, one per message")]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """One WHEP session in, access units and Opus packets out.
 
     Two output ports rather than one per track: ports are declared statically,
@@ -419,66 +503,24 @@ class WhepPlayer:
     for the stream. The `OpusHead` in the audio facts' `codec_configuration_hex` carries a
     pre-skip of 0 because RTP states no encoder lookahead, so a decoder trims
     nothing.
+
+    `url` and `bearer_token` are live. While an endpoint plays, a new value dials its endpoint
+    off the frame thread, and the reading thread moves to it once it has connected; one that
+    fails raises a `WhepSessionNotOpened` of its kind on the node, and the old one keeps
+    playing. While none plays, as for the first endpoint, the reading thread dials it and
+    redials it with backoff instead: a WHEP endpoint refuses until its publisher starts, so a
+    player brought up before its publisher plays once the publisher does.
     """
-
-    url: Annotated[
-        str,
-        SettingOnly(),
-        Description("The WHEP endpoint to play from; the node fails, naming `url`, until it is set."),
-    ] = ""
-    bearer_token: Annotated[
-        str | None,
-        SettingOnly(),
-        Description("Sent as `Authorization: Bearer` when the endpoint wants one."),
-    ] = None
-    encoded_video: OutputPin[
-        Annotated[
-            EncodedVideo,
-            EncodedCodecs("h264"),
-            Description("H.264 access units, Annex-B, one per message"),
-        ]
-    ]
-    encoded_audio: OutputPin[
-        Annotated[EncodedAudio, EncodedCodecs("opus"), Description("Opus packets, one per message")]
-    ]
-
-    def __init__(self) -> None:
-        self._url = _required_url(self.url, "WhepPlayer")
-        self._bearer_token = _optional_bearer_token(self.bearer_token)
-        self._reading_thread: "_native.WhepPlayerThread | None" = None
-
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        """Lend both outputs to a reading thread of this wheel's Rust.
-
-        Connecting happens on that thread and not in `setup()`, so an endpoint
-        that is slow or down cannot spend the helper's start-up budget.
-        """
-        module_host_table = ctx.open_module_host_table(
+    del encoded_video, encoded_audio
+    # Both outputs go to a reading thread of this wheel's Rust, which writes every frame with no
+    # Python attached.
+    reading_thread = _native.WhepPlayerThread(
+        ctx.open_module_host_table(
             output_ports=[ENCODED_VIDEO_OUTPUT_PORT, ENCODED_AUDIO_OUTPUT_PORT]
         )
-        self._reading_thread = _native.WhepPlayerThread(
-            module_host_table, self._url, self._bearer_token
+    )
+    computed(
+        lambda: reading_thread.open_session(
+            _required_url(url.get(), "WhepPlayer"), _optional_bearer_token(bearer_token.get())
         )
-
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_the_reading_thread()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_the_reading_thread()
-
-    def _stop_the_reading_thread(self) -> None:
-        if self._reading_thread is None:
-            return
-        # Bounded well inside the helper's five-second teardown budget: the
-        # thread's own wait for media is bounded. A thread still inside a
-        # connect against an unresponsive relay outlives this, and closes the
-        # session itself when the connect returns — which is the most a stop
-        # can honestly promise.
-        if not self._reading_thread.stop_and_join(READER_THREAD_JOIN_TIMEOUT_SECONDS):
-            log.warn(
-                "WhepPlayer: the reading thread is still connecting; the session "
-                "will close when that connect returns"
-            )
-        self._reading_thread = None
+    )

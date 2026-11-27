@@ -15,7 +15,7 @@ the log lines, because a helper process's Rust has no `tracing` subscriber.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 import numpy
 
@@ -25,13 +25,13 @@ from tatolab.stream import (
     Description,
     EncodedAudio,
     EncodedCodecs,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
+    computed,
     log,
     node,
 )
@@ -84,26 +84,27 @@ def _log_codec_notices(notices: "list[tuple[Literal['info', 'warn'], str]]") -> 
     conversion=True,
 )
 @node(scheduling="high")
-class OpusEncoder:
-    """Audio windows in, Opus packets out."""
-
-    bitrate_bps: Annotated[
-        int | None,
-        SettingOnly(),
-        NumberRange(minimum=1, maximum=_HIGHEST_BITRATE_BPS_LIBOPUS_TAKES),
-        Description(
-            "Target bitrate in bits per second. Unset, libopus picks its own from the sample "
-            "rate and channel count."
-        ),
-    ] = None
-    application: Annotated[
-        OpusEncoderApplication,
-        SettingOnly(),
-        Description(
-            "Which libopus tuning to encode for: `audio` for broadcast and high fidelity, `voip` "
-            "for speech, `lowdelay` for the lowest latency at a cost in quality."
-        ),
-    ] = "audio"
+def OpusEncoder(
+    *,
+    bitrate_bps: Input[
+        Annotated[
+            int | None,
+            NumberRange(minimum=1, maximum=_HIGHEST_BITRATE_BPS_LIBOPUS_TAKES),
+            Description(
+                "Target bitrate in bits per second. Unset, libopus picks its own from the "
+                "sample rate and channel count."
+            ),
+        ]
+    ] = Input(None),
+    application: Input[
+        Annotated[
+            OpusEncoderApplication,
+            Description(
+                "Which libopus tuning to encode for: `audio` for broadcast and high fidelity, "
+                "`voip` for speech, `lowdelay` for the lowest latency at a cost in quality."
+            ),
+        ]
+    ] = Input("audio"),
     audio: InputPin[
         Annotated[
             Audio,
@@ -119,27 +120,36 @@ class OpusEncoder:
                 "source's own channel count"
             ),
         ]
-    ]
+    ],
     encoded_audio: OutputPin[
         Annotated[
             EncodedAudio,
             EncodedCodecs(OPUS_RFC6381_CODEC_STRING),
             Description("Opus packets, one per message"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Audio windows in, Opus packets out.
 
-    def __init__(self) -> None:
-        self._encoder = _native.AudioWindowToEncodedPacketEncoder(
-            self.bitrate_bps, self.application
-        )
-        self._stream_facts_owed_to_the_port: "_native.OpusEncoderPortStreamFacts | None" = None
+    Both inputs are live: a new value builds an encoder of it off the frame thread, and the
+    next window is encoded with it, its port's stream facts stated again before its first
+    packet.
+    """
+    encoding = computed(lambda: _OpusEncoding(bitrate_bps.get(), application.get()))
+    stream_facts_owed_to_the_port: "_native.OpusEncoderPortStreamFacts | None" = None
+    encoder_owing_them: "_OpusEncoding | None" = None
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        del ctx
-        while (window := self.audio.read()) is not None:
+    def encode_each_window(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal stream_facts_owed_to_the_port, encoder_owing_them
+        del frame_ctx
+        encoder = encoding.get()
+        if encoder is not encoder_owing_them:
+            # A new encoder states its own stream facts before its first packet.
+            encoder_owing_them, stream_facts_owed_to_the_port = encoder, None
+        while (window := audio.read()) is not None:
             interleaved_samples = numpy.ascontiguousarray(numpy.from_dlpack(window).T)
             try:
-                opus_packet_bytes = self._encoder.encode_one_window(
+                opus_packet_bytes = encoder.native.encode_one_window(
                     interleaved_samples.tobytes(),
                     window.sample_rate,
                     window.channel_count,
@@ -147,36 +157,43 @@ class OpusEncoder:
                     window.dtype,
                 )
             finally:
-                _log_codec_notices(self._encoder.take_notices())
+                _log_codec_notices(encoder.native.take_notices())
             if opus_packet_bytes is None:
                 continue
-            owed = self._encoder.take_stream_facts_owed_to_the_port()
+            owed = encoder.native.take_stream_facts_owed_to_the_port()
             if owed is not None:
-                self._stream_facts_owed_to_the_port = owed
+                stream_facts_owed_to_the_port = owed
             # Set ahead of the first packet it describes, and kept owed until
             # the port takes it.
-            if self._stream_facts_owed_to_the_port is not None:
-                self.encoded_audio.set_stream_facts(
+            stream_facts = stream_facts_owed_to_the_port
+            if stream_facts is not None:
+                encoded_audio.set_stream_facts(
                     PacketsStreamFacts(
                         rfc6381_codec=OPUS_RFC6381_CODEC_STRING,
-                        sample_rate=self._stream_facts_owed_to_the_port.sample_rate,
-                        channel_count=self._stream_facts_owed_to_the_port.channel_count,
-                        codec_configuration_hex=self._stream_facts_owed_to_the_port.codec_configuration_hex,
+                        sample_rate=stream_facts.sample_rate,
+                        channel_count=stream_facts.channel_count,
+                        codec_configuration_hex=stream_facts.codec_configuration_hex,
                     ),
                 )
-                self._stream_facts_owed_to_the_port = None
+                stream_facts_owed_to_the_port = None
             # Stamped with the instant the packet's first sample was captured,
             # never the moment it was published.
-            self.encoded_audio.write(
+            encoded_audio.write(
                 opus_packet_bytes, timestamp_ns=window.timestamp_ns, starts_group=True
             )
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        log.info(
-            "OpusEncoder: teardown",
-            packets_encoded=self._encoder.packets_encoded,
-        )
+    return encode_each_window
+
+
+class _OpusEncoding:
+    """One libopus encoder of a bitrate and a tuning, which says how many packets it encoded
+    when it is closed."""
+
+    def __init__(self, bitrate_bps: "int | None", application: str) -> None:
+        self.native = _native.AudioWindowToEncodedPacketEncoder(bitrate_bps, application)
+
+    def close(self) -> None:
+        log.info("OpusEncoder: encoder closed", packets_encoded=self.native.packets_encoded)
 
 
 @node.meta(
@@ -207,9 +224,8 @@ class OpusEncoder:
     conversion=True,
 )
 @node(scheduling="high")
-class OpusDecoder:
-    """Opus packets in, audio blocks out."""
-
+def OpusDecoder(
+    *,
     encoded_audio: InputPin[
         Annotated[
             EncodedAudio,
@@ -217,27 +233,28 @@ class OpusDecoder:
             StreamDelivery("ordered"),
             Description("Opus packets to decode"),
         ]
-    ]
+    ],
     audio: OutputPin[
         Annotated[
             Audio,
             Description("Decoded audio blocks, f32 at 48 kHz in the stream's own channel count"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Opus packets in, audio blocks out."""
+    decoder = _native.EncodedPacketToAudioBlockDecoder()
+    next_start_sample = 0
+    next_first_sample_timestamp_ns: "int | None" = None
 
-    def __init__(self) -> None:
-        self._decoder = _native.EncodedPacketToAudioBlockDecoder()
-        self._next_start_sample = 0
-        self._next_first_sample_timestamp_ns: int | None = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        del ctx
-        while (message := self.encoded_audio.read_message()) is not None:
-            upstream_stream_facts = self.encoded_audio.upstream_stream_facts(
+    def decode_each_packet(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal next_start_sample, next_first_sample_timestamp_ns
+        del frame_ctx
+        while (message := encoded_audio.read_message()) is not None:
+            upstream_stream_facts = encoded_audio.upstream_stream_facts(
                 inbound_link=message.inbound_link
             )
             try:
-                block = self._decoder.decode_one_arriving_message(
+                block = decoder.decode_one_arriving_message(
                     message.payload.payload,
                     message.timestamp_ns,
                     message.starts_group,
@@ -245,7 +262,7 @@ class OpusDecoder:
                     None if upstream_stream_facts is None else upstream_stream_facts.to_wire(),
                 )
             finally:
-                _log_codec_notices(self._decoder.take_notices())
+                _log_codec_notices(decoder.take_notices())
             if block is None:
                 continue
             planar_samples = numpy.ascontiguousarray(
@@ -253,30 +270,30 @@ class OpusDecoder:
                 .reshape(block.sample_count, block.channels)
                 .T
             )
-            self._next_start_sample += self._samples_skipped_before(block)
-            self.audio.write(
+            next_start_sample += samples_a_loss_left_out_before(
+                block, next_first_sample_timestamp_ns
+            )
+            audio.write(
                 planar_samples,
                 block.first_sample_timestamp_ns,
-                start_sample=self._next_start_sample,
+                start_sample=next_start_sample,
                 sample_rate=OPUS_SAMPLE_RATE_HZ,
             )
-            self._next_start_sample += block.sample_count
-            self._next_first_sample_timestamp_ns = block.first_sample_timestamp_ns + (
+            next_start_sample += block.sample_count
+            next_first_sample_timestamp_ns = block.first_sample_timestamp_ns + (
                 block.sample_count * NANOSECONDS_PER_SECOND // OPUS_SAMPLE_RATE_HZ
             )
 
-    def _samples_skipped_before(self, block: _native.DecodedAudioBlock) -> int:
-        """The samples a loss left out between the last published block and
-        `block`, measured from the stamp the decoder re-anchored on."""
-        if self._next_first_sample_timestamp_ns is None:
-            return 0
-        skipped_ns = block.first_sample_timestamp_ns - self._next_first_sample_timestamp_ns
-        return max(0, round(skipped_ns * OPUS_SAMPLE_RATE_HZ / NANOSECONDS_PER_SECOND))
+    return decode_each_packet
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        log.info(
-            "OpusDecoder: teardown",
-            blocks_published=self._decoder.blocks_published,
-            packets_lost_on_the_link=self._decoder.packets_lost_on_the_link,
-        )
+
+def samples_a_loss_left_out_before(
+    block: _native.DecodedAudioBlock, next_first_sample_timestamp_ns: "int | None"
+) -> int:
+    """The samples a loss left out between the last published block, whose successor was due
+    at `next_first_sample_timestamp_ns`, and `block`, measured from the stamp the decoder
+    re-anchored on."""
+    if next_first_sample_timestamp_ns is None:
+        return 0
+    skipped_ns = block.first_sample_timestamp_ns - next_first_sample_timestamp_ns
+    return max(0, round(skipped_ns * OPUS_SAMPLE_RATE_HZ / NANOSECONDS_PER_SECOND))
