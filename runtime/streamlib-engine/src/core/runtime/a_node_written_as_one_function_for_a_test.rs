@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A node type for tests written as one function: one value input, `gain`, and one computed
-//! value built from it, which each frame reads; a gain below zero fails the build. It records each run of its body, the `gain`
-//! each build read, the value the latest frame read and each built value dropped, for a test of
-//! a value set live reaching a node that is never rebuilt. One node of the type runs at a time.
+//! value built from it, which each frame reads; a gain below zero fails the build. It records
+//! each run of its body, the `gain` each build that landed read, the value the latest frame read
+//! and each built value dropped, for a test of a value set live reaching a node that is never
+//! rebuilt, or of a build that fails. One node of the type runs at a time.
 
 use std::sync::Once;
 
