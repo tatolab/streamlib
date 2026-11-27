@@ -293,14 +293,15 @@ impl SpeakerPlayback {
             drain_thread_finished: Mutex::new(drain_thread_finished),
         });
         if let Err(refusal) = started {
-            self.stop(python);
+            self.close(python);
             return Err(PyRuntimeError::new_err(format!("SpeakerSink: {refusal}")));
         }
         Ok(())
     }
 
-    /// Stop playing and end the drain thread within its grace.
-    fn stop(&mut self, python: Python<'_>) {
+    /// Stop playing, end the drain thread within its grace and log what the
+    /// playback played. Idempotent.
+    fn close(&mut self, python: Python<'_>) {
         python.detach(|| self.stop_playing_and_draining());
     }
 }
@@ -339,6 +340,25 @@ impl SpeakerPlayback {
         self.silence_counts_of_ended_playbacks
             .silence_before_playback_began_byte_count +=
             ended_ring.silence_played_before_the_cushion_filled_byte_count();
+        let failure_that_ended_the_playback = self
+            .playback_stream
+            .failure_that_ended_the_stream()
+            .ok()
+            .flatten();
+        self.module_host.log(
+            ModuleHostLogLevel::Info,
+            SPEAKER_LOG_TARGET,
+            &format!(
+                "SpeakerSink: closed. played_blocks={} refused_blocks={} underrun_bytes={} \
+                 silence_before_playback_began_bytes={} \
+                 playback_device_failure={failure_that_ended_the_playback:?}",
+                self.played_block_count.load(Ordering::Relaxed),
+                self.refused_block_count.load(Ordering::Relaxed),
+                self.silence_counts_of_ended_playbacks.underrun_byte_count,
+                self.silence_counts_of_ended_playbacks
+                    .silence_before_playback_began_byte_count,
+            ),
+        );
     }
 }
 

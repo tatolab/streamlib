@@ -7,7 +7,7 @@ no engine crate.
 - On macOS, camera access is asked for only by a `CameraSource`, and only in a
   stream someone loads or starts: it asks without waiting, and frames begin once
   the user allows it. A stream the runtime re-loads on its own as it starts never
-  asks, and its `CameraSource` refuses at `setup()` until access was answered.
+  asks, and its `CameraSource` fails to open the camera until access was answered.
   A stream with no camera node never touches AVFoundation.
 - `CaptureToDownstreamLatencyProbe` logs the frame rate and the
   capture-to-read latency of the frames it receives.

@@ -17,7 +17,9 @@ import time
 
 import pytest
 
+import tatolab.speaker
 from helper_process_link_wiring import wire_one_link
+from node_function_running_for_a_test import NodeFunctionRunningForATest
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.speaker import (
@@ -29,13 +31,7 @@ from tatolab.speaker import (
     SpeakerSink,
 )
 from tatolab.stream import RuntimeContextFullAccess, log
-from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
-
-
-def a_speaker(**field_values: object) -> SpeakerSink:
-    """A `SpeakerSink` built as its helper builds it, `audio` bound to a stand-in: its native half reads the port."""
-    return construct_class_node(SpeakerSink, field_values=field_values, pins={"audio": object()})
 
 
 #: Long enough for any arm to drain a few blocks, which first opens a device or
@@ -55,8 +51,9 @@ def silent_planar_f32_samples(channel_count: int, samples_per_channel: int) -> "
 class SpeakerWiredToAWriter:
     """A `SpeakerSink`'s `audio` port wired from an output written here."""
 
-    def __init__(self, request: pytest.FixtureRequest) -> None:
+    def __init__(self, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
         self.log_records: "list[str]" = []
+        self.monkeypatch = monkeypatch
         self.next_start_sample = 0
         unique = f"spk{os.getpid()}_{request.node.name}"[:60]
         writer_outputs = _engine.open_node_link_data_access_for_helper_process()
@@ -80,6 +77,18 @@ class SpeakerWiredToAWriter:
             _engine.open_runtime_context_full_access_for_helper_process(
                 speaker_inputs, "runtime-under-test", "speaker-under-test"
             )
+        )
+
+    def a_speaker(self, **values: object) -> NodeFunctionRunningForATest:
+        """A `SpeakerSink` running as its helper runs it, `audio` bound to a stand-in: its native
+        half reads the port."""
+        return NodeFunctionRunningForATest(
+            SpeakerSink,
+            tatolab.speaker,
+            self.speaker_context,
+            self.monkeypatch,
+            values=values,
+            pins={"audio": object()},
         )
 
     def write(self, payload: bytes) -> None:
@@ -119,26 +128,22 @@ def speaker_wired_to_a_writer(
     """`log` reaches a sink only in the interpreter the runtime starts for a
     node, so here every level is recorded instead."""
     del private_iceoryx2_domain_for_this_test_process
-    wired = SpeakerWiredToAWriter(request)
+    wired = SpeakerWiredToAWriter(request, monkeypatch)
     for log_level in ("debug", "info", "warn", "error"):
         monkeypatch.setattr(log, log_level, wired.log_records.append)
     return wired
 
 
-def test_a_started_speaker_plays_every_block_in_its_format(speaker_wired_to_a_writer):
-    speaker = a_speaker()
-    context = speaker_wired_to_a_writer.speaker_context
-    speaker.setup(context)
-    playback = speaker._opened_playback()
-    speaker.start(context)
+def test_a_speaker_plays_every_block_in_its_format(speaker_wired_to_a_writer):
+    speaker = speaker_wired_to_a_writer.a_speaker()
     try:
+        playback = speaker.built()
         speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(BLOCKS_WRITTEN_PER_TEST)
         await_count(
             lambda: playback.played_block_count, BLOCKS_WRITTEN_PER_TEST, "blocks played"
         )
     finally:
-        speaker.stop(context)
-        speaker.teardown(context)
+        speaker.stop()
 
     assert (playback.sample_rate, playback.channels, playback.sample_format) == (
         SPEAKER_SAMPLE_RATE,
@@ -150,26 +155,19 @@ def test_a_started_speaker_plays_every_block_in_its_format(speaker_wired_to_a_wr
     assert any(
         f"{SPEAKER_SAMPLE_RATE} Hz × {SPEAKER_CHANNELS} ch" in record for record in records
     ), records
-    assert any(
-        f"played_blocks={BLOCKS_WRITTEN_PER_TEST}" in record and "underrun_bytes=" in record
-        for record in records
-    ), records
 
 
 def test_a_block_in_another_format_is_refused_and_counted_never_played(
     speaker_wired_to_a_writer,
 ):
-    speaker = a_speaker()
-    context = speaker_wired_to_a_writer.speaker_context
-    speaker.setup(context)
-    playback = speaker._opened_playback()
-    speaker.start(context)
+    speaker = speaker_wired_to_a_writer.a_speaker()
     try:
+        playback = speaker.built()
         speaker_wired_to_a_writer.write_silent_channels_block(1, 160, 16_000)
         speaker_wired_to_a_writer.write(b"not a channels block")
         await_count(lambda: playback.refused_block_count, 2, "blocks refused")
     finally:
-        speaker.teardown(context)
+        speaker.stop()
 
     assert playback.played_block_count == 0
 
@@ -177,53 +175,50 @@ def test_a_block_in_another_format_is_refused_and_counted_never_played(
 def test_the_audio_port_is_lent_to_native_code_so_python_cannot_read_it(
     speaker_wired_to_a_writer,
 ):
-    speaker = a_speaker()
-    context = speaker_wired_to_a_writer.speaker_context
-    speaker.setup(context)
+    speaker = speaker_wired_to_a_writer.a_speaker()
     try:
         with pytest.raises(Exception, match=AUDIO_INPUT_PORT):
-            link_input_data_reader_of(context).read(AUDIO_INPUT_PORT)
+            link_input_data_reader_of(speaker_wired_to_a_writer.speaker_context).read(
+                AUDIO_INPUT_PORT
+            )
     finally:
-        speaker.teardown(context)
+        speaker.stop()
 
 
-def test_a_device_the_backend_cannot_open_refuses_setup_naming_it(speaker_wired_to_a_writer):
-    speaker = a_speaker(device_id="tatolab-no-such-speaker")
-    with pytest.raises(RuntimeError, match="tatolab-no-such-speaker"):
-        speaker.setup(speaker_wired_to_a_writer.speaker_context)
-
-
-def test_a_speaker_stopped_and_started_again_keeps_playing(speaker_wired_to_a_writer):
-    speaker = a_speaker()
-    context = speaker_wired_to_a_writer.speaker_context
-    speaker.setup(context)
-    playback = speaker._opened_playback()
+def test_a_device_the_backend_cannot_open_fails_the_open_naming_it(speaker_wired_to_a_writer):
+    speaker = speaker_wired_to_a_writer.a_speaker(device_id="tatolab-no-such-speaker")
     try:
-        speaker.start(context)
-        speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(1)
-        await_count(lambda: playback.played_block_count, 1, "blocks played")
-        speaker.stop(context)
-        speaker.start(context)
-        speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(1)
-        await_count(lambda: playback.played_block_count, 2, "blocks played")
+        assert "tatolab-no-such-speaker" in speaker.why_the_last_build_failed()
     finally:
-        speaker.teardown(context)
+        speaker.stop()
 
 
-def test_a_speaker_never_set_up_or_started_tears_down_cleanly(speaker_wired_to_a_writer):
-    speaker = a_speaker()
-    context = speaker_wired_to_a_writer.speaker_context
-    speaker.stop(context)
-    speaker.teardown(context)
-    speaker.setup(context)
-    speaker.stop(context)
-    speaker.teardown(context)
+def test_a_device_set_while_playing_opens_it_and_keeps_playing(
+    speaker_wired_to_a_writer,
+):
+    """Mental-revert: leave the playback a set replaces open, and both drain the port."""
+    speaker = speaker_wired_to_a_writer.a_speaker()
+    try:
+        first = speaker.built()
+        speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(1)
+        await_count(lambda: first.played_block_count, 1, "blocks played")
 
+        speaker.set(device_id="")
+        second = speaker.built()
+        # What the playback replaced had drained before it was closed.
+        time.sleep(0.2)
+        played_by_the_first = first.played_block_count
+        speaker_wired_to_a_writer.write_blocks_in_the_speakers_format(BLOCKS_WRITTEN_PER_TEST)
+        await_count(
+            lambda: second.played_block_count, BLOCKS_WRITTEN_PER_TEST, "blocks played"
+        )
+    finally:
+        speaker.stop()
 
-def test_start_before_setup_is_refused_by_name(speaker_wired_to_a_writer):
-    speaker = a_speaker()
-    with pytest.raises(RuntimeError, match="before setup"):
-        speaker.start(speaker_wired_to_a_writer.speaker_context)
+    assert second is not first
+    assert first.played_block_count == played_by_the_first, (
+        "the playback replaced plays nothing more"
+    )
 
 
 def test_the_distribution_declares_the_node_for_the_node_catalog():

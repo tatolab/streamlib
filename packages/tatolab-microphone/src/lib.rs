@@ -194,7 +194,7 @@ impl MicrophoneCapture {
             publish_thread_finished: Mutex::new(publish_thread_finished),
         });
         if let Err(refusal) = started {
-            self.stop(python);
+            self.close(python);
             return Err(PyRuntimeError::new_err(format!(
                 "MicrophoneSource: {refusal}"
             )));
@@ -202,9 +202,9 @@ impl MicrophoneCapture {
         Ok(())
     }
 
-    /// Stop capturing, publish what was already captured, and end the
-    /// publishing thread within its grace.
-    fn stop(&mut self, python: Python<'_>) {
+    /// Stop capturing, publish what was already captured, end the publishing
+    /// thread within its grace and log what the capture published. Idempotent.
+    fn close(&mut self, python: Python<'_>) {
         python.detach(|| self.stop_capturing_and_publishing());
     }
 }
@@ -240,6 +240,21 @@ impl MicrophoneCapture {
         }
         self.dropped_block_count_of_ended_deliveries +=
             delivery.hand_off_ring.dropped_block_count();
+        let failure_that_ended_the_capture = self
+            .capture_stream
+            .failure_that_ended_the_stream()
+            .ok()
+            .flatten();
+        self.module_host.log(
+            ModuleHostLogLevel::Info,
+            MICROPHONE_LOG_TARGET,
+            &format!(
+                "MicrophoneSource: closed. published_blocks={} dropped_blocks={} \
+                 capture_device_failure={failure_that_ended_the_capture:?}",
+                self.published_block_count.load(Ordering::Relaxed),
+                self.dropped_block_count_of_ended_deliveries,
+            ),
+        );
     }
 }
 

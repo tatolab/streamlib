@@ -3,13 +3,13 @@
 
 """`CameraSource`: a camera whose every frame reaches the GPU with no CPU copy.
 
-`setup()` lends the `video` output to this wheel's Rust, which opens the
-camera and adopts each
-capture buffer once through the module host table — a V4L2 driver buffer
-exported as a DMA-BUF on Linux, an AVFoundation IOSurface on macOS — and per
-frame converts it on the GPU into a texture from the node's output pool and
-publishes an Image frame in its slot once `start()` runs. Python runs at setup,
-start and stop, never at frame cadence.
+The node's body lends the `video` output to this wheel's Rust once, and its one
+computed value is the open camera: the Rust opens it and adopts each capture
+buffer once through the module host table — a V4L2 driver buffer exported as a
+DMA-BUF on Linux, an AVFoundation IOSurface on macOS — and per frame converts
+it on the GPU into a texture from the node's output pool and publishes an Image
+frame in its slot. Python runs only when an input changes, never at frame
+cadence.
 """
 
 from __future__ import annotations
@@ -19,12 +19,13 @@ from typing import Annotated
 
 from tatolab.stream import (
     Description,
+    Input,
     NumberRange,
     OutputPin,
     RuntimeContextFullAccess,
-    SettingOnly,
     Texture,
     TexturePixelFormats,
+    computed,
     log,
     node,
 )
@@ -40,112 +41,90 @@ else:
     _CameraCapture = _native.V4l2ZeroCopyCameraCapture
 
 
+def _log_the_camera_opened(capture: "_CameraCapture") -> None:
+    if sys.platform == "darwin":
+        log.info(
+            f"CameraSource: {capture.device_name} ({capture.device_id}) opened in "
+            f"{capture.fourcc} {capture.width}x{capture.height} at "
+            f"{capture.nominal_frames_per_second} fps"
+        )
+        return
+    log.info(
+        f"CameraSource: {capture.device_path} ({capture.card_name}) opened in "
+        f"{capture.fourcc} {capture.width}x{capture.height} at "
+        f"{capture.nominal_frames_per_second} fps, {capture.bytes_per_line} bytes "
+        f"a row, colour primaries={capture.colour_primaries} "
+        f"transfer={capture.colour_transfer} matrix={capture.colour_matrix} "
+        f"range={capture.colour_range}"
+    )
+
+
 @node.meta(
     description=(
         "Captures a camera — V4L2 on Linux, AVFoundation on macOS — and converts each frame "
         "on the GPU, with no CPU copy. On macOS a stream someone loads or starts asks for camera "
         "access without waiting, and frames begin once the user allows it; a stream the runtime "
-        "re-loads on its own never asks, and is refused at setup until access has been answered."
+        "re-loads on its own never asks, and its camera fails to open until access has been "
+        "answered."
     ),
 )
 @node(execution="manual", paced_by_real_time=True)
-class CameraSource:
-    """A camera, published as RGBA pictures.
-
-    Each setting is read at setup, where the camera opens, so a change opens it again.
-    """
-
-    device_id: Annotated[
-        str | None,
-        SettingOnly(),
-        Description(
-            "A V4L2 node such as `/dev/video0` on Linux, an AVFoundation camera's unique ID on "
-            "macOS; the first camera found when unset, on macOS the built-in one first."
-        ),
-    ] = None
-    max_width: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The widest frame size negotiated.")
-    ] = 1920
-    max_height: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=1),
-        Description("The tallest frame size negotiated."),
-    ] = 1080
-    output_pool_rotation_depth: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=1),
-        Description(
-            "How many converted frames the output pool rotates before reusing a free slot."
-        ),
-    ] = 4
+def CameraSource(
+    *,
+    device_id: Input[
+        Annotated[
+            str | None,
+            Description(
+                "A V4L2 node such as `/dev/video0` on Linux, an AVFoundation camera's unique ID "
+                "on macOS; the first camera found when unset, on macOS the built-in one first."
+            ),
+        ]
+    ] = Input(None),
+    max_width: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The widest frame size negotiated.")]
+    ] = Input(1920),
+    max_height: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The tallest frame size negotiated.")]
+    ] = Input(1080),
+    output_pool_rotation_depth: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1),
+            Description(
+                "How many converted frames the output pool rotates before reusing a free slot."
+            ),
+        ]
+    ] = Input(4),
     video: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(CONVERTED_FRAME_TEXTURE_FORMAT),
             Description("RGBA frames from the camera, each colour as captured"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """A camera, published as RGBA pictures.
 
-    def __init__(self) -> None:
-        self._capture: "_CameraCapture | None" = None
+    The open camera is a computed value: a change to any input opens the camera again while the
+    stream plays. Another camera opens while the one it replaces keeps publishing; the same
+    camera is taken over, the capture it replaces closed first. A camera that fails to open
+    shows on the node, and the capture it was to replace keeps publishing.
+    """
+    del video  # Lent to the native half, which publishes on it.
+    module_host_table = ctx.open_module_host_table(output_ports=[VIDEO_OUTPUT_PORT])
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        """Lend `video` to the native half and open the camera, so a camera that
-        cannot be opened, or that camera access refuses, refuses the node here."""
-        module_host_table = ctx.open_module_host_table(output_ports=[VIDEO_OUTPUT_PORT])
-        if sys.platform == "darwin":
-            avfoundation_capture = _native.AvFoundationZeroCopyCameraCapture(
-                module_host_table,
-                VIDEO_OUTPUT_PORT,
-                self.device_id,
-                self.max_width,
-                self.max_height,
-                self.output_pool_rotation_depth,
-            )
-            self._capture = avfoundation_capture
-            log.info(
-                f"CameraSource: {avfoundation_capture.device_name} "
-                f"({avfoundation_capture.device_id}) opened in {avfoundation_capture.fourcc} "
-                f"{avfoundation_capture.width}x{avfoundation_capture.height} at "
-                f"{avfoundation_capture.nominal_frames_per_second} fps"
-            )
-            return
-        v4l2_capture = _native.V4l2ZeroCopyCameraCapture(
+    def open_the_camera() -> "_CameraCapture":
+        capture = _CameraCapture(
             module_host_table,
             VIDEO_OUTPUT_PORT,
-            self.device_id,
-            self.max_width,
-            self.max_height,
-            self.output_pool_rotation_depth,
+            device_id.get(),
+            max_width.get(),
+            max_height.get(),
+            output_pool_rotation_depth.get(),
         )
-        self._capture = v4l2_capture
-        log.info(
-            f"CameraSource: {v4l2_capture.device_path} ({v4l2_capture.card_name}) opened in "
-            f"{v4l2_capture.fourcc} {v4l2_capture.width}x{v4l2_capture.height} at "
-            f"{v4l2_capture.nominal_frames_per_second} fps, {v4l2_capture.bytes_per_line} bytes "
-            f"a row, colour primaries={v4l2_capture.colour_primaries} "
-            f"transfer={v4l2_capture.colour_transfer} matrix={v4l2_capture.colour_matrix} "
-            f"range={v4l2_capture.colour_range}"
-        )
+        _log_the_camera_opened(capture)
+        capture.start()
+        return capture
 
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        if self._capture is None:
-            raise RuntimeError("CameraSource: start() ran before setup() opened the camera")
-        self._capture.start()
-
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_capturing()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_capturing()
-
-    def _stop_capturing(self) -> None:
-        if self._capture is None:
-            return
-        self._capture.stop()
-        self._capture = None
+    computed(open_the_camera)

@@ -15,11 +15,14 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// takes its camera over.
 type CaptureUntilClosed<C> = Arc<Mutex<Option<C>>>;
 
+/// A camera, and the capture holding it while that capture is held at all.
+type CameraAndItsCapture<C> = (String, Weak<Mutex<Option<C>>>);
+
 /// The cameras captures of type `C` hold in this process, each by one capture.
 pub struct CamerasHeldByOneCaptureEach<C> {
     /// Held across a takeover, so two opens of one camera never both find it free.
     opening: Mutex<()>,
-    held: Mutex<Vec<(String, Weak<Mutex<Option<C>>>)>>,
+    held: Mutex<Vec<CameraAndItsCapture<C>>>,
 }
 
 /// One capture holding its camera, until it is closed or a later capture takes the camera over.
