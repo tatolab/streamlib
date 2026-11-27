@@ -110,7 +110,7 @@ class HelperProcessLifecycle:
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
             try:
-                command = self._next_lifecycle_command_feeding_a_not_ready_manual_node()
+                command = self._next_lifecycle_command_ticking_a_manual_node()
                 if command is None:
                     log.info("the parent closed the channel; shutting down")
                     self._tear_down_after_the_parent_went_away()
@@ -128,24 +128,38 @@ class HelperProcessLifecycle:
                     "the bag in flight is lost"
                 )
 
-    def _next_lifecycle_command_feeding_a_not_ready_manual_node(
+    def _next_lifecycle_command_ticking_a_manual_node(
         self,
     ) -> "Optional[dict[str, Any]]":
         """The next lifecycle command. While a manual node runs, the wait ticks
-        on a steady beat: each tick tells the parent whether the node is ready,
-        since a node's own thread may report either, and while it is not ready
-        and not paused sends a transparent frame on each of its Image outputs."""
+        on a steady beat: each tick takes the values set, wired and built since
+        the last, as a frame of any other node does; tells the parent whether
+        the node is ready, since a node's own thread may report either; and
+        while it is not ready and not paused sends a transparent frame on each
+        of its Image outputs."""
         tick_seconds = 1.0 / PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE
         while self._a_manual_node_runs():
             self._bridge.clear_lifecycle_command_arrivals()
             was_waiting, command = self._bridge.next_lifecycle_command_if_waiting()
             if was_waiting:
                 return command
+            self._take_the_new_values_at_a_tick()
             self._tell_the_parent_whether_the_node_is_ready()
             if not self._paused:
                 self._send_transparent_frames_while_the_node_is_not_ready()
             select.select([self._bridge.lifecycle_command_arrival_fd()], [], [], tick_seconds)
         return self._bridge.next_lifecycle_command()
+
+    def _take_the_new_values_at_a_tick(self) -> None:
+        """Give each field a wire feeds the newest value its wire gave, and a node written as
+        one function the values built and written since the last tick. Never waits on a build."""
+        assert self._hosted is not None
+        if self._hosted.fields is not None:
+            self._take_each_new_value_a_wire_gives_a_field()
+        from tatolab.runtime._node_function_running import NodeFunctionRunning
+
+        if isinstance(self._hosted.instance, NodeFunctionRunning):
+            self._hosted.instance.take_the_new_values_at_a_tick()
 
     def _a_manual_node_runs(self) -> bool:
         return self._running and not self._scheduling_loop_runs and self._hosted is not None

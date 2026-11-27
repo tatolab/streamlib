@@ -50,3 +50,26 @@ def ReadsItsLevelInItsBodyProbe(*, level: Input[float] = Input(0.25)) -> None:
 def ReturnsANumberProbe(*, level: Input[float] = Input(0.25)) -> float:
     """Returns a number where a node function returns its per-frame function."""
     return 4.0
+
+
+WHAT_THE_LEVEL_PUBLISHING_PROBE_DID: "list[tuple[str, float]]" = []
+"""Each `("opened", level)` and `("closed", level)` the publishing probe did, in order."""
+
+
+class PublishingOfALevel:
+    """A value built from one level that would publish it on its own, recording its open and its
+    close."""
+
+    def __init__(self, level: float) -> None:
+        self.level = level
+        WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.append(("opened", level))
+
+    def close(self) -> None:
+        WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.append(("closed", self.level))
+
+
+@node(execution="manual")
+def LevelPublishingProbe(*, level: Input[float] = Input(0.25)) -> None:
+    """Paces itself: opens a publishing of its level, which publishes on its own, and returns no
+    per-frame function."""
+    computed(lambda: PublishingOfALevel(level.get()))

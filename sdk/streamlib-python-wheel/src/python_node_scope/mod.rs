@@ -478,6 +478,20 @@ impl PythonRunningNodeScope {
         }
     }
 
+    /// Take the values built or written since the last flush, at a tick of a node that paces
+    /// itself: each value they replace is closed on the worker. Never waits on a build, nor on a
+    /// frame running on another thread, which takes them itself.
+    fn flush(&self) -> PyResult<()> {
+        let Some(mut frame_view) = self.0.frame_view.try_lock() else {
+            return Ok(());
+        };
+        frame_view
+            .as_mut()
+            .ok_or_else(refuse_a_closed_scope)?
+            .flush();
+        Ok(())
+    }
+
     /// How the last build of `computed_value` went.
     fn last_build_of(
         &self,
