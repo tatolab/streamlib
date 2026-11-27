@@ -32,7 +32,7 @@ use super::subprocess_escalate::{
 use subprocess_bridge_reader_and_escalate_workers::{
     SubprocessBridgeThreads, node_run_id_shortened_for_a_thread_name,
     refuse_every_link_this_subprocess_still_owed, spawn_the_native_escalate_worker,
-    spawn_the_reader_and_the_escalate_worker,
+    spawn_the_reader_and_its_two_escalate_workers,
 };
 
 /// Env var advertising the inherited child-end fd number of the escalate
@@ -420,7 +420,7 @@ impl SubprocessBridge {
             frame_demultiplexing_reader_thread,
             escalate_worker_thread,
             kernel_build_worker_thread,
-        } = spawn_the_reader_and_the_escalate_worker(
+        } = spawn_the_reader_and_its_two_escalate_workers(
             BufReader::new(read_half),
             Arc::clone(&parent_side),
             Arc::clone(&escalate_request_dispatch),

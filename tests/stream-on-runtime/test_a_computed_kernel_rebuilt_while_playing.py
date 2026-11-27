@@ -115,13 +115,15 @@ def test_a_computed_kernel_is_rebuilt_for_each_width_set_while_playing_and_each_
     assert listed["state"] == "running", listed
     assert listed["condition"]["health"] == "healthy", listed
     dispatch_seconds = tatolabd.marker_payloads("DISPATCH_SECONDS")[-1]
-    print(f"frame dispatch seconds after the kernel for {last_width}:", dispatch_seconds)
+    print(
+        f"frame dispatch seconds after the kernel for {last_width}:", dispatch_seconds
+    )
     while_a_build_ran = dispatch_seconds["while_a_build_ran"]
     while_no_build_ran = dispatch_seconds["while_no_build_ran"]
-    assert while_a_build_ran["frames"] >= FRAMES_OVERLAPPING_A_BUILD_THE_MEASURE_NEEDS, (
-        f"too few frames overlapped a build to measure them: {dispatch_seconds}"
-    )
-    assert while_a_build_ran["median"] <= while_no_build_ran["max"], (
+    assert (
+        while_a_build_ran["frames"] >= FRAMES_OVERLAPPING_A_BUILD_THE_MEASURE_NEEDS
+    ), f"too few frames overlapped a build to measure them: {dispatch_seconds}"
+    assert while_a_build_ran["max"] <= while_no_build_ran["max"], (
         "a frame whose dispatches overlap a kernel build takes longer than any frame with no "
         f"build in flight: {dispatch_seconds}"
     )

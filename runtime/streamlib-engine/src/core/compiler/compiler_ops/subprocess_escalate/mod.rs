@@ -288,6 +288,30 @@ pub(crate) fn refusal_of_an_escalate_request(
     }))
 }
 
+/// Wrap an [`EscalateRequest`] in the outer `{ rpc, op, payload… }` envelope a
+/// helper sends, for a request the bridge makes of its own dispatch.
+pub(crate) fn envelope_request(request: EscalateRequest) -> serde_json::Value {
+    let mut obj = serde_json::to_value(&request).unwrap_or(serde_json::Value::Null);
+    if let Some(map) = obj.as_object_mut() {
+        map.insert(
+            "rpc".to_string(),
+            serde_json::Value::String(ESCALATE_REQUEST_RPC.to_string()),
+        );
+    }
+    obj
+}
+
+/// The `handle_id` an enveloped `ok` response carries; `None` for an `err`, or
+/// a frame that is not a response at all.
+pub(crate) fn handle_id_of_an_enveloped_ok_response(answer: &serde_json::Value) -> Option<String> {
+    let mut response = answer.clone();
+    response.as_object_mut()?.remove("rpc");
+    match serde_json::from_value::<EscalateResponse>(response).ok()? {
+        EscalateResponse::Ok(ok) => Some(ok.handle_id),
+        EscalateResponse::Err(_) => None,
+    }
+}
+
 /// Wrap an [`EscalateResponse`] in the outer `{ rpc, payload… }` envelope the
 /// bridge's escalate worker writes to the subprocess.
 pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {

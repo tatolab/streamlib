@@ -4,7 +4,8 @@
 use super::handle_lifecycle::EscalateHandleRegistry;
 use super::{
     ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_OP_BUILDING_A_KERNEL, ESCALATE_REQUEST_RPC,
-    envelope_response, parse_op_for_tests, request_id, try_parse_escalate_request, *,
+    envelope_request, envelope_response, handle_id_of_an_enveloped_ok_response, parse_op_for_tests,
+    request_id, try_parse_escalate_request, *,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -167,6 +168,41 @@ fn the_op_built_on_the_kernel_build_worker_parses_as_a_compute_kernel_registrati
         Err(e) => panic!("a kernel build frame must decode: {}", e.message),
     };
     assert!(matches!(parsed, EscalateRequest::RegisterComputeKernel(_)));
+}
+
+/// A request the bridge makes of its own dispatch decodes as the op it was
+/// built from. Fail-without-fix: leave the `rpc` tag off and the dispatch
+/// passes the frame over as no escalate request at all.
+#[test]
+fn an_enveloped_request_decodes_as_the_request_it_wraps() {
+    let release = EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+        handle_id: "kernel-1".to_string(),
+        request_id: "r-release".to_string(),
+    });
+    let enveloped = envelope_request(release.clone());
+    let parsed = match try_parse_escalate_request(&enveloped).expect("escalate-shaped") {
+        Ok(op) => op,
+        Err(e) => panic!("an enveloped request must decode: {}", e.message),
+    };
+    assert_eq!(parsed, release);
+}
+
+#[test]
+fn an_enveloped_ok_response_names_its_handle_and_an_err_names_none() {
+    let ok = envelope_response(EscalateResponse::Ok(EscalateResponseOk {
+        request_id: "r-1".to_string(),
+        handle_id: "kernel-1".to_string(),
+        ..Default::default()
+    }));
+    assert_eq!(
+        handle_id_of_an_enveloped_ok_response(&ok).as_deref(),
+        Some("kernel-1")
+    );
+    let err = envelope_response(EscalateResponse::Err(EscalateResponseErr {
+        request_id: "r-2".to_string(),
+        message: "refused".to_string(),
+    }));
+    assert_eq!(handle_id_of_an_enveloped_ok_response(&err), None);
 }
 
 #[test]
