@@ -122,7 +122,7 @@ impl PythonComputeKernel {
     }
 
     /// Refuse a kernel whose registration was handed back.
-    fn refuse_once_released(&self) -> PyResult<()> {
+    fn refuse_if_released(&self) -> PyResult<()> {
         if self.released.load(Ordering::Acquire) {
             return Err(ComputeKernelReleased::new_err(
                 "this compute kernel was closed, so the engine no longer holds it; dispatch the \
@@ -174,7 +174,7 @@ impl PythonComputeKernel {
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
-        self.refuse_once_released()?;
+        self.refuse_if_released()?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let (wire_bindings, push_constants_hex) =
@@ -358,7 +358,7 @@ impl PythonKernelDispatchBatch {
                 }
             }
 
-            kernel.refuse_once_released()?;
+            kernel.refuse_if_released()?;
             let (wire_bindings, push_constants_hex) =
                 kernel.validated_wire_dispatch(python, bindings, push_constants)?;
 

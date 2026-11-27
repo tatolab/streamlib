@@ -142,49 +142,63 @@ pub(in super::super) fn handle_register_compute_kernel(
         })
         .collect();
 
-    let registered = sandbox
-        .escalate(|full| {
-            let (kernel_id, kernel) = full.create_or_reuse_compute_kernel(
-                &spv,
-                req.push_constant_size,
-                &declared,
-                shader_source.entry_point(),
-            )?;
-            // Held inside the escalate: its trailing device-idle wait can fail
-            // after the cache counted the registration, which would leave it
-            // held by nobody.
-            registry.hold_compute_kernel_registration_for_the_helper(&kernel_id);
-            Ok((kernel_id, kernel))
-        })
-        .and_then(|(kernel_id, kernel)| {
-            // The caller dispatches by name and only the shader knows which
-            // kind each name is, so the shape goes back with the id.
-            let bindings = kernel
-                .bindings()
-                .iter()
-                .map(|spec| {
-                    reflected_kernel_binding_response(
-                        &kernel_id,
-                        spec.binding,
-                        compute_binding_kind_to_wire(spec.kind).wire_name(),
-                        spec.name.as_deref(),
-                    )
-                })
-                .collect::<crate::core::error::Result<Vec<_>>>()?;
-            Ok((kernel_id, bindings))
-        });
+    // Answered from inside the escalate, so a trailing device-idle wait that
+    // fails after the kernel was registered still hands the helper the id its
+    // registration is released by.
+    let mut registered = None;
+    let escalated = sandbox.escalate(|full| {
+        let (kernel_id, kernel) = full.create_or_reuse_compute_kernel(
+            &spv,
+            req.push_constant_size,
+            &declared,
+            shader_source.entry_point(),
+        )?;
+        // The caller dispatches by name and only the shader knows which kind
+        // each name is, so the shape goes back with the id.
+        let bindings = kernel
+            .bindings()
+            .iter()
+            .map(|spec| {
+                reflected_kernel_binding_response(
+                    &kernel_id,
+                    spec.binding,
+                    compute_binding_kind_to_wire(spec.kind).wire_name(),
+                    spec.name.as_deref(),
+                )
+            })
+            .collect::<crate::core::error::Result<Vec<_>>>();
+        let bindings = match bindings {
+            Ok(bindings) => bindings,
+            Err(e) => {
+                full.release_compute_kernel(&kernel_id);
+                return Err(e);
+            }
+        };
+        registry.hold_compute_kernel_registration_for_the_helper(&kernel_id);
+        registered = Some((kernel_id, bindings));
+        Ok(())
+    });
 
-    match registered {
-        Ok((kernel_id, bindings)) => EscalateResponse::Ok(EscalateResponseOk {
-            request_id: rid,
-            handle_id: kernel_id,
-            bindings: Some(bindings),
-            ..Default::default()
-        }),
-        Err(e) => EscalateResponse::Err(EscalateResponseErr {
+    match (registered, escalated) {
+        (Some((kernel_id, bindings)), escalated) => {
+            if let Err(e) = escalated {
+                tracing::warn!(
+                    kernel_id,
+                    "register_compute_kernel: the kernel is registered, but the device-idle wait after it failed: {e}"
+                );
+            }
+            EscalateResponse::Ok(EscalateResponseOk {
+                request_id: rid,
+                handle_id: kernel_id,
+                bindings: Some(bindings),
+                ..Default::default()
+            })
+        }
+        (None, Err(e)) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
             message: format!("register_compute_kernel failed: {e}"),
         }),
+        (None, Ok(())) => unreachable!("an escalate that registered no kernel answers its error"),
     }
 }
 

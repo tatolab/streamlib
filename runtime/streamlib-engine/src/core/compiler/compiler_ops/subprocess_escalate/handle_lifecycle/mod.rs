@@ -466,20 +466,39 @@ pub(super) fn release_acceleration_structure(
 /// Let one registration of the compute kernel `kernel_id` go in `GpuContext`'s
 /// cache, answering whether one held it; the kernel's pipeline goes with the
 /// last.
-pub(super) fn release_compute_kernel_registration(
+fn release_compute_kernel_registration(sandbox: &GpuContextLimitedAccess, kernel_id: &str) -> bool {
+    release_compute_kernel_registrations(sandbox, [(kernel_id, 1)]) == 1
+}
+
+/// Let go of each `(kernel_id, registrations)` in one escalate, answering how
+/// many registrations were held; a device-idle wait that fails after them is
+/// logged, since the registrations are already let go of.
+fn release_compute_kernel_registrations<'a>(
     sandbox: &GpuContextLimitedAccess,
-    kernel_id: &str,
-) -> bool {
+    registrations_by_kernel_id: impl IntoIterator<Item = (&'a str, usize)>,
+) -> usize {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        sandbox
-            .escalate(|full| Ok(full.release_compute_kernel(kernel_id)))
-            .unwrap_or(false)
+        let mut released = 0;
+        let escalated = sandbox.escalate(|full| {
+            for (kernel_id, registrations) in registrations_by_kernel_id {
+                released += (0..registrations)
+                    .filter(|_| full.release_compute_kernel(kernel_id))
+                    .count();
+            }
+            Ok(())
+        });
+        if let Err(e) = escalated {
+            tracing::warn!(
+                "releasing compute kernel registrations: the device-idle wait after them failed: {e}"
+            );
+        }
+        released
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (sandbox, kernel_id);
-        false
+        let _ = (sandbox, registrations_by_kernel_id.into_iter());
+        0
     }
 }
 
@@ -544,13 +563,13 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
     for acceleration_structure_id in registry.take_acceleration_structures_built_for_the_helper() {
         release_acceleration_structure(sandbox, &acceleration_structure_id);
     }
-    for (kernel_id, registrations) in
-        registry.take_compute_kernel_registrations_held_for_the_helper()
-    {
-        for _ in 0..registrations {
-            release_compute_kernel_registration(sandbox, &kernel_id);
-        }
-    }
+    let kernel_registrations = registry.take_compute_kernel_registrations_held_for_the_helper();
+    release_compute_kernel_registrations(
+        sandbox,
+        kernel_registrations
+            .iter()
+            .map(|(kernel_id, registrations)| (kernel_id.as_str(), *registrations)),
+    );
 }
 
 pub(crate) fn release_node_output_pool_slot(

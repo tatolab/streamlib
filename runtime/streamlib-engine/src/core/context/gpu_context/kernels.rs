@@ -422,7 +422,8 @@ impl GpuContext {
     /// Returns the cache key as the kernel id: a caller re-registering the same
     /// kernel gets the same id back, and pays no compilation for it. Each call
     /// is one registration of the kernel, held until
-    /// [`Self::release_compute_kernel`] lets it go.
+    /// [`Self::release_compute_kernel`] lets it go; a caller that never lets it
+    /// go holds the kernel for the context's life.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_compute_kernel(
         &self,
