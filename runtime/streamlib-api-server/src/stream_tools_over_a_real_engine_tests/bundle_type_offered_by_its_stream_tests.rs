@@ -37,13 +37,13 @@ fn a_reading() -> PinType {
     a_bundle_named("Reading", &["level", "humidity"])
 }
 
-fn a_tone() -> PinType {
+pub(super) fn a_tone() -> PinType {
     a_bundle_named("Tone", &["pitch"])
 }
 
 /// `stream_id` resolving, as its interpreter described them, a `Thermometer` giving a reading,
 /// a `Logbook` taking a List of readings and a `Synth` taking a tone.
-fn the_stream_describing_three_node_types_of_two_bundles(
+pub(super) fn the_stream_describing_three_node_types_of_two_bundles(
     engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
     stream_id: &str,
 ) {
