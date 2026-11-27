@@ -37,7 +37,14 @@ class NodeFunctionRunningForATest:
             return computed_value
 
         self.context = context
-        self.running = NodeFunctionRunning(node_function, values_to_build_with=values, pins=pins)
+        # A device node declares no pin group, so it binds no slot's pins and holds no slots.
+        self.running = NodeFunctionRunning(
+            node_function,
+            values_to_build_with=values,
+            pins=pins,
+            bind_pins=lambda members: {},
+            slot_counts={},
+        )
         # The body declares only while it runs, in setup, so `computed` is recorded only then.
         setattr(module, "computed", declared_and_recorded)
         try:
