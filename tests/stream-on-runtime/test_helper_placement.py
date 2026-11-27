@@ -32,8 +32,6 @@ from helper_placement_streams import (
     function_node_run_as_python_into_a_class_lending_it_to_native_code,
     function_node_run_as_python_into_python_records_sink,
     function_nodes_read_by_two_native_converters_into_python_sink,
-    lfo_into_python_sink_reporting_each_batch_it_reads,
-    lfo_into_remap_into_python_sink,
     native_float_to_integer_into_python_integer_sink,
     python_level_source_through_a_gate_into_a_native_converter,
     python_source_through_a_gate_into_python_sink,
@@ -43,8 +41,11 @@ from helper_placement_streams import (
     only_labelled_source_into_sink,
     raw_message_payload_source_into_sink,
     rust_function_nodes_in_islands_beside_python_ones,
+    stateful_counter_read_by_one_python_sink_reporting_each_batch,
     stateful_counter_read_by_two_python_sinks,
     two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock,
+    wave_into_python_sink_reporting_each_batch_it_reads,
+    wave_into_remap_into_python_sink,
     two_labelled_sources_each_into_its_own_sink,
 )
 from helper_process_observation import (
@@ -239,14 +240,14 @@ def test_a_native_builtin_stays_in_the_app_process(
 def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_process_of_their_own(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`Lfo -> Remap -> <Python class>` starts exactly one helper, the class's.
+    """`Wave -> Remap -> <Python class>` starts exactly one helper, the class's.
 
     The two function nodes are compiled into the class's helper and evaluated
     at each of its reads: the class's field holds a value the island computed,
     that moves with the stream's time and stays in `Remap`'s 0..1, and no
     process was started for either function node.
     """
-    tatolabd = start_tatolabd_running_stream(lfo_into_remap_into_python_sink)
+    tatolabd = start_tatolabd_running_stream(wave_into_remap_into_python_sink)
     values_read = tatolabd.await_marker("FUNCTION_NODE_VALUES_READ")
     sink_pid = values_read["sink_pid"]
     assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
@@ -259,11 +260,8 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
         f"the class gets a process:\n{tatolabd.recent_stderr()}"
     )
     values = values_read["values"]
-    assert values[0] == pytest.approx(0.5), (
-        f"the LFO starts at 0, which `Remap` maps to 0.5, and the class first read {values[0]}"
-    )
     assert all(0.0 <= value <= 1.0 for value in values), (
-        f"`Remap` maps the LFO's -1..1 onto 0..1, and the class read {values}"
+        f"`Remap` maps the wave's -1..1 onto 0..1, and the class read {values}"
     )
     assert len(set(values)) > 1, (
         f"the island is evaluated at each read on the stream's moving clock, and every read "
@@ -310,7 +308,7 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
     assert len(carried_links) == 2, f"`graph` shows each carried link as it was given: {graph['links']}"
     levels = levels_read["levels"]
     assert all(0 <= level <= 100 for level in levels), (
-        f"`Remap` maps the LFO onto 0..100, and the class read {levels}"
+        f"`Remap` maps the wave onto 0..100, and the class read {levels}"
     )
     assert len(set(levels)) > 1, f"the pool evaluates the island on a moving clock: {levels}"
 
@@ -536,21 +534,21 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
     )
 
 
-def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_what_it_reads(
+def test_remap_added_and_removed_live_between_a_wave_and_a_python_class_changes_what_it_reads(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """`Lfo -> <Python class>`, then `Remap` linked in between and taken out,
+    """`Wave -> <Python class>`, then `Remap` linked in between and taken out,
     all while the class runs: each edit is handed to the running class as its
     island, so what it reads swings -1..1, then stays in `Remap`'s 0..1, then
     swings -1..1 again, in the one process the class started in.
     """
-    tatolabd = start_tatolabd_running_stream(lfo_into_python_sink_reporting_each_batch_it_reads)
+    tatolabd = start_tatolabd_running_stream(wave_into_python_sink_reporting_each_batch_it_reads)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     direct, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
     sink_pid = direct["sink_pid"]
     assert direct["lowest"] < -0.5 and direct["highest"] > 0.5, (
-        f"a second of a 1 Hz `Lfo` swings -1..1, and the class read {direct}"
+        f"a second of a 1 Hz `Wave` swings -1..1, and the class read {direct}"
     )
 
     graph = local_api.call_tool("graph", {"stream": stream_id})
@@ -577,12 +575,12 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
     ]
     edit_live(
         "connect",
-        {"source": end_of(uuid_of["lfo"], "result"), "target": end_of(remap["node"], "x")},
+        {"source": end_of(uuid_of["wave"], "result"), "target": end_of(remap["node"], "x")},
     )
     edit_live(
         "disconnect",
         {
-            "source": end_of(uuid_of["lfo"], "result"),
+            "source": end_of(uuid_of["wave"], "result"),
             "target": end_of(uuid_of["sink"], "brightness"),
         },
     )
@@ -602,27 +600,27 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
     hosts = {
         node["name"]: node["components"].get("host")
         for node in graph["nodes"]
-        if node["name"] in ("lfo", "remap")
+        if node["name"] in ("wave", "remap")
     }
     assert hosts == {
-        "lfo": {"inside_the_read_of": ["sink"]},
+        "wave": {"inside_the_read_of": ["sink"]},
         "remap": {"inside_the_read_of": ["sink"]},
     }, f"`graph` names the class each function node runs inside the read of: {hosts}"
     remapped, occurrence = the_first_value_batch_read_after(
         tatolabd, remapped_from_ns, from_occurrence=occurrence + 1
     )
     assert 0.0 <= remapped["lowest"] and remapped["highest"] <= 1.0, (
-        f"`Remap` maps the LFO's -1..1 onto 0..1, and the class read {remapped}"
+        f"`Remap` maps the wave's -1..1 onto 0..1, and the class read {remapped}"
     )
     assert remapped["highest"] - remapped["lowest"] > 0.5, (
-        f"the `Lfo` keeps swinging through `Remap`: {remapped}"
+        f"the `Wave` keeps swinging through `Remap`: {remapped}"
     )
 
     edit_live("remove_node", {"node": remap["node"]})
     edit_live(
         "connect",
         {
-            "source": end_of(uuid_of["lfo"], "result"),
+            "source": end_of(uuid_of["wave"], "result"),
             "target": end_of(uuid_of["sink"], "brightness"),
         },
     )
@@ -634,7 +632,7 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
         tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
     )
     assert direct_again["lowest"] < -0.5 and direct_again["highest"] > 0.5, (
-        f"with `Remap` gone the class reads the `Lfo` directly again, and read {direct_again}"
+        f"with `Remap` gone the class reads the `Wave` directly again, and read {direct_again}"
     )
     assert {remapped["sink_pid"], direct_again["sink_pid"]} == {sink_pid}, (
         "each edit reaches the running class; none restarts its helper"
@@ -833,16 +831,109 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
     assert counter["components"]["ran_compiled"] is True, counter["components"]
 
 
+def test_a_second_reader_wired_to_a_playing_stateful_function_node_reads_it_and_the_first_reads_on(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A second Python class added and linked to a playing stateful counter
+    reads its counts at once, with no stop: the counter runs in a helper of its
+    own, so the new reader is one more link out of it.
+
+    The second reader reads a run of consecutive counts from the one counter,
+    not a fresh count from one, and every count it reads the first one reads
+    too. The first reader reads every count in order across the edit, none
+    skipped and none started over, in the one helper it started in.
+
+    Fail-without-fix: the second link is refused, naming the running first
+    reader, until the stream is stopped.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        stateful_counter_read_by_one_python_sink_reporting_each_batch
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    before_the_edit = tatolabd.await_marker("COUNT_BATCH_READ_IN_ORDER")
+    assert before_the_edit["reader"] == "first", before_the_edit
+    local_api = tatolabd.local_api_client()
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    (counter,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "counter"
+    ]
+    (second_reader,) = edit_live(
+        "add_node",
+        {
+            "type": "helper_placement_nodes:ReportsEachBatchOfCountsItReadInOrderAsTheSecondReader",
+            "name": "second_reader",
+        },
+    )["added_nodes"]
+    edit_live(
+        "connect",
+        {
+            "source": {"node": counter["id"], "port": "result"},
+            "target": {"node": second_reader["node"], "port": "count"},
+        },
+    )
+
+    occurrence = 1
+    second_readers_batch = None
+    while second_readers_batch is None:
+        occurrence += 1
+        batch = tatolabd.await_marker("COUNT_BATCH_READ_IN_ORDER", occurrence=occurrence)
+        if batch["reader"] == "second":
+            second_readers_batch = batch
+    while True:
+        occurrence += 1
+        batch = tatolabd.await_marker("COUNT_BATCH_READ_IN_ORDER", occurrence=occurrence)
+        if batch["reader"] == "first" and batch["counts"][-1] >= second_readers_batch["counts"][-1]:
+            break
+    links = local_api.call_tool("graph", {"stream": stream_id})["links"]
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert [link["state"] for link in links] == ["wired", "wired"], links
+    batches = tatolabd.marker_payloads("COUNT_BATCH_READ_IN_ORDER")
+    first_readers_batches = [batch for batch in batches if batch["reader"] == "first"]
+    assert {batch["pid"] for batch in first_readers_batches} == {before_the_edit["pid"]}, (
+        f"the first reader reads on in the helper it started in: {first_readers_batches}"
+    )
+    first_readers_counts = [count for batch in first_readers_batches for count in batch["counts"]]
+    assert first_readers_counts == [
+        first_readers_counts[0] + offset for offset in range(len(first_readers_counts))
+    ], f"the first reader reads each count once, in order, across the edit: {first_readers_counts}"
+    second_readers_counts = second_readers_batch["counts"]
+    assert second_readers_counts == [
+        second_readers_counts[0] + offset for offset in range(len(second_readers_counts))
+    ], second_readers_counts
+    assert second_readers_counts[0] > before_the_edit["counts"][-1], (
+        f"the second reader reads the counter that was counting, not a count of its own from one: "
+        f"{second_readers_counts}, after the first read {before_the_edit['counts']}"
+    )
+    assert set(second_readers_counts) <= set(first_readers_counts), (
+        f"both readers read the one counter's values: {second_readers_counts} and "
+        f"{first_readers_counts}"
+    )
+    assert len(set(helper_pids)) == 3 and before_the_edit["pid"] in helper_pids, (
+        f"the two readers and the counter each get a helper, and the first reader's is never "
+        f"started again: {helper_pids}:\n{tatolabd.recent_stderr()}"
+    )
+
+
 def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_python_ones(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A fixture module's Rust function nodes join islands beside Python ones
-    and are evaluated inside each reader's read, with no process of their own.
+    """A fixture module's stateless Rust function nodes join islands beside
+    Python ones and are evaluated inside their reader's read, and its stateful
+    one runs in a helper of its own.
 
-    `Lfo -> ScaleAndOffset (Rust) -> Clamp` maps the LFO's -1..1 onto 0..1, and
-    `CountsItsOwnCalls (Rust) -> Remap` hands its ordered reader each count once,
-    as `(count + 1) / 2`. Only the two Python classes get a helper, and
-    `graph` shows each Rust node as `function` / `rust`.
+    `Wave -> ScaleAndOffset (Rust) -> Clamp` maps the wave's -1..1 onto 0..1
+    with no process of its own, and `CountsItsOwnCalls (Rust) -> Remap` hands
+    its ordered reader each count once, as `(count + 1) / 2`: the two Python
+    classes and the counter get a helper each, and `graph` shows each Rust
+    node as `function` / `rust`.
     """
     tatolabd = start_tatolabd_running_stream(rust_function_nodes_in_islands_beside_python_ones)
     stream_id = tatolabd.await_the_latest_stream_loaded()
@@ -854,20 +945,17 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_p
     tatolabd.await_clean_exit()
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
 
-    assert sorted(helper_pids) == sorted([values_read["sink_pid"], counts_read["pid"]]), (
+    class_pids = {values_read["sink_pid"], counts_read["pid"]}
+    assert len(set(helper_pids)) == 3 and class_pids < set(helper_pids), (
         f"a stream of five function nodes and two Python classes started {helper_pids}; "
-        f"only the classes get a process:\n{tatolabd.recent_stderr()}"
+        f"the classes and the stateful counter get a process:\n{tatolabd.recent_stderr()}"
     )
     values = values_read["values"]
-    assert values[0] == pytest.approx(0.5), (
-        f"the LFO starts at 0, which `ScaleAndOffset` maps to 0.5, and the class first read "
-        f"{values[0]}"
-    )
     assert all(0.0 <= value <= 1.0 for value in values), values
     assert len(set(values)) > 1, f"the island moves with the stream's clock: {values}"
     counts = [2.0 * value - 1.0 for value in counts_read["counts"]]
-    assert counts == [float(count) for count in range(1, len(counts) + 1)], (
-        f"the Rust counter counts each read once from its first, and its reader read {counts}"
+    assert counts == [counts[0] + offset for offset in range(len(counts))], (
+        f"the Rust counter's reader reads each count it wrote once, in order: {counts}"
     )
 
     rust_node_types = {
@@ -891,8 +979,8 @@ def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(
 ):
     """The state a stateful node carries is a parameter, not a side effect.
 
-    Two runs of the same `Lfo` island, each in its own reader's helper, read
-    the same value at each step: the one the step's stream time gives, a sine
+    Two runs of the same `Lfo`, each in a helper of its own read by its own
+    class, read the same value at each step: the one the step's stream time gives, a sine
     advanced by exactly one step of stream time per step, whatever the machine
     took to run it.
 
@@ -909,7 +997,7 @@ def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(
 
     assert first_run["pid"] != second_run["pid"], (first_run, second_run)
     assert first_run["steps"] == second_run["steps"], (
-        f"two runs of one stateful island on one stepped clock read different values: "
+        f"two runs of one stateful node on one stepped clock read different values: "
         f"{first_run['steps']} and {second_run['steps']}"
     )
     first_step_read = first_run["steps"][0][0]

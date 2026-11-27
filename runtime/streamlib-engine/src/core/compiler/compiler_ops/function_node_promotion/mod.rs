@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Moving a function node out of its readers' islands into a helper process of
-//! its own, with every function node downstream of it, so no node left inline
-//! reads one that moved: on a crash or stall of its reader's helper, and when
-//! the compile finds a stateful one that more than one reader would evaluate.
+//! its own: each stateful one, alone, as the compile adds it; and on a crash or
+//! stall of its reader's helper, with every function node downstream of it, so
+//! the running reader's islands lose nodes and gain no input port.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -27,103 +27,39 @@ use crate::core::graph::{
 /// crashed has no frame interval of its own.
 pub(crate) const PROMOTED_FUNCTION_NODE_INTERVAL_MS_FOR_A_READER_WITH_NONE: u32 = 10;
 
-/// How often the helper of a stateful function node that several readers read
-/// evaluates it.
-pub(crate) const STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS: u32 = 10;
+/// How often the helper of a stateful function node evaluates it.
+pub(crate) const STATEFUL_FUNCTION_NODE_INTERVAL_MS: u32 = 10;
 
-/// Move each stateful function node that more than one reader would evaluate,
-/// with every function node downstream of it, out of the islands into a helper
-/// process of its own, so its state has one copy and every reader reads the one
-/// value it evaluates.
+/// Place each stateful function node in `nodes_to_add` in a helper process of
+/// its own, so its state has one copy whatever reads it, and a reader wired to
+/// it while the stream plays is one more link out of that helper.
 ///
-/// Refused by name, changing nothing, when one of those readers or the node
-/// itself is already running, since a running reader is not re-islanded in
-/// this release.
-pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+/// The function nodes downstream of it stay in their readers' islands, each
+/// reading its value at an input port of that reader.
+pub(crate) fn place_each_stateful_function_node_in_a_process_of_its_own(
     graph: &mut Graph,
     nodes_to_add: &[NodeRunId],
-    nodes_to_remove: &[NodeRunId],
-) -> Result<()> {
-    let mut moved_out_of_the_islands: HashSet<NodeRunId> = HashSet::new();
-    loop {
-        let runs_inline = |node_id: &NodeRunId| {
-            runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
-                && !moved_out_of_the_islands.contains(node_id)
-                && !nodes_to_remove.contains(node_id)
-        };
-        let mut stateful_function_nodes_inline: Vec<NodeRunId> = graph
-            .traversal()
-            .v(())
-            .ids()
-            .into_iter()
-            .filter(|node_id| runs_inline(node_id))
-            .filter(|node_id| {
-                graph.traversal().v(node_id).first().is_some_and(|node| {
-                    !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
-                })
+) {
+    let mut stateful_function_nodes_added: Vec<NodeRunId> = nodes_to_add
+        .iter()
+        .filter(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))
+        .filter(|node_id| {
+            graph.traversal().v(*node_id).first().is_some_and(|node| {
+                !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
             })
-            .collect();
-        stateful_function_nodes_inline.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        let read_by_several_readers =
-            stateful_function_nodes_inline
-                .into_iter()
-                .find_map(|node_id| {
-                    let readers =
-                        the_readers_evaluating(graph, &node_id, &runs_inline, nodes_to_remove);
-                    (readers.len() > 1).then_some((node_id, readers))
-                });
-        let Some((stateful_function_node, readers)) = read_by_several_readers else {
-            break;
-        };
-        let stateful_function_node_name = the_name_in_the_graph_of(graph, &stateful_function_node);
-        let running: BTreeSet<String> = readers
-            .iter()
-            .chain(std::iter::once(&stateful_function_node))
-            .filter(|node_id| !nodes_to_add.contains(*node_id))
-            .map(|node_id| the_name_in_the_graph_of(graph, node_id))
-            .collect();
-        if !running.is_empty() {
-            return Err(Error::InvalidGraph(format!(
-                "stateful function node `{stateful_function_node_name}` would be read by {} \
-                 readers, so it runs once in a helper process of its own, and {} already \
-                 running; a running reader is not re-islanded in this release. To fix: stop \
-                 the stream and start it with the edit",
-                readers.len(),
-                running
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-                    + if running.len() == 1 { " is" } else { " are" }
-            )));
-        }
-        let moved = the_function_nodes_downstream_of(graph, &stateful_function_node, &runs_inline);
-        if let Some(not_added) = moved
-            .iter()
-            .find(|node_id| !nodes_to_add.contains(*node_id))
-        {
-            return Err(Error::InvalidGraph(format!(
-                "stateful function node `{stateful_function_node_name}` would be read by {} \
-                 readers, so it runs once in a helper process of its own with every function \
-                 node downstream of it, and `{}` is already running inside a reader; a \
-                 running reader is not re-islanded in this release. To fix: stop the stream \
-                 and start it with the edit",
-                readers.len(),
-                the_name_in_the_graph_of(graph, not_added)
-            )));
-        }
-        moved_out_of_the_islands.extend(moved);
-    }
-    for moved_id in the_promoted_nodes_in_a_stable_order(&moved_out_of_the_islands) {
+        })
+        .cloned()
+        .collect();
+    stateful_function_nodes_added.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    for stateful_function_node in stateful_function_nodes_added {
         mark_a_function_node_promoted_to_its_own_process(
             graph,
-            &moved_id,
+            &stateful_function_node,
             ProcessExecution::Continuous {
-                interval_ms: STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS,
+                interval_ms: STATEFUL_FUNCTION_NODE_INTERVAL_MS,
             },
         );
     }
-    Ok(())
 }
 
 /// Mark `function_node_id` promoted into a helper of its own driven the way
@@ -158,52 +94,6 @@ fn mark_a_function_node_promoted_to_its_own_process(
             evaluated_at_setup,
         });
     }
-}
-
-/// The nodes outside any island whose read evaluates `function_node`, through
-/// the function nodes `runs_inline` keeps downstream of it.
-fn the_readers_evaluating(
-    graph: &Graph,
-    function_node: &NodeRunId,
-    runs_inline: &dyn Fn(&NodeRunId) -> bool,
-    nodes_to_remove: &[NodeRunId],
-) -> BTreeSet<NodeRunId> {
-    let mut readers = BTreeSet::new();
-    for downstream in the_function_nodes_downstream_of(graph, function_node, runs_inline) {
-        for link in graph.traversal().e(()).iter() {
-            let destination = link.to_port().node_run_id();
-            if link.source().node_run_id() == &downstream
-                && !runs_inline(destination)
-                && !nodes_to_remove.contains(destination)
-            {
-                readers.insert(destination.clone());
-            }
-        }
-    }
-    readers
-}
-
-/// `function_node` and every function node `runs_inline` keeps that its
-/// outputs reach.
-fn the_function_nodes_downstream_of(
-    graph: &Graph,
-    function_node: &NodeRunId,
-    runs_inline: &dyn Fn(&NodeRunId) -> bool,
-) -> HashSet<NodeRunId> {
-    let mut reached = HashSet::new();
-    let mut to_follow = vec![function_node.clone()];
-    while let Some(following) = to_follow.pop() {
-        if !reached.insert(following.clone()) {
-            continue;
-        }
-        for link in graph.traversal().e(()).iter() {
-            let destination = link.to_port().node_run_id();
-            if link.source().node_run_id() == &following && runs_inline(destination) {
-                to_follow.push(destination.clone());
-            }
-        }
-    }
-    reached
 }
 
 /// What a promotion adds to the compile that carries it.
@@ -371,9 +261,22 @@ fn the_name_in_the_graph_of(graph: &Graph, node_id: &NodeRunId) -> String {
 
 /// `function_node` and every function node its outputs reach inside islands.
 fn the_function_nodes_from(graph: &Graph, function_node: &NodeRunId) -> HashSet<NodeRunId> {
-    the_function_nodes_downstream_of(graph, function_node, &|node_id| {
-        runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
-    })
+    let mut reached = HashSet::new();
+    let mut to_follow = vec![function_node.clone()];
+    while let Some(following) = to_follow.pop() {
+        if !reached.insert(following.clone()) {
+            continue;
+        }
+        for link in graph.traversal().e(()).iter() {
+            let destination = link.to_port().node_run_id();
+            if link.source().node_run_id() == &following
+                && runs_inside_the_read_of_each_node_it_feeds(graph, destination)
+            {
+                to_follow.push(destination.clone());
+            }
+        }
+    }
+    reached
 }
 
 fn the_promoted_nodes_in_a_stable_order(promoted: &HashSet<NodeRunId>) -> Vec<NodeRunId> {

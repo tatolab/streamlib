@@ -31,6 +31,12 @@ def Lfo(  # noqa: N802
 
 
 @node
+def Wave(rate_hz: float = 1.0, *, now: Time) -> float:  # noqa: N802
+    """A sine wave from -1 to 1 at `rate_hz`, at the stream time it is evaluated at; it keeps no state."""
+    return math.sin(2.0 * math.pi * ((rate_hz * now * 1e-9) % 1.0))
+
+
+@node
 def Remap(  # noqa: N802
     x: float = 0.0,
     from_low: float = -1.0,

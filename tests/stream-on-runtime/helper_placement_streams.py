@@ -8,7 +8,7 @@ from typing import Any
 from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
 from rust_function_node_fixture import RustGate
 from rust_function_node_fixture import ScaleAndOffset
-from helper_placement_function_nodes import Clamp, Gate, Lfo, Remap
+from helper_placement_function_nodes import Clamp, Gate, Lfo, Remap, Wave
 from tatolab.stream import FloatToInteger, SteppedStreamClock, StreamBuilder, graph_generator
 
 from helper_placement_nodes import (
@@ -26,13 +26,14 @@ from helper_placement_nodes import (
     LevelScaledByItsGain,
     LendsTheLabelToItsNativeHalf,
     ForksAWorkerThatOutlivesItProbe,
+    ReportsEachBatchOfCountsItReadInOrderAsTheFirstReader,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
     ReportsEachBatchOfGatedCountsItReadSink,
     ReportsEachBatchOfItsLevel,
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessIntegerSink,
-    ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
+    ReportsTheCountItReadAndDiesOnceItReadsPastTwoHundred,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheCountsItReadSink,
     ReportsTheFunctionNodeValuesItReadSink,
@@ -134,12 +135,12 @@ def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> N
 
 
 @graph_generator
-def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
-    """`Lfo` into `Remap` into a Python class reading the value they evaluate to."""
-    lfo = stream_builder.add(Lfo)
+def wave_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """`Wave` into `Remap` into a Python class reading the value they evaluate to."""
+    wave = stream_builder.add(Wave)
     remap = stream_builder.add(Remap)
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
-    stream_builder.connect(lfo.output("result"), remap.input("x"))
+    stream_builder.connect(wave.output("result"), remap.input("x"))
     stream_builder.connect(remap.output("result"), sink.input("brightness"))
 
 
@@ -147,31 +148,29 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
 def function_nodes_read_by_two_native_converters_into_python_sink(
     stream_builder: StreamBuilder,
 ) -> None:
-    """`Lfo` into `Remap` onto 0..100 into a native `FloatToInteger` into a Python class, and a second `Lfo` into a second converter.
+    """`Wave` into `Remap` onto 0..100 into a native `FloatToInteger` into a Python class, and a second `Wave` into a second converter.
 
     Neither converter runs in a helper, so neither can evaluate the island it
-    reads: both islands go to the stream's one function node pool. Each
-    island has an `Lfo` of its own, since a stateful node two readers read runs
-    in a process of its own.
+    reads: both islands go to the stream's one function node pool.
     """
-    lfo = stream_builder.add(Lfo)
-    second_lfo = stream_builder.add(Lfo, name="second-lfo")
+    wave = stream_builder.add(Wave)
+    second_wave = stream_builder.add(Wave, name="second-wave")
     remap = stream_builder.add(Remap, input_values={"to_high": 100.0})
     first_converter = stream_builder.add(FloatToInteger, name="first-converter")
     second_converter = stream_builder.add(FloatToInteger, name="second-converter")
     sink = stream_builder.add(ReportsTheLevelsItReadSink, name="sink")
-    stream_builder.connect(lfo.output("result"), remap.input("x"))
+    stream_builder.connect(wave.output("result"), remap.input("x"))
     stream_builder.connect(remap.output("result"), first_converter.input("value"))
-    stream_builder.connect(second_lfo.output("result"), second_converter.input("value"))
+    stream_builder.connect(second_wave.output("result"), second_converter.input("value"))
     stream_builder.connect(first_converter.output("cast"), sink.input("levels"))
 
 
 @graph_generator
-def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBuilder) -> None:
-    """`Lfo` read directly by a Python class reporting each batch of values."""
-    lfo = stream_builder.add(Lfo, name="lfo")
+def wave_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBuilder) -> None:
+    """`Wave` read directly by a Python class reporting each batch of values."""
+    wave = stream_builder.add(Wave, name="wave")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
-    stream_builder.connect(lfo.output("result"), sink.input("brightness"))
+    stream_builder.connect(wave.output("result"), sink.input("brightness"))
 
 
 @graph_generator
@@ -225,8 +224,9 @@ def function_node_slower_than_the_pools_frame_interval_read_by_a_native_converte
 
 
 @graph_generator
-def pooled_counter_beside_a_pooled_node_that_hangs(stream_builder: StreamBuilder) -> None:
-    """A stateful counter and a node that hangs after its first calls, each read by a native `FloatToInteger`, so both run in the pool."""
+def stateful_counter_beside_a_pooled_node_that_hangs(stream_builder: StreamBuilder) -> None:
+    """A stateful counter and a node that hangs after its first calls, each read by a native
+    `FloatToInteger`: the hanger runs in the pool, and the counter in a helper of its own."""
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
     count_converter = stream_builder.add(FloatToInteger, name="count-converter")
     sink = stream_builder.add(ReportsTheCountsItReadSink, name="sink")
@@ -264,9 +264,9 @@ def function_node_run_as_python_that_crashes_into_python_sink(stream_builder: St
 @graph_generator
 def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuilder) -> None:
     """A stateful function node counting its calls, read by a Python class that
-    takes its own helper down once a fresh count reaches twenty."""
+    takes its own helper down once, at the count of two hundred."""
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
-    sink = stream_builder.add(ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty, name="sink")
+    sink = stream_builder.add(ReportsTheCountItReadAndDiesOnceItReadsPastTwoHundred, name="sink")
     stream_builder.connect(counter.output("result"), sink.input("count"))
 
 
@@ -277,6 +277,19 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
     for reader_name in ("first_reader", "second_reader"):
         reader = stream_builder.add(ReportsTheCountsItReadInOrderSink, name=reader_name)
         stream_builder.connect(counter.output("result"), reader.input("count"))
+
+
+@graph_generator
+def stateful_counter_read_by_one_python_sink_reporting_each_batch(
+    stream_builder: StreamBuilder,
+) -> None:
+    """One stateful function node counting its calls, read by one Python class reporting each
+    batch of the counts it read in order; a second reader is wired to it while it plays."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    first_reader = stream_builder.add(
+        ReportsEachBatchOfCountsItReadInOrderAsTheFirstReader, name="first_reader"
+    )
+    stream_builder.connect(counter.output("result"), first_reader.input("count"))
 
 
 @graph_generator
@@ -298,7 +311,7 @@ def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
 def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
     stream_builder: StreamBuilder,
 ) -> None:
-    """The same `Lfo` island twice, each read by its own Python class, on an unpaced stepped clock."""
+    """The same `Lfo` twice, each in a helper of its own read by its own Python class, on an unpaced stepped clock."""
     stream_builder.run_on_clock(
         SteppedStreamClock(
             step_ns=STEPPED_LFO_STEP_MS * 1_000_000,
@@ -313,13 +326,13 @@ def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
 
 @graph_generator
 def rust_function_nodes_in_islands_beside_python_ones(stream_builder: StreamBuilder) -> None:
-    """`Lfo` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
-    into `Remap`, each island read by its own Python class."""
-    lfo = stream_builder.add(Lfo)
+    """`Wave` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
+    into `Remap`, each read by its own Python class."""
+    wave = stream_builder.add(Wave)
     scale_and_offset = stream_builder.add(ScaleAndOffset)
     clamp = stream_builder.add(Clamp)
     values_sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
-    stream_builder.connect(lfo.output("result"), scale_and_offset.input("x"))
+    stream_builder.connect(wave.output("result"), scale_and_offset.input("x"))
     stream_builder.connect(scale_and_offset.output("result"), clamp.input("x"))
     stream_builder.connect(clamp.output("result"), values_sink.input("brightness"))
 
@@ -403,7 +416,7 @@ def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: Str
 @graph_generator
 def held_level_into_a_setting_and_read_by_a_python_sink(stream_builder: StreamBuilder) -> None:
     """A stateful function node holding its `level` input, into a setting a Python class reads
-    at setup and into a second Python class: two readers, so it runs in a process of its own."""
+    at setup and into a second Python class; stateful, so it runs in a process of its own."""
     held = stream_builder.add(HoldsItsLevelCountingItsCalls, name="held")
     reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")

@@ -103,11 +103,11 @@ def test_each_value_the_pool_works_out_into_a_setting_rebuilds_its_class_once_wi
     ], f"a value the class is built with rebuilds nothing:\n{tatolabd.recent_stderr()}"
 
 
-def test_a_stateful_function_node_two_readers_read_builds_the_class_whose_setting_it_feeds_with_its_value(
+def test_a_stateful_function_node_builds_the_class_whose_setting_it_feeds_with_its_value(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """A stateful function node read by a setting and by a second class runs
-    in a process of its own; it works its 0.25 out as it sets up, so the class
+    in a process of its own, as every stateful one does; it works its 0.25 out as it sets up, so the class
     reading it at setup is built once, with 0.25 and never its own 0.1, and the
     second class reads 0.25 too.
 

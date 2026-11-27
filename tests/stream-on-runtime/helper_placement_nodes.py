@@ -7,7 +7,7 @@ import dataclasses
 import json
 import os
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 from tatolab.stream import (
     EncodedVideo,
@@ -389,20 +389,69 @@ class ReportsTheLevelItIsBuiltWith:
 def HoldsItsLevelCountingItsCalls(  # noqa: N802
     step: float = 1.0, level: float = 0.25, *, previous: State[CallsCountedSoFar]
 ) -> Stateful[float, CallsCountedSoFar]:
-    """Its `level` input, which a link can drive; stateful, so two readers move
-    it into a helper of its own."""
+    """Its `level` input, which a link can drive; stateful, so it runs in a
+    helper of its own."""
     return level, CallsCountedSoFar(previous.calls + step)
 
 
-#: The count at which a sink whose count started fresh takes its own helper down.
-COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES = 20.0
+#: How many counts a sink reporting each batch of the counts it read in order reads in a batch.
+COUNTS_IN_EACH_BATCH_READ_IN_ORDER = 10
+
+
+def read_each_count_in_order_and_report_each_batch(
+    count: Any, counts_read: "list[float]", reader: str
+) -> None:
+    """Read every count `count` holds, in order, onto `counts_read`, reporting each
+    `COUNTS_IN_EACH_BATCH_READ_IN_ORDER` as `reader` with its own pid."""
+    while True:
+        value = count.read()
+        if value is None:
+            return
+        counts_read.append(float(value))
+        if len(counts_read) == COUNTS_IN_EACH_BATCH_READ_IN_ORDER:
+            report(
+                "COUNT_BATCH_READ_IN_ORDER",
+                {"reader": reader, "pid": os.getpid(), "counts": list(counts_read)},
+            )
+            counts_read.clear()
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty:
+class ReportsEachBatchOfCountsItReadInOrderAsTheFirstReader:
+    """Reads every count written on `count`, in order, and reports each batch as `first`."""
+
+    count: InputPin[Annotated[float, StreamDelivery("ordered")]]
+
+    def __init__(self) -> None:
+        self._counts_read: "list[float]" = []
+
+    def process(self, ctx) -> None:
+        read_each_count_in_order_and_report_each_batch(self.count, self._counts_read, "first")
+
+
+@node(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfCountsItReadInOrderAsTheSecondReader:
+    """Reads every count written on `count`, in order, and reports each batch as `second`."""
+
+    count: InputPin[Annotated[float, StreamDelivery("ordered")]]
+
+    def __init__(self) -> None:
+        self._counts_read: "list[float]" = []
+
+    def process(self, ctx) -> None:
+        read_each_count_in_order_and_report_each_batch(self.count, self._counts_read, "second")
+
+
+#: The count at which a sink that read a lower one takes its own helper down.
+COUNT_A_SINK_THAT_READ_A_LOWER_ONE_DIES_AT = 200.0
+
+
+@node(execution="continuous", interval_ms=10)
+class ReportsTheCountItReadAndDiesOnceItReadsPastTwoHundred:
     """Reports the first count it reads with its own pid, and takes its own
-    helper down once a count that started at one reaches twenty. A count it
-    first reads above one was carried over, so it reads on without dying."""
+    helper down at the first count of two hundred or more once it has read a
+    lower one. A helper started in its place reads on past the count its dead
+    one reached, so it never reads a lower one and never dies."""
 
     count: float | None = None
 
@@ -416,8 +465,11 @@ class ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty:
         if self._first_count_read is None:
             self._first_count_read = count_read
             report("FIRST_COUNT_READ", {"pid": os.getpid(), "count": count_read})
-        if self._first_count_read <= 1.0 and count_read >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES:
-            report("FRESH_COUNT_SINK_ABOUT_TO_DIE", {"pid": os.getpid(), "count": count_read})
+        if (
+            self._first_count_read < COUNT_A_SINK_THAT_READ_A_LOWER_ONE_DIES_AT
+            and count_read >= COUNT_A_SINK_THAT_READ_A_LOWER_ONE_DIES_AT
+        ):
+            report("SINK_ABOUT_TO_DIE", {"pid": os.getpid(), "count": count_read})
             os._exit(1)
 
 
@@ -457,7 +509,7 @@ class ReportsTheLfoValueOfEachStepSink:
             )
 
 
-#: How many counts a sink of a counter several readers read reads before it reports them.
+#: How many counts a sink of a counter reads before it reports them.
 COUNTS_READ_IN_ORDER_BEFORE_REPORTING = 20
 
 

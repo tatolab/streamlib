@@ -27,7 +27,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
 };
 use crate::core::compiler::compiler_ops::function_node_promotion::{
     FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
-    place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own,
+    place_each_stateful_function_node_in_a_process_of_its_own,
     plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
     record_each_promotion_on_its_nodes_metrics,
 };
@@ -279,11 +279,10 @@ impl Compiler {
             )?)
         };
         plan.add_each_node_and_link_restarted(&nodes_restarted);
-        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+        place_each_stateful_function_node_in_a_process_of_its_own(
             &mut graph_arc.write(),
             &plan.nodes_to_add,
-            &node_ids_to_remove,
-        )?;
+        );
         let carries_handed_to_the_running_pool = {
             let mut graph = graph_arc.write();
             let carries_handed_to_the_running_pool =
