@@ -14,7 +14,7 @@ use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
     LeaseAwarePoolSlotRing, PoolSlotReuse,
 };
 use crate::core::context::texture_pools_and_rings::shared_pool_entry_freeing::{
-    LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
+    LONGEST_A_SHARED_POOL_SWEEP_WAITS_FOR_ITS_ENTRIES_GPU_WORK,
     SharedPoolEntriesAwaitingDestruction, SharedPoolEntryFreeingScan, SharedPoolEntryIdleWindow,
     SharedPoolEntryObservationCursor, SharedPoolEntryTakenOutOfItsPool,
 };
@@ -478,7 +478,7 @@ impl PixelBufferPoolManager {
 
     /// Free every unheld slot due to be freed — flagged, or idle past the
     /// window — waiting at most
-    /// [`LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK`] for
+    /// [`LONGEST_A_SHARED_POOL_SWEEP_WAITS_FOR_ITS_ENTRIES_GPU_WORK`] for
     /// the GPU work naming the slots awaiting destruction; answers how many
     /// were destroyed.
     pub(in crate::core::context) fn free_every_unheld_slot_due_to_be_freed_waiting_for_its_gpu_work(
@@ -515,7 +515,7 @@ impl PixelBufferPoolManager {
         self.slots_awaiting_destruction
             .park_and_destroy_every_one_ready_waiting_at_most(
                 slots_taken_out,
-                LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
+                LONGEST_A_SHARED_POOL_SWEEP_WAITS_FOR_ITS_ENTRIES_GPU_WORK,
             )
     }
 

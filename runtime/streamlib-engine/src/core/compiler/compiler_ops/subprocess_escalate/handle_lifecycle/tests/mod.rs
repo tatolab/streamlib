@@ -62,6 +62,25 @@ fn next_node_output_frame_over_the_escalate_op(
     pool_key: &str,
     rotation_depth: u32,
 ) -> std::result::Result<String, String> {
+    next_node_output_frame_of_width_over_the_escalate_op(
+        sandbox,
+        registry,
+        pool_key,
+        rotation_depth,
+        64,
+    )
+}
+
+/// The next 32-high frame `width` wide a node output pool hands out over the
+/// real escalate op, or its refusal's message.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn next_node_output_frame_of_width_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    pool_key: &str,
+    rotation_depth: u32,
+    width: u32,
+) -> std::result::Result<String, String> {
     use super::super::handle_escalate_op;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
         EscalateRequestAcquireTexture, EscalateRequestNodeOutputPool,
@@ -77,7 +96,7 @@ fn next_node_output_frame_over_the_escalate_op(
         &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-pooled".to_string(),
-            width: 64,
+            width,
             height: 32,
             format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
             node_output_pool: Some(EscalateRequestNodeOutputPool {

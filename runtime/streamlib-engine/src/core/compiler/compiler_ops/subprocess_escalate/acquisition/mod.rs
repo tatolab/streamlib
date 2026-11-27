@@ -33,7 +33,8 @@ use neither_linux_nor_macos::{
 use super::handle_lifecycle::{
     EscalateHandleRegistry, NodeOutputFrameHandOff, NodeOutputFramePublished,
     NodeOutputFreshSlotHandOff, NodeOutputSlotDescriptor, NodeOutputTextureDescriptor,
-    RegisteredHandle, release_node_output_pool_slot,
+    RegisteredHandle, ReleasedNodeOutputPoolSlot, release_node_output_pool_slot,
+    release_node_output_pool_slot_freed_as_soon_as_unheld,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -293,6 +294,31 @@ fn allocate_registered_node_output_slot(
     }
 }
 
+/// Free the slots a node output pool's descriptor change retired now: the
+/// shared pools free an unheld entry only on a later acquire or release,
+/// which a pool reusing its own slots never makes.
+fn free_the_slots_a_descriptor_change_retired(
+    sandbox: &GpuContextLimitedAccess,
+    retired_slots: Vec<ReleasedNodeOutputPoolSlot>,
+) {
+    let mut a_shared_pool_entry_was_retired = false;
+    for retired_slot in retired_slots {
+        a_shared_pool_entry_was_retired |=
+            retired_slot.registered_handle.is_drawn_from_a_shared_pool();
+        release_node_output_pool_slot_freed_as_soon_as_unheld(sandbox, retired_slot);
+    }
+    if a_shared_pool_entry_was_retired {
+        let destroyed = sandbox
+            .host_inner()
+            .free_every_unheld_shared_pool_entry_due_to_be_freed_waiting_for_its_gpu_work();
+        tracing::debug!(
+            destroyed_texture_pool_slot_count = destroyed.texture_pool_slots,
+            destroyed_pixel_buffer_pool_slot_count = destroyed.pixel_buffer_pool_slots,
+            "freed the slots a node output pool's descriptor change retired"
+        );
+    }
+}
+
 fn hand_off_node_output_frame(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -308,9 +334,7 @@ fn hand_off_node_output_frame(
     let (handed_off, slots_a_descriptor_change_released) = registry
         .node_output_pools()
         .hand_off_a_reusable_frame(host, &pool_key, rotation_depth as usize, descriptor);
-    for released_slot in slots_a_descriptor_change_released {
-        release_node_output_pool_slot(sandbox, released_slot);
-    }
+    free_the_slots_a_descriptor_change_retired(sandbox, slots_a_descriptor_change_released);
     if let NodeOutputFrameHandOff::Published(published) = handed_off? {
         return Ok(published);
     }
