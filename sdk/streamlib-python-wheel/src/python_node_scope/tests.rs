@@ -66,7 +66,7 @@ kernel = declared.declare(lambda: computed(build_the_kernel))
 scope = declared.start()
 run_frames_until(scope, lambda: kernel.get() == ("kernel", 0.0))
 
-scope.write(seconds_to_build, 1.0)
+scope.write([(seconds_to_build, 1.0)])
 frames_on_the_old_kernel = []
 def taken_the_new_kernel():
     if kernel.get() == ("kernel", 0.0):
@@ -102,9 +102,9 @@ device = declared.declare(lambda: computed(lambda: StubDevice(device_id.get())))
 scope = declared.start()
 run_frames_until(scope, lambda: device.get().device_id == 0)
 
-scope.write(device_id, 1)
+scope.write([(device_id, 1)])
 run_frames_until(scope, lambda: device.get().device_id == 1 and len(closes) == 1)
-scope.write(device_id, 2)
+scope.write([(device_id, 2)])
 run_frames_until(scope, lambda: device.get().device_id == 2 and len(closes) == 2)
 time.sleep(0.1)
 run_frames_until(scope, lambda: True)
@@ -138,7 +138,7 @@ device = declared.declare(lambda: computed(build_the_device))
 scope = declared.start()
 run_frames_until(scope, lambda: device.get() is the_one_device)
 
-scope.write(unread_by_the_device, 1)
+scope.write([(unread_by_the_device, 1)])
 assert scope.wait_until_settled(5.0)
 assert scope.last_build_of(device).builds == 2
 run_frames_until(scope, lambda: True)
@@ -168,7 +168,7 @@ layout = declared.declare(lambda: computed(build_the_layout))
 scope = declared.start()
 run_frames_until(scope, lambda: layout.get() == ("layout", 2))
 
-scope.write(layer_count, 0)
+scope.write([(layer_count, 0)])
 assert scope.wait_until_settled(5.0)
 last_build = scope.last_build_of(layout)
 assert (last_build.state, last_build.builds, last_build.failure) == ("failed", 2, "raised"), last_build.state
@@ -177,7 +177,7 @@ frames = []
 run_frames_until(scope, lambda: frames.append(layout.get()) or len(frames) == 3)
 assert frames == [("layout", 2)] * 3, frames
 
-scope.write(layer_count, 3)
+scope.write([(layer_count, 3)])
 run_frames_until(scope, lambda: layout.get() == ("layout", 3))
 last_build = scope.last_build_of(layout)
 assert (last_build.state, last_build.builds, last_build.failure, last_build.why) == ("built", 3, None, None)
@@ -210,7 +210,7 @@ last_build = scope.last_build_of(kernel)
 assert (last_build.state, last_build.failure) == ("failed", "read_a_computed_value_not_yet_built"), last_build.failure
 assert not scope.run_frame(lambda: None)
 
-scope.write(taps, 5)
+scope.write([(taps, 5)])
 run_frames_until(scope, lambda: kernel.get() == ("kernel", 5))
 scope.close()
 "#,
@@ -232,7 +232,7 @@ layer_count, kernels = declared.declare(declare)
 scope = declared.start()
 run_frames_until(scope, lambda: kernels.get() == ("kernels", 2))
 
-scope.write(layers, ("background", "subtitle"))
+scope.write([(layers, ("background", "subtitle"))])
 assert scope.wait_until_settled(5.0)
 assert scope.last_build_of(layer_count).builds == 2
 assert scope.last_build_of(kernels).builds == 1
@@ -277,7 +277,7 @@ declared = NodeScopeBeingDeclared()
 taps = declared.input(3)
 scope = declared.start()
 scope.close()
-for refused_call in (lambda: scope.write(taps, 4), lambda: scope.run_frame(lambda: None)):
+for refused_call in (lambda: scope.write([(taps, 4)]), lambda: scope.run_frame(lambda: None)):
     try:
         refused_call()
     except RuntimeError as refused:
@@ -306,9 +306,9 @@ handed_on = declared.declare(lambda: computed(lambda: device.get() if gain.get()
 scope = declared.start()
 run_frames_until(scope, lambda: handed_on.get() is lent_device)
 
-scope.write(gain, 2)
+scope.write([(gain, 2)])
 run_frames_until(scope, lambda: handed_on.get() is None)
-scope.write(device, StubDevice())
+scope.write([(device, StubDevice())])
 assert scope.wait_until_settled(5.0)
 run_frames_until(scope, lambda: True)
 time.sleep(0.1)
@@ -334,7 +334,7 @@ def a_long_frame():
     frame_started.set()
     for _ in range(50):
         frames_read.append(kernel.get())
-        scope.write(taps, len(frames_read))
+        scope.write([(taps, len(frames_read))])
         time.sleep(0.002)
 
 closer = threading.Thread(target=lambda: (frame_started.wait(5.0), scope.close()))
@@ -391,7 +391,7 @@ tensor = declared.declare(lambda: computed(lambda: LargeTensor(size.get())))
 scope = declared.start()
 run_frames_until(scope, lambda: tensor.get().size == 1)
 
-scope.write(size, 2)
+scope.write([(size, 2)])
 run_frames_until(scope, lambda: tensor.get().size == 2 and len(freed_on) == 1)
 for _ in range(20):
     run_frames_until(scope, lambda: True)
@@ -425,11 +425,11 @@ wired_device = declared_b.input(None)
 scope_b = declared_b.start()
 device_0 = []
 scope_a.run_frame(lambda: device_0.append(device.get()))
-scope_b.write(wired_device, device_0[0])
-scope_b.write(wired_device, None)
+scope_b.write([(wired_device, device_0[0])])
+scope_b.write([(wired_device, None)])
 device_0.clear()
 
-scope_a.write(device_id, 1)
+scope_a.write([(device_id, 1)])
 run_frames_until(scope_a, lambda: device.get().device_id == 1 and closes == [0])
 scope_a.close()
 scope_b.close()
@@ -447,7 +447,7 @@ others_input = other.input(1)
 others_kernel = other.declare(lambda: computed(lambda: others_input.get()))
 scope = NodeScopeBeingDeclared().start()
 for refused_call in (
-    lambda: scope.write(others_input, 2),
+    lambda: scope.write([(others_input, 2)]),
     lambda: scope.last_build_of(others_kernel),
 ):
     try:
@@ -495,12 +495,12 @@ device = declared.declare(lambda: computed(build_the_device))
 holder.append(declared.start())
 run_frames_until(holder[0], lambda: True)
 
-holder[0].write(generation, 1)
+holder[0].write([(generation, 1)])
 assert holder[0].wait_until_settled(5.0)
 assert len(refusals) == 1 and "cannot close its own" in refusals[0], refusals
 
 scope = holder[0]
-scope.write(generation, 2)
+scope.write([(generation, 2)])
 del scope
 deadline = time.monotonic() + 5.0
 while len(closes) < 3 and time.monotonic() < deadline:
@@ -563,6 +563,32 @@ closer.start()
 closer.join(5.0)
 assert not closer.is_alive(), "the close hung"
 assert len(closes) == 1, closes
+"#,
+    );
+}
+
+#[test]
+fn several_inputs_written_in_one_write_build_what_reads_them_once() {
+    run_with_the_frame_loop(
+        r#"
+builds = []
+declared = NodeScopeBeingDeclared()
+width = declared.input(1)
+height = declared.input(1)
+
+def build_the_size():
+    builds.append((width.get(), height.get()))
+    return (width.get(), height.get())
+
+size = declared.declare(lambda: computed(build_the_size))
+scope = declared.start()
+run_frames_until(scope, lambda: size.get() == (1, 1))
+
+scope.write([(width, 2), (height, 3)])
+assert scope.wait_until_settled(5.0)
+run_frames_until(scope, lambda: size.get() == (2, 3))
+scope.close()
+assert builds == [(1, 1), (2, 3)], builds
 "#,
     );
 }

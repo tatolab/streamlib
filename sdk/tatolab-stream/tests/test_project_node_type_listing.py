@@ -766,3 +766,72 @@ def test_the_entry_answers_why_when_its_request_is_not_json(tmp_path: Path) -> N
 
     assert finished.returncode == 0, finished.stderr
     assert "JSONDecodeError" in json.loads(finished.stdout)["failed_because"]
+
+
+def test_a_function_under_node_with_its_keywords_is_listed_as_a_process_node() -> None:
+    module_source = "\n".join(
+        [
+            "from typing import Annotated, Callable",
+            "from tatolab.stream import Description, Input, InputPin, OutputPin, Texture, node",
+            "from tatolab.stream import RuntimeContextFullAccess",
+            "",
+            '@node.meta(description="Blurs each picture.")',
+            "@node(execution='reactive')",
+            "def blur(",
+            "    *,",
+            "    video: Annotated[InputPin[Texture], Description('The pictures.')],",
+            "    radius: Input[Annotated[float, Description('How far.')]] = Input(4.0),",
+            "    result: OutputPin[Texture],",
+            "    ctx: RuntimeContextFullAccess,",
+            ") -> Callable[..., None]: ...",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.blur", "nodes/blur.py", module_source)]
+    )
+
+    (blur,) = read["node_types"]
+    assert (blur["type"], blur["kind"], blur["description"]) == (
+        "nodes.blur:blur",
+        "process",
+        "Blurs each picture.",
+    )
+    assert [port["name"] for port in blur["inputs"]] == ["video", "radius"]
+    assert blur["inputs"][0]["description"] == "The pictures."
+    assert blur["inputs"][1]["description"] == "How far."
+    assert blur["inputs"][1]["pin_default"] == 4.0
+    assert blur["inputs"][1]["annotation"] == "Annotated[float, Description('How far.')]"
+    assert [port["name"] for port in blur["outputs"]] == ["result"]
+
+
+def test_a_node_function_input_lists_its_keyword_default_and_what_is_written_around_it() -> None:
+    """Mental-revert: read only `Input(value)` and the type inside `Input[...]`, and the listing
+    drops the default and the range the runtime declares; list an `async def`, and it shows a node
+    type its import refuses."""
+    module_source = "\n".join(
+        [
+            "from typing import Annotated, Callable",
+            "from tatolab.stream import Input, NumberRange, node",
+            "",
+            "@node(execution='reactive')",
+            "def gain(",
+            "    *,",
+            "    level: Annotated[Input[float], NumberRange(minimum=0.0, maximum=1.0)] = Input(default=0.5),",
+            ") -> None: ...",
+            "",
+            "@node(execution='reactive')",
+            "async def waits(*, level: Input[float] = Input(1.0)) -> None: ...",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.gain", "nodes/gain.py", module_source)]
+    )
+
+    (gain,) = read["node_types"]
+    (level,) = gain["inputs"]
+    assert level["pin_default"] == 0.5
+    assert level["annotation"] == "Annotated[float, NumberRange(minimum=0.0, maximum=1.0)]"

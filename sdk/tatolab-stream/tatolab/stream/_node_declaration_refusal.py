@@ -44,6 +44,16 @@ type NodeDeclarationFindingCode = Literal[
     "pin_group_slot_holds_no_pin",
     "pin_group_inside_a_slot",
     "pin_group_on_a_function_node",
+    "pin_group_on_a_node_function",
+    "node_function_parameter_not_keyword_only",
+    "node_function_parameter_not_typed",
+    "node_function_parameter_not_an_input",
+    "input_default_not_an_input",
+    "setting_on_a_node_function",
+    "node_function_parameter_private",
+    "pin_type_choice_on_a_node_function",
+    "node_function_not_a_plain_def",
+    "node_function_takes_the_context_twice",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 

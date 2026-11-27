@@ -16,11 +16,15 @@ A node is named by its import path, derived from `__module__` and
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import sys
 from collections.abc import Mapping
-from typing import Any, Callable, Literal, NoReturn, Optional, ParamSpec, TypeVar, overload
+from typing import Any, Callable, Literal, NoReturn, Optional, ParamSpec, Protocol, TypeVar, overload
 
-from ._class_node_declaration import read_class_node_ports_members_and_pin_groups
+from ._class_node_declaration import (
+    read_class_node_ports_members_and_pin_groups,
+    read_node_function_ports_and_members,
+)
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._node_meta_declaration import (
     PROCESS_NODE_KIND,
@@ -29,6 +33,7 @@ from ._node_meta_declaration import (
     take_node_meta_held_for_the_kind_decorator,
     the_conversion_a_node_states,
 )
+from ._node_function import NodeFunction
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
 from ._shader_node_declaration import ShaderNode, declare_shader_node
 from ._pin_declaration import NodeDeclarationRefusal
@@ -263,6 +268,19 @@ _CLASS_NODE_KEYWORD_DEFAULTS: "dict[str, Any]" = {
     "paced_by_real_time": False,
 }
 _NodeUnderDeclaration = TypeVar("_NodeUnderDeclaration")
+_ProcessNodeUnderDeclaration = TypeVar("_ProcessNodeUnderDeclaration")
+
+
+class _NodeDeclarationItsKeywordsSay(Protocol):
+    """What `@node(...)` with its keywords is: it declares a class node, or a node function."""
+
+    @overload
+    def __call__(self, node: NodeClassUnderDeclaration, /) -> NodeClassUnderDeclaration: ...
+
+    @overload
+    def __call__(
+        self, node: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]", /
+    ) -> NodeFunction: ...
 
 
 class NodeDeclarationDecorator:
@@ -288,7 +306,7 @@ class NodeDeclarationDecorator:
         interval_ms: int = 0,
         scheduling: Optional[str] = None,
         paced_by_real_time: bool = False,
-    ) -> "Callable[[NodeClassUnderDeclaration], NodeClassUnderDeclaration]": ...
+    ) -> "_NodeDeclarationItsKeywordsSay": ...
 
     def __call__(
         self,
@@ -310,7 +328,13 @@ class NodeDeclarationDecorator:
         the names it had beside it, `FormerlyNamed("frequency_hz")`, and a project saved under
         one of them opens with its value and links on the pin. The return annotation is the
         output `result`. `Time`, `State[...]` and `Stateful[...]` are found by type and
-        are never pins. A function takes `@node` bare.
+        are never pins. Bare `@node` on a function declares a pure function node.
+
+        `@node(...)` on a function declares a node written as one function, whose body runs once
+        when the node is set up and returns the function it calls each frame. Each parameter is
+        keyword-only: a value input `level: Input[float] = Input(0.25)`, a pin `video:
+        InputPin[Texture]` or `result: OutputPin[Texture]`, or the context `ctx:
+        RuntimeContextFullAccess`. It takes the keywords a class takes.
 
         On a class, each value input is an annotated field with its default, `radius: float =
         4.0`, each Stream or Trigger input `video: InputPin[Texture]`, and each output
@@ -332,20 +356,16 @@ class NodeDeclarationDecorator:
             "paced_by_real_time": paced_by_real_time,
         }
 
-        def apply_to_class(class_under_decoration: NodeClassUnderDeclaration) -> NodeClassUnderDeclaration:
-            if not isinstance(class_under_decoration, type):
-                raise TypeError(
-                    f"`@node(...)` with keyword arguments declares a class node, and "
-                    f"{getattr(class_under_decoration, '__name__', class_under_decoration)!r} is "
-                    f"not a class. A function takes `@node` bare."
-                )
+        def apply_to_class_or_function(node_under_decoration: Any) -> Any:
+            if not isinstance(node_under_decoration, type):
+                return _declare_a_node_function(node_under_decoration, **class_keywords)
             input_ports, output_ports, members, pin_groups = (
-                read_class_node_ports_members_and_pin_groups(class_under_decoration)
+                read_class_node_ports_members_and_pin_groups(node_under_decoration)
             )
-            setattr(class_under_decoration, NODE_DECLARATION_CLASS_NODE_MEMBERS_STAMP, members)
-            setattr(class_under_decoration, NODE_DECLARATION_CLASS_NODE_PIN_GROUPS_STAMP, pin_groups)
-            return _stamp_a_class_node(
-                class_under_decoration,
+            setattr(node_under_decoration, NODE_DECLARATION_CLASS_NODE_MEMBERS_STAMP, members)
+            setattr(node_under_decoration, NODE_DECLARATION_CLASS_NODE_PIN_GROUPS_STAMP, pin_groups)
+            return _stamp_a_process_node(
+                node_under_decoration,
                 input_ports=input_ports,
                 output_ports=output_ports,
                 pin_groups=[pin_group.declared for pin_group in pin_groups],
@@ -353,14 +373,15 @@ class NodeDeclarationDecorator:
             )
 
         if node is None:
-            return apply_to_class
+            return apply_to_class_or_function
         if isinstance(node, type):
-            return apply_to_class(node)
+            return apply_to_class_or_function(node)
         if class_keywords != _CLASS_NODE_KEYWORD_DEFAULTS:
             raise TypeError(
                 "`execution`, `interval_ms`, `scheduling` and `paced_by_real_time` declare how a "
-                "class node runs, and a function node runs inside the read of each node it "
-                "feeds. A function takes `@node` bare."
+                "node written as one function runs, and a function under bare `@node` is a pure "
+                "function node, which runs inside the read of each node it feeds. To fix: "
+                "`@node(execution=...)` with its keywords inside the call."
             )
         return declare_function_node(
             node,
@@ -500,8 +521,59 @@ def _refuse_the_retired(retired: RetiredDeclaration, arguments: "tuple[object, .
     )
 
 
-def _stamp_a_class_node(
-    node_class: NodeClassUnderDeclaration,
+def _declare_a_node_function(
+    function: "Callable[..., Any]",
+    *,
+    execution: Optional[str],
+    interval_ms: int,
+    scheduling: Optional[str],
+    paced_by_real_time: bool,
+) -> NodeFunction:
+    """`function` read into a node written as one function, stamped as a class node is."""
+    if not inspect.isfunction(function):
+        raise NodeDeclarationRefusal(
+            f"`@node(...)` declares a class or a function defined with `def`, got {function!r}. "
+            f"To fix: put it on a `def` or a class.",
+            finding_code="node_function_not_a_plain_def",
+            node=getattr(function, "__name__", type(function).__name__),
+        )
+    if (
+        inspect.iscoroutinefunction(function)
+        or inspect.isasyncgenfunction(function)
+        or inspect.isgeneratorfunction(function)
+    ):
+        raise NodeDeclarationRefusal(
+            f"`{function.__name__}` is not a plain `def`, and a node function's body runs once "
+            f"and returns the function the node calls each frame. To fix: make it a plain `def`, "
+            f"with no `async` and no `yield`.",
+            finding_code="node_function_not_a_plain_def",
+            node=function.__name__,
+        )
+    input_ports, output_ports, members, full_access_context_parameter = (
+        read_node_function_ports_and_members(function)
+    )
+    node_function = NodeFunction(
+        function,
+        members=members,
+        full_access_context_parameter=full_access_context_parameter,
+    )
+    held_meta = take_node_meta_held_for_the_kind_decorator(function)
+    if held_meta:
+        hold_node_meta_for_the_kind_decorator(node_function, held_meta)
+    return _stamp_a_process_node(
+        node_function,
+        input_ports=input_ports,
+        output_ports=output_ports,
+        pin_groups=[],
+        execution=execution,
+        interval_ms=interval_ms,
+        scheduling=scheduling,
+        paced_by_real_time=paced_by_real_time,
+    )
+
+
+def _stamp_a_process_node(
+    node_class: _ProcessNodeUnderDeclaration,
     *,
     input_ports: "list[dict[str, Any]]",
     output_ports: "list[dict[str, Any]]",
@@ -510,12 +582,12 @@ def _stamp_a_class_node(
     interval_ms: int,
     scheduling: Optional[str],
     paced_by_real_time: bool,
-) -> NodeClassUnderDeclaration:
-    """Stamp `node_class` as a class node of `input_ports`, `output_ports` and `pin_groups`, which
-    runs in a process of its own."""
+) -> _ProcessNodeUnderDeclaration:
+    """Stamp `node_class`, a class or a node function, as a node of `input_ports`, `output_ports`
+    and `pin_groups`, which runs in a process of its own."""
     declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
     conversion = the_conversion_a_node_states(
-        node_class.__name__,
+        getattr(node_class, "__name__"),
         declared_meta,
         declared_by="@node",
         kind=PROCESS_NODE_KIND,
@@ -561,14 +633,14 @@ def _stamp_a_class_node(
 def _resolve_execution(
     execution: Optional[str],
     interval_ms: int,
-    node_class: type,
+    node_class: object,
     *,
     has_input_ports: bool,
 ) -> "dict[str, Any]":
     if execution is None:
         if not has_input_ports:
             raise ValueError(
-                f"{node_class.__name__} declares no input ports, so it must declare "
+                f"{getattr(node_class, '__name__', node_class)} declares no input ports, so it must declare "
                 f"an execution mode: `@node(execution=\"continuous\", interval_ms=…)` "
                 f"for a source that produces on its own schedule, or "
                 f"`execution=\"manual\"` for one driven by a callback it owns. Only a "

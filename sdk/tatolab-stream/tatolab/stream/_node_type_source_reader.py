@@ -77,6 +77,7 @@ _INPUT_PIN_ANNOTATION = "InputPin"
 _OUTPUT_PIN_ANNOTATION = "OutputPin"
 _CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
+_NODE_FUNCTION_INPUT_ANNOTATION = "Input"
 _SINGLE_OUTPUT_PORT_NAME = "result"
 _DATACLASS_DECORATOR = "dataclass"
 
@@ -282,6 +283,11 @@ class _ModuleDeclarationReading:
             self.graph_generators.append(self._graph_generator(function, qualname))
         if self._note_a_retired_form(function, qualname):
             return
+        if isinstance(self._decorated_with(function, TYPED_NODE_DECORATOR), ast.Call):
+            # An `async def` is refused as a node function, so it lists as no node type.
+            if isinstance(function, ast.FunctionDef):
+                self.node_types.append(self._node_function_type(function, qualname))
+            return
         for decorator_name, kind in (
             (TYPED_NODE_DECORATOR, "function"),
             (SHADER_NODE_DECORATOR, "shader"),
@@ -382,6 +388,41 @@ class _ModuleDeclarationReading:
             inputs.append(port)
         return self._node_type(
             qualname, "process", declaration=node_class, inputs=inputs, outputs=outputs
+        )
+
+    def _node_function_type(
+        self, function: ast.FunctionDef | ast.AsyncFunctionDef, qualname: str
+    ) -> dict[str, Any]:
+        """A function under `@node(...)`: each keyword-only parameter an `Input`, an `InputPin`
+        or an `OutputPin`, in the order written, an `Input`'s type and default listed as a class
+        field's are; the runtime context is no port."""
+        inputs: list[dict[str, Any]] = []
+        outputs: list[dict[str, Any]] = []
+        for parameter, default in zip(function.args.kwonlyargs, function.args.kw_defaults):
+            if parameter.annotation is None:
+                continue
+            pin_form, type_annotation = _class_node_pin_form_and_its_type(parameter.annotation)
+            if pin_form is None:
+                pin_form, type_annotation = _node_function_input_and_its_type(parameter.annotation)
+                if pin_form is None:
+                    continue
+            port: dict[str, Any] = {
+                "name": _port_name_as_cast(parameter.arg),
+                "description": self._described_text_of(parameter.annotation)
+                or self._described_text_of(type_annotation),
+                "annotation": ast.unparse(
+                    type_annotation if pin_form == _NODE_FUNCTION_INPUT_ANNOTATION else parameter.annotation
+                ),
+            }
+            if pin_form == _OUTPUT_PIN_ANNOTATION:
+                outputs.append(port)
+                continue
+            input_default = _the_default_an_input_call_states(default)
+            if input_default is not None:
+                port.update(_default_as_listed(input_default, literal_key="pin_default"))
+            inputs.append(port)
+        return self._node_type(
+            qualname, "process", declaration=function, inputs=inputs, outputs=outputs
         )
 
     def _function_or_shader_node_type(
@@ -818,3 +859,47 @@ def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[st
         arguments = _subscript_arguments(written) if isinstance(written, ast.Subscript) else []
         return form, arguments[0] if arguments else written
     return None, annotation
+
+
+def _node_function_input_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:
+    """`Input` and the type inside it for a node function's `Input[...]`, with what an
+    `Annotated[...]` around it states put back around that type, as the runtime reads it; `None`
+    and the annotation itself for any other."""
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            return _node_function_input_and_its_type(ast.parse(annotation.value, mode="eval").body)
+        except SyntaxError:
+            return None, annotation
+    written = annotation
+    stated_around: list[ast.expr] = []
+    if isinstance(written, ast.Subscript) and _annotated_type_name(written) == _ANNOTATED_ANNOTATION:
+        arguments = _subscript_arguments(written)
+        if arguments:
+            written, *stated_around = arguments
+    if isinstance(written, ast.Subscript) and _annotated_type_name(written) == _NODE_FUNCTION_INPUT_ANNOTATION:
+        arguments = _subscript_arguments(written)
+        if arguments:
+            if not stated_around:
+                return _NODE_FUNCTION_INPUT_ANNOTATION, arguments[0]
+            assert isinstance(annotation, ast.Subscript)
+            return _NODE_FUNCTION_INPUT_ANNOTATION, ast.Subscript(
+                value=annotation.value,
+                slice=ast.Tuple(elts=[arguments[0], *stated_around], ctx=ast.Load()),
+                ctx=ast.Load(),
+            )
+    return None, annotation
+
+
+def _the_default_an_input_call_states(default: Optional[ast.expr]) -> Optional[ast.expr]:
+    """The value `Input(value)` or `Input(default=value)` holds; `None` for no default or for
+    another expression."""
+    if not (
+        isinstance(default, ast.Call)
+        and _annotated_type_name(default.func) == _NODE_FUNCTION_INPUT_ANNOTATION
+    ):
+        return None
+    if len(default.args) == 1 and not default.keywords:
+        return default.args[0]
+    if not default.args and [keyword.arg for keyword in default.keywords] == ["default"]:
+        return default.keywords[0].value
+    return None

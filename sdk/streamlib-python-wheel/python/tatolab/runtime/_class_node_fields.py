@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The fields of a running class node under bare `@node`, each holding its input's current value.
+"""The fields of a running class node under bare `@node`, or the value inputs of a node function, each holding its input's current value.
 
 A field holds the value its wire gave last while a wire feeds it, and the value set on it
 otherwise: its stored value from the `setup` command, then each one `set_input_values` hands
@@ -12,7 +12,7 @@ to one rebuilds the node.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Mapping
 from typing import Any, Optional
 
 from tatolab.stream._class_node_construction import assign_live_field_values
@@ -39,7 +39,11 @@ class ClassNodeFields:
         inputs: LinkInputDataReader,
         node_id: str,
         stored_input_values: "Optional[dict[str, Any]]",
+        assign_field_values: "Callable[[Any, Mapping[str, object]], None]" = assign_live_field_values,
     ) -> None:
+        """`assign_field_values` gives a running node each new value, by its port's name; a class
+        node's fields are assigned, and a node function's inputs written to its scope."""
+        self._assign_field_values = assign_field_values
         self._inputs = inputs
         self._node_id = node_id
         self._fields = {member.port: member for member in members if member.form == "field"}
@@ -84,7 +88,7 @@ class ClassNodeFields:
         self._set_values.update(
             {port: value for port, value in taken.items() if port in stored_input_values}
         )
-        assign_live_field_values(
+        self._assign_field_values(
             node_instance,
             {port: value for port, value in taken.items() if port not in self._each_held_from_its_wire},
         )
@@ -106,7 +110,7 @@ class ClassNodeFields:
                 given[port] = value
                 self._each_held_from_its_wire.add(port)
         if given:
-            assign_live_field_values(node_instance, given)
+            self._assign_field_values(node_instance, given)
 
     def hand_back_the_set_value_of(
         self, node_instance: object, port: str, *, fed_by_an_island: "Collection[str]" = ()
@@ -117,7 +121,7 @@ class ClassNodeFields:
         self._each_held_from_its_wire.discard(port)
         member = self._fields[port]
         value = self._set_values.get(port, member.default)
-        assign_live_field_values(node_instance, {port: value})
+        self._assign_field_values(node_instance, {port: value})
 
     def _a_wire_feeds(self, port: str, fed_by_an_island: "Collection[str]") -> bool:
         return port in fed_by_an_island or bool(self._inputs.inbound_link_names(port))

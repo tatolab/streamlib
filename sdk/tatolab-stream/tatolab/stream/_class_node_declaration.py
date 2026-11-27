@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Bare `@node` on a class: each annotated field a value input, each `InputPin` a stream or trigger, each `OutputPin` an output.
+"""Bare `@node` on a class, or `@node(...)` on a function: each value input, each `InputPin` a stream or trigger, each `OutputPin` an output.
 
 A field is a public annotated attribute with its default, `radius: float = 4.0`, and reads as a
 value: `SettingOnly()` beside its type makes it a setting read at setup, `WireOnly()` one that
@@ -10,6 +10,10 @@ annotation with no value, `video: InputPin[Texture]`, and how a Stream input rea
 is `StreamDelivery` inside it. Every pin and field goes through `read_pin_declaration`, as a
 function's parameters do, so a mistake is a `NodeDeclarationRefusal` with its finding code.
 State the node keeps is `_private` or a `ClassVar`, and `__init__` takes no parameters.
+
+A function's keyword-only parameters are read the same way, one reader for both: each value input
+`radius: Input[float] = Input(4.0)`, each pin `video: InputPin[Texture]`, and the runtime context
+`ctx: RuntimeContextFullAccess`, found by its type, which is no port.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import inspect
 import types
 import typing
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Literal, Optional
+from typing import Any, Callable, ClassVar, Final, Literal, Optional
 
 from ._class_node_pins import InputPin, OutputPin
 from ._class_node_type_choice import give_each_type_choice_what_it_may_choose
@@ -44,6 +48,8 @@ from ._pin_declaration import (
     read_pin_declaration,
 )
 from ._former_name_check import refuse_former_names_that_find_no_one_pin
+from ._node_context_protocols import RuntimeContextFullAccess
+from ._node_function_input import Input
 
 __all__ = [
     "ClassNodeMember",
@@ -51,6 +57,7 @@ __all__ = [
     "read_class_node_ports",
     "read_class_node_ports_and_members",
     "read_class_node_ports_members_and_pin_groups",
+    "read_node_function_ports_and_members",
 ]
 
 type DeclaredPort = dict[str, Any]
@@ -132,10 +139,23 @@ def read_class_node_ports_members_and_pin_groups(
     return input_ports, output_ports, members, tuple(reading.pin_groups)
 
 
+def read_node_function_ports_and_members(
+    function: Callable[..., Any],
+) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...], Optional[str]]:
+    """The input and output ports a node function's parameters declare, as the engine reads them,
+    the value input or pin behind each, and the parameter the runtime context is handed in,
+    `None` for a body that takes none; refused, as a `NodeDeclarationRefusal`, as a class's
+    fields and pins are, and for a parameter that is not keyword-only, not typed, or neither an
+    `Input`, a pin nor the context."""
+    reading = _NodeFunctionReading(function)
+    input_ports, output_ports, members = reading.ports(constructed_in_python=True)
+    return input_ports, output_ports, members, reading.full_access_context_parameter
+
+
 class _ClassNodeReading:
     """One class's fields and pins, read once."""
 
-    def __init__(self, node_class: type, *, of_the_runtimes_own_node: bool) -> None:
+    def __init__(self, node_class: Any, *, of_the_runtimes_own_node: bool) -> None:
         self._node_class = node_class
         self._node = node_class.__name__
         self._of_the_runtimes_own_node = of_the_runtimes_own_node
@@ -581,6 +601,172 @@ class _ClassNodeReading:
             )
         self._port_spelling_by_cast_name[port_name] = spelling
         return port_name
+
+
+class _NodeFunctionReading(_ClassNodeReading):
+    """One node function's keyword-only parameters, read as a class's fields and pins are: each
+    `Input[T]` a field typed `T` with its `Input(...)`'s default, each pin as a class's pin."""
+
+    def __init__(self, function: Callable[..., Any]) -> None:
+        super().__init__(function, of_the_runtimes_own_node=False)
+        self._parameters = inspect.signature(function).parameters
+        self.full_access_context_parameter: Optional[str] = None
+        """The parameter the runtime context is handed in, once `ports` has read them."""
+
+    def _refuse_an_init_taking_parameters(self) -> None:
+        for parameter in self._parameters.values():
+            if parameter.kind is not inspect.Parameter.KEYWORD_ONLY:
+                raise self._refusal(
+                    f"`{self._node}`'s parameter `{parameter.name}` is not keyword-only, and the "
+                    f"runtime hands a node function each input by its name. To fix: write `*` "
+                    f"before the first parameter, `def {self._node}(*, {parameter.name}: ...)`.",
+                    "node_function_parameter_not_keyword_only",
+                    pin=parameter.name,
+                )
+
+    def _resolved_annotations(self) -> dict[str, Any]:
+        type_parameters = {
+            type_parameter.__name__: type_parameter
+            for type_parameter in getattr(self._node_class, "__type_params__", ())
+        }
+        try:
+            hints = typing.get_type_hints(
+                self._node_class, localns=type_parameters or None, include_extras=True
+            )
+        except Exception as unresolvable:
+            raise TypeError(
+                f"{self._node} carries an annotation that cannot be resolved, so its inputs and "
+                f"pins cannot be read: {unresolvable}. Every annotation must be importable at "
+                f"run time, not only under `TYPE_CHECKING`."
+            ) from unresolvable
+        annotations: dict[str, Any] = {}
+        for name in self._parameters:
+            if name not in hints:
+                raise self._refusal(
+                    f"`{self._node}`'s parameter `{name}` is not typed, so nothing says what it "
+                    f"is. To fix: `{name}: Input[float] = Input(0.0)` for a value input, "
+                    f"`{name}: InputPin[Texture]` or `{name}: OutputPin[Texture]` for a pin, or "
+                    f"`{name}: RuntimeContextFullAccess` for the runtime context.",
+                    "node_function_parameter_not_typed",
+                    pin=name,
+                )
+            annotation = hints[name]
+            if annotation is RuntimeContextFullAccess:
+                if self.full_access_context_parameter is not None:
+                    raise self._refusal(
+                        f"`{self._node}` takes the runtime context as both "
+                        f"`{self.full_access_context_parameter}` and `{name}`, and the runtime "
+                        f"hands it once. To fix: keep one of them.",
+                        "node_function_takes_the_context_twice",
+                        pin=name,
+                    )
+                self.full_access_context_parameter = name
+                continue
+            if name.startswith("_"):
+                raise self._refusal(
+                    f"`{self._node}`'s parameter `{name}` starts with `_`, and every parameter of "
+                    f"a node function is one of its inputs or pins. To fix: name it without the "
+                    f"`_`, and keep state the node builds in a `computed(...)` value or a local "
+                    f"of its body.",
+                    "node_function_parameter_private",
+                    pin=name,
+                )
+            annotations[name] = self._the_annotation_a_parameter_is_read_by(name, annotation)
+        return annotations
+
+    def _the_annotation_a_parameter_is_read_by(self, name: str, annotation: Any) -> Any:
+        """A pin's annotation as written, and an `Input[T]`'s `T`, as a class's field writes it."""
+        written = annotation
+        if typing.get_origin(written) is typing.Annotated:
+            written = typing.get_args(written)[0]
+        form = typing.get_origin(written) or written
+        if form in _DIRECTION_OF_EACH_PIN_FORM or a_pin_group_written_in(annotation):
+            return annotation
+        if form is not Input:
+            if form is self._the_limited_context_type():
+                words = (
+                    f"`{self._node}`'s parameter `{name}` is the limited runtime context, which "
+                    f"the function the body returns is handed each frame. To fix: take it as that "
+                    f"function's parameter, and `{name}: RuntimeContextFullAccess` in the body."
+                )
+            else:
+                words = (
+                    f"`{self._node}`'s parameter `{name}` is typed `{annotation!r}`, and a node "
+                    f"function's value input is an `Input`. To fix: `{name}: Input[...] = "
+                    f"Input(...)`, its type inside the brackets and its default inside the call."
+                )
+            raise self._refusal(words, "node_function_parameter_not_an_input", pin=name)
+        arguments = typing.get_args(written)
+        if not arguments:
+            raise self._refusal(
+                f"`{self._node}`'s input `{name}` is a bare `Input`, so nothing names its type. "
+                f"To fix: `{name}: Input[float] = Input(0.0)`, or the pin type it holds.",
+                "pin_has_no_type",
+                pin=name,
+            )
+        input_modes, _ = _taken_off(arguments[0], (SettingOnly,))
+        if not input_modes and annotation is not written:
+            input_modes, _ = _taken_off(annotation, (SettingOnly,))
+        if input_modes:
+            raise self._refusal(
+                f"`{self._node}`'s input `{name}` carries `{input_modes[0]!r}`, and every input of "
+                f"a node function is live: a computed value whose build reads it builds again "
+                f"when it changes. To fix: drop it, and read `{name}` in a `computed(...)` build.",
+                "setting_on_a_node_function",
+                pin=name,
+            )
+        if annotation is written:
+            return arguments[0]
+        return typing.Annotated[arguments[0], *typing.get_args(annotation)[1:]]  # pyright: ignore[reportInvalidTypeArguments]
+
+    def _the_limited_context_type(self) -> object:
+        from ._node_context_protocols import RuntimeContextLimitedAccess
+
+        return RuntimeContextLimitedAccess
+
+    def _declares_a_value(self, attribute_name: str) -> bool:
+        return self._parameters[attribute_name].default is not inspect.Parameter.empty
+
+    def _default_of(self, attribute_name: str) -> object:
+        default = self._parameters[attribute_name].default
+        if default is inspect.Parameter.empty:
+            return NO_DEFAULT
+        if not isinstance(default, Input):
+            raise self._refusal(
+                f"`{self._node}`'s input `{attribute_name}` defaults to `{default!r}`, and a node "
+                f"function's input states its default inside `Input(...)`. To fix: "
+                f"`{attribute_name}: Input[...] = Input({default!r})`.",
+                "input_default_not_an_input",
+                pin=attribute_name,
+            )
+        declared: Input[Any] = default
+        return declared.default
+
+    def _field(
+        self, attribute_name: str, annotation: Any, description: Optional[str]
+    ) -> tuple[DeclaredPort, Optional[DeclaredPort]]:
+        port, published_on = super()._field(attribute_name, annotation, description)
+        if _chooses_a_pin_type(port["pin_declaration"]):
+            raise self._refusal(
+                f"`{self._node}`'s input `{attribute_name}` chooses a pin type, which decides the "
+                f"node's pins and so rebuilds it when it changes, and every input of a node "
+                f"function is live. To fix: declare the node as a class under bare `@node` while "
+                f"an input chooses its pin types.",
+                "pin_type_choice_on_a_node_function",
+                pin=attribute_name,
+            )
+        return port, published_on
+
+    def _pin_group(
+        self, attribute_name: str, annotation: Any, description: Optional[str]
+    ) -> ClassNodePinGroup:
+        raise self._refusal(
+            f"`{self._node}`'s parameter `{attribute_name}` is a `PinGroup`, which a node function "
+            f"does not take yet. To fix: declare the node as a class under bare `@node` while it "
+            f"holds a pin group.",
+            "pin_group_on_a_node_function",
+            pin=attribute_name,
+        )
 
 
 def _chooses_a_pin_type(declaration: PinDeclarationOnTheWire) -> bool:

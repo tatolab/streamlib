@@ -147,7 +147,7 @@ def test_a_retired_declaration_is_an_error_naming_its_replacement(
 
 
 RETIRED_IMPORT_SOURCE = '''\
-from tatolab.stream import Input, node
+from tatolab.stream import Output, node
 '''
 
 
@@ -163,7 +163,7 @@ def test_a_module_holding_only_a_retired_import_is_checked_and_found_at_it(
     (finding,) = the_findings_of(run_check(project_directory), "nodes/ports.py")
     assert (finding["finding_code"], finding["severity"]) == ("declaration_retired", "error")
     assert (finding["line"], finding["node_type"]) == (1, None)
-    assert finding["words"].startswith("`tatolab.stream.Input` is retired. To fix:")
+    assert finding["words"].startswith("`tatolab.stream.Output` is retired. To fix:")
 
 
 def test_a_module_that_does_not_import_is_one_finding_with_its_traceback(
