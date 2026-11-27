@@ -129,6 +129,43 @@ fn a_shutdown_cut_into_a_slow_setup_reads_each_rung_answered_by_its_own_reply() 
     assert_eq!(reply["rpc"], "done");
 }
 
+/// A helper that skipped its `stop` reply answers `teardown` while the stop
+/// rung still waits: out of step for `stop`, and still the answer to
+/// `teardown` once the ladder waits on it.
+///
+/// Fail-without-fix: drop the reply once it is read as out of step, and the
+/// teardown rung waits out its whole budget for a reply that already came.
+#[test]
+fn a_reply_read_out_of_step_is_kept_for_the_command_it_answers() {
+    let mut bridge = LifecycleCommandsWithTheHelperEndInHand::new();
+    let mut shutdown_commands_sent = ShutdownCommandsSent::default();
+    bridge
+        .commands
+        .send_the_shutdown_commands(&mut shutdown_commands_sent)
+        .expect("both shutdown commands are written");
+    bridge.helper_reads("stop");
+    let teardown_frame = bridge.helper_reads("teardown");
+    bridge.helper_answers(&teardown_frame, "done");
+
+    assert!(matches!(
+        bridge.commands.await_the_reply_to_a_shutdown_command(
+            &shutdown_commands_sent,
+            HelperProcessShutdownCommand::Stop,
+            PROMPT,
+        ),
+        Err(LifecycleReplyNotReceived::AnsweredAnotherCommand { .. })
+    ));
+    let reply = bridge
+        .commands
+        .await_the_reply_to_a_shutdown_command(
+            &shutdown_commands_sent,
+            HelperProcessShutdownCommand::Teardown,
+            PROMPT,
+        )
+        .expect("the reply to teardown, read while stop was awaited");
+    assert_eq!(reply["rpc"], "done");
+}
+
 #[test]
 fn awaiting_a_shutdown_command_never_sent_names_it() {
     let bridge = LifecycleCommandsWithTheHelperEndInHand::new();

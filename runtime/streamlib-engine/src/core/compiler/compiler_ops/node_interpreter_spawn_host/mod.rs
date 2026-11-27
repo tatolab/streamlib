@@ -249,6 +249,7 @@ fn reported_reason(reply: &serde_json::Value) -> &str {
 /// Wait up to `slice` for the reply to `command`, as `shutdown_commands_sent`
 /// holds it, and say how the wait ended for the shutdown ladder.
 fn await_the_reply_to(
+    node_display_name: &str,
     bridge: &SubprocessBridge,
     shutdown_commands_sent: &ShutdownCommandsSent,
     command: HelperProcessShutdownCommand,
@@ -268,7 +269,7 @@ fn await_the_reply_to(
             | LifecycleReplyNotReceived::AnsweredACommandNotAwaited { .. }
             | LifecycleReplyNotReceived::ReplyNamedNoCommand { .. }),
         ) => {
-            tracing::error!("[{}] {out_of_step}", bridge.node_run_id());
+            tracing::error!("[{node_display_name}] {out_of_step}");
             LifecycleReplyAwaited::AnsweredOutOfStep
         }
     }

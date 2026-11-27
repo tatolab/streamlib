@@ -81,6 +81,7 @@ enum CooperativeRungEnded {
     ReplyArrived,
     BudgetSpent,
     NoReplyCanArrive,
+    /// A reply out of step was read, and the awaited one never came.
     AnsweredOutOfStep,
     ChildAlreadyExited,
     ShutdownForced,
@@ -110,11 +111,10 @@ impl HelperProcessShutdownLadder {
     /// Walk every rung, asking `await_lifecycle_reply` for each cooperative one.
     ///
     /// Both commands are already on the wire when this is called — the host
-    /// sends them together — so `await_lifecycle_reply` only answers whether
-    /// that command's reply arrived inside the slice it was handed, draining
-    /// whatever else the helper sent on the way. A closure rather than the
-    /// bridge itself, so the rungs are drivable against a stub child with no
-    /// engine behind it.
+    /// sends them together — so `await_lifecycle_reply` only answers how the
+    /// wait for that command's reply, matched by its id, ended inside the
+    /// slice it was handed. A closure rather than the bridge itself, so the
+    /// rungs are drivable against a stub child with no engine behind it.
     pub(crate) fn walk_every_rung(
         mut self,
         mut await_lifecycle_reply: impl FnMut(
@@ -174,7 +174,8 @@ impl HelperProcessShutdownLadder {
             CooperativeRungEnded::AnsweredOutOfStep => {
                 self.signal_the_child_itself(libc::SIGINT);
                 tracing::warn!(
-                    "[{}] its helper process answered out of step with its stop; interrupting it",
+                    "[{}] its helper process answered out of step with its stop and never answered \
+                 it; interrupting it",
                     self.node_display_name,
                 );
             }
@@ -197,14 +198,17 @@ impl HelperProcessShutdownLadder {
                 self.node_display_name,
             ),
             CooperativeRungEnded::AnsweredOutOfStep => tracing::warn!(
-                "[{}] its helper process answered out of step with its teardown",
+                "[{}] its helper process answered out of step with its teardown and never \
+                 answered it",
                 self.node_display_name,
             ),
         }
     }
 
     /// Wait up to `budget` for `command`'s reply, in slices, so a forced
-    /// shutdown or a child that has already exited ends the wait at once.
+    /// shutdown or a child that has already exited ends the wait at once. A
+    /// reply out of step does not: the helper may still answer `command`, so
+    /// it is waited for to the end of the budget.
     ///
     /// A child that has exited can never answer, and its escalate socket can
     /// stay open behind a descendant that inherited it, so the socket alone
@@ -219,6 +223,7 @@ impl HelperProcessShutdownLadder {
         budget: Duration,
     ) -> CooperativeRungEnded {
         let deadline = Instant::now() + budget;
+        let mut answered_out_of_step = false;
         loop {
             if self.shutdown_escalation_of_its_stream.is_forced() {
                 return CooperativeRungEnded::ShutdownForced;
@@ -228,7 +233,11 @@ impl HelperProcessShutdownLadder {
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return CooperativeRungEnded::BudgetSpent;
+                return if answered_out_of_step {
+                    CooperativeRungEnded::AnsweredOutOfStep
+                } else {
+                    CooperativeRungEnded::BudgetSpent
+                };
             }
             match await_lifecycle_reply(
                 command,
@@ -238,9 +247,7 @@ impl HelperProcessShutdownLadder {
                 LifecycleReplyAwaited::NoReplyCanArrive => {
                     return CooperativeRungEnded::NoReplyCanArrive;
                 }
-                LifecycleReplyAwaited::AnsweredOutOfStep => {
-                    return CooperativeRungEnded::AnsweredOutOfStep;
-                }
+                LifecycleReplyAwaited::AnsweredOutOfStep => answered_out_of_step = true,
                 LifecycleReplyAwaited::SliceElapsed => {}
             }
         }
@@ -656,6 +663,34 @@ raise SystemExit(0)
             terminating_signal_of(&outcome),
             Some(libc::SIGTERM),
             "the group still goes down after a cooperative shutdown: {outcome:?}"
+        );
+    }
+
+    /// A stray reply read while a rung waits is no answer to its command, but
+    /// it ends nothing: the helper that answers its command after it is never
+    /// interrupted.
+    ///
+    /// Fail-without-fix: end the rung on the first reply out of step, and
+    /// the stop rung interrupts a helper that was about to answer.
+    #[test]
+    fn a_reply_out_of_step_does_not_cut_a_rung_short() {
+        let mut stub = a_stub_parking_after(LEAVES_THROUGH_THE_INTERRUPT);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("StrayReplyProbe");
+        let mut answered_out_of_step_already = Vec::new();
+        let outcome = ladder.walk_every_rung(|command, _slice| {
+            if answered_out_of_step_already.contains(&command) {
+                return LifecycleReplyAwaited::Arrived;
+            }
+            answered_out_of_step_already.push(command);
+            LifecycleReplyAwaited::AnsweredOutOfStep
+        });
+
+        assert_ne!(
+            exit_code_of(&outcome),
+            Some(EXIT_CODE_OF_A_STUB_THAT_TOOK_THE_INTERRUPT),
+            "a helper that answered its command after a stray reply must never be signalled"
         );
     }
 

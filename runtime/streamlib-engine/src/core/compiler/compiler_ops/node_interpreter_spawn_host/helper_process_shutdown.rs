@@ -77,6 +77,7 @@ impl NodeInterpreterSpawnHost {
         let outcome = self.child.take().map(|child| {
             let bridge = self.bridge.as_ref();
             let shutdown_commands_sent = &self.shutdown_commands_sent;
+            let node_display_name = &self.node_display_name;
             HelperProcessShutdownLadder::taking_over(
                 self.node_display_name.clone(),
                 child,
@@ -85,7 +86,13 @@ impl NodeInterpreterSpawnHost {
                     .clone(),
             )
             .walk_every_rung(|command, slice| match bridge {
-                Some(bridge) => await_the_reply_to(bridge, shutdown_commands_sent, command, slice),
+                Some(bridge) => await_the_reply_to(
+                    node_display_name,
+                    bridge,
+                    shutdown_commands_sent,
+                    command,
+                    slice,
+                ),
                 None => LifecycleReplyAwaited::NoReplyCanArrive,
             })
         });

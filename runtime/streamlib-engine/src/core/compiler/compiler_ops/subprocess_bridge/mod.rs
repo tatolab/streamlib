@@ -559,11 +559,6 @@ impl SubprocessBridge {
         self.parent_side.the_subprocess_was_given_up_on()
     }
 
-    /// The run id of the node whose subprocess this bridge reaches.
-    pub(crate) fn node_run_id(&self) -> &str {
-        &self.parent_side.node_run_id
-    }
-
     /// How a link wired after this subprocess's setup command reaches it, for
     /// its wiring envelope to hand links over through.
     pub fn link_delivery_to_this_subprocess(

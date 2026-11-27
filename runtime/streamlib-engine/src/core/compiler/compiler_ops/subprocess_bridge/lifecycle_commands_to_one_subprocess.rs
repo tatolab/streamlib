@@ -5,6 +5,7 @@
 //! matched to its command by the [`OutOfProcessCommandId`] it echoes.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -134,12 +135,15 @@ impl ShutdownCommandsSent {
 }
 
 /// One lifecycle command still owed its reply.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct ReplyOwedToASentCommand {
     command: LifecycleCommandAnsweredByAReply,
     /// Whether its waiter stopped waiting, so a reply that arrives late is
     /// dropped by name rather than read as the answer to another command.
     abandoned: bool,
+    /// Its reply, read while another command's waiter waited, kept for its own
+    /// waiter.
+    arrived_out_of_step: Option<serde_json::Value>,
 }
 
 /// The lifecycle commands the parent writes to one helper, the replies it
@@ -209,9 +213,10 @@ impl LifecycleCommandsToOneSubprocess {
         &self,
         shutdown_commands_sent: &mut ShutdownCommandsSent,
     ) -> Result<()> {
-        for owed in self.owed_by_command_id.lock().values_mut() {
+        self.owed_by_command_id.lock().retain(|_, owed| {
             owed.abandoned = true;
-        }
+            owed.arrived_out_of_step.is_none()
+        });
         for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
             let sent = self.send_a_lifecycle_command_awaiting_its_reply(
                 command.lifecycle_command(),
@@ -250,6 +255,7 @@ impl LifecycleCommandsToOneSubprocess {
             ReplyOwedToASentCommand {
                 command: sent.command,
                 abandoned: false,
+                arrived_out_of_step: None,
             },
         );
     }
@@ -257,14 +263,17 @@ impl LifecycleCommandsToOneSubprocess {
     /// Wait up to `timeout` for the reply carrying `awaited`'s id.
     ///
     /// A late reply to a command whose waiter abandoned it is logged and
-    /// passed over. Any other reply is an error naming both commands: the
-    /// helper answers each command it is sent, in order, so it means the two
-    /// sides no longer agree on what was asked.
+    /// passed over. Any other reply is an error naming both commands, since
+    /// the helper answers each command in order; a reply to another command
+    /// still awaited is kept for that command's own waiter.
     pub(super) fn await_the_reply_to(
         &self,
         awaited: LifecycleCommandSent,
         timeout: Duration,
     ) -> std::result::Result<serde_json::Value, LifecycleReplyNotReceived> {
+        if let Some(reply) = self.take_the_reply_that_arrived_out_of_step_for(awaited) {
+            return Ok(reply);
+        }
         let deadline = Instant::now() + timeout;
         loop {
             let reply = match self
@@ -284,11 +293,12 @@ impl LifecycleCommandsToOneSubprocess {
             let Some(answered_command_id) = out_of_process_command_id_of(&reply) else {
                 return Err(LifecycleReplyNotReceived::ReplyNamedNoCommand { awaited });
             };
-            let owed = self.owed_by_command_id.lock().remove(&answered_command_id);
+            let mut owed_by_command_id = self.owed_by_command_id.lock();
+            let owed = owed_by_command_id.remove(&answered_command_id);
             if answered_command_id == awaited.command_id {
                 return Ok(reply);
             }
-            let Some(owed) = owed else {
+            let Some(mut owed) = owed else {
                 return Err(LifecycleReplyNotReceived::AnsweredACommandNotAwaited {
                     awaited,
                     answered_command_id,
@@ -299,6 +309,8 @@ impl LifecycleCommandsToOneSubprocess {
                 command_id: answered_command_id,
             };
             if !owed.abandoned {
+                owed.arrived_out_of_step = Some(reply);
+                owed_by_command_id.insert(answered_command_id, owed);
                 return Err(LifecycleReplyNotReceived::AnsweredAnotherCommand {
                     awaited,
                     answered,
@@ -315,8 +327,26 @@ impl LifecycleCommandsToOneSubprocess {
     /// Stop waiting on the reply to `sent`, so one that arrives later is
     /// dropped rather than read as the answer to another command.
     pub(super) fn abandon_the_reply_to(&self, sent: LifecycleCommandSent) {
-        if let Some(owed) = self.owed_by_command_id.lock().get_mut(&sent.command_id) {
-            owed.abandoned = true;
+        let mut owed_by_command_id = self.owed_by_command_id.lock();
+        match owed_by_command_id.get_mut(&sent.command_id) {
+            Some(owed) if owed.arrived_out_of_step.is_some() => {
+                owed_by_command_id.remove(&sent.command_id);
+            }
+            Some(owed) => owed.abandoned = true,
+            None => {}
         }
+    }
+
+    /// The reply to `awaited` read while another command's waiter waited.
+    fn take_the_reply_that_arrived_out_of_step_for(
+        &self,
+        awaited: LifecycleCommandSent,
+    ) -> Option<serde_json::Value> {
+        let mut owed_by_command_id = self.owed_by_command_id.lock();
+        let Entry::Occupied(owed) = owed_by_command_id.entry(awaited.command_id) else {
+            return None;
+        };
+        owed.get().arrived_out_of_step.as_ref()?;
+        owed.remove().arrived_out_of_step
     }
 }
