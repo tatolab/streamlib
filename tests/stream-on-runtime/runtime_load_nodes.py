@@ -8,7 +8,7 @@ node interpreter, so a graph naming `runtime_load_nodes:LoadedFrameRelay`
 proves a node type registers from its description alone.
 """
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     InputPin,
@@ -21,16 +21,18 @@ from tatolab.stream import (
 )
 
 
-@node
-class LoadedFrameRelay:
+@node(execution="reactive")
+def LoadedFrameRelay(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Passes each frame it reads downstream unchanged."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-
-    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = video_from_upstream.read()
         if frame is not None:
-            self.video_to_downstream.write(frame)
+            video_to_downstream.write(frame)
+
+    return each_frame
 

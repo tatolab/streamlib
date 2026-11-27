@@ -13,19 +13,18 @@ involved.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -36,32 +35,32 @@ from ..gpu_surface_conventions import (
 
 
 @node.meta(description="Copies the camera's frame into a bindable device texture")
-@node
-class CameraFrameToTexture:
-    """Buffer-backed camera frame in, texture-backed frame out."""
-
+@node(execution="reactive")
+def CameraFrameToTexture(
+    *,
     video_from_camera: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
-    ]
+    ],
     video_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The same frames, in textures a kernel can bind"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Buffer-backed camera frame in, texture-backed frame out."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
-        )
+    output_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_camera.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = video_from_camera.read()
         if frame is None:
             return
 
-        texture = self.output_ring.next_texture_for_this_frame(
+        texture = output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
         # The read frame's claim is what holds the camera's pixels still for
@@ -69,7 +68,9 @@ class CameraFrameToTexture:
         # texture would see them.
         ctx.gpu_limited_access.copy_surface_to_surface(frame.surface_id, texture)
 
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
+
+    return each_frame

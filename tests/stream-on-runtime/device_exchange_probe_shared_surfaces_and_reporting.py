@@ -50,15 +50,14 @@ def report_device_exchange_probe_observation(probe_body) -> None:
 class DeviceExchangeFrameProbeBase:
     """Reads exactly one Texture frame, held against producer reuse while it lives, then reports through `report_device_exchange_probe_observation`."""
 
-    video_from_upstream: InputPin[FramesInOrder]
-
-    def __init__(self) -> None:
+    def __init__(self, video_from_upstream: InputPin[FramesInOrder]) -> None:
+        self.video_from_upstream = video_from_upstream
         self._frames_seen = 0
 
     def _probe(self, ctx: RuntimeContextLimitedAccess, frame: Texture) -> dict:
         raise NotImplementedError
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = self.video_from_upstream.read()
         if frame is None or self._frames_seen >= 1:
             return

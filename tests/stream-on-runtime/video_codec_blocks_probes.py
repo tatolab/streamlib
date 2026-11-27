@@ -21,9 +21,9 @@ overlap.
 
 import dataclasses
 import json
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import EncodedVideo, InputPin, StreamDelivery, Texture, log, node
+from tatolab.stream import EncodedVideo, InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -46,31 +46,32 @@ DECODED_STAMPS_REPORTED = 30
 EncodedVideoInOrder = Annotated[EncodedVideo, StreamDelivery("ordered")]
 
 
-@node
-class EncodedFrameProbe:
+@node(execution="reactive")
+def EncodedFrameProbe(
+    *,
+    encoded_video_from_upstream: InputPin[EncodedVideoInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the encoder's output as access units and reports each one."""
 
-    def __init__(self) -> None:
-        self._frames_admitted = 0
-        self._entered_the_stream = False
+    frames_admitted = 0
+    entered_the_stream = False
 
-    encoded_video_from_upstream: InputPin[EncodedVideoInOrder]
-
-    def process(self, ctx) -> None:
-        if self._frames_admitted >= ENCODED_FRAMES_REPORTED:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal entered_the_stream, frames_admitted
+        if frames_admitted >= ENCODED_FRAMES_REPORTED:
             return
-        message = self.encoded_video_from_upstream.read_message()
+        message = encoded_video_from_upstream.read_message()
         if message is None:
             return
         # The doctrine every reader of an encoded stream owes it: enter only
         # at a group start. The first message off this link is not necessarily
         # the producer's first — attaching mid-group hands over frames whose
         # keyframe is already gone.
-        if not self._entered_the_stream:
+        if not entered_the_stream:
             if not message.starts_group:
                 return
-            self._entered_the_stream = True
-        self._frames_admitted += 1
+            entered_the_stream = True
+        frames_admitted += 1
         access_unit = bytes(memoryview(message.payload.payload).cast("B"))
         report = {
             "starts_group": message.starts_group,
@@ -79,35 +80,43 @@ class EncodedFrameProbe:
             "opening_bytes": list(access_unit[:4]),
             "byte_count": len(access_unit),
         }
-        if self._frames_admitted == 1:
-            upstream_stream_facts = self.encoded_video_from_upstream.upstream_stream_facts()
+        if frames_admitted == 1:
+            upstream_stream_facts = encoded_video_from_upstream.upstream_stream_facts()
             report["stream_facts"] = (
                 None if upstream_stream_facts is None else upstream_stream_facts.to_wire()
             )
         log.info(ENCODED_FRAME_MARKER + json.dumps(report))
-        if self._frames_admitted == ENCODED_FRAMES_REPORTED:
+        if frames_admitted == ENCODED_FRAMES_REPORTED:
             log.info(ENCODED_FRAMES_COMPLETE_MARKER)
 
+    return each_frame
 
-@node
-class EncodedFrameTimestampProbe:
+
+@node(execution="reactive")
+def EncodedFrameTimestampProbe(
+    *,
+    encoded_video_from_upstream: InputPin[EncodedVideoInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the frame-header stamp riding each of the encoder's messages.
 
     No group gate: this decodes nothing, so every message that arrives is one
     whose stamp a decoded frame downstream may carry.
     """
 
-    encoded_video_from_upstream: InputPin[EncodedVideoInOrder]
-
-    def process(self, ctx) -> None:
-        message = self.encoded_video_from_upstream.read_message()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        message = encoded_video_from_upstream.read_message()
         if message is None:
             return
         log.info(ENCODED_FRAME_STAMP_MARKER + json.dumps({"timestamp_ns": message.timestamp_ns}))
 
+    return each_frame
 
-@node
-class DecodedVideoFrameProbe:
+
+@node(execution="reactive")
+def DecodedVideoFrameProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the decoder's first two Texture frames whole, then every frame's stamp.
 
     The first two carry the whole frame because that is what the extent, colour
@@ -115,14 +124,12 @@ class DecodedVideoFrameProbe:
     report has something to overlap with.
     """
 
-    def __init__(self) -> None:
-        self._messages_seen = []
-        self._stamps_reported = 0
+    messages_seen = []
+    stamps_reported = 0
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
-
-    def process(self, ctx) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal stamps_reported
+        frame = video_from_upstream.read()
         if frame is None:
             return
         message = {
@@ -133,14 +140,16 @@ class DecodedVideoFrameProbe:
             "colour": dataclasses.asdict(frame.colour),
             "timestamp_ns": frame.timestamp_ns,
         }
-        if len(self._messages_seen) < 2:
-            self._messages_seen.append(message)
-            if len(self._messages_seen) == 2:
-                log.info(DECODED_FRAMES_MARKER + json.dumps(self._messages_seen))
-        self._stamps_reported += 1
+        if len(messages_seen) < 2:
+            messages_seen.append(message)
+            if len(messages_seen) == 2:
+                log.info(DECODED_FRAMES_MARKER + json.dumps(messages_seen))
+        stamps_reported += 1
         log.info(
             DECODED_FRAME_STAMP_MARKER
             + json.dumps({"timestamp_ns": message["timestamp_ns"]})
         )
-        if self._stamps_reported == DECODED_STAMPS_REPORTED:
+        if stamps_reported == DECODED_STAMPS_REPORTED:
             log.info(DECODED_FRAME_STAMPS_COMPLETE_MARKER)
+
+    return each_frame

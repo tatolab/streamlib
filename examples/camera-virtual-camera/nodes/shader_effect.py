@@ -8,28 +8,31 @@ spawns this node's child interpreter with — and the `type` an agent passes to
 `add_node` to put a look into the running stream.
 
 The host is written once. A look is the `float4 effect(float4 source, int2 at)`
-function a config carries: the host wraps it in a compute kernel at `setup()`
-and runs it over every frame on the GPU, so the pixels never leave it.
+function its `effect_slang` input carries: the host wraps it in a compute kernel
+when it is set, and runs it over every frame on the GPU, so the pixels never leave it.
 `looks/` holds three to start from.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
+    ComputeKernel,
     Description,
-    TextureToWrite,
+    GpuContextLimitedAccess,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     node,
 )
 
@@ -101,61 +104,70 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
-@node.meta(description="Runs the Slang effect function its setting carries over every frame")
-@node
-class ShaderEffect:
-    """Frame in, the same frame through a Slang `effect` function out."""
+def look_kernel_of(gpu: GpuContextLimitedAccess, effect_slang: str) -> ComputeKernel:
+    """The compute kernel that runs `effect_slang` over a frame."""
+    try:
+        return gpu.create_compute_kernel(
+            source=look_kernel_slang(effect_slang),
+            push_constant_size=0,
+            bindings={
+                SOURCE_FRAME_BINDING: "sampled_texture",
+                LOOK_FRAME_BINDING: "storage_image",
+            },
+        )
+    except (RuntimeError, ValueError) as refusal:
+        raise RuntimeError(
+            f"ShaderEffect could not build its look from `effect_slang`: {refusal}"
+        ) from refusal
 
-    effect_slang: Annotated[
-        str,
-        SettingOnly(),
-        Description(
-            "The look: a Slang `float4 effect(float4 source, int2 at)` function, compiled at setup."
-        ),
-    ] = "float4 effect(float4 source, int2 at) { return source; }"
+
+@node.meta(description="Runs the Slang effect function its input carries over every frame")
+@node(execution="reactive")
+def ShaderEffect(
+    *,
+    effect_slang: Input[
+        Annotated[
+            str,
+            Description(
+                "The look: a Slang `float4 effect(float4 source, int2 at)` function, compiled when set."
+            ),
+        ]
+    ] = Input("float4 effect(float4 source, int2 at) { return source; }"),
     video_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames to put the look on")]
-    ]
+    ],
     video_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The same frames through the look"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Frame in, the same frame through a Slang `effect` function out."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # Depth 1: `dispatch` returns with the GPU work retired, and nothing
-        # outside this node names the landing texture.
-        self.source_frame_landing_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
-        )
-        self.look_frame_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
-        )
-        try:
-            self.look_kernel = ctx.gpu_limited_access.create_compute_kernel(
-                source=look_kernel_slang(self.effect_slang),
-                push_constant_size=0,
-                bindings={
-                    SOURCE_FRAME_BINDING: "sampled_texture",
-                    LOOK_FRAME_BINDING: "storage_image",
-                },
-            )
-        except (RuntimeError, ValueError) as refusal:
-            raise RuntimeError(
-                f"ShaderEffect could not build its look from `effect_slang`: {refusal}"
-            ) from refusal
+    # Depth 1: `dispatch` returns with the GPU work retired, and nothing
+    # outside this node names the landing texture.
+    source_frame_landing_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
+    )
+    look_frame_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
+    )
+    gpu = ctx.gpu_limited_access
+    # A new look builds a new kernel; frames keep the last one that built until it is ready.
+    look_kernel = computed(lambda: look_kernel_of(gpu, effect_slang.get()))
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = video_from_upstream.read()
         if frame is None:
             return
 
         # A camera publishes buffer-backed frames and a kernel samples
         # textures, so each frame lands in one this node owns, device to device.
         source_frame_landing_texture = (
-            self.source_frame_landing_ring.next_texture_for_this_frame(
+            source_frame_landing_ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, frame.width, frame.height
             )
         )
@@ -163,10 +175,10 @@ class ShaderEffect:
             frame.surface_id, source_frame_landing_texture
         )
 
-        look_frame_texture = self.look_frame_ring.next_texture_for_this_frame(
+        look_frame_texture = look_frame_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        self.look_kernel.dispatch(
+        look_kernel.get().dispatch(
             bindings={
                 SOURCE_FRAME_BINDING: source_frame_landing_texture,
                 LOOK_FRAME_BINDING: look_frame_texture,
@@ -178,7 +190,9 @@ class ShaderEffect:
             ),
         )
 
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(look_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
+
+    return each_frame

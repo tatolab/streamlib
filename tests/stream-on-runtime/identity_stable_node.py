@@ -10,11 +10,15 @@ which names the child's own entry file instead. `test_node_run_identity.py`
 copies this file into each project it runs `tatolab` on.
 """
 
-from tatolab.stream import node
+from typing import Callable
+from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
 @node(execution="continuous", interval_ms=1)
-class IdentityStableNode:
+def IdentityStableNode() -> Callable[[RuntimeContextLimitedAccess], None]:
     """Does nothing per tick. Identity is the whole subject here."""
 
-    def process(self, ctx) -> None: ...
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        def process(self, ctx) -> None: ...
+
+    return each_frame

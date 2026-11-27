@@ -397,21 +397,17 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
 
 /// A native source whose every `process()` raises the same words.
 #[streamlib::sdk::node(execution = continuous(interval_ms = 5), output("video", pin_type = Texture, formats = ["rgba8_unorm"]))]
-pub struct StreamToolsTestSourceWhoseProcessRaises;
-
-/// What [`StreamToolsTestSourceWhoseProcessRaises`] raises.
-const WHAT_THE_RAISING_SOURCE_RAISES: &str = "the test source raises on every process";
-
-impl streamlib::sdk::nodes::ContinuousNode for StreamToolsTestSourceWhoseProcessRaises::Node {
-    fn process(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
+pub(super) fn stream_tools_test_source_whose_process_raises()
+-> impl FnMut(&streamlib::sdk::context::RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
         Err(streamlib::sdk::error::Error::Runtime(
             WHAT_THE_RAISING_SOURCE_RAISES.to_owned(),
         ))
     }
 }
+
+/// What [`StreamToolsTestSourceWhoseProcessRaises`] raises.
+const WHAT_THE_RAISING_SOURCE_RAISES: &str = "the test source raises on every process";
 
 /// A subscriber to a stream's graph is sent `drops_raises_or_link_states_changed` on the stream's
 /// first sample, and again once a node's `process()` starts raising after playback starts, which no

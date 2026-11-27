@@ -10,36 +10,36 @@ own interpreter, as numpy over the borrowed sample.
 """
 
 import json
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 
-from tatolab.stream import Audio, InputPin, StreamDelivery, log, node
+from tatolab.stream import Audio, InputPin, RuntimeContextLimitedAccess, StreamDelivery, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_SEEN "
 
 BLOCKS_REPORTED = 8
 
 
-@node
-class ChannelsBlockProbe:
+@node(execution="reactive")
+def ChannelsBlockProbe(
+    *,
+    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports what each read saw for the first few blocks the source publishes."""
 
-    def __init__(self) -> None:
-        self._readings = []
+    readings = []
 
-    audio_from_upstream: InputPin[Annotated[Audio, StreamDelivery("ordered")]]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         # Drained even after the report is out: a probe that stopped reading
         # would be measuring its own backlog draining away as counted drops
         # rather than the capture.
-        block = self.audio_from_upstream.read()
-        if block is None or len(self._readings) >= BLOCKS_REPORTED:
+        block = audio_from_upstream.read()
+        if block is None or len(readings) >= BLOCKS_REPORTED:
             return
 
         samples = numpy.from_dlpack(block)
-        self._readings.append(
+        readings.append(
             {
                 "sample_rate": block.sample_rate,
                 "channels": block.channel_count,
@@ -53,5 +53,7 @@ class ChannelsBlockProbe:
                 "samples_borrow_the_sample_with_no_copy": not samples.flags.owndata,
             }
         )
-        if len(self._readings) == BLOCKS_REPORTED:
-            log.info(RESULT_MARKER + json.dumps(self._readings))
+        if len(readings) == BLOCKS_REPORTED:
+            log.info(RESULT_MARKER + json.dumps(readings))
+
+    return each_frame

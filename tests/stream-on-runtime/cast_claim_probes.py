@@ -40,7 +40,7 @@ import os
 import struct
 import traceback
 import zlib
-from typing import Annotated, ClassVar
+from typing import Annotated, Callable, ClassVar
 
 import numpy
 
@@ -112,6 +112,15 @@ def _report(probe_body) -> None:
     log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
 
 
+# `newest`, not `ordered`: a queued message's id is only good for pool-depth
+# frames after publish, so a probe that lets messages queue reads ids the camera
+# has already recycled — refused loudly, but that refusal on *arrival* is not
+# what these probes measure. Reading the newest message keeps arrivals current,
+# so the first frame a lagged holder keeps still gets lapped, and a probe that
+# reads exactly one frame is not delayed by a queue of stale ones.
+NewestFrameFromUpstream = InputPin[Annotated[Texture, StreamDelivery("newest")]]
+
+
 class _LaggedHolderProbe:
     """Read the first frame, let the camera run ahead, read its pixels again.
 
@@ -121,14 +130,8 @@ class _LaggedHolderProbe:
 
     HOLDS_THE_FIRST_FRAME: ClassVar[bool]
 
-    # `newest`, not `ordered`: a queued message's id is only good for
-    # pool-depth frames after publish, so a probe that lets messages queue reads
-    # ids the camera has already recycled — refused loudly, but that refusal on
-    # *arrival* is not what these probes measure. Reading the newest message
-    # keeps arrivals current; the first frame still gets lapped.
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-
-    def __init__(self) -> None:
+    def __init__(self, video_from_upstream: NewestFrameFromUpstream) -> None:
+        self.video_from_upstream = video_from_upstream
         self._held_frame: "Texture | None" = None
         self._held_surface_id: "str | None" = None
         self._claim_taken: "bool | None" = None
@@ -148,7 +151,7 @@ class _LaggedHolderProbe:
             surface.unlock()
         return pixels
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self._reported:
             return
         try:
@@ -253,24 +256,36 @@ class _LaggedHolderProbe:
         _report(lambda: observation)
 
 
-@node
-class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
-    """The first `Texture` is held, and holding the object is the only thing
-    keeping the camera off that slot — no handle, no view, no context
-    manager."""
-
+class _TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
     HOLDS_THE_FIRST_FRAME = True
 
 
-@node
-class ADroppedImageFrameReleasesItsSlotProbe(_LaggedHolderProbe):
+@node(execution="reactive")
+def TheHeldImageFrameKeepsItsSlotProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The first `Texture` is held, and holding the object is the only thing
+    keeping the camera off that slot — no handle, no view, no context
+    manager."""
+    return _TheHeldImageFrameKeepsItsSlotProbe(video_from_upstream).each_frame
+
+
+class _ADroppedImageFrameReleasesItsSlotProbe(_LaggedHolderProbe):
+    HOLDS_THE_FIRST_FRAME = False
+
+
+@node(execution="reactive")
+def ADroppedImageFrameReleasesItsSlotProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The control. Same probe, same lag, the first `Texture` dropped once
     its pixels are sampled — so its claim is released and the camera is free
     to recycle the slot. The late re-read must be refused as recycled; a lookup
     that *succeeds* here hands back another frame's pixels under the dropped
     frame's id."""
-
-    HOLDS_THE_FIRST_FRAME = False
+    return _ADroppedImageFrameReleasesItsSlotProbe(video_from_upstream).each_frame
 
 
 class _BareProtocolProbe:
@@ -283,11 +298,8 @@ class _BareProtocolProbe:
     takes the capsule.
     """
 
-    # `newest`: this probe reads exactly one frame at whatever moment it
-    # starts, so a queue of stale messages would only delay it.
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-
-    def __init__(self) -> None:
+    def __init__(self, video_from_upstream: NewestFrameFromUpstream) -> None:
+        self.video_from_upstream = video_from_upstream
         self._reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
@@ -296,7 +308,7 @@ class _BareProtocolProbe:
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         raise NotImplementedError
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self._reported:
             return
         try:
@@ -388,15 +400,31 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
         return observation
 
 
-@node
-class TheImageFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
+class _TheImageFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
+    pass
+
+
+@node(execution="reactive")
+def TheImageFrameReachesItsPixelsBareProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The `Texture` a Texture read returns reaches its pixels through the
     object itself, and reaches the surface's own pixels."""
+    return _TheImageFrameReachesItsPixelsBareProbe(video_from_upstream).each_frame
 
 
-@node
-class TheImageFrameReachesItsPixelsAsADeviceTensorProbe(_BareProtocolDeviceSideProbe):
+class _TheImageFrameReachesItsPixelsAsADeviceTensorProbe(_BareProtocolDeviceSideProbe):
+    pass
+
+
+@node(execution="reactive")
+def TheImageFrameReachesItsPixelsAsADeviceTensorProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The same on the device side, with a real GPU package taking the capsule."""
+    return _TheImageFrameReachesItsPixelsAsADeviceTensorProbe(video_from_upstream).each_frame
 
 
 # ---- the write doors: an edit through the object, seen on the surface -------
@@ -449,11 +477,7 @@ class _WriteDoorProbe(_BareProtocolProbe):
         }
 
 
-@node
-class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
-    """`with frame.writable() as t:` — a CUDA package editing a live frame in
-    place, with the edit on the surface once the block ends."""
-
+class _TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     def _edit_the_top_rows(self, frame) -> None:
         import torch
 
@@ -461,13 +485,17 @@ class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             torch.from_dlpack(device_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node
-class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
-    """The other half of the one write rule: the raise is never suppressed on
-    the way out, and the surface follows its floor's publication rule — the
-    complete frame the engine already held on Linux, the stores that landed
-    before the raise on macOS."""
+@node(execution="reactive")
+def TheGpuWriteDoorEditsTheFrameProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`with frame.writable() as t:` — a CUDA package editing a live frame in
+    place, with the edit on the surface once the block ends."""
+    return _TheGpuWriteDoorEditsTheFrameProbe(video_from_upstream).each_frame
 
+
+class _ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         import torch
 
@@ -501,27 +529,35 @@ class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
         }
 
 
-@node
-class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
-    """`with frame.cpu() as img:` — the named slow path, editing a live frame
-    through plain numpy with no CUDA consumer anywhere in it."""
+@node(execution="reactive")
+def ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The other half of the one write rule: the raise is never suppressed on
+    the way out, and the surface follows its floor's publication rule — the
+    complete frame the engine already held on Linux, the stores that landed
+    before the raise on macOS."""
+    return _ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(video_from_upstream).each_frame
 
+
+class _TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     def _edit_the_top_rows(self, frame) -> None:
         with frame.cpu() as host_pixels:
             host_pixels[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node
-class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
-    """The CPU door's exception path, reported as what it is.
+@node(execution="reactive")
+def TheCpuWriteDoorEditsTheFrameProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`with frame.cpu() as img:` — the named slow path, editing a live frame
+    through plain numpy with no CUDA consumer anywhere in it."""
+    return _TheCpuWriteDoorEditsTheFrameProbe(video_from_upstream).each_frame
 
-    The host view *is* the surface's own mapping, so bytes already written are
-    already in the frame — there is no staging to drop. What the door owes is
-    that the raise reaches the caller and the scope still closes, which is what
-    this measures; a discard claim here would be a claim the mapping cannot
-    keep.
-    """
 
+class _ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         the_exception_propagated = False
         try:
@@ -541,6 +577,22 @@ class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
         }
 
 
+@node(execution="reactive")
+def ARaiseInsideTheCpuWriteDoorPropagatesProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The CPU door's exception path, reported as what it is.
+
+    The host view *is* the surface's own mapping, so bytes already written are
+    already in the frame — there is no staging to drop. What the door owes is
+    that the raise reaches the caller and the scope still closes, which is what
+    this measures; a discard claim here would be a claim the mapping cannot
+    keep.
+    """
+    return _ARaiseInsideTheCpuWriteDoorPropagatesProbe(video_from_upstream).each_frame
+
+
 class _NestedWriteDoorProbe(_WriteDoorProbe):
     """Edit half the rows through an outer write door, open the same door
     again inside it, then edit the other half through the outer view.
@@ -552,8 +604,8 @@ class _NestedWriteDoorProbe(_WriteDoorProbe):
 
     REFUSAL_NAMES: ClassVar[str]
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, video_from_upstream: NewestFrameFromUpstream) -> None:
+        super().__init__(video_from_upstream)
         self._the_inner_door_was_refused_by_name = False
 
     def _open_the_inner_door(self, frame) -> None:
@@ -573,10 +625,7 @@ class _NestedWriteDoorProbe(_WriteDoorProbe):
         return observation
 
 
-@node
-class AnInnerCpuDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
-    """`with frame.cpu()` inside another over the same frame."""
-
+class _AnInnerCpuDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
     REFUSAL_NAMES = "has an edit staged through"
 
     def _open_the_inner_door(self, frame) -> None:
@@ -591,10 +640,16 @@ class AnInnerCpuDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
             outer_pixels[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node
-class AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
-    """`with frame.writable()` inside another over the same frame."""
+@node(execution="reactive")
+def AnInnerCpuDoorKeepsTheOuterEditProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`with frame.cpu()` inside another over the same frame."""
+    return _AnInnerCpuDoorKeepsTheOuterEditProbe(video_from_upstream).each_frame
 
+
+class _AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
     REFUSAL_NAMES = "already has a device-tensor scope entered"
 
     def _open_the_inner_door(self, frame) -> None:
@@ -614,12 +669,16 @@ class AnInnerGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
             outer[half : self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node
-class ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
-    """`with frame.cpu()` writing inside `with frame.writable()` before the
-    outer scope mints its first tensor: the outer scope's blit-back would
-    overwrite the inner edit with a staging filled before it."""
+@node(execution="reactive")
+def AnInnerGpuWriteDoorKeepsTheOuterEditProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`with frame.writable()` inside another over the same frame."""
+    return _AnInnerGpuWriteDoorKeepsTheOuterEditProbe(video_from_upstream).each_frame
 
+
+class _ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
     REFUSAL_NAMES = "has an edit staged through"
 
     def _open_the_inner_door(self, frame) -> None:
@@ -632,3 +691,14 @@ class ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(_NestedWriteDoorProbe):
         with frame.writable() as outer_tensor:
             self._open_the_inner_door_or_take_its_refusal(frame)
             torch.from_dlpack(outer_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
+
+
+@node(execution="reactive")
+def ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(
+    *,
+    video_from_upstream: NewestFrameFromUpstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`with frame.cpu()` writing inside `with frame.writable()` before the
+    outer scope mints its first tensor: the outer scope's blit-back would
+    overwrite the inner edit with a staging filled before it."""
+    return _ACpuDoorInsideAGpuWriteDoorKeepsTheOuterEditProbe(video_from_upstream).each_frame

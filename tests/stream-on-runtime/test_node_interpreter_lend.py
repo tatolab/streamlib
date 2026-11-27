@@ -165,12 +165,14 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
         project_directory,
         "lend_declared_nodes_for_a_refused_interpreter",
         """
-        from tatolab.stream import EncodedVideo, OutputPin, node
+        from typing import Callable
+
+        from tatolab.stream import EncodedVideo, OutputPin, RuntimeContextLimitedAccess, node
 
 
         @node(execution="manual")
-        class DeclaredNode:
-            nothing_to_downstream: OutputPin[EncodedVideo]
+        def DeclaredNode(*, nothing_to_downstream: OutputPin[EncodedVideo]) -> None:
+            pass
         """,
     )
     interpreter_without_the_lend = tmp_path / "python-without-the-lend"
@@ -203,14 +205,16 @@ def test_a_type_that_describes_registers_without_its_module_entering_this_proces
         tmp_path,
         "lend_described_nodes",
         """
-        from tatolab.stream import EncodedVideo, OutputPin, node
+        from typing import Callable
+
+        from tatolab.stream import EncodedVideo, OutputPin, RuntimeContextLimitedAccess, node
 
 
         @node(execution="continuous", interval_ms=50)
-        class DescribedSource:
-            bags_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None: ...
+        def DescribedSource(
+            *, bags_to_downstream: OutputPin[EncodedVideo]
+        ) -> Callable[[RuntimeContextLimitedAccess], None]:
+            return lambda ctx: None
         """,
     )
 
@@ -238,16 +242,18 @@ def test_a_type_described_against_the_lend_imports_the_runtime_the_runtime_unit_
         from pathlib import Path
 
         import tatolab.runtime
-        from tatolab.stream import EncodedVideo, OutputPin, node
+        from typing import Callable
+
+        from tatolab.stream import EncodedVideo, OutputPin, RuntimeContextLimitedAccess, node
 
         Path({str(lent_runtime_file_record)!r}).write_text(tatolab.runtime.__file__)
 
 
         @node(execution="continuous", interval_ms=50)
-        class DescribedAgainstTheLendSource:
-            bags_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None: ...
+        def DescribedAgainstTheLendSource(
+            *, bags_to_downstream: OutputPin[EncodedVideo]
+        ) -> Callable[[RuntimeContextLimitedAccess], None]:
+            return lambda ctx: None
         """,
     )
 
@@ -278,14 +284,16 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
         project_directory,
         "relatively_loaded_nodes",
         """
-        from tatolab.stream import EncodedVideo, OutputPin, node
+        from typing import Callable
+
+        from tatolab.stream import EncodedVideo, OutputPin, RuntimeContextLimitedAccess, node
 
 
         @node(execution="continuous", interval_ms=50)
-        class RelativelyLoadedSource:
-            bags_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None: ...
+        def RelativelyLoadedSource(
+            *, bags_to_downstream: OutputPin[EncodedVideo]
+        ) -> Callable[[RuntimeContextLimitedAccess], None]:
+            return lambda ctx: None
         """,
     )
     write_the_project_file_unless_there(project_directory)

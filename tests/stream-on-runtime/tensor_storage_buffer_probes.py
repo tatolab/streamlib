@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 
+from typing import Callable
 import json
 import math
 import os
@@ -10,7 +11,7 @@ import traceback
 import uuid
 
 from json_messages import JsonMessagesInOrder, json_bytes, json_read
-from tatolab.stream import EncodedVideo, InputPin, OutputPin, clock, log, node
+from tatolab.stream import EncodedVideo, Input, InputPin, OutputPin, RuntimeContextFullAccess, RuntimeContextLimitedAccess, clock, log, node
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -80,60 +81,59 @@ def expected_tensor_values(torch, shape: "list[int]", dtype: str, frame_index: i
 
 
 @node(execution="continuous", interval_ms=10)
-class TensorStorageBufferPublishingSource:
+def TensorStorageBufferPublishingSource(
+    *,
+    tensors_to_downstream: OutputPin[EncodedVideo],
+    tensor_name: Input[str] = Input("model_input"),
+    frames_to_publish: Input[int] = Input(POOL_ROTATION_DEPTH),
+    minimum_interval_between_publishes_ns: Input[int] = Input(0),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes each frame's values into a pooled tensor through torch and
     publishes its surface id once the handle's close has ordered the writes."""
+    pool_key = f"tensor-storage-buffer-probe-{uuid.uuid4().hex}"
+    last_publish_ns: "int | None" = None
+    surface_ids_published_so_far: "list[str]" = []
+    producer_observations: "list[dict]" = []
+    stopped = False
 
-    tensors_to_downstream: OutputPin[EncodedVideo]
-
-    tensor_name: str = "model_input"
-    frames_to_publish: int = POOL_ROTATION_DEPTH
-    minimum_interval_between_publishes_ns: int = 0
-
-    def __init__(self) -> None:
-        self._shape, self._dtype = TENSORS_BY_NAME[self.tensor_name]
-        self._pool_key = f"tensor-storage-buffer-probe-{uuid.uuid4().hex}"
-        self._last_publish_ns: "int | None" = None
-        self._surface_ids_published_so_far: "list[str]" = []
-        self._producer_observations: "list[dict]" = []
-        self._stopped = False
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal stopped, last_publish_ns
         import torch
 
-        if self._stopped:
+        if stopped:
             return
-        frame_index = len(self._surface_ids_published_so_far)
-        if frame_index >= self.frames_to_publish:
+        frame_index = len(surface_ids_published_so_far)
+        if frame_index >= frames_to_publish.get():
             return
         unavailable = _torch_device_unavailable_reason()
         if unavailable is not None:
-            self._stopped = True
+            stopped = True
             _report(
                 "TensorStorageBufferPublishingSource",
                 lambda: {"torch_device_unavailable": unavailable},
             )
             return
+        shape, dtype = TENSORS_BY_NAME[tensor_name.get()]
         now_ns = clock.monotonic_now_ns()
         if (
-            self._last_publish_ns is not None
-            and now_ns - self._last_publish_ns
-            < self.minimum_interval_between_publishes_ns
+            last_publish_ns is not None
+            and now_ns - last_publish_ns
+            < minimum_interval_between_publishes_ns.get()
         ):
             return
-        self._last_publish_ns = now_ns
+        last_publish_ns = now_ns
 
         with ctx.gpu_limited_access.acquire_storage_buffer_from_node_output_pool(
-            self._pool_key,
+            pool_key,
             POOL_ROTATION_DEPTH,
-            self._shape,
-            self._dtype,
+            shape,
+            dtype,
         ) as tensor_surface:
             surface_id = tensor_surface.surface_id
             written = torch.from_dlpack(tensor_surface)
             written.copy_(
                 expected_tensor_values(
-                    torch, self._shape, self._dtype, frame_index
+                    torch, shape, dtype, frame_index
                 ).to(written.device)
             )
             reread = torch.from_dlpack(tensor_surface)
@@ -149,7 +149,7 @@ class TensorStorageBufferPublishingSource:
                         torch.from_dlpack(independently_imported_surface), written
                     )
                 )
-            self._producer_observations.append(
+            producer_observations.append(
                 {
                     "surface_id": surface_id,
                     "stated_shape": tensor_surface.shape,
@@ -164,7 +164,7 @@ class TensorStorageBufferPublishingSource:
                 }
             )
 
-        self.tensors_to_downstream.write(
+        tensors_to_downstream.write(
             json_bytes(
                 {
                     "surface_id": surface_id,
@@ -173,15 +173,17 @@ class TensorStorageBufferPublishingSource:
                 }
             )
         )
-        self._surface_ids_published_so_far.append(surface_id)
-        if len(self._surface_ids_published_so_far) == self.frames_to_publish:
+        surface_ids_published_so_far.append(surface_id)
+        if len(surface_ids_published_so_far) == frames_to_publish.get():
             _report(
                 "TensorStorageBufferPublishingSource",
                 lambda: {
-                    "surface_ids_published": self._surface_ids_published_so_far,
-                    "producer_observations": self._producer_observations,
+                    "surface_ids_published": surface_ids_published_so_far,
+                    "producer_observations": producer_observations,
                 },
             )
+
+    return each_frame
 
 
 def _read_a_published_tensor(
@@ -218,31 +220,29 @@ def _read_a_published_tensor(
         return observation
 
 
-@node
-class PublishedTensorReadingSink:
+@node(execution="reactive")
+def PublishedTensorReadingSink(
+    *,
+    tensors_from_upstream: InputPin[JsonMessagesInOrder],
+    tensor_name: Input[str] = Input("model_input"),
+    resolve_the_previous_frames_id: Input[bool] = Input(False),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Resolves each published tensor id and compares its values to the ones
     its producer wrote for that frame."""
 
-    tensors_from_upstream: InputPin[JsonMessagesInOrder]
+    _previous_surface_id: "str | None" = None
 
-    tensor_name: str = "model_input"
-    # The negative control: resolve the previous frame's id against this
-    # frame's expected values, which must then mismatch.
-    resolve_the_previous_frames_id: bool = False
-
-    def __init__(self) -> None:
-        self._previous_surface_id: "str | None" = None
-
-    def process(self, ctx) -> None:
-        unit = self.tensors_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal _previous_surface_id
+        unit = tensors_from_upstream.read()
         if unit is None:
             return
         message = json_read(unit)
         resolved_surface_id = message["surface_id"]
         resolved_frame_index = message["frame_index"]
-        if self.resolve_the_previous_frames_id:
-            previous_surface_id = self._previous_surface_id
-            self._previous_surface_id = message["surface_id"]
+        if resolve_the_previous_frames_id.get():
+            previous_surface_id = _previous_surface_id
+            _previous_surface_id = message["surface_id"]
             if previous_surface_id is None:
                 return
             resolved_surface_id = previous_surface_id
@@ -256,42 +256,44 @@ class PublishedTensorReadingSink:
                 **_read_a_published_tensor(
                     ctx,
                     resolved_surface_id,
-                    *TENSORS_BY_NAME[self.tensor_name],
+                    *TENSORS_BY_NAME[tensor_name.get()],
                     message["frame_index"],
                     resolved_frame_index,
                 ),
             },
         )
 
+    return each_frame
 
-@node
-class HeldTensorRereadingSink:
+
+@node(execution="reactive")
+def HeldTensorRereadingSink(
+    *,
+    tensors_from_upstream: InputPin[JsonMessagesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Resolves the first tensor and holds its handle open, re-reading it
     through torch as every later tensor is published."""
 
-    tensors_from_upstream: InputPin[JsonMessagesInOrder]
+    _held_tensor_surface = None
+    later_tensors_seen = 0
 
-    def __init__(self) -> None:
-        self._held_tensor_surface = None
-        self._later_tensors_seen = 0
+    # Loading torch and its CUDA context takes longer than the producer
+    # takes to cycle the pool; done lazily in the first process() it
+    # outlasts the first tensor.
+    import torch
 
-    def setup(self, ctx) -> None:
-        # Loading torch and its CUDA context takes longer than the producer
-        # takes to cycle the pool; done lazily in the first process() it
-        # outlasts the first tensor.
+    if _torch_device_unavailable_reason() is None:
+        torch.zeros(1, device=NATURAL_TORCH_DEVICE_TYPE)
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal _held_tensor_surface, later_tensors_seen
         import torch
 
-        if _torch_device_unavailable_reason() is None:
-            torch.zeros(1, device=NATURAL_TORCH_DEVICE_TYPE)
-
-    def process(self, ctx) -> None:
-        import torch
-
-        unit = self.tensors_from_upstream.read()
+        unit = tensors_from_upstream.read()
         if unit is None:
             return
         message = json_read(unit)
-        if self._held_tensor_surface is None:
+        if _held_tensor_surface is None:
             # The claim holds the slot from the read to the resolve, then
             # drops, so the rereads rest on the resolved handle alone.
             claim_from_the_read = (
@@ -299,13 +301,13 @@ class HeldTensorRereadingSink:
                     message["surface_id"]
                 )
             )
-            self._held_tensor_surface = ctx.gpu_limited_access.resolve_surface(
+            _held_tensor_surface = ctx.gpu_limited_access.resolve_surface(
                 message["surface_id"]
             )
             del claim_from_the_read
             return
-        self._later_tensors_seen += 1
-        held_tensor_surface = self._held_tensor_surface
+        later_tensors_seen += 1
+        held_tensor_surface = _held_tensor_surface
 
         def reread_the_held_tensor() -> dict:
             read = torch.from_dlpack(held_tensor_surface)
@@ -315,11 +317,13 @@ class HeldTensorRereadingSink:
             return {
                 "held_surface_id": held_tensor_surface.surface_id,
                 "later_surface_id": message["surface_id"],
-                "later_tensors_seen": self._later_tensors_seen,
+                "later_tensors_seen": later_tensors_seen,
                 "held_values_still_frame_0s": bool(torch.equal(read, expected)),
             }
 
         _report("HeldTensorRereadingSink", reread_the_held_tensor)
+
+    return each_frame
 
 
 KERNEL_WRITTEN_TENSOR_SHAPE = [4, 64, 64]
@@ -367,119 +371,118 @@ float4 main() : SV_Target {
     description="A compute kernel and a draw each bind a tensor storage buffer by surface id",
 )
 @node(execution="manual")
-class TensorStorageBufferKernelBindingProbe:
+def TensorStorageBufferKernelBindingProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """A compute kernel writes an index pattern into one tensor, which torch
     reads back; a second tensor the kernel never names keeps its sentinel.
     A draw reads its colour from a tensor, and a second tensor paints a
     different colour — so the pixels come from the binding, not the shader."""
 
-    def setup(self, ctx) -> None:
-        import torch
+    import torch
 
-        unavailable = _torch_device_unavailable_reason()
-        if unavailable is not None:
-            _report(
-                "TensorStorageBufferKernelBindingProbe",
-                lambda: {"torch_device_unavailable": unavailable},
-            )
-            return
-        gpu = ctx.gpu_full_access
+    unavailable = _torch_device_unavailable_reason()
+    if unavailable is not None:
+        _report(
+            "TensorStorageBufferKernelBindingProbe",
+            lambda: {"torch_device_unavailable": unavailable},
+        )
+        return
+    gpu = ctx.gpu_full_access
 
-        def observe() -> dict:
-            element_count = math.prod(KERNEL_WRITTEN_TENSOR_SHAPE)
-            index_pattern = (
-                torch.arange(element_count, dtype=torch.float32)
-                .reshape(KERNEL_WRITTEN_TENSOR_SHAPE)
-                .to(NATURAL_TORCH_DEVICE_TYPE)
-            )
-            compute_kernel = ctx.gpu_limited_access.create_compute_kernel(
-                source=WRITE_INDEX_PATTERN_SLANG
-            )
-            with (
-                gpu.acquire_storage_buffer(
-                    KERNEL_WRITTEN_TENSOR_SHAPE, "float32"
-                ) as dispatched_tensor,
-                gpu.acquire_storage_buffer(
-                    KERNEL_WRITTEN_TENSOR_SHAPE, "float32"
-                ) as undispatched_tensor,
-            ):
-                for tensor_surface in (dispatched_tensor, undispatched_tensor):
-                    torch.from_dlpack(tensor_surface).fill_(
-                        KERNEL_TENSOR_UNWRITTEN_SENTINEL
-                    )
-                compute_kernel.dispatch(
-                    bindings={INDEX_PATTERN_TENSOR_BINDING: dispatched_tensor},
-                    group_count=(element_count // 64, 1, 1),
+    def observe() -> dict:
+        element_count = math.prod(KERNEL_WRITTEN_TENSOR_SHAPE)
+        index_pattern = (
+            torch.arange(element_count, dtype=torch.float32)
+            .reshape(KERNEL_WRITTEN_TENSOR_SHAPE)
+            .to(NATURAL_TORCH_DEVICE_TYPE)
+        )
+        compute_kernel = ctx.gpu_limited_access.create_compute_kernel(
+            source=WRITE_INDEX_PATTERN_SLANG
+        )
+        with (
+            gpu.acquire_storage_buffer(
+                KERNEL_WRITTEN_TENSOR_SHAPE, "float32"
+            ) as dispatched_tensor,
+            gpu.acquire_storage_buffer(
+                KERNEL_WRITTEN_TENSOR_SHAPE, "float32"
+            ) as undispatched_tensor,
+        ):
+            for tensor_surface in (dispatched_tensor, undispatched_tensor):
+                torch.from_dlpack(tensor_surface).fill_(
+                    KERNEL_TENSOR_UNWRITTEN_SENTINEL
                 )
-                dispatched = torch.from_dlpack(dispatched_tensor)
-                undispatched = torch.from_dlpack(undispatched_tensor)
-                try:
-                    dispatched_tensor.__dlpack__(
-                        max_version=(1, 0), dl_device=FOREIGN_DLPACK_DEVICE
-                    )
-                    foreign_device_refusal = None
-                except BufferError as refusal:
-                    foreign_device_refusal = str(refusal)
-                compute_observation = {
-                    "foreign_device_refusal": foreign_device_refusal,
-                    "compute_binding_names": list(compute_kernel.binding_names),
-                    "dispatched_tensor_device": str(dispatched.device),
-                    "dispatched_tensor_shape": list(dispatched.shape),
-                    "dispatched_holds_the_index_pattern": bool(
-                        torch.equal(dispatched, index_pattern)
-                    ),
-                    "undispatched_holds_the_index_pattern": bool(
-                        torch.equal(undispatched, index_pattern)
-                    ),
-                    "undispatched_still_holds_the_sentinel": bool(
-                        torch.all(undispatched == KERNEL_TENSOR_UNWRITTEN_SENTINEL)
-                    ),
-                }
-
-            graphics_kernel = gpu.create_graphics_kernel(
-                color_attachment_formats=["rgba8_unorm"],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
-                fragment_source=PAINT_THE_TENSORS_COLOUR_FRAGMENT_SLANG,
-                label="python-tensor-painted-fullscreen-triangle",
+            compute_kernel.dispatch(
+                bindings={INDEX_PATTERN_TENSOR_BINDING: dispatched_tensor},
+                group_count=(element_count // 64, 1, 1),
             )
-            colour_target = gpu.acquire_texture(
-                DRAWN_COLOUR_TARGET_EXTENT,
-                DRAWN_COLOUR_TARGET_EXTENT,
-                "rgba8_unorm",
-                ["render_attachment", "texture_binding", "copy_src", "copy_dst"],
-            )
-
-            def draw_painting_from(colour: "list[float]") -> "list[list[int]]":
-                with gpu.acquire_storage_buffer([4], "float32") as colour_tensor:
-                    torch.from_dlpack(colour_tensor).copy_(
-                        torch.tensor(colour, dtype=torch.float32)
-                    )
-                    graphics_kernel.draw(
-                        bindings={PAINT_COLOUR_BINDING: colour_tensor},
-                        color_targets=[colour_target],
-                        extent=(DRAWN_COLOUR_TARGET_EXTENT, DRAWN_COLOUR_TARGET_EXTENT),
-                        vertex_count=3,
-                    )
-                colour_target.lock(read_only=True)
-                try:
-                    pixels = colour_target.as_numpy().reshape(-1, 4)
-                    distinct = {tuple(int(channel) for channel in pixel) for pixel in pixels}
-                    return [list(pixel) for pixel in sorted(distinct)]
-                finally:
-                    colour_target.unlock()
-
-            return {
-                **compute_observation,
-                "graphics_binding_names": list(graphics_kernel.binding_names),
-                "distinct_pixels_painted_from_the_tensor": draw_painting_from(
-                    PAINT_COLOUR
+            dispatched = torch.from_dlpack(dispatched_tensor)
+            undispatched = torch.from_dlpack(undispatched_tensor)
+            try:
+                dispatched_tensor.__dlpack__(
+                    max_version=(1, 0), dl_device=FOREIGN_DLPACK_DEVICE
+                )
+                foreign_device_refusal = None
+            except BufferError as refusal:
+                foreign_device_refusal = str(refusal)
+            compute_observation = {
+                "foreign_device_refusal": foreign_device_refusal,
+                "compute_binding_names": list(compute_kernel.binding_names),
+                "dispatched_tensor_device": str(dispatched.device),
+                "dispatched_tensor_shape": list(dispatched.shape),
+                "dispatched_holds_the_index_pattern": bool(
+                    torch.equal(dispatched, index_pattern)
                 ),
-                "distinct_pixels_painted_from_the_control_tensor": draw_painting_from(
-                    CONTROL_PAINT_COLOUR
+                "undispatched_holds_the_index_pattern": bool(
+                    torch.equal(undispatched, index_pattern)
+                ),
+                "undispatched_still_holds_the_sentinel": bool(
+                    torch.all(undispatched == KERNEL_TENSOR_UNWRITTEN_SENTINEL)
                 ),
             }
 
-        _report("TensorStorageBufferKernelBindingProbe", observe)
+        graphics_kernel = gpu.create_graphics_kernel(
+            color_attachment_formats=["rgba8_unorm"],
+            vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+            fragment_source=PAINT_THE_TENSORS_COLOUR_FRAGMENT_SLANG,
+            label="python-tensor-painted-fullscreen-triangle",
+        )
+        colour_target = gpu.acquire_texture(
+            DRAWN_COLOUR_TARGET_EXTENT,
+            DRAWN_COLOUR_TARGET_EXTENT,
+            "rgba8_unorm",
+            ["render_attachment", "texture_binding", "copy_src", "copy_dst"],
+        )
 
-    def process(self, ctx) -> None:
-        pass
+        def draw_painting_from(colour: "list[float]") -> "list[list[int]]":
+            with gpu.acquire_storage_buffer([4], "float32") as colour_tensor:
+                torch.from_dlpack(colour_tensor).copy_(
+                    torch.tensor(colour, dtype=torch.float32)
+                )
+                graphics_kernel.draw(
+                    bindings={PAINT_COLOUR_BINDING: colour_tensor},
+                    color_targets=[colour_target],
+                    extent=(DRAWN_COLOUR_TARGET_EXTENT, DRAWN_COLOUR_TARGET_EXTENT),
+                    vertex_count=3,
+                )
+            colour_target.lock(read_only=True)
+            try:
+                pixels = colour_target.as_numpy().reshape(-1, 4)
+                distinct = {tuple(int(channel) for channel in pixel) for pixel in pixels}
+                return [list(pixel) for pixel in sorted(distinct)]
+            finally:
+                colour_target.unlock()
+
+        return {
+            **compute_observation,
+            "graphics_binding_names": list(graphics_kernel.binding_names),
+            "distinct_pixels_painted_from_the_tensor": draw_painting_from(
+                PAINT_COLOUR
+            ),
+            "distinct_pixels_painted_from_the_control_tensor": draw_painting_from(
+                CONTROL_PAINT_COLOUR
+            ),
+        }
+
+    _report("TensorStorageBufferKernelBindingProbe", observe)

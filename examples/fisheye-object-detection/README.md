@@ -54,7 +54,7 @@ with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
     self._draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
 ```
 
-`ModelInputTensorKernel`, compiled once in `setup()` with
+`ModelInputTensorKernel`, compiled once in the node's body with
 `fit="pad_bottom_right", pad_to_multiple_of=32`, writes the detector's input —
 RGB, channels-first, scaled into `[0, 1]`, padded at the bottom and right to
 YOLOv8's stride — in one compute pass, into a tensor surface that
@@ -243,7 +243,7 @@ necessarily this one.
 This stream needs real hardware and says so rather than pretending: the kernels
 run on the engine's own GPU, and the detector runs on whichever accelerator
 `torch.accelerator` reports — CUDA on Linux, MPS on Apple Silicon. A torch
-build that sees no usable accelerator stops the detector in `setup()` and says
+build that sees no usable accelerator stops the detector as it loads and says
 why. It is also a heavy install: `ultralytics` brings a detector and `torch`
 brings its GPU runtime, several gigabytes between them on Linux.
 
@@ -312,10 +312,11 @@ The nodes are `camerasource`, `syntheticfisheyelens` and
 
 ## Knobs
 
-Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Each knob is an input of its node, stored in `streams/main.graph.json`. Change it in Tato
 Studio's inspector, which records the edit in the project's history and applies it to the
-running stream. The lens's coefficients and the confidence threshold are read on every frame; the
-detector's coefficients and weights are settings, so changing one rebuilds the detector.
+running stream. The lens's coefficients and the confidence threshold are read on every frame; a change to the
+detector's coefficients or weights builds again only what reads them, while frames go on with
+what was built.
 
 | Knob | Node | Effect |
 | --- | --- | --- |

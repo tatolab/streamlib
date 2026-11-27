@@ -8,11 +8,11 @@ engine spawns this node's child interpreter with.
 """
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -22,6 +22,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -125,63 +126,70 @@ def _workgroups_covering(pixels: int) -> int:
 
 
 @node.meta(description="Screens each camera frame into halftone dots with a compute kernel")
-@node
-class HalftoneCompute:
-    """Camera frame in, the same picture as a halftone dot screen out."""
-
-    cell_size: Annotated[
-        int,
-        NumberRange(minimum=2, maximum=64),
-        Description("Pixels across one dot cell; bigger is a coarser screen."),
-    ] = DEFAULT_CELL_SIZE
-    dot_boost: Annotated[
-        float,
-        NumberRange(minimum=0.01, maximum=4.0),
-        Description("How far a dot's ink is lifted above the colour it sampled."),
-    ] = DEFAULT_DOT_BOOST
-    background_level: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("The grey the paper is, from 0.0 (black) to 1.0 (white)."),
-    ] = DEFAULT_BACKGROUND_LEVEL
+@node(execution="reactive")
+def HalftoneCompute(
+    *,
+    cell_size: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=2, maximum=64),
+            Description("Pixels across one dot cell; bigger is a coarser screen."),
+        ]
+    ] = Input(DEFAULT_CELL_SIZE),
+    dot_boost: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.01, maximum=4.0),
+            Description("How far a dot's ink is lifted above the colour it sampled."),
+        ]
+    ] = Input(DEFAULT_DOT_BOOST),
+    background_level: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("The grey the paper is, from 0.0 (black) to 1.0 (white)."),
+        ]
+    ] = Input(DEFAULT_BACKGROUND_LEVEL),
     camera_frame_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
-    ]
+    ],
     halftone_frame_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The same frames screened into halftone dots by the kernel"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Camera frame in, the same picture as a halftone dot screen out."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # Depth 1: `dispatch` returns with the GPU work retired, and nothing
-        # outside this node ever names the landing texture.
-        self.camera_frame_landing_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
-        )
-        self.halftone_frame_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
-        )
-        self.halftone_kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=HALFTONE_COMPUTE_SLANG,
-            push_constant_size=HALFTONE_DIAL_SIZE,
-            # Asserted against the shader's own reflection, so a binding renamed
-            # on one side of this file is refused here, before the first frame.
-            bindings={
-                CAMERA_FRAME_BINDING: "sampled_texture",
-                HALFTONE_FRAME_BINDING: "storage_image",
-            },
-        )
+    # Depth 1: `dispatch` returns with the GPU work retired, and nothing
+    # outside this node ever names the landing texture.
+    camera_frame_landing_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
+    )
+    halftone_frame_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
+    )
+    halftone_kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=HALFTONE_COMPUTE_SLANG,
+        push_constant_size=HALFTONE_DIAL_SIZE,
+        # Asserted against the shader's own reflection, so a binding renamed
+        # on one side of this file is refused here, before the first frame.
+        bindings={
+            CAMERA_FRAME_BINDING: "sampled_texture",
+            HALFTONE_FRAME_BINDING: "storage_image",
+        },
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.camera_frame_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = camera_frame_from_upstream.read()
         if frame is None:
             return
 
         camera_frame_landing_texture = (
-            self.camera_frame_landing_ring.next_texture_for_this_frame(
+            camera_frame_landing_ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, frame.width, frame.height
             )
         )
@@ -191,10 +199,10 @@ class HalftoneCompute:
             frame.surface_id, camera_frame_landing_texture
         )
 
-        halftone_frame_texture = self.halftone_frame_ring.next_texture_for_this_frame(
+        halftone_frame_texture = halftone_frame_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        self.halftone_kernel.dispatch(
+        halftone_kernel.dispatch(
             bindings={
                 CAMERA_FRAME_BINDING: camera_frame_landing_texture,
                 HALFTONE_FRAME_BINDING: halftone_frame_texture,
@@ -207,13 +215,15 @@ class HalftoneCompute:
             # Push constants travel with a dispatch and never persist on the
             # kernel, so the dials as they stand now go with each one.
             push_constants=struct.pack(
-                HALFTONE_DIAL_FORMAT, self.cell_size, self.dot_boost, self.background_level
+                HALFTONE_DIAL_FORMAT, cell_size.get(), dot_boost.get(), background_level.get()
             ),
         )
 
         # The capture's timestamp, not the effect's: downstream orders frames by
         # when the camera captured them.
-        self.halftone_frame_to_downstream.write(
+        halftone_frame_to_downstream.write(
             TextureToWrite.of_texture(halftone_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
+
+    return each_frame

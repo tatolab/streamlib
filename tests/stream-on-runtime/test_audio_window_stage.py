@@ -228,7 +228,7 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
 GAPPED_AUDIO_NODES_SOURCE = '''\
 """A mono source whose every block starts a second after the last one ended."""
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
@@ -248,28 +248,32 @@ GAP_BETWEEN_BLOCKS_NS = 1_000_000_000
 
 
 @node(execution="continuous", interval_ms=20)
-class GappedMonoSource:
+def GappedMonoSource(
+    *,
+    audio: OutputPin[Audio],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Each block is short of a 512-sample window, and each one's stamp is a
     discontinuity, so the windowed consumer flushes what the last block left."""
 
-    def __init__(self) -> None:
-        self._blocks = 0
-        self._anchor_ns = monotonic_now_ns()
+    blocks = 0
+    anchor_ns = monotonic_now_ns()
 
-    audio: OutputPin[Audio]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.audio.write(
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal blocks
+        audio.write(
             numpy.zeros((1, FRAMES_PER_BLOCK), dtype=numpy.float32),
-            timestamp_ns=self._anchor_ns + self._blocks * GAP_BETWEEN_BLOCKS_NS,
-            start_sample=self._blocks * SAMPLE_RATE * GAP_BETWEEN_BLOCKS_NS // 1_000_000_000,
+            timestamp_ns=anchor_ns + blocks * GAP_BETWEEN_BLOCKS_NS,
+            start_sample=blocks * SAMPLE_RATE * GAP_BETWEEN_BLOCKS_NS // 1_000_000_000,
             sample_rate=SAMPLE_RATE,
         )
-        self._blocks += 1
+        blocks += 1
+
+    return each_frame
 
 
-@node
-class WindowedMonoConsumer:
+@node(execution="reactive")
+def WindowedMonoConsumer(
+    *,
     audio: InputPin[
         Annotated[
             Audio,
@@ -278,10 +282,12 @@ class WindowedMonoConsumer:
                 sample_rate=SAMPLE_RATE, channels=1, dtype="f32", window_size=512
             ),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        audio.read()
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.audio.read()
+    return each_frame
 '''
 
 GAPPED_AUDIO_STREAM_SOURCE = '''\

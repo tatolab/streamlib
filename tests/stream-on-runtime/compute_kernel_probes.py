@@ -3,8 +3,8 @@
 
 """Probes for named N-binding compute dispatch, from where a kernel really runs.
 
-A kernel is an object: built in `setup()` on the limited capability,
-dispatched per frame in `process()`. Every probe runs in its own helper
+A kernel is an object: built on the limited capability in a node's body, and
+dispatched there. Every probe runs in its own helper
 process and reports one `MARKER:PROBE_RESULT` JSON line.
 
 What is worth breaking a build over is that a Python node can read one
@@ -24,7 +24,6 @@ from tatolab.stream import (
     GpuSurfaceHandle,
     KernelDispatchBatch,
     RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess,
     log,
     node,
 )
@@ -86,19 +85,19 @@ def _refusal_of(dispatch_body) -> str:
 
 
 class _ComputeKernelProbeBase:
-    """Builds the conformance kernel in `setup`, reports from `setup`.
+    """Builds the conformance kernel and reports, from the node's body.
 
     Nothing upstream is needed: the probe acquires both surfaces itself, which
     is the point — a kernel output is an engine-owned texture the node
     names, not something handed to it.
     """
 
-    # Declared, not merely assigned: `setup` assigns them inside a nested
+    # Declared, not merely assigned: `report_from` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
     _gpu_full_access: GpuContextFullAccess
     _gpu_limited_access: GpuContextLimitedAccess
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def report_from(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             # Held for probes whose observation needs the capability itself
@@ -129,18 +128,11 @@ class _ComputeKernelProbeBase:
 
         _report(observe)
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        pass
-
     def observe(self, kernel, source, output) -> dict:
         raise NotImplementedError
 
 
-@node.meta(description="Reads one surface and writes another through a compute kernel")
-@node(execution="manual")
-class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
-    """The pass the v1 wire could not express."""
-
+class _ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         kernel.dispatch(
             bindings={SOURCE_BINDING: source, OUTPUT_BINDING: output},
@@ -156,12 +148,14 @@ class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.meta(description="Every way of getting the bindings wrong, refused by name")
+@node.meta(description="Reads one surface and writes another through a compute kernel")
 @node(execution="manual")
-class BindingRefusalProbe(_ComputeKernelProbeBase):
-    """Unknown, missing and wrong-target refusals, each raising before any
-    GPU work is submitted and each naming the shader's own bindings."""
+def ReadOneWriteAnotherProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The pass the v1 wire could not express."""
+    _ReadOneWriteAnotherProbe().report_from(ctx)
 
+
+class _BindingRefusalProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         group_count = (SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1)
         push_constants = b"\x00\x00\x00\x00"
@@ -216,19 +210,15 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.meta(description="A texture's pixels reach the CPU through the staged door")
+@node.meta(description="Every way of getting the bindings wrong, refused by name")
 @node(execution="manual")
-class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
-    """The staged CPU door end to end, with numpy as the only consumer.
+def BindingRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Unknown, missing and wrong-target refusals, each raising before any
+    GPU work is submitted and each naming the shader's own bindings."""
+    _BindingRefusalProbe().report_from(ctx)
 
-    Fills an acquired texture through the CPU write door, dispatches a
-    kernel that samples it, and reads the kernel's own output back through
-    the CPU read door. No CUDA runtime and no GPU package take part: if
-    either door were still refusing a texture backing, or the block-edge
-    publish never landed in the surface's own allocation, the kernel would
-    read something other than what was written and this reports it.
-    """
 
+class _TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         source.lock(read_only=False)
         source.as_numpy()[:] = FILLED_SOURCE_RGBA
@@ -260,13 +250,22 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.meta(description="A raise inside the CPU door over a texture propagates")
+@node.meta(description="A texture's pixels reach the CPU through the staged door")
 @node(execution="manual")
-class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
-    """A raise inside the CPU door over a texture, and the pixel the frame
-    holds afterwards — the staged door's own on Linux, the stores made before
-    the raise on macOS, where the door is the IOSurface itself."""
+def TextureBackedPixelsReachTheCpuProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The staged CPU door end to end, with numpy as the only consumer.
 
+    Fills an acquired texture through the CPU write door, dispatches a
+    kernel that samples it, and reads the kernel's own output back through
+    the CPU read door. No CUDA runtime and no GPU package take part: if
+    either door were still refusing a texture backing, or the block-edge
+    publish never landed in the surface's own allocation, the kernel would
+    read something other than what was written and this reports it.
+    """
+    _TextureBackedPixelsReachTheCpuProbe().report_from(ctx)
+
+
+class _TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         del kernel, output
         source.lock(read_only=False)
@@ -293,20 +292,16 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.meta(description="An acquired texture takes a write-back without spelling copy usage")
+@node.meta(description="A raise inside the CPU door over a texture propagates")
 @node(execution="manual")
-class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
-    """The LUT flow the ruling widened #1758 to cover, spelled the way an
-    author would: acquire with one usage token, fill it through the CPU
-    write door, and read it back.
+def TextureCpuDoorRaiseProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """A raise inside the CPU door over a texture, and the pixel the frame
+    holds afterwards — the staged door's own on Linux, the stores made before
+    the raise on macOS, where the door is the IOSurface itself."""
+    _TextureCpuDoorRaiseProbe().report_from(ctx)
 
-    `usage=["texture_binding"]` alone is enough because the engine implies
-    both copy bits — so the door answers rather than refusing about a flag
-    the author had no reason to name. Filling and re-reading is what makes
-    that end to end: a mask that merely parsed right would still fail here
-    if the copy the door records could not run against the allocation.
-    """
 
+class _AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
         lut = self._gpu_full_access.acquire_texture(
@@ -337,6 +332,22 @@ class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
         }
 
 
+@node.meta(description="An acquired texture takes a write-back without spelling copy usage")
+@node(execution="manual")
+def AcquiredTextureImpliesCopyUsageProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The LUT flow the ruling widened #1758 to cover, spelled the way an
+    author would: acquire with one usage token, fill it through the CPU
+    write door, and read it back.
+
+    `usage=["texture_binding"]` alone is enough because the engine implies
+    both copy bits — so the door answers rather than refusing about a flag
+    the author had no reason to name. Filling and re-reading is what makes
+    that end to end: a mask that merely parsed right would still fail here
+    if the copy the door records could not run against the allocation.
+    """
+    _AcquiredTextureImpliesCopyUsageProbe().report_from(ctx)
+
+
 BRIGHTEN_SLANG = """\
 [[vk::binding(0, 0)]] Sampler2D unbrightened_image;
 [[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> brightened_image;
@@ -365,10 +376,10 @@ class _TwoPassProbeBase:
     surfaces it runs over.
 
     Written the way the change file spells it: two kernels constructed in
-    `setup()`, an intermediate surface neither the source nor the output.
+    the node's body, an intermediate surface neither the source nor the output.
     """
 
-    # Declared, not merely assigned: `setup` assigns them inside a nested
+    # Declared, not merely assigned: `report_from` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
     _gpu_full_access: GpuContextFullAccess
     _brighten: ComputeKernel
@@ -377,7 +388,7 @@ class _TwoPassProbeBase:
     _intermediate: GpuSurfaceHandle
     _output: GpuSurfaceHandle
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def report_from(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             self._gpu_full_access = gpu
@@ -396,9 +407,6 @@ class _TwoPassProbeBase:
             return self.observe()
 
         _report(observe)
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        pass
 
     def brighten_then_double(self, batch: KernelDispatchBatch) -> None:
         """The two passes, in order, into whatever batch is handed in."""
@@ -423,12 +431,7 @@ class _TwoPassProbeBase:
         raise NotImplementedError
 
 
-@node.meta(description="A two-pass filter dispatched as one batch")
-@node(execution="manual")
-class TwoPassBatchProbe(_TwoPassProbeBase):
-    """The demo: a chain whose intermediate is written by pass 1 and read by
-    pass 2, inside one scope."""
-
+class _TwoPassBatchProbe(_TwoPassProbeBase):
     def observe(self) -> dict:
         with self._gpu_full_access.kernel_dispatch_batch() as batch:
             self.brighten_then_double(batch)
@@ -453,13 +456,15 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         }
 
 
-@node.meta(description="A raise inside a batch scope submits nothing and propagates")
+@node.meta(description="A two-pass filter dispatched as one batch")
 @node(execution="manual")
-class BatchExceptionProbe(_TwoPassProbeBase):
-    """Half of a multi-pass filter is not what the author wrote, so a raise
-    inside the scope discards the whole batch — and the exception is not
-    swallowed on the way out."""
+def TwoPassBatchProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The demo: a chain whose intermediate is written by pass 1 and read by
+    pass 2, inside one scope."""
+    _TwoPassBatchProbe().report_from(ctx)
 
+
+class _BatchExceptionProbe(_TwoPassProbeBase):
     def observe(self) -> dict:
         class TheProbesOwnFailure(Exception):
             pass
@@ -483,13 +488,16 @@ class BatchExceptionProbe(_TwoPassProbeBase):
         }
 
 
-@node.meta(description="Every way of getting a batch wrong, refused by name")
+@node.meta(description="A raise inside a batch scope submits nothing and propagates")
 @node(execution="manual")
-class BatchRefusalProbe(_TwoPassProbeBase):
-    """A batch refuses in the caller's own stack: a wrong binding at the
-    `dispatch` line, a repeated kernel at the line that repeats it, and a
-    closed scope when it is dispatched into again."""
+def BatchExceptionProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Half of a multi-pass filter is not what the author wrote, so a raise
+    inside the scope discards the whole batch — and the exception is not
+    swallowed on the way out."""
+    _BatchExceptionProbe().report_from(ctx)
 
+
+class _BatchRefusalProbe(_TwoPassProbeBase):
     def observe(self) -> dict:
         with self._gpu_full_access.kernel_dispatch_batch() as batch:
             unknown = _refusal_of(
@@ -554,12 +562,16 @@ class BatchRefusalProbe(_TwoPassProbeBase):
         }
 
 
-@node.meta(description="Every way of getting the kernel's source wrong, refused by name")
+@node.meta(description="Every way of getting a batch wrong, refused by name")
 @node(execution="manual")
-class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
-    """Slang source and pre-compiled SPIR-V are alternatives, and a shader that
-    does not compile says so with the compiler's own diagnostic."""
+def BatchRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """A batch refuses in the caller's own stack: a wrong binding at the
+    `dispatch` line, a repeated kernel at the line that repeats it, and a
+    closed scope when it is dispatched into again."""
+    _BatchRefusalProbe().report_from(ctx)
 
+
+class _ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
         gpu = self._gpu_limited_access
@@ -589,3 +601,11 @@ class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
                 )
             ),
         }
+
+
+@node.meta(description="Every way of getting the kernel's source wrong, refused by name")
+@node(execution="manual")
+def ShaderSourceRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Slang source and pre-compiled SPIR-V are alternatives, and a shader that
+    does not compile says so with the compiler's own diagnostic."""
+    _ShaderSourceRefusalProbe().report_from(ctx)

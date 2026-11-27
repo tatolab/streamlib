@@ -16,6 +16,7 @@ from typing import Annotated, Any, Callable, Tuple, TypedDict
 
 from tatolab.stream import (
     GpuSurfaceHandle,
+    Input,
     InputPin,
     ModelInputTensorChannelOrder,
     ModelInputTensorDtype,
@@ -26,6 +27,7 @@ from tatolab.stream import (
     RuntimeContextLimitedAccess,
     StreamDelivery,
     Texture,
+    computed,
     log,
     node,
 )
@@ -210,26 +212,25 @@ def compare_with_the_torch_reference(
     }
 
 
-@node
-class ModelInputTensorMatrixProbe:
-    """Applies a kernel per layout x dtype of one fit to the first frame and
-    reports each tensor's largest error against torch."""
-
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
-
-    fit_case_name: str = "letterbox"
+@node(execution="reactive")
+def ModelInputTensorMatrixProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+    fit_case_name: Input[str] = Input("letterbox"),
     # The negative control: every kernel compiled with `WRONG_MEAN`, compared
     # with a reference made with the right one.
-    compile_with_the_wrong_mean: bool = False
+    compile_with_the_wrong_mean: Input[bool] = Input(False),
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Applies a kernel per layout x dtype of one fit to the first frame and
+    reports each tensor's largest error against torch."""
+    gpu_limited_access = ctx.gpu_limited_access
 
-    def __init__(self) -> None:
-        self._compiled_mean = WRONG_MEAN if self.compile_with_the_wrong_mean else IMAGENET_MEAN
-        self._reported = False
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self._kernels = {
+    def compile_each_kernel() -> "dict[Any, ModelInputTensorKernel]":
+        compiled_mean = WRONG_MEAN if compile_with_the_wrong_mean.get() else IMAGENET_MEAN
+        return {
             case: ModelInputTensorKernel.compile(
-                ctx.gpu_limited_access,
+                gpu_limited_access,
                 width=FIT_CASES[case[0]]["width"],
                 height=FIT_CASES[case[0]]["height"],
                 fit=FIT_CASES[case[0]]["fit"],
@@ -238,18 +239,23 @@ class ModelInputTensorMatrixProbe:
                 layout=case[1],
                 dtype=case[2],
                 scale=SCALE,
-                mean=self._compiled_mean,
+                mean=compiled_mean,
                 std=IMAGENET_STD,
             )
-            for case in matrix_cases_for_fit(self.fit_case_name)
+            for case in matrix_cases_for_fit(fit_case_name.get())
         }
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._reported:
+    kernels = computed(compile_each_kernel)
+    reported = False
+
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = video_from_upstream.read()
+        if frame is None or reported:
             return
-        self._reported = True
-        gpu = ctx.gpu_limited_access
+        reported = True
+        gpu = frame_ctx.gpu_limited_access
+        kernel_of_each_case = kernels.get()
 
         def apply_each() -> "dict[str, Any]":
             unavailable = _torch_device_unavailable_reason()
@@ -269,7 +275,7 @@ class ModelInputTensorMatrixProbe:
                         IMAGENET_MEAN,
                         IMAGENET_STD,
                     )
-                    for case, kernel in self._kernels.items()
+                    for case, kernel in kernel_of_each_case.items()
                 }
             return {
                 "source_is_not_uniform": bool((source_rgba != source_rgba[0, 0]).any()),
@@ -278,30 +284,33 @@ class ModelInputTensorMatrixProbe:
 
         _report(apply_each)
 
+    return each_frame
 
-@node
-class NonRgbaSourceRefusalProbe:
+
+@node(execution="reactive")
+def NonRgbaSourceRefusalProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Hands the kernel a `bgra32` pixel buffer and a tensor surface, and
     reports each refusal."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
+    kernel = ModelInputTensorKernel.compile(ctx.gpu_limited_access, width=32, height=24)
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.kernel = ModelInputTensorKernel.compile(ctx.gpu_limited_access, width=32, height=24)
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = video_from_upstream.read()
+        if frame is None or reported:
             return
-        self._reported = True
+        reported = True
         gpu = ctx.gpu_limited_access
 
         def refusal_of(surface: GpuSurfaceHandle) -> str:
             try:
-                self.kernel.apply_to_surface(gpu, surface)
+                kernel.apply_to_surface(gpu, surface)
             except ValueError as refusal:
                 return str(refusal)
             return "not refused"
@@ -320,6 +329,8 @@ class NonRgbaSourceRefusalProbe:
 
         _report(refuse_each)
 
+    return each_frame
+
 
 # A second extent the frame changes to, and its tensor under a multiple of 16.
 SECOND_SOURCE_WIDTH = 30
@@ -330,37 +341,38 @@ SECOND_FIT_CASE: FitCase = {
 }
 
 
-@node
-class PadBottomRightExtentChangeProbe:
+@node(execution="reactive")
+def PadBottomRightExtentChangeProbe(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Applies one `pad_bottom_right` kernel to the frame, then to a smaller
     RGBA pixel buffer written from numpy, then to the frame again — each
     tensor at its own source's extent, each compared with torch."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
+    kernel = ModelInputTensorKernel.compile(
+        ctx.gpu_limited_access,
+        fit="pad_bottom_right",
+        pad_to_multiple_of=16,
+        scale=SCALE,
+        mean=IMAGENET_MEAN,
+        std=IMAGENET_STD,
+    )
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.kernel = ModelInputTensorKernel.compile(
-            ctx.gpu_limited_access,
-            fit="pad_bottom_right",
-            pad_to_multiple_of=16,
-            scale=SCALE,
-            mean=IMAGENET_MEAN,
-            std=IMAGENET_STD,
-        )
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
-        if frame is None or self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        frame = video_from_upstream.read()
+        if frame is None or reported:
             return
-        self._reported = True
+        reported = True
         gpu = ctx.gpu_limited_access
 
         def compare(surface: GpuSurfaceHandle, source_rgba, fit_case: FitCase) -> "dict[str, Any]":
             return compare_with_the_torch_reference(
-                gpu, surface, source_rgba, self.kernel, fit_case, "nchw", "rgb",
+                gpu, surface, source_rgba, kernel, fit_case, "nchw", "rgb",
                 IMAGENET_MEAN, IMAGENET_STD,
             )
 
@@ -395,3 +407,5 @@ class PadBottomRightExtentChangeProbe:
                 }
 
         _report(apply_across_an_extent_change)
+
+    return each_frame

@@ -28,15 +28,10 @@ use crate::core::test_support::{MockPinTypedNode, ensure_test_mocks_registered};
     input("picture", pin_type = Texture, former_names = ["video_in"]),
     output("frames", pin_type = Texture, formats = ["rgba8_unorm"], former_names = ["video"]),
 )]
-struct MockRenamedPortsNode;
-
-impl crate::core::ReactiveNode for MockRenamedPortsNode::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+fn mock_renamed_ports_node()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
+{
+    |_ctx| Ok(())
 }
 
 /// Register the test mocks and [`MockRenamedPortsNode`], once.

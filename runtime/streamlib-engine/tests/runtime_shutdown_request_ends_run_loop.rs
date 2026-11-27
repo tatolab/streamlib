@@ -19,21 +19,9 @@ const SHUTDOWN_OBSERVED_WATCHDOG: Duration = Duration::from_secs(5);
 #[streamlib::sdk::node(
     execution = manual,
 )]
-pub struct ShutdownRequestingTestNode;
-
-impl streamlib_engine::ManualNode for ShutdownRequestingTestNode::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        ctx.runtime()
-            .request_this_streams_shutdown("integration test: the node decided the run is over")
-    }
+pub fn shutdown_requesting_test_node(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    ctx.runtime()
+        .request_this_streams_shutdown("integration test: the node decided the run is over")
 }
 
 fn an_empty_stream_loaded_into(

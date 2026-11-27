@@ -149,7 +149,7 @@ def test_a_default_write_timestamp_is_the_engine_media_clock(start_tatolabd_runn
 
 
 def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd_running_stream):
-    """A context kept past its hook still answers, because a helper process has
+    """A context kept past the body it was handed to still answers, because a helper process has
     no engine view to lease.
 
     A child owns its state outright — its pause flag is a local announcement
@@ -166,7 +166,7 @@ def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd_running_str
 # ---------------------------------------------------------------------------
 
 
-def test_an_output_pin_still_writes_from_a_worker_thread_started_in_setup(
+def test_an_output_pin_still_writes_from_a_worker_thread_the_node_started(
     start_tatolabd_running_stream,
 ):
     """An output pin is deliberately not hook-bound: a manual source writes it
@@ -232,7 +232,7 @@ def test_a_closed_pixel_buffer_returns_its_pool_slot(start_tatolabd_running_stre
 def test_a_worker_thread_constructs_privileged_resources_like_the_native_camera(
     start_tatolabd_running_stream,
 ):
-    """The camera's shape, from Python: stash the capabilities in setup, build
+    """The camera's shape, from Python: keep the capabilities the body is handed, build
     privileged resources from a thread the node owns.
 
     `camera_linux.rs` is the reference — its capture thread holds only

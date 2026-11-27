@@ -8,11 +8,10 @@ name the engine spawns this node's child interpreter with.
 """
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -21,12 +20,13 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
 # The whole effect, as a Slang compute kernel: one invocation per output pixel.
 # A lens drifts around the frame and turns what it covers into dots. `dials`
-# are the values `process()` pushes each frame. Edit it while `tatolab dev`
+# are the values each frame pushes. Edit it while `tatolab dev`
 # runs to see the change.
 HALFTONE_LENS_SLANG = """
 [[vk::binding(0, 0)]] Sampler2D source_frame;
@@ -88,58 +88,60 @@ def workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
 
 
-@node
-class HalftoneLensEffect:
-    """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
-
+@node(execution="reactive")
+def HalftoneLensEffect(
+    *,
     video_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames to put the lens over")]
-    ]
+    ],
     video_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(HALFTONE_FRAME_TEXTURE_FORMAT),
             Description("The same frames, dotted where the lens covers them"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.halftone_lens_kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=HALFTONE_LENS_SLANG,
-            push_constant_size=HALFTONE_LENS_DIALS.size,
-            bindings={
-                "source_frame": "sampled_texture",
-                "halftone_frame": "storage_image",
-            },
-        )
-        # A frame arrives as a pixel buffer, which a kernel cannot sample, so
-        # each one is copied into a texture first.
-        self.source_frame_textures = NodeOutputTextureRing(
-            HALFTONE_FRAME_TEXTURE_FORMAT, ["texture_binding"], depth=1
-        )
-        self.halftone_frame_textures = NodeOutputTextureRing(
-            HALFTONE_FRAME_TEXTURE_FORMAT, ["storage_binding", "texture_binding"]
-        )
-        self.first_frame_at_ns: int | None = None
+    halftone_lens_kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=HALFTONE_LENS_SLANG,
+        push_constant_size=HALFTONE_LENS_DIALS.size,
+        bindings={
+            "source_frame": "sampled_texture",
+            "halftone_frame": "storage_image",
+        },
+    )
+    # A frame arrives as a pixel buffer, which a kernel cannot sample, so
+    # each one is copied into a texture first.
+    source_frame_textures = NodeOutputTextureRing(
+        HALFTONE_FRAME_TEXTURE_FORMAT, ["texture_binding"], depth=1
+    )
+    halftone_frame_textures = NodeOutputTextureRing(
+        HALFTONE_FRAME_TEXTURE_FORMAT, ["storage_binding", "texture_binding"]
+    )
+    first_frame_at_ns: int | None = None
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal first_frame_at_ns
+        frame = video_from_upstream.read()
         if frame is None:
             return
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
-        if self.first_frame_at_ns is None:
-            self.first_frame_at_ns = ctx.time
-        seconds = (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND
+        if first_frame_at_ns is None:
+            first_frame_at_ns = ctx.time
+        seconds = (ctx.time - first_frame_at_ns) / NANOSECONDS_PER_SECOND
 
         gpu = ctx.gpu_limited_access
-        source_frame = self.source_frame_textures.next_texture_for_this_frame(
+        source_frame = source_frame_textures.next_texture_for_this_frame(
             gpu, frame.width, frame.height
         )
         gpu.copy_surface_to_surface(frame.surface_id, source_frame)
-        halftone_frame = self.halftone_frame_textures.next_texture_for_this_frame(
+        halftone_frame = halftone_frame_textures.next_texture_for_this_frame(
             gpu, frame.width, frame.height
         )
-        self.halftone_lens_kernel.dispatch(
+        halftone_lens_kernel.dispatch(
             bindings={"source_frame": source_frame, "halftone_frame": halftone_frame},
             group_count=(
                 workgroups_covering(frame.width),
@@ -148,7 +150,9 @@ class HalftoneLensEffect:
             ),
             push_constants=HALFTONE_LENS_DIALS.pack(frame.width, frame.height, seconds),
         )
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(halftone_frame, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
+
+    return each_frame

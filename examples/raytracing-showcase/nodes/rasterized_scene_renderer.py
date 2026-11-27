@@ -12,19 +12,19 @@ what differs across the divider is only what a ray buys.
 from __future__ import annotations
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -164,62 +164,65 @@ float4 main(RasterVertexToFragment fragment) : SV_Target0 {
 
 @node.meta(description="The showcase scene rasterized — direct lighting and nothing else")
 @node(execution="continuous", interval_ms=16)
-class RasterizedSceneRenderer:
-    """Ray tracing off: flat direct lighting, no shadows, no reflections."""
-
-    width: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The frame's width in pixels.")
-    ] = 1280
-    height: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The frame's height in pixels.")
-    ] = 720
+def RasterizedSceneRenderer(
+    *,
+    width: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The frame's width in pixels.")]
+    ] = Input(1280),
+    height: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The frame's height in pixels.")]
+    ] = Input(720),
     rasterized_frame_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The scene with direct lighting only — no rays cast"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Ray tracing off: flat direct lighting, no shadows, no reflections."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, RENDER_ATTACHMENT_AND_SAMPLED_TEXTURE_USAGE
-        )
-        self.raster_kernel = ctx.gpu_full_access.create_graphics_kernel(
-            color_attachment_formats=[TEXTURE_FORMAT],
-            vertex_source=RASTER_VERTEX_SLANG,
-            fragment_source=RASTER_FRAGMENT_SLANG,
-            push_constant_size=RASTER_PUSH_CONSTANT_SIZE,
-            # The vertex stage collapses hidden faces itself.
-            cull_mode="none",
-            label="showcase-rasterizer",
-        )
+    output_ring = NodeOutputTextureRing(
+        TEXTURE_FORMAT, RENDER_ATTACHMENT_AND_SAMPLED_TEXTURE_USAGE
+    )
+    raster_kernel = ctx.gpu_full_access.create_graphics_kernel(
+        color_attachment_formats=[TEXTURE_FORMAT],
+        vertex_source=RASTER_VERTEX_SLANG,
+        fragment_source=RASTER_FRAGMENT_SLANG,
+        push_constant_size=RASTER_PUSH_CONSTANT_SIZE,
+        # The vertex stage collapses hidden faces itself.
+        cull_mode="none",
+        label="showcase-rasterizer",
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         frame_time_ns = ctx.time
         camera_azimuth, light_azimuth = orbit_azimuths_at(frame_time_ns)
 
-        rasterized_frame_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.width, self.height
+        rasterized_frame_texture = output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, width.get(), height.get()
         )
-        self.raster_kernel.draw(
+        raster_kernel.draw(
             bindings={},
             color_targets=[rasterized_frame_texture],
-            extent=(self.width, self.height),
+            extent=(width.get(), height.get()),
             vertex_count=UNIT_CUBE_VERTEX_COUNT,
             instance_count=SHOWCASE_BOX_COUNT,
             push_constants=struct.pack(
                 RASTER_PUSH_CONSTANT_FORMAT,
                 camera_azimuth,
                 light_azimuth,
-                self.width / self.height,
+                width.get() / height.get(),
                 packed_ring_draw_order_furthest_first(camera_azimuth),
             ),
         )
 
-        self.rasterized_frame_to_downstream.write(
+        rasterized_frame_to_downstream.write(
             TextureToWrite.of_texture(
                 rasterized_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR
             ),
             timestamp_ns=frame_time_ns,
         )
+
+    return each_frame

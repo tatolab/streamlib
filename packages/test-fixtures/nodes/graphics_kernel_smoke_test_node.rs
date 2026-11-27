@@ -1,12 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::nodes::ManualNode;
+use streamlib::sdk::nodes::{Input, computed};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
@@ -15,6 +14,8 @@ use streamlib::sdk::rhi::{
     MultisampleState, PrimitiveTopology, RasterizationState, TextureFormat, TextureUsages,
     VertexInputState,
 };
+
+use crate::result_written_to_its_file::the_result_written_to_its_file;
 
 /// SPIR-V for the smoke-test vertex stage. Compiled by `build.rs`.
 #[cfg(target_os = "linux")]
@@ -34,59 +35,19 @@ const SMOKE_PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<u32>() as u32;
 #[cfg(target_os = "linux")]
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
-/// The settings [`GraphicsKernelSmokeTest`] reads at setup.
-#[streamlib::sdk::node_settings]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphicsKernelSmokeTestSettings {
-    #[description = "The file the node writes its result to."]
-    pub output_path: String,
-}
-
 #[streamlib::sdk::node(
     execution = manual,
-    settings = crate::graphics_kernel_smoke_test_node::GraphicsKernelSmokeTestSettings,
+    input("output_path", description = "The file the node writes its result to.", value = String, default = String::new()),
 )]
 #[meta(
-    description = "Graphics-kernel smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() to assert the binding methods don't panic. Smoke-only; pixel correctness not asserted."
+    description = "Graphics-kernel smoke test fixture — in its body, creates a graphics kernel via FullAccess, acquires a render-target Texture and runs a single offscreen_render() to assert the binding methods don't panic, then writes the result to the file its output_path names. Smoke-only; pixel correctness not asserted."
 )]
-pub struct GraphicsKernelSmokeTest {}
-
-impl ManualNode for GraphicsKernelSmokeTest::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.settings.output_path.clone();
-
-        let outcome = run_graphics_kernel_smoke(ctx);
-
-        let line = match outcome {
-            Ok(()) => "OK".to_string(),
-            Err(e) => format!("ERR:{e}"),
-        };
-        std::fs::write(&output_path, &line).map_err(|e| {
-            Error::Runtime(format!("GraphicsKernelSmokeTest: write {output_path}: {e}"))
-        })?;
-        Ok(())
-    }
-
-    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
+pub fn graphics_kernel_smoke_test(output_path: Input<String>, ctx: &RuntimeContextFullAccess<'_>) {
+    // The kernel is built and run once, in the body, with FullAccess.
+    let outcome = run_graphics_kernel_smoke(ctx).map(|()| Vec::new());
+    computed(move |_build_ctx| {
+        the_result_written_to_its_file("GraphicsKernelSmokeTest", &output_path.get(), &outcome)
+    });
 }
 
 #[cfg(target_os = "linux")]

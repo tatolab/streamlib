@@ -18,6 +18,7 @@ from tatolab.stream import (
     StreamBuilder,
     graph_generator,
 )
+from tatolab.stream._node_function import NodeFunction
 
 
 TENSOR_TO_AUDIO_TYPE = "tatolab.stream:TensorToAudio"
@@ -63,5 +64,5 @@ def a_stream_setting_input_values(stream_builder: StreamBuilder) -> None:
     stream_builder.add(StandInMarker, input_values=NESTED_INPUT_VALUES)
 
 
-def names_of_nodes_added(stream_builder: StreamBuilder, *node_classes: type) -> "list[str]":
-    return [stream_builder.add(node_class).name for node_class in node_classes]
+def names_of_nodes_added(stream_builder: StreamBuilder, *nodes: NodeFunction) -> "list[str]":
+    return [stream_builder.add(each_node).name for each_node in nodes]

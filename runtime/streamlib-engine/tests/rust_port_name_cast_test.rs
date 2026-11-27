@@ -13,7 +13,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
-use streamlib_engine::core::{OutputPortMarker, Result, RuntimeContextFullAccess};
+use streamlib_engine::core::OutputPortMarker;
 
 /// An empty stream loaded into `runner`, its project in `project_directory`.
 fn an_empty_stream_loaded_into(
@@ -32,13 +32,7 @@ fn an_empty_stream_loaded_into(
     execution = manual,
     output("videoOut", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub struct CamelCaseVideoSource;
-
-impl streamlib_engine::ManualNode for CamelCaseVideoSource::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn camel_case_video_source() {}
 
 fn camel_case_video_source_registered() -> NodeClassImportPath {
     NODE_REGISTRY.register::<CamelCaseVideoSource::Node>();

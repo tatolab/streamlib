@@ -4,127 +4,86 @@
 //! Integration-test fixture that exercises the GpuContextLimitedAccess
 //! surface end-to-end.
 //!
-//! Lifecycle:
-//!   1. `setup()` — clones `ctx.gpu_limited_access()` and stashes it.
-//!      Bumps the `Arc<GpuContext>` refcount.
-//!   2. `start()` — acquires a `PixelBuffer` via the stashed
-//!      `GpuContextLimitedAccess::acquire_pixel_buffer`. Reads
-//!      the cached `width`/`height`. Calls `plane_base_address(0)` and
-//!      writes a sentinel byte through the returned pointer to prove
-//!      the host-allocated mapped memory is reachable, then drops the
-//!      `PixelBuffer`.
-//!   3. Writes "OK\n<width>x<height>\nsentinel_addr=0x<hex>" or
-//!      "ERR:<message>" to the `output_path` its setting names so the
-//!      integration test can verify the round-trip.
-//!   4. `teardown()` — drops the stashed `GpuContextLimitedAccess`.
+//! The body clones `ctx.gpu_limited_access()`, bumping the
+//! `Arc<GpuContext>` refcount. Its one computed value, built from
+//! `width` and `height`, acquires a `PixelBuffer` through the clone,
+//! reads the cached `width`/`height`, calls `plane_base_address(0)` and
+//! writes a sentinel byte through the returned pointer to prove the
+//! host-allocated mapped memory is reachable, then drops the
+//! `PixelBuffer` and writes "OK\n<width>x<height>\nsentinel_addr=0x<hex>"
+//! or "ERR:<message>" to the file its `output_path` names so the
+//! integration test can verify the round-trip. The clone drops with the
+//! node.
 
-use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{
-    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::nodes::ManualNode;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::nodes::{Input, computed};
 use streamlib::sdk::rhi::PixelFormat;
 
-/// The settings [`GpuAcquireTest`] reads at setup.
-#[streamlib::sdk::node_settings]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GpuAcquireTestSettings {
-    #[description = "The height of the pixel buffer acquired, in pixels."]
-    pub height: u32,
-    #[description = "The file the node writes its result to."]
-    pub output_path: String,
-    #[description = "The width of the pixel buffer acquired, in pixels."]
-    pub width: u32,
-}
+use crate::result_written_to_its_file::the_result_written_to_its_file;
 
 #[streamlib::sdk::node(
     execution = manual,
-    settings = crate::gpu_acquire_test_node::GpuAcquireTestSettings,
+    input("height", description = "The height of the pixel buffer acquired, in pixels.", value = u32, default = 0),
+    input("output_path", description = "The file the node writes its result to.", value = String, default = String::new()),
+    input("width", description = "The width of the pixel buffer acquired, in pixels.", value = u32, default = 0),
 )]
 #[meta(
     description = "GPU integration test fixture — exercises acquire_pixel_buffer, plane_base_address_pixel_buffer, and the pixel-buffer lifecycle through GpuContextLimitedAccess"
 )]
-pub struct GpuAcquireTest {
-    gpu: Option<GpuContextLimitedAccess>,
+pub fn gpu_acquire_test(
+    height: Input<u32>,
+    output_path: Input<String>,
+    width: Input<u32>,
+    ctx: &RuntimeContextFullAccess<'_>,
+) {
+    let gpu = ctx.gpu_limited_access().clone();
+    computed(move |_build_ctx| {
+        let outcome = acquire_a_pixel_buffer_and_write_its_plane(&gpu, *width.get(), *height.get())
+            .map(|(w, h, ptr)| {
+                vec![
+                    format!("{w}x{h}"),
+                    format!("sentinel_addr=0x{:x}", ptr as usize),
+                ]
+            });
+        the_result_written_to_its_file("GpuAcquireTest", &output_path.get(), &outcome)
+    });
 }
 
-impl ManualNode for GpuAcquireTest::Node {
-    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Clone the GpuContextLimitedAccess (Arc refcount bump on
-        // `Arc<GpuContext>`); dropping the clone in `teardown()`
-        // balances it.
-        self.gpu = Some(ctx.gpu_limited_access().clone());
-        Ok(())
+/// Acquire a `width` × `height` pixel buffer through `gpu` and write a sentinel byte to its
+/// first plane: the width and height it holds, and the plane's address.
+fn acquire_a_pixel_buffer_and_write_its_plane(
+    gpu: &GpuContextLimitedAccess,
+    width: u32,
+    height: u32,
+) -> Result<(u32, u32, *mut u8)> {
+    // Exercise `acquire_pixel_buffer` — paired out-param
+    // tuple return.
+    let (_pool_id, pixel_buffer) = gpu.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
+
+    // Read the cached POD width/height (pure field reads).
+    let observed_w = pixel_buffer.width;
+    let observed_h = pixel_buffer.height;
+
+    // `plane_base_address` returns a host-allocated mapped
+    // pointer in the same process address space.
+    let plane_ptr = pixel_buffer.plane_base_address(0);
+
+    // If the mapping is HOST_VISIBLE, write a sentinel byte
+    // to prove the mapped memory is reachable.
+    if !plane_ptr.is_null() {
+        // SAFETY: `plane_ptr` is the mapped base address for
+        // plane 0 of a freshly-acquired HOST_VISIBLE pixel
+        // buffer. The host's VMA allocator guarantees this
+        // pointer is valid for at least one byte for the
+        // buffer's lifetime; we own the `PixelBuffer` value
+        // here so the lifetime is the duration of this call.
+        unsafe {
+            *plane_ptr = 0xAB;
+        }
     }
 
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.settings.output_path.clone();
-        let width = self.settings.width;
-        let height = self.settings.height;
+    drop(pixel_buffer);
 
-        let result: Result<(u32, u32, *mut u8)> = (|| {
-            let gpu = self
-                .gpu
-                .as_ref()
-                .ok_or_else(|| Error::Runtime("GpuAcquireTest: setup() didn't stash gpu".into()))?;
-
-            // Exercise `acquire_pixel_buffer` — paired out-param
-            // tuple return.
-            let (_pool_id, pixel_buffer) =
-                gpu.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
-
-            // Read the cached POD width/height (pure field reads).
-            let observed_w = pixel_buffer.width;
-            let observed_h = pixel_buffer.height;
-
-            // `plane_base_address` returns a host-allocated mapped
-            // pointer in the same process address space.
-            let plane_ptr = pixel_buffer.plane_base_address(0);
-
-            // If the mapping is HOST_VISIBLE, write a sentinel byte
-            // to prove the mapped memory is reachable.
-            if !plane_ptr.is_null() {
-                // SAFETY: `plane_ptr` is the mapped base address for
-                // plane 0 of a freshly-acquired HOST_VISIBLE pixel
-                // buffer. The host's VMA allocator guarantees this
-                // pointer is valid for at least one byte for the
-                // buffer's lifetime; we own the `PixelBuffer` value
-                // here so the lifetime is the duration of `start()`.
-                unsafe {
-                    *plane_ptr = 0xAB;
-                }
-            }
-
-            drop(pixel_buffer);
-
-            Ok((observed_w, observed_h, plane_ptr))
-        })();
-
-        let line = match result {
-            Ok((w, h, ptr)) => format!("OK\n{w}x{h}\nsentinel_addr=0x{:x}", ptr as usize),
-            Err(e) => format!("ERR:{e}"),
-        };
-        std::fs::write(&output_path, &line)
-            .map_err(|e| Error::Runtime(format!("GpuAcquireTest: write {output_path}: {e}")))?;
-        Ok(())
-    }
-
-    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.gpu.take();
-        Ok(())
-    }
-
-    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
+    Ok((observed_w, observed_h, plane_ptr))
 }

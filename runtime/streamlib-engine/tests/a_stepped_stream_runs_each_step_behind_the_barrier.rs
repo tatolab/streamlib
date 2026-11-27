@@ -18,11 +18,10 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_str
 use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
+use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
 use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner};
-use streamlib_engine::core::{
-    Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClockSpec,
-};
+use streamlib_engine::core::{Result, RuntimeContextLimitedAccess, StreamClockSpec};
 
 /// Stream nanoseconds per step, and the source's interval.
 const STEP_NS: u64 = 50_000_000;
@@ -40,15 +39,14 @@ static TICKS_THE_SINK_TOOK: Mutex<Vec<(u64, i64)>> = Mutex::new(Vec::new());
     execution = continuous(interval_ms = 50),
     output("ticks", pin_type = String, flow = Stream),
 )]
-pub struct SteppedTickSource {
-    next_tick: u64,
-}
-
-impl streamlib_engine::ContinuousNode for SteppedTickSource::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let tick = self.next_tick;
-        self.next_tick += 1;
-        self.outputs.write_msgpack("ticks", &tick)
+pub fn stepped_tick_source(
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    let mut next_tick = 0u64;
+    move |_ctx| {
+        let tick = next_tick;
+        next_tick += 1;
+        outputs.write_msgpack("ticks", &tick)
     }
 }
 
@@ -57,17 +55,18 @@ impl streamlib_engine::ContinuousNode for SteppedTickSource::Node {
     input("ticks", delivery_profile = "ordered", pin_type = String, flow = Stream),
     output("relayed", pin_type = String, flow = Stream),
 )]
-pub struct SlowSteppedRelay;
-
-impl streamlib_engine::ReactiveNode for SlowSteppedRelay::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        let Some(message) = self.inputs.read_raw("ticks")? else {
+pub fn slow_stepped_relay(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        let Some(message) = inputs.read_raw("ticks")? else {
             return Ok(());
         };
         std::thread::sleep(MIDDLE_NODE_MACHINE_TIME_PER_MESSAGE);
         let tick: u64 = rmp_serde::from_slice(&message.payload)
             .map_err(|decode| streamlib_engine::core::Error::Runtime(decode.to_string()))?;
-        self.outputs.write_msgpack("relayed", &tick)
+        outputs.write_msgpack("relayed", &tick)
     }
 }
 
@@ -75,11 +74,11 @@ impl streamlib_engine::ReactiveNode for SlowSteppedRelay::Node {
     execution = reactive,
     input("relayed", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
-pub struct SteppedTickSink;
-
-impl streamlib_engine::ReactiveNode for SteppedTickSink::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some(message) = self.inputs.read_raw("relayed")? {
+pub fn stepped_tick_sink(
+    inputs: InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw("relayed")? {
             let tick: u64 = rmp_serde::from_slice(&message.payload)
                 .map_err(|decode| streamlib_engine::core::Error::Runtime(decode.to_string()))?;
             TICKS_THE_SINK_TOOK
@@ -97,12 +96,12 @@ static TICK_BATCHES_THE_SLOW_SINK_TOOK: Mutex<Vec<Vec<u64>>> = Mutex::new(Vec::n
     execution = continuous(interval_ms = 150),
     input("ticks", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
-pub struct EveryThirdStepTickSink;
-
-impl streamlib_engine::ContinuousNode for EveryThirdStepTickSink::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+pub fn every_third_step_tick_sink(
+    inputs: InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
         let mut batch = Vec::new();
-        while let Some(message) = self.inputs.read_raw("ticks")? {
+        while let Some(message) = inputs.read_raw("ticks")? {
             batch
                 .push(rmp_serde::from_slice(&message.payload).map_err(|decode| {
                     streamlib_engine::core::Error::Runtime(decode.to_string())
@@ -114,26 +113,14 @@ impl streamlib_engine::ContinuousNode for EveryThirdStepTickSink::Node {
 }
 
 #[streamlib::sdk::node(execution = manual, output("frames", pin_type = Texture, formats = ["rgba8_unorm"]))]
-pub struct SelfPacedSource;
-
-impl streamlib_engine::ManualNode for SelfPacedSource::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn self_paced_source() {}
 
 #[streamlib::sdk::node(
     execution = manual,
     paced_by_real_time,
     output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub struct RealTimePacedManualSource;
-
-impl streamlib_engine::ManualNode for RealTimePacedManualSource::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn real_time_paced_manual_source() {}
 
 /// How long the node paced by real time takes over each call, on the machine clock.
 const REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL: Duration = Duration::from_millis(300);
@@ -143,11 +130,11 @@ const REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL: Duration = Duration::from_mill
     paced_by_real_time,
     output("ticks", pin_type = String, flow = Stream),
 )]
-pub struct SlowRealTimePacedTickSource;
-
-impl streamlib_engine::ContinuousNode for SlowRealTimePacedTickSource::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.outputs.write_msgpack("ticks", &0u64)?;
+pub fn slow_real_time_paced_tick_source(
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        outputs.write_msgpack("ticks", &0u64)?;
         std::thread::sleep(REAL_TIME_PACED_NODE_MACHINE_TIME_PER_CALL);
         Ok(())
     }
@@ -160,11 +147,11 @@ static TICKS_THE_REAL_TIME_SINK_TOOK: AtomicU64 = AtomicU64::new(0);
     execution = reactive,
     input("ticks", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
-pub struct RealTimePacedTickSink;
-
-impl streamlib_engine::ReactiveNode for RealTimePacedTickSink::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while self.inputs.read_raw("ticks")?.is_some() {
+pub fn real_time_paced_tick_sink(
+    inputs: InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        while inputs.read_raw("ticks")?.is_some() {
             TICKS_THE_REAL_TIME_SINK_TOOK.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())

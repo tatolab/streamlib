@@ -4,29 +4,28 @@
 """One fullscreen graphics pass over one incoming frame.
 
 The shape both full-frame effects in this stream share: build the kernel once
-in `setup()` where the capability is Full, then per frame take a colour target
-from the output ring, draw the incoming frame into it, and publish the target's
-texture. A subclass supplies its fragment shader and packs its own push
-constants; everything else — ports, kernel construction, the ring, the draw,
-the write — is here so each effect module is only its effect.
+in the node's body where the capability is Full, then per frame take a colour
+target from the output ring, draw the incoming frame into it, and publish the
+target's texture. An effect supplies its fragment shader and packs its own push
+constants; everything else — the pin types, kernel construction, the ring, the
+draw, the write — is here so each effect module is only its effect.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Annotated, ClassVar
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    Texture,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
+    Texture,
     TexturePixelFormats,
+    TextureToWrite,
 )
 
 from .elapsed_seconds_since_first_process import ElapsedSecondsSinceFirstProcess
@@ -36,90 +35,76 @@ from .gpu_surface_conventions import (
     read_shader_source,
 )
 
-__all__ = ["SinglePassVideoEffect"]
+__all__ = [
+    "SHARED_VERTEX_SHADER_FILE_NAME",
+    "VideoFromUpstream",
+    "VideoToDownstream",
+    "each_frame_of_a_single_pass_video_effect",
+]
 
 # The input port and the name the fragment shader samples the frame at.
 VIDEO_FROM_UPSTREAM = "video_from_upstream"
 
 SHARED_VERTEX_SHADER_FILE_NAME = "fullscreen_triangle_vertex.slang"
 
-_CLASS_ATTRIBUTES_EVERY_EFFECT_DECLARES = {
-    "fragment_shader_file_name": str,
-    "push_constant_size": int,
-}
+VideoFromUpstream = InputPin[
+    Annotated[Texture, StreamDelivery("newest"), Description("The frame to draw the effect over")]
+]
+"""The pin type of an effect's `video_from_upstream` input."""
 
-
-class SinglePassVideoEffect(ABC):
-    """Base for an effect that is one fragment shader over one input frame."""
-
-    fragment_shader_file_name: ClassVar[str]
-    push_constant_size: ClassVar[int]
-
-    def __init_subclass__(cls, **class_keywords: object) -> None:
-        super().__init_subclass__(**class_keywords)
-        for (
-            attribute_name,
-            attribute_type,
-        ) in _CLASS_ATTRIBUTES_EVERY_EFFECT_DECLARES.items():
-            if not isinstance(getattr(cls, attribute_name, None), attribute_type):
-                raise TypeError(
-                    f"{cls.__name__} subclasses SinglePassVideoEffect without the "
-                    f"class attribute `{attribute_name}: {attribute_type.__name__}`"
-                )
-        if getattr(cls.push_constants_for, "__isabstractmethod__", False):
-            raise TypeError(
-                f"{cls.__name__} subclasses SinglePassVideoEffect without defining "
-                f"`push_constants_for(self, frame, elapsed_seconds) -> bytes`"
-            )
-
-    video_from_upstream: InputPin[
-        Annotated[
-            Texture, StreamDelivery("newest"), Description("The frame to draw the effect over")
-        ]
+VideoToDownstream = OutputPin[
+    Annotated[
+        Texture,
+        TexturePixelFormats(TEXTURE_FORMAT),
+        Description("The same frame through the effect"),
     ]
-    video_to_downstream: OutputPin[
-        Annotated[
-            Texture,
-            TexturePixelFormats(TEXTURE_FORMAT),
-            Description("The same frame through the effect"),
-        ]
-    ]
+]
+"""The pin type of an effect's `video_to_downstream` output."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
-        )
-        self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
-            color_attachment_formats=[TEXTURE_FORMAT],
-            vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),
-            fragment_source=read_shader_source(self.fragment_shader_file_name),
-            bindings={VIDEO_FROM_UPSTREAM: ("sampled_texture", ["fragment"])},
-            push_constant_size=self.push_constant_size,
-            label=type(self).__name__,
-        )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.video_from_upstream.read()
+def each_frame_of_a_single_pass_video_effect(
+    ctx: RuntimeContextFullAccess,
+    *,
+    label: str,
+    fragment_shader_file_name: str,
+    push_constant_size: int,
+    push_constants_for: Callable[[Texture, float], bytes],
+    video_from_upstream: VideoFromUpstream,
+    video_to_downstream: VideoToDownstream,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Build the effect's kernel from `fragment_shader_file_name` and return the function that
+    draws each frame of `video_from_upstream` through it into `video_to_downstream`, its push
+    constants packed by `push_constants_for(frame, elapsed_seconds)`."""
+    elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
+    output_ring = NodeOutputTextureRing(TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE)
+    graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
+        color_attachment_formats=[TEXTURE_FORMAT],
+        vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),
+        fragment_source=read_shader_source(fragment_shader_file_name),
+        bindings={VIDEO_FROM_UPSTREAM: ("sampled_texture", ["fragment"])},
+        push_constant_size=push_constant_size,
+        label=label,
+    )
+
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        frame = video_from_upstream.read()
         if frame is None:
             return
-        elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
+        elapsed_seconds = elapsed_seconds_since_first_process.seconds_at(frame_ctx.time)
 
-        color_target = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, frame.width, frame.height
+        color_target = output_ring.next_texture_for_this_frame(
+            frame_ctx.gpu_limited_access, frame.width, frame.height
         )
-        self.graphics_kernel.draw(
+        graphics_kernel.draw(
             bindings={VIDEO_FROM_UPSTREAM: frame.surface_id},
             color_targets=[color_target],
             extent=(frame.width, frame.height),
             vertex_count=3,
-            push_constants=self.push_constants_for(frame, elapsed_seconds),
+            push_constants=push_constants_for(frame, elapsed_seconds),
         )
-        self.video_to_downstream.write(
+        video_to_downstream.write(
             TextureToWrite.of_texture(color_target, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
 
-    @abstractmethod
-    def push_constants_for(self, frame: Texture, elapsed_seconds: float) -> bytes:
-        """This effect's push-constant block for one frame, packed as its shader declares it."""
+    return each_frame

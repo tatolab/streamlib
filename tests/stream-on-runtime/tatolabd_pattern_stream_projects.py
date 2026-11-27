@@ -47,19 +47,22 @@ def {stream_function_name}(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(pattern.output("video"), reader.input("video_from_upstream"))
 '''
 PROJECT_FRAME_READER_SOURCE = '''\
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 
-@node
-class PatternFrameReader:
+@node(execution="reactive")
+def PatternFrameReader(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads each frame it receives and keeps none."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        video_from_upstream.read()
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.video_from_upstream.read()
+    return each_frame
 '''
 PROJECT_STREAM_NODE_COUNT = 2
 

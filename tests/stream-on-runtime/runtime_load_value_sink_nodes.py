@@ -7,19 +7,22 @@ A test whose subject is only what a graph document can carry through a load, how
 or which numbers and strings it holds, names this node.
 """
 
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
+from tatolab.stream import Input, InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 
-@node
-class ValueSink:
+@node(execution="reactive")
+def ValueSink(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    value: Input[int] = Input(0),
+    title: Input[str] = Input(""),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads each frame it receives, and holds a number and a title."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-    value: int = 0
-    title: str = ""
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         del ctx
-        self.video_from_upstream.read()
+        video_from_upstream.read()
+
+    return each_frame

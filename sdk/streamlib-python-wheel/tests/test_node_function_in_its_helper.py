@@ -410,14 +410,15 @@ def what_the_stacking_probe_did() -> "list[tuple[str, object]]":
 
 
 def wait_until_the_stacking_probe_did(
-    done: "tuple[str, object]", *, since: int, timeout_s: float = 5.0
+    stand_in_parent: Any, done: "tuple[str, object]", *, since: int, timeout_s: float = 5.0
 ) -> None:
-    """Wait until the stacking probe did `done` after the first `since` things it did."""
+    """Wait until the stacking probe did `done` after the first `since` things it did, answering
+    the helper meanwhile."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if done in what_the_stacking_probe_did()[since:]:
             return
-        time.sleep(0.01)
+        answer_the_helper_for_a_moment(stand_in_parent)
     raise AssertionError(
         f"the stacking probe never did {done!r}; it did: {what_the_stacking_probe_did()[since:][-5:]}"
     )
@@ -487,26 +488,32 @@ def test_a_layer_wired_or_unwired_while_playing_gives_the_node_its_slots_and_reb
             },
         }
     )
-    assert stand_in_parent.receive() == {"rpc": "ready", "takes_its_pin_group_slots_live": True}
+    assert stand_in_parent.receive_answering_each_escalate() == {
+        "rpc": "ready",
+        "takes_its_pin_group_slots_live": True,
+    }
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
-    wait_until_the_stacking_probe_did(("frame", (1, (2.0,))), since=0)
+    wait_until_the_stacking_probe_did(stand_in_parent, ("frame", (1, (2.0,))), since=0)
 
     second_layer = the_wiring_of_a_link_into_a_layer(1, "input")
     since = len(what_the_stacking_probe_did())
     stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": second_layer})
-    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": second_layer["link_id"]}
-    wait_until_the_stacking_probe_did(("frame", (2, (2.0, 3.0))), since=since)
+    assert stand_in_parent.receive_answering_each_escalate() == {
+        "rpc": "link_wired",
+        "link_id": second_layer["link_id"],
+    }
+    wait_until_the_stacking_probe_did(stand_in_parent, ("frame", (2, (2.0, 3.0))), since=since)
     since = len(what_the_stacking_probe_did())
     # Held until the probe reads the level, so its sender outlives the read.
     source_of_the_second_layer = a_source_of_levels_into_layer(1)
     write_a_level(source_of_the_second_layer, 0.75)
-    wait_until_the_stacking_probe_did(("read", (1, 0.75)), since=since)
+    wait_until_the_stacking_probe_did(stand_in_parent, ("read", (1, 0.75)), since=since)
 
     since = len(what_the_stacking_probe_did())
     stand_in_parent.send(
         {"cmd": "set_input_values", "input_values": {"layers.0.gain": 2.0, "layers.1.gain": 5.0}}
     )
-    wait_until_the_stacking_probe_did(("frame", (2, (2.0, 5.0))), since=since)
+    wait_until_the_stacking_probe_did(stand_in_parent, ("frame", (2, (2.0, 5.0))), since=since)
 
     since = len(what_the_stacking_probe_did())
     stand_in_parent.send(
@@ -517,7 +524,7 @@ def test_a_layer_wired_or_unwired_while_playing_gives_the_node_its_slots_and_reb
             "link_id": second_layer["link_id"],
         }
     )
-    wait_until_the_stacking_probe_did(("frame", (1, (2.0,))), since=since)
+    wait_until_the_stacking_probe_did(stand_in_parent, ("frame", (1, (2.0,))), since=since)
 
     did = what_the_stacking_probe_did()
     assert [entry for entry in did if entry[0] in ("body", "counted")] == [
@@ -559,13 +566,16 @@ def test_a_link_into_a_slot_that_does_not_build_is_refused_and_leaves_the_slots_
             },
         }
     )
-    assert stand_in_parent.receive() == {"rpc": "ready", "takes_its_pin_group_slots_live": True}
+    assert stand_in_parent.receive_answering_each_escalate() == {
+        "rpc": "ready",
+        "takes_its_pin_group_slots_live": True,
+    }
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
-    wait_until_the_stacking_probe_did(("weights", (2.0,)), since=0)
+    wait_until_the_stacking_probe_did(stand_in_parent, ("weights", (2.0,)), since=0)
 
     second_layer = the_wiring_of_a_link_into_a_layer(1, "input")
     stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": second_layer})
-    refused = stand_in_parent.receive()
+    refused = stand_in_parent.receive_answering_each_escalate()
     assert refused["rpc"] == "link_wire_failed", refused
     assert refused["link_id"] == second_layer["link_id"]
     assert refused["reason"] == "a layer needs its weight set", refused
@@ -575,8 +585,11 @@ def test_a_link_into_a_slot_that_does_not_build_is_refused_and_leaves_the_slots_
         {"cmd": "set_input_values", "input_values": {"layers.0.weight": 2.0, "layers.1.weight": 4.0}}
     )
     stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": second_layer})
-    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": second_layer["link_id"]}
-    wait_until_the_stacking_probe_did(("weights", (2.0, 4.0)), since=since)
+    assert stand_in_parent.receive_answering_each_escalate() == {
+        "rpc": "link_wired",
+        "link_id": second_layer["link_id"],
+    }
+    wait_until_the_stacking_probe_did(stand_in_parent, ("weights", (2.0, 4.0)), since=since)
     stop_and_tear_down(stand_in_parent, lifecycle_thread)
 
 

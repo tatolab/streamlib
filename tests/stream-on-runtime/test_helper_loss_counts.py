@@ -37,13 +37,12 @@ import json
 import os
 import time
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     EncodedVideo,
     InputPin,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     StreamDelivery,
     log,
@@ -55,63 +54,65 @@ TICKS_PER_OVERSIZED_BAG = 50
 
 
 @node(execution="continuous", interval_ms=1)
-class FastBagSource:
+def FastBagSource(
+    *,
+    bags: OutputPin[EncodedVideo],
+    oversized_bags: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes far faster than `SlowOrderedSink` reads, and now and then a message no
     helper link can carry."""
 
-    def __init__(self) -> None:
-        self._ticks = 0
+    ticks = 0
 
-    bags: OutputPin[EncodedVideo]
-
-    oversized_bags: OutputPin[EncodedVideo]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self._ticks += 1
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal ticks
+        ticks += 1
         for message_index in range(BAGS_PER_TICK):
-            self.bags.write(
-                bytes([self._ticks % 256, message_index]),
+            bags.write(
+                bytes([ticks % 256, message_index]),
                 starts_group=message_index == 0,
             )
-        if self._ticks % TICKS_PER_OVERSIZED_BAG == 0:
-            self.oversized_bags.write(bytes({OVERSIZED_BAG_PADDING_BYTES}))
+        if ticks % TICKS_PER_OVERSIZED_BAG == 0:
+            oversized_bags.write(bytes({OVERSIZED_BAG_PADDING_BYTES}))
+
+    return each_frame
 
 
-@node
-class SlowOrderedSink:
+@node(execution="reactive")
+def SlowOrderedSink(
+    *,
+    bags: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Takes every message in order, far slower than they arrive, and says once
     what its reads were told: a loss on its link, and a message continuing a
     group."""
 
-    def __init__(self) -> None:
-        self._lost_told_so_far = 0
-        self._a_message_continuing_a_group_arrived = False
-        self._reported_what_its_reads_were_told = False
+    lost_told_so_far = 0
+    a_message_continuing_a_group_arrived = False
+    reported_what_its_reads_were_told = False
 
-    bags: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]]
+    log.info("MARKER:SLOW_SINK_PID " + json.dumps({{"pid": os.getpid()}}))
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        log.info("MARKER:SLOW_SINK_PID " + json.dumps({{"pid": os.getpid()}}))
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        message = self.bags.read_message()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal a_message_continuing_a_group_arrived, lost_told_so_far, reported_what_its_reads_were_told
+        message = bags.read_message()
         if message is None:
             return
-        self._lost_told_so_far += message.lost_since_last_read
+        lost_told_so_far += message.lost_since_last_read
         if not message.starts_group:
-            self._a_message_continuing_a_group_arrived = True
+            a_message_continuing_a_group_arrived = True
         if (
             message.lost_since_last_read > 0
-            and self._a_message_continuing_a_group_arrived
-            and not self._reported_what_its_reads_were_told
+            and a_message_continuing_a_group_arrived
+            and not reported_what_its_reads_were_told
         ):
-            self._reported_what_its_reads_were_told = True
+            reported_what_its_reads_were_told = True
             log.info(
                 "MARKER:SLOW_SINK_TOLD_OF_A_LOSS "
                 + json.dumps(
                     {{
                         "lost_since_last_read": message.lost_since_last_read,
-                        "lost_told_so_far": self._lost_told_so_far,
+                        "lost_told_so_far": lost_told_so_far,
                         "inbound_link": message.inbound_link,
                         "sink_pid": os.getpid(),
                     }}
@@ -119,15 +120,20 @@ class SlowOrderedSink:
             )
         time.sleep(0.05)
 
+    return each_frame
 
-@node
-class NewestSink:
+
+@node(execution="reactive")
+def NewestSink(
+    *,
+    bags: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Drains whatever reaches it."""
 
-    bags: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        bags.read()
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.bags.read()
+    return each_frame
 '''
 
 LOSS_COUNTING_STREAM_SOURCE = f'''\

@@ -3,16 +3,19 @@
 
 """Reads every decoded frame and keeps none, so `graph` counts what the decoder writes."""
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import InputPin, RuntimeContextLimitedAccess, StreamDelivery, Texture, node
 
 
-@node
-class DecodedVideoFrameSink:
+@node(execution="reactive")
+def DecodedVideoFrameSink(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The reader a decoder's `video` port needs for `graph` to count its writes."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        video_from_upstream.read()
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        self.video_from_upstream.read()
+    return each_frame

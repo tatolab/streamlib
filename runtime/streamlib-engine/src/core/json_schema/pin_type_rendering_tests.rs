@@ -87,15 +87,10 @@ fn the_catalog_serves_a_rust_ports_declared_pin_type_and_no_family() {
     input("every_frame", pin_type = Texture, delivery_profile = "ordered"),
     output("still", pin_type = Texture, formats = ["rgba8_unorm"], flow = Value),
 )]
-struct MockNodeReadingByItsPins;
-
-impl crate::core::ReactiveNode for MockNodeReadingByItsPins::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+fn mock_node_reading_by_its_pins()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
+{
+    |_ctx| Ok(())
 }
 
 /// Each port's name, flow and delivery profile, as `ports` renders them.
@@ -236,15 +231,10 @@ fn a_graph_interface_port_renders_the_pin_type_it_carries_and_none_while_untyped
     input("frames", pin_type = Texture, formats = ["rgba8_unorm", "bgra8_unorm"]),
     output("picture", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-struct MockNodeStatingTextureFormats;
-
-impl crate::core::ReactiveNode for MockNodeStatingTextureFormats::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+fn mock_node_stating_texture_formats()
+-> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
+{
+    |_ctx| Ok(())
 }
 
 #[test]

@@ -9,9 +9,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::Result;
-use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
+use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::schemars::JsonSchema;
 
 /// How the node crashes the runtime.
@@ -78,13 +76,7 @@ impl<'de> Deserialize<'de> for CrashOnDemandTestNodeConfig {
 #[streamlib::sdk::node(
     execution = manual,
 )]
-pub(crate) struct CrashOnDemandTestNode;
-
-impl ManualNode for CrashOnDemandTestNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn crash_on_demand_test_node() {}
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_crash_on_demand_test_node() {

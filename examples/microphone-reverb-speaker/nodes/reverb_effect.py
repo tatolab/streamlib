@@ -5,18 +5,19 @@
 
 Importable as `nodes.reverb_effect:ReverbEffect`, which is the name the engine
 spawns this node's child interpreter with. Its Channels input declares one window
-contract, so every block `process()` reads is exactly 128 mono f32 samples at
+contract, so every block a frame reads is exactly 128 mono f32 samples at
 48 kHz, whatever the capture device opened at: the filter lengths are fixed at
 construction, and there is no resampler or rechunker in this file.
 """
 
-from typing import Annotated, Final
+from typing import Annotated, Callable, Final
 
 import numpy
 from tatolab.stream import (
     Audio,
     AudioWindowContract,
     Description,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
@@ -47,11 +48,11 @@ DIFFUSER_FEEDBACK = 0.5
 
 # Freeverb's input attenuation. It is not a headroom guarantee: the wet path
 # peaks near 2.5x around 5.77 kHz, where the comb resonances align and the
-# diffuser chain multiplies on top, which is what the clamp in `process()` is for.
+# diffuser chain multiplies on top, which is what the clamp in each frame is for.
 GAIN_INTO_THE_COMB_BANK = 0.015
 
 # Map the 0..1 dials onto the ranges the filters take. Feedback stays inside
-# [0.7, 0.98] for every legal room size, so no setting makes a comb diverge.
+# [0.7, 0.98] for every legal room size, so no input makes a comb diverge.
 ROOM_SIZE_TO_FEEDBACK_SCALE = 0.28
 ROOM_SIZE_TO_FEEDBACK_OFFSET = 0.7
 DAMPING_TO_FILTER_COEFFICIENT_SCALE = 0.4
@@ -158,34 +159,37 @@ class ReverbDiffuserFilter:
 
 
 @node.meta(description="Adds a reverb tail to the audio it is given, mixed under the original")
-@node
-class ReverbEffect:
-    """Mono audio in, the same audio with its own reverb tail mixed under it out.
-
-    Every dial is read on each window, so turning one while the stream plays
-    changes the tail from the next window on.
-    """
-
-    room_size: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("How long the tail rings; 1 is the largest room."),
-    ] = 0.7
-    damping: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("How quickly the tail loses its highs."),
-    ] = 0.5
-    wet_level: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("How loud the tail is mixed in."),
-    ] = 0.25
-    dry_level: Annotated[
-        float,
-        NumberRange(minimum=0.0, maximum=1.0),
-        Description("How loud the original audio is mixed in."),
-    ] = 0.7
+@node(execution="reactive")
+def ReverbEffect(
+    *,
+    room_size: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("How long the tail rings; 1 is the largest room."),
+        ]
+    ] = Input(0.7),
+    damping: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("How quickly the tail loses its highs."),
+        ]
+    ] = Input(0.5),
+    wet_level: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("How loud the tail is mixed in."),
+        ]
+    ] = Input(0.25),
+    dry_level: Input[
+        Annotated[
+            float,
+            NumberRange(minimum=0.0, maximum=1.0),
+            Description("How loud the original audio is mixed in."),
+        ]
+    ] = Input(0.7),
     dry_audio_from_upstream: InputPin[
         Annotated[
             Audio,
@@ -193,62 +197,69 @@ class ReverbEffect:
             REVERB_WINDOW,
             Description("Whatever the microphone captured, converted to the reverb's window"),
         ]
-    ]
+    ],
     reverberated_audio_to_downstream: OutputPin[
         Annotated[Audio, Description("The input with its own tail mixed under it")]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Mono audio in, the same audio with its own reverb tail mixed under it out.
+
+    Every dial is read on each window, so turning one while the stream plays
+    changes the tail from the next window on.
+    """
+
+    comb_filters = [
+        ReverbCombFilter(
+            delay_length_at_the_reverb_window_rate(delay), REVERB_WINDOW.window_size
+        )
+        for delay in COMB_DELAYS_AT_THE_REFERENCE_RATE
+    ]
+    diffuser_filters = [
+        ReverbDiffuserFilter(
+            delay_length_at_the_reverb_window_rate(delay), REVERB_WINDOW.window_size
+        )
+        for delay in DIFFUSER_DELAYS_AT_THE_REFERENCE_RATE
     ]
 
-    def __init__(self) -> None:
-        self._comb_filters = [
-            ReverbCombFilter(
-                delay_length_at_the_reverb_window_rate(delay), REVERB_WINDOW.window_size
-            )
-            for delay in COMB_DELAYS_AT_THE_REFERENCE_RATE
-        ]
-        self._diffuser_filters = [
-            ReverbDiffuserFilter(
-                delay_length_at_the_reverb_window_rate(delay), REVERB_WINDOW.window_size
-            )
-            for delay in DIFFUSER_DELAYS_AT_THE_REFERENCE_RATE
-        ]
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        # Drained rather than read once, so a window that is already whole never
-        # waits behind the next device quantum, and falling behind costs latency
-        # once rather than forever.
-        while True:
-            dry_block = self.dry_audio_from_upstream.read()
-            if dry_block is None:
-                return
-            self.reverberate_one_window(dry_block)
-
-    def reverberate_one_window(self, dry_block: Audio) -> None:
+    def reverberate_one_window(dry_block: Audio) -> None:
         """Mix one window's tail under it and write the result downstream."""
         # The contract guarantees mono f32, `[channel][sample]`. The view borrows
         # the message's samples, which the arithmetic below only ever reads.
         dry = numpy.from_dlpack(dry_block)[0]
 
         comb_feedback = (
-            self.room_size * ROOM_SIZE_TO_FEEDBACK_SCALE + ROOM_SIZE_TO_FEEDBACK_OFFSET
+            room_size.get() * ROOM_SIZE_TO_FEEDBACK_SCALE + ROOM_SIZE_TO_FEEDBACK_OFFSET
         )
-        damping_coefficient = self.damping * DAMPING_TO_FILTER_COEFFICIENT_SCALE
+        damping_coefficient = damping.get() * DAMPING_TO_FILTER_COEFFICIENT_SCALE
         into_the_comb_bank = dry * GAIN_INTO_THE_COMB_BANK
         wet = numpy.zeros_like(dry)
-        for comb_filter in self._comb_filters:
+        for comb_filter in comb_filters:
             wet += comb_filter.add_one_window_to_the_tail(
                 into_the_comb_bank, comb_feedback, damping_coefficient
             )
-        for diffuser_filter in self._diffuser_filters:
+        for diffuser_filter in diffuser_filters:
             wet = diffuser_filter.diffuse_one_window(wet)
 
-        mixed = dry * self.dry_level + wet * self.wet_level
+        mixed = dry * dry_level.get() + wet * wet_level.get()
         numpy.clip(mixed, -1.0, 1.0, out=mixed)
 
         # The tail rides later windows; these samples cover the instants the
         # incoming ones did, so the block keeps the stamp and index it arrived with.
-        self.reverberated_audio_to_downstream.write(
+        reverberated_audio_to_downstream.write(
             numpy.ascontiguousarray(mixed.astype(numpy.float32, copy=False)[numpy.newaxis, :]),
             timestamp_ns=dry_block.timestamp_ns,
             start_sample=dry_block.start_sample,
             sample_rate=REVERB_WINDOW.sample_rate,
         )
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        # Drained rather than read once, so a window that is already whole never
+        # waits behind the next device quantum, and falling behind costs latency
+        # once rather than forever.
+        while True:
+            dry_block = dry_audio_from_upstream.read()
+            if dry_block is None:
+                return
+            reverberate_one_window(dry_block)
+
+    return each_frame

@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import random
 import struct
+from typing import Callable
 
-from typing import ClassVar
+from tatolab.stream import RuntimeContextFullAccess, RuntimeContextLimitedAccess, Texture, node
 
-from tatolab.stream import Texture, RuntimeContextFullAccess, node
-
-from ..single_pass_video_effect import SinglePassVideoEffect
+from ..single_pass_video_effect import (
+    VideoFromUpstream,
+    VideoToDownstream,
+    each_frame_of_a_single_pass_video_effect,
+)
 
 # `float2 frame_extent_in_pixels; float elapsed_seconds; float glitch_intensity;
 #  float glitch_seed; float dramatic_glitch;`
@@ -81,25 +84,34 @@ class GlitchFlashSchedule:
 
 
 @node.meta(description="Cyberpunk colour grade with intermittent glitch flashes")
-@node
-class CyberpunkGlitch(SinglePassVideoEffect):
+@node(execution="reactive")
+def CyberpunkGlitch(
+    *,
+    video_from_upstream: VideoFromUpstream,
+    video_to_downstream: VideoToDownstream,
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The grade is always on; the glitch is not."""
+    flash_schedule = GlitchFlashSchedule()
 
-    fragment_shader_file_name: ClassVar[str] = "cyberpunk_glitch_fragment.slang"
-    push_constant_size: ClassVar[int] = GLITCH_PUSH_CONSTANT_SIZE
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        super().setup(ctx)
-        self.flash_schedule = GlitchFlashSchedule()
-
-    def push_constants_for(self, frame: Texture, elapsed_seconds: float) -> bytes:
-        self.flash_schedule.advance_to(elapsed_seconds)
+    def push_constants_for(frame: Texture, elapsed_seconds: float) -> bytes:
+        flash_schedule.advance_to(elapsed_seconds)
         return struct.pack(
             GLITCH_PUSH_CONSTANT_FORMAT,
             float(frame.width),
             float(frame.height),
             elapsed_seconds,
-            self.flash_schedule.intensity,
-            self.flash_schedule.seed,
-            1.0 if self.flash_schedule.is_dramatic else 0.0,
+            flash_schedule.intensity,
+            flash_schedule.seed,
+            1.0 if flash_schedule.is_dramatic else 0.0,
         )
+
+    return each_frame_of_a_single_pass_video_effect(
+        ctx,
+        label="CyberpunkGlitch",
+        fragment_shader_file_name="cyberpunk_glitch_fragment.slang",
+        push_constant_size=GLITCH_PUSH_CONSTANT_SIZE,
+        push_constants_for=push_constants_for,
+        video_from_upstream=video_from_upstream,
+        video_to_downstream=video_to_downstream,
+    )

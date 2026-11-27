@@ -3,8 +3,8 @@
 
 """Probes for named-binding graphics draws, from where a kernel really runs.
 
-A kernel is an object: built in `setup()` where the capability is Full, drawn
-per frame in `process()`. Every probe runs in a node interpreter of
+A kernel is an object: built in a node's body where the capability is Full,
+and drawn there or per frame. Every probe runs in a node interpreter of
 its own and reports one `MARKER:PROBE_RESULT` JSON line.
 
 What is worth breaking a build over is that a Python node can render a
@@ -19,13 +19,12 @@ import json
 import os
 import traceback
 from collections.abc import Sequence
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     ColorInfo,
     GpuContextFullAccess,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -34,6 +33,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     log,
     node,
 )
@@ -147,18 +147,18 @@ def _invert_sampled_input_graphics_kernel(
 
 
 class _GraphicsKernelProbeBase:
-    """Builds the conformance kernel in `setup`, reports from `setup`.
+    """Builds the conformance kernel and reports, from the node's body.
 
     Nothing upstream is needed: the probe acquires both surfaces itself, which
     is the point — a draw's colour target is an engine-owned texture the
     node names, not something handed to it.
     """
 
-    # Declared, not merely assigned: `setup` assigns it inside a nested
+    # Declared, not merely assigned: `report_from` assigns it inside a nested
     # closure, which a type checker does not walk for attribute inference.
     _gpu_full_access: GpuContextFullAccess
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def report_from(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             # Held for probes whose observation needs the capability itself
@@ -181,9 +181,6 @@ class _GraphicsKernelProbeBase:
 
         _report(observe)
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        pass
-
     def draw_the_conformance_pass(self, kernel, source, color_target) -> None:
         """The one draw every probe here spells the same way."""
         kernel.draw(
@@ -197,16 +194,7 @@ class _GraphicsKernelProbeBase:
         raise NotImplementedError
 
 
-@node.meta(description="Draws a fullscreen triangle sampling one texture into another")
-@node(execution="manual")
-class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
-    """The demo: a Python node renders a pass with named bindings.
-
-    No bridge is installed anywhere, no vertex buffer exists, and the colour
-    target is a texture this node acquired rather than one an application
-    handed it.
-    """
-
+class _FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
     def observe(self, kernel, source, color_target) -> dict:
         self.draw_the_conformance_pass(kernel, source, color_target)
         # Twice, over the same surfaces: the kernel keeps no binding state, so
@@ -222,12 +210,19 @@ class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.meta(description="Every way of getting a draw's bindings wrong, refused by name")
+@node.meta(description="Draws a fullscreen triangle sampling one texture into another")
 @node(execution="manual")
-class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
-    """Unknown, missing, kind-mismatched and unresolvable, each raising with a
-    message naming what the shaders actually declare."""
+def FullscreenTriangleDrawProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The demo: a Python node renders a pass with named bindings.
 
+    No bridge is installed anywhere, no vertex buffer exists, and the colour
+    target is a texture this node acquired rather than one an application
+    handed it.
+    """
+    _FullscreenTriangleDrawProbe().report_from(ctx)
+
+
+class _GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
     def observe(self, kernel, source, color_target) -> dict:
         gpu = self._gpu_full_access
 
@@ -292,18 +287,15 @@ class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.meta(description="A binding declared for a stage the shaders do not read it in")
+@node.meta(description="Every way of getting a draw's bindings wrong, refused by name")
 @node(execution="manual")
-class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
-    """The ticket's named validation case, at the line it belongs to.
+def GraphicsBindingRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Unknown, missing, kind-mismatched and unresolvable, each raising with a
+    message naming what the shaders actually declare."""
+    _GraphicsBindingRefusalProbe().report_from(ctx)
 
-    A graphics kernel is always built from both stages, so the stage claim a
-    declaration can get wrong is *which* of them reads the binding. A draw
-    never revisits that, so the mistake has to refuse at construction — and the
-    traceback proves it did, because there is no kernel object to draw with
-    afterwards.
-    """
 
+class _GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
     def observe(self, kernel, source, color_target) -> dict:
         gpu = self._gpu_full_access
 
@@ -332,18 +324,21 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.meta(description="A uniform-buffer binding a draw cannot name a surface for")
+@node.meta(description="A binding declared for a stage the shaders do not read it in")
 @node(execution="manual")
-class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
-    """A uniform-buffer binding is reflected, declared and refused at the draw.
+def GraphicsStageMismatchProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The ticket's named validation case, at the line it belongs to.
 
-    No escalate op mints a uniform buffer, so a draw that accepted a surface
-    here would bind whatever the descriptor last held. The name is read back
-    off the kernel rather than spelled here — how reflection names a uniform
-    block is the shader's business, and the refusal has to name whatever it
-    named.
+    A graphics kernel is always built from both stages, so the stage claim a
+    declaration can get wrong is *which* of them reads the binding. A draw
+    never revisits that, so the mistake has to refuse at construction — and the
+    traceback proves it did, because there is no kernel object to draw with
+    afterwards.
     """
+    _GraphicsStageMismatchProbe().report_from(ctx)
 
+
+class _GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
     def observe(self, kernel, source, color_target) -> dict:
         del kernel
         tinted = self._gpu_full_access.create_graphics_kernel(
@@ -369,17 +364,21 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.meta(description="Pass shapes a Python draw cannot ask for")
+@node.meta(description="A uniform-buffer binding a draw cannot name a surface for")
 @node(execution="manual")
-class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
-    """Vertex buffers, an index buffer and a depth target are not arguments.
+def GraphicsBufferBindingRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """A uniform-buffer binding is reflected, declared and refused at the draw.
 
-    No escalate op mints a vertex or an index buffer, and the offscreen pass a
-    draw runs attaches colour targets only — so rather than accepting the
-    argument and dropping it, the surface has no such argument, and the
-    attachment count it does take is checked before anything is submitted.
+    No escalate op mints a uniform buffer, so a draw that accepted a surface
+    here would bind whatever the descriptor last held. The name is read back
+    off the kernel rather than spelled here — how reflection names a uniform
+    block is the shader's business, and the refusal has to name whatever it
+    named.
     """
+    _GraphicsBufferBindingRefusalProbe().report_from(ctx)
 
+
+class _GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
     def observe(self, kernel, source, color_target) -> dict:
         gpu = self._gpu_full_access
 
@@ -429,6 +428,19 @@ class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
+@node.meta(description="Pass shapes a Python draw cannot ask for")
+@node(execution="manual")
+def GraphicsPassShapeRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Vertex buffers, an index buffer and a depth target are not arguments.
+
+    No escalate op mints a vertex or an index buffer, and the offscreen pass a
+    draw runs attaches colour targets only — so rather than accepting the
+    argument and dropping it, the surface has no such argument, and the
+    attachment count it does take is checked before anything is submitted.
+    """
+    _GraphicsPassShapeRefusalProbe().report_from(ctx)
+
+
 # Two halves of exactly representable colours, so the frame read downstream
 # either matches every pixel or names where it does not.
 LEFT_HALF_RGBA = [255, 0, 0, 255]
@@ -444,65 +456,68 @@ float4 main(float4 fragment_position : SV_Position) : SV_Target {{
 
 
 @node(execution="continuous", interval_ms=10)
-class RenderedTextureFrameProducer:
+def RenderedTextureFrameProducer(
+    *,
+    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Renders two known halves into a texture from its output pool, once,
     and sends that frame downstream on every tick — no link promises delivery,
     and a bag written before the reader's interpreter subscribed is lost."""
 
-    video_to_downstream: OutputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm")]]
+    _color_target = None
 
-    def __init__(self) -> None:
-        self._color_target = None
+    try:
+        gpu = ctx.gpu_full_access
+        kernel = gpu.create_graphics_kernel(
+            color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
+            vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+            fragment_source=TWO_HALVES_FRAGMENT_SLANG,
+            label="python-two-halves",
+        )
+        _color_target = NodeOutputTextureRing(
+            COLOR_ATTACHMENT_FORMAT, COLOR_TARGET_TEXTURE_USAGE, depth=1
+        ).next_texture_for_this_frame(gpu, SURFACE_WIDTH, SURFACE_HEIGHT)
+        kernel.draw(
+            bindings={},
+            color_targets=[_color_target],
+            extent=(SURFACE_WIDTH, SURFACE_HEIGHT),
+            vertex_count=3,
+        )
+    except BaseException:
+        _report(lambda: {"failure": "the producer: " + traceback.format_exc()})
+        raise
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        try:
-            gpu = ctx.gpu_full_access
-            kernel = gpu.create_graphics_kernel(
-                color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
-                fragment_source=TWO_HALVES_FRAGMENT_SLANG,
-                label="python-two-halves",
-            )
-            self._color_target = NodeOutputTextureRing(
-                COLOR_ATTACHMENT_FORMAT, COLOR_TARGET_TEXTURE_USAGE, depth=1
-            ).next_texture_for_this_frame(gpu, SURFACE_WIDTH, SURFACE_HEIGHT)
-            kernel.draw(
-                bindings={},
-                color_targets=[self._color_target],
-                extent=(SURFACE_WIDTH, SURFACE_HEIGHT),
-                vertex_count=3,
-            )
-        except BaseException:
-            _report(lambda: {"failure": "the producer: " + traceback.format_exc()})
-            raise
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self._color_target is None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        if _color_target is None:
             return
-        self.video_to_downstream.write(
-            TextureToWrite.of_texture(self._color_target, ColorInfo()),
+        video_to_downstream.write(
+            TextureToWrite.of_texture(_color_target, ColorInfo()),
             timestamp_ns=ctx.time,
         )
 
+    return each_frame
+
 
 @node.meta(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
-@node
-class RenderedFrameCpuReader:
+@node(execution="reactive")
+def RenderedFrameCpuReader(
+    *,
+    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the first frame it is handed through `cpu()`, in a node
     interpreter of its own, and reports what each half holds."""
 
-    video_from_upstream: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        if reported:
             return
-        frame = self.video_from_upstream.read()
+        frame = video_from_upstream.read()
         if frame is None:
             return
-        self._reported = True
+        reported = True
 
         def observe() -> dict:
             with frame.cpu() as host_pixels:
@@ -522,3 +537,5 @@ class RenderedFrameCpuReader:
             }
 
         _report(observe)
+
+    return each_frame

@@ -318,13 +318,7 @@ async fn a_view_node_renders_its_manifest_settings_as_inputs_reading_its_config(
     execution = manual,
     input("cue", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
-pub struct StreamToolsTestRecordsReader;
-
-impl ManualNode for StreamToolsTestRecordsReader::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(super) fn stream_tools_test_records_reader() {}
 
 /// The UUID the graph document of the Graph Input test gives its `cue` Input.
 const CUE_GRAPH_INPUT_NODE_UUID: &str = "c0ec0ec0-ec0e-4c0e-8c0e-c0ec0ec0ec0e";

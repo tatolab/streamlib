@@ -200,33 +200,14 @@ class _RecycledFrame:
         raise RuntimeError("surface retired")
 
 
-def _recorder():
-    from tatolab.stream._class_node_construction import construct_class_node
-
-    from camera_python_effects.nodes.lerobot_recorder import LeRobotRecorder
-
-    return construct_class_node(
-        LeRobotRecorder,
-        field_values={"dataset_root": "unused"},
-        pins={
-            port: object()
-            for port in (
-                "video_from_camera",
-                "stylized_from_compositor",
-                "pose_from_avatar",
-                "episodes_to_downstream",
-            )
-        },
-    )
-
-
 def test_recorded_pixels_are_a_decimated_rgb_copy_that_outlives_the_frame() -> None:
     from camera_python_effects.nodes.lerobot_recorder import (
         RECORDING_DECIMATION_STRIDE,
+        recording_pixels_of,
     )
 
     rgba = numpy.arange(16 * 24 * 4, dtype=numpy.uint8).reshape(16, 24, 4)
-    pixels = _recorder()._frame_pixels(_HostSideOnlyFrame(rgba))
+    pixels = recording_pixels_of(_HostSideOnlyFrame(rgba))
 
     stride = RECORDING_DECIMATION_STRIDE
     assert pixels.shape == (16 // stride, 24 // stride, 3)
@@ -235,8 +216,36 @@ def test_recorded_pixels_are_a_decimated_rgb_copy_that_outlives_the_frame() -> N
     assert numpy.array_equal(pixels, rgba[::stride, ::stride, :3])
 
 
-def test_an_unreadable_frame_is_counted_and_skipped() -> None:
-    recorder = _recorder()
-    recorder.frames_unreadable = 0  # setup() starts the count
-    assert recorder._frame_pixels(_RecycledFrame()) is None
-    assert recorder.frames_unreadable == 1
+def test_an_unreadable_frame_is_counted_and_skipped(monkeypatch) -> None:
+    from camera_python_effects.nodes import lerobot_recorder
+
+    class _NoDataset:
+        episodes_saved = 0
+
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _PinHolding:
+        def __init__(self, *frames: object) -> None:
+            self._frames = list(frames)
+
+        def read(self) -> object:
+            return self._frames.pop(0) if self._frames else None
+
+    monkeypatch.setattr(lerobot_recorder, "LeRobotEpisodeRecording", _NoDataset)
+    # The close logs the counts, and only a node's own interpreter has the runtime to log to.
+    monkeypatch.setattr(lerobot_recorder.log, "info", lambda *_, **__: None)
+    recording = lerobot_recorder.DatasetBeingRecorded(
+        lerobot_recorder.RecordingSettings(
+            dataset_root="unused", repo_id="unused", fps=30, record_stylized=False
+        )
+    )
+    try:
+        recording.drain_video_pin(_PinHolding(_RecycledFrame()), lerobot_recorder.CAMERA_STREAM)
+        assert lerobot_recorder.recording_pixels_of(_RecycledFrame()) is None
+        assert recording.frames_unreadable == 1
+    finally:
+        recording.close()

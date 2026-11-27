@@ -9,8 +9,8 @@
 
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::iceoryx2::MessageGroupBoundary;
-use streamlib::sdk::nodes::{ContinuousNode, NODE_REGISTRY};
+use streamlib::sdk::iceoryx2::{MessageGroupBoundary, OutputWriter};
+use streamlib::sdk::nodes::NODE_REGISTRY;
 
 use crate::numbered_message_writer_test_node::NANOSECONDS_BETWEEN_MESSAGE_STAMPS;
 
@@ -21,16 +21,15 @@ const GROUPS_WRITTEN_TOGETHER: u64 = 2;
     execution = continuous(interval_ms = 20),
     output("paired_groups", pin_type = String, flow = Stream),
 )]
-pub struct PairedGroupWriterTestNode {
-    next_message_number: u64,
-}
-
-impl ContinuousNode for PairedGroupWriterTestNode::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+pub(crate) fn paired_group_writer_test_node(
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    let mut next_message_number = 0u64;
+    move |_ctx| {
         for _ in 0..GROUPS_WRITTEN_TOGETHER {
-            let message_number = self.next_message_number;
-            self.next_message_number += 1;
-            self.outputs.write_bytes_with_timestamp(
+            let message_number = next_message_number;
+            next_message_number += 1;
+            outputs.write_bytes_with_timestamp(
                 "paired_groups",
                 format!("message {message_number}").as_bytes(),
                 message_number as i64 * NANOSECONDS_BETWEEN_MESSAGE_STAMPS,

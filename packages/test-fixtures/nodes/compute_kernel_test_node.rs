@@ -4,46 +4,33 @@
 //! Integration-test fixture that exercises the compute-kernel typed
 //! binding methods end-to-end.
 //!
-//! Lifecycle:
-//!   1. `setup()` — nothing (the kernel is built in `start()` so the
-//!      construction error path lands in the same place the
-//!      integration test reads).
-//!   2. `start()` —
-//!      a. Construct a [`ComputeKernelDescriptor`] for the
-//!      embedded "output[i] = input[i] * 2" SPIR-V shader and
-//!      create the kernel through
-//!      `gpu_full_access().create_compute_kernel(...)` (already
-//!      covered by EscalateSmokeTest but re-exercised here for
-//!      completeness — the kernel return must be valid for the rest
-//!      of this test).
-//!      b. Acquire input + output `StorageBuffer` handles via
-//!      `gpu_limited_access().acquire_storage_buffer(...)` with a
-//!      byte-shaped `TensorStorageBufferLayout`.
-//!      HOST_VISIBLE allocations, persistently-mapped pointer
-//!      cached on the handle.
-//!      c. Populate input through `mapped_ptr()` with `[1, 2, 3,
-//!         ..., element_count]`. Pure CPU writes through the
-//!      persistently-mapped pointer returned at acquire time.
-//!      d. Bind input + output through
-//!      `kernel.set_storage_buffer_storage(...)`.
-//!      e. Stage push constants via
-//!      `kernel.set_push_constants_value(&[element_count])`.
-//!      f. Dispatch the kernel via
-//!      `kernel.dispatch(group_count, 1, 1)`.
-//!      g. Read the output buffer back via its `mapped_ptr()` and
-//!      compare each element to the CPU reference (`input[i] *
-//!         2`). Any mismatch is a hard fail.
-//!      h. Write `OK\n<element_count>` or `ERR:<message>` to the
-//!      `output_path` its setting names so the integration test can
-//!      assert the round-trip succeeded.
-//!   3. `teardown()` — nothing; the kernel + storage buffers drop
-//!      naturally via their handle Drop impls.
+//! Its one computed value, built from `element_count`:
+//!   a. Acquires input + output `StorageBuffer` handles via
+//!      `acquire_storage_buffer(...)` on the limited access with a
+//!      byte-shaped `TensorStorageBufferLayout`: HOST_VISIBLE
+//!      allocations, the persistently-mapped pointer cached on the
+//!      handle.
+//!   b. Creates the kernel for the embedded "output[i] = input[i] * 2"
+//!      SPIR-V shader through `escalate(|full| full.create_compute_kernel(...))`.
+//!   c. Populates input through `mapped_ptr()` with `[1, 2, 3, ...,
+//!      element_count]`.
+//!   d. Binds input + output through `kernel.set_storage_buffer_storage(...)`,
+//!      stages push constants via `kernel.set_push_constants_value(&element_count)`
+//!      and dispatches via `kernel.dispatch(group_count, 1, 1)`.
+//!   e. Reads the output buffer back via its `mapped_ptr()` and compares
+//!      each element to the CPU reference (`input[i] * 2`). Any mismatch
+//!      is a hard fail.
+//!   f. Writes `OK\n<element_count>` or `ERR:<message>` to the file its
+//!      `output_path` names so the integration test can assert the
+//!      round-trip succeeded.
+//!
+//! The kernel and storage buffers drop with the build that made them.
 //!
 //! What this locks: a regression that breaks any of
 //! `create_compute_kernel`, `acquire_storage_buffer`,
 //! `set_storage_buffer_storage`, `set_push_constants`, or
 //! `dispatch` surfaces here as either:
-//!   - A missing output file (`start()` panicked).
+//!   - A missing output file (the build panicked).
 //!   - `ERR:<message>` in the file (one of the calls returned an
 //!     error code).
 //!   - The output buffer's contents disagreeing with the CPU
@@ -51,14 +38,15 @@
 //!     e.g. a binding-handle mismatch routed the wrong buffer
 //!     pointer to the wrong slot).
 
-use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::nodes::ManualNode;
+use streamlib::sdk::nodes::{Input, computed};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, TensorStorageBufferLayout,
 };
+
+use crate::result_written_to_its_file::the_result_written_to_its_file;
 
 /// SPIR-V for the `output[i] = input[i] * 2` reference kernel.
 /// Compiled from `shaders/cpu_ref_doubler.slang` by this crate's
@@ -82,102 +70,61 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
     },
 ];
 
-/// The settings [`ComputeKernelTest`] reads at setup.
-#[streamlib::sdk::node_settings]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ComputeKernelTestSettings {
-    #[description = "The number of elements in the buffer the kernel doubles."]
-    pub element_count: u32,
-    #[description = "The file the node writes its result to."]
-    pub output_path: String,
-}
-
 #[streamlib::sdk::node(
     execution = manual,
-    settings = crate::compute_kernel_test_node::ComputeKernelTestSettings,
+    input("element_count", description = "The number of elements in the buffer the kernel doubles.", value = u32, default = 0),
+    input("output_path", description = "The file the node writes its result to.", value = String, default = String::new()),
 )]
 #[meta(
-    description = "Compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2, and asserts CPU-reference match"
+    description = "Compute-kernel CPU-reference integration test fixture — in a computed value read from its element_count, allocates input + output storage buffers via LimitedAccess, creates a kernel through escalate, dispatches output[i] = input[i] * 2, asserts CPU-reference match, and writes the result to the file its output_path names"
 )]
-pub struct ComputeKernelTest {}
-
-impl ManualNode for ComputeKernelTest::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let output_path = self.settings.output_path.clone();
-        let element_count = self.settings.element_count;
-
-        let outcome = run_compute_kernel_round_trip(ctx, element_count);
-
-        let line = match outcome {
-            Ok(()) => format!("OK\n{element_count}"),
-            Err(e) => format!("ERR:{e}"),
-        };
-        std::fs::write(&output_path, &line)
-            .map_err(|e| Error::Runtime(format!("ComputeKernelTest: write {output_path}: {e}")))?;
-        Ok(())
-    }
-
-    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        Ok(())
-    }
+pub fn compute_kernel_test(
+    element_count: Input<u32>,
+    output_path: Input<String>,
+    ctx: &RuntimeContextFullAccess<'_>,
+) {
+    let gpu = ctx.gpu_limited_access().clone();
+    computed(move |_build_ctx| {
+        let element_count = *element_count.get();
+        let outcome = run_compute_kernel_round_trip(&gpu, element_count)
+            .map(|()| vec![element_count.to_string()]);
+        the_result_written_to_its_file("ComputeKernelTest", &output_path.get(), &outcome)
+    });
 }
 
 #[cfg(target_os = "linux")]
-fn run_compute_kernel_round_trip(
-    ctx: &RuntimeContextFullAccess<'_>,
-    element_count: u32,
-) -> Result<()> {
+fn run_compute_kernel_round_trip(gpu: &GpuContextLimitedAccess, element_count: u32) -> Result<()> {
     if element_count == 0 {
         return Err(Error::Runtime(
             "ComputeKernelTest: element_count must be > 0".into(),
         ));
     }
 
-    let gpu_limited = ctx.gpu_limited_access();
-
     // Acquire input + output storage buffers up-front through
     // LimitedAccess. HOST_VISIBLE allocations — the persistently-
     // mapped pointer is cached on the handle, no escalation
     // required to read/write them.
     let byte_size = (element_count as u64) * (std::mem::size_of::<u32>() as u64);
-    let input = gpu_limited
+    let input = gpu
         .acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(byte_size)?)
         .map_err(|e| Error::Runtime(format!("acquire input storage_buffer: {e}")))?;
-    let output = gpu_limited
+    let output = gpu
         .acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(byte_size)?)
         .map_err(|e| Error::Runtime(format!("acquire output storage_buffer: {e}")))?;
 
-    // Kernel construction is FullAccess-privileged (touches
-    // descriptor pools + pipeline cache + queue); Manual-mode
-    // start() takes FullAccess directly.
-    // The kernel handle is valid for the rest of this fn; its Clone/Drop
-    // manage the underlying Arc's strong count.
-    let full = ctx.gpu_full_access();
-    let kernel = full
-        .create_compute_kernel(&ComputeKernelDescriptor {
-            label: "cpu_ref_doubler",
-            entry_point: "main",
-            spv: CPU_REF_DOUBLER_SPV,
-            bindings: CPU_REF_DOUBLER_BINDINGS,
-            push_constant_size: std::mem::size_of::<u32>() as u32,
-            specialization_constants: &[],
+    // Kernel construction is FullAccess-privileged (touches descriptor pools + pipeline cache +
+    // queue), so the build escalates for it. The kernel handle is valid for the rest of this fn;
+    // its Clone/Drop manage the underlying Arc's strong count.
+    let kernel = gpu
+        .escalate(|full| {
+            full.create_compute_kernel(&ComputeKernelDescriptor {
+                label: "cpu_ref_doubler",
+                entry_point: "main",
+                spv: CPU_REF_DOUBLER_SPV,
+                bindings: CPU_REF_DOUBLER_BINDINGS,
+                push_constant_size: std::mem::size_of::<u32>() as u32,
+                specialization_constants: &[],
+            })
         })
         .map_err(|e| Error::Runtime(format!("create_compute_kernel: {e}")))?;
 
@@ -255,7 +202,7 @@ fn run_compute_kernel_round_trip(
 
 #[cfg(not(target_os = "linux"))]
 fn run_compute_kernel_round_trip(
-    _ctx: &RuntimeContextFullAccess<'_>,
+    _gpu: &GpuContextLimitedAccess,
     _element_count: u32,
 ) -> Result<()> {
     Err(Error::Runtime(

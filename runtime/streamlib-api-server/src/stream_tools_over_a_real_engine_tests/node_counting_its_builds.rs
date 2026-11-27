@@ -1,16 +1,16 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A node that counts each setup and teardown it runs, records each `level` it reads, and holds
-//! a [`StubExclusiveDevice`] from its setup to its teardown, one device and one count for each
-//! stream it runs in.
+//! A node written as one function that counts each setup and teardown it runs, records each
+//! `level` it reads, and holds a [`StubExclusiveDevice`] from its setup to its teardown, one
+//! device and one count for each stream it runs in.
 
 use std::collections::BTreeMap;
 
 use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::descriptors::PinType;
-use streamlib::sdk::nodes::ContinuousNode;
+use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
 
 use super::stub_exclusive_device::{StubExclusiveDevice, StubExclusiveDeviceLease};
@@ -76,34 +76,43 @@ pub(super) fn the_builds_counted_in<T>(
     )
 }
 
-/// A native node reading its Float `level` input that counts its setups and teardowns and holds
-/// its stream's stub exclusive device open from setup to teardown.
+/// What a [`NodeCountingItsBuilds`] holds from its setup to its teardown: its stream's stub
+/// exclusive device, counting the teardown as it drops.
+struct HeldFromSetupToTeardown {
+    stream_id: String,
+    _lease: StubExclusiveDeviceLease,
+}
+
+impl Drop for HeldFromSetupToTeardown {
+    fn drop(&mut self) {
+        count_in(&self.stream_id, |counted| counted.teardowns += 1);
+    }
+}
+
+/// A native node written as one function reading its Float `level` input, that counts each run
+/// of its body as a setup and each drop of what its body made as a teardown, and holds its
+/// stream's stub exclusive device open from one to the other.
 #[streamlib::sdk::node(
     execution = continuous(interval_ms = 5),
     input("level", delivery_profile = "newest", pin_type = Float),
 )]
-pub(super) struct NodeCountingItsBuilds {
-    lease: Option<StubExclusiveDeviceLease>,
-}
-
-impl ContinuousNode for NodeCountingItsBuilds::Node {
-    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let device = count_in(ctx.stream_id(), |counted| {
-            counted.setups += 1;
-            Arc::clone(&counted.device)
-        });
-        self.lease = Some(device.open());
-        Ok(())
-    }
-
-    fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        count_in(ctx.stream_id(), |counted| counted.teardowns += 1);
-        self.lease = None;
-        Ok(())
-    }
-
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        if let Some(message) = self.inputs.read_raw(THE_COUNTING_NODES_LEVEL)? {
+pub(super) fn node_counting_its_builds(
+    inputs: InputMailboxes,
+    ctx: &RuntimeContextFullAccess<'_>,
+) -> Result<impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>> {
+    let device = count_in(ctx.stream_id(), |counted| {
+        counted.setups += 1;
+        Arc::clone(&counted.device)
+    });
+    let held = HeldFromSetupToTeardown {
+        stream_id: ctx.stream_id().to_owned(),
+        _lease: device.open(),
+    };
+    Ok(move |ctx: &RuntimeContextLimitedAccess<'_>| {
+        // Named so the closure owns `held`: its drop, when the node's frame function goes, is
+        // what counts the teardown.
+        let _held_until_the_frames_end = &held;
+        if let Some(message) = inputs.read_raw(THE_COUNTING_NODES_LEVEL)? {
             let level = unpack_pin_value(
                 &PinType::Float { exact_size: None },
                 PackedPinValueRef {
@@ -119,7 +128,7 @@ impl ContinuousNode for NodeCountingItsBuilds::Node {
             });
         }
         Ok(())
-    }
+    })
 }
 
 /// Register [`NodeCountingItsBuilds`] with the node registry, once per test binary.

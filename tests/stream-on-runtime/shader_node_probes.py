@@ -11,18 +11,21 @@ published. The sink reports one `MARKER:PROBE_RESULT` line per frame it reads.
 import json
 import os
 import traceback
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Color,
     ColorInfo,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
+    RuntimeContextLimitedAccess,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     log,
     node,
 )
@@ -77,26 +80,29 @@ KNOWN_PIXELS_TEXTURE_FORMATS = ("rgba8_unorm", "bgra8_unorm")
 
 
 @node(execution="continuous", interval_ms=30)
-class KnownPixelsVideoSource:
+def KnownPixelsVideoSource(
+    *,
+    video: OutputPin[Annotated[Texture, TexturePixelFormats(*KNOWN_PIXELS_TEXTURE_FORMATS)]],
+    texture_format: Input[str] = Input("rgba8_unorm"),
+    frames_to_publish: Input[int] = Input(FRAMES_TO_PUBLISH),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Publishes a red ramp, constant green, blue and alpha, from its own texture ring."""
-
-    video: OutputPin[Annotated[Texture, TexturePixelFormats(*KNOWN_PIXELS_TEXTURE_FORMATS)]]
-
-    texture_format: str = "rgba8_unorm"
-    frames_to_publish: int = FRAMES_TO_PUBLISH
-
-    def __init__(self) -> None:
-        self._texture_format = self.texture_format
-        self._frames_to_publish = self.frames_to_publish
-        self._output_texture_ring = NodeOutputTextureRing(
-            self.texture_format, ["texture_binding"], depth=4
+    # The format beside the ring built for it, so a frame lays its channels out in the order of
+    # the ring it draws from.
+    format_and_output_texture_ring = computed(
+        lambda: (
+            texture_format.get(),
+            NodeOutputTextureRing(texture_format.get(), ["texture_binding"], depth=4),
         )
-        self._frames_published = 0
+    )
+    frames_published = 0
 
-    def process(self, ctx) -> None:
-        if self._frames_published >= self._frames_to_publish:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames_published
+        if frames_published >= frames_to_publish.get():
             return
-        texture = self._output_texture_ring.next_texture_for_this_frame(
+        ring_format, output_texture_ring = format_and_output_texture_ring.get()
+        texture = output_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, FRAME_WIDTH, FRAME_HEIGHT
         )
         texture.lock(read_only=False)
@@ -104,24 +110,27 @@ class KnownPixelsVideoSource:
             pixels = texture.as_numpy()
             for column in range(FRAME_WIDTH):
                 red, green, blue, alpha = known_pixel_at_column(column)
-                if self._texture_format.startswith("bgra"):
+                if ring_format.startswith("bgra"):
                     pixels[:, column] = [blue, green, red, alpha]
                 else:
                     pixels[:, column] = [red, green, blue, alpha]
         finally:
             texture.unlock()
-        self.video.write(TextureToWrite.of_texture(texture, ColorInfo()))
-        self._frames_published += 1
+        video.write(TextureToWrite.of_texture(texture, ColorInfo()))
+        frames_published += 1
+
+    return each_frame
 
 
-@node
-class ShadedFramePixelReadingSink:
+@node(execution="reactive")
+def ShadedFramePixelReadingSink(
+    *,
+    shaded: InputPin[Annotated[Texture, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the extent, format and sampled pixels of each frame a shader node wrote."""
 
-    shaded: InputPin[Annotated[Texture, StreamDelivery("ordered")]]
-
-    def process(self, ctx) -> None:
-        frame = self.shaded.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = shaded.read()
         if frame is None:
             return
 
@@ -142,12 +151,17 @@ class ShadedFramePixelReadingSink:
 
         _report("ShadedFramePixelReadingSink", read_the_shaded_pixels)
 
+    return each_frame
 
-@node
-class FrameDiscardingSink:
+
+@node(execution="reactive")
+def FrameDiscardingSink(
+    *,
+    discarded: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads each frame it is handed and keeps none: a second reader of the Texture feeding it."""
 
-    discarded: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        discarded.read()
 
-    def process(self, ctx) -> None:
-        self.discarded.read()
+    return each_frame

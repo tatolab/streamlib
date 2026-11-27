@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import math
 import struct
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -33,6 +33,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     node,
 )
 
@@ -472,8 +473,71 @@ LAYER_USAGE = ["storage_binding", "texture_binding"]
     category="Gulf Stream Neon",
     description="The HDR picture: a raymarched Art Deco skyline on the real coast, mirror water with ray-marched reflections, the synthwave sky, and the reveal into the real chart. Distance rides in alpha.",
 )
-@node
-class NeonHorizonRenderer:
+@node(execution="reactive")
+def NeonHorizonRenderer(
+    *,
+    width: Input[Annotated[int, NumberRange(minimum=8), Description("The picture's width in pixels.")]] = Input(1080),
+    height: Input[Annotated[int, NumberRange(minimum=8), Description("The picture's height in pixels.")]] = Input(1920),
+    vertical_field_of_view_degrees: Input[
+        Annotated[
+            float, NumberRange(minimum=1.0, maximum=170.0), Description("The lens's vertical field of view.")
+        ]
+    ] = Input(62.0),
+    exposure: Input[
+        Annotated[
+            float, NumberRange(minimum=0.05, maximum=2.0), Description("How bright the picture is exposed.")
+        ]
+    ] = Input(0.5),
+    skyline_height: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=0.15), Description("How tall the skyline stands.")
+        ]
+    ] = Input(0.055),
+    mode: Input[
+        Annotated[
+            Literal["take", "stage"],
+            Description("`take` flies the take's camera; `stage` follows the stage view."),
+        ]
+    ] = Input("take"),
+    time_of_day: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=1.0), Description("0 golden hour to 1 night.")
+        ]
+    ] = Input(0.35),
+    morph: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=1.0), Description("0 the real chart to 1 neon.")
+        ]
+    ] = Input(1.0),
+    glow: Input[
+        Annotated[
+            float, NumberRange(minimum=0.0, maximum=3.0), Description("How bright the neon glows.")
+        ]
+    ] = Input(1.0),
+    contours: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("From BathymetryRelief")]],
+    relief: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("From BathymetryRelief")]],
+    trails: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("From GulfStreamCurrent")]],
+    soundtrack: InputPin[
+        Annotated[SoundtrackPulseReading, StreamDelivery("newest"), Description("beat, energy: from SoundtrackPulse")]
+    ],
+    station: InputPin[
+        Annotated[StationReading, StreamDelivery("newest"), Description("wind: from NoaaStationFeed")]
+    ],
+    stage: InputPin[
+        Annotated[StageCamera, StreamDelivery("newest"), Description("The stage view's camera: orbit, zoom and fly")]
+    ],
+    look: InputPin[
+        Annotated[StageLookReading, StreamDelivery("newest"), Description("The stage's smoothed look: morph, time of day, skyline, neon")]
+    ],
+    scene: OutputPin[
+        Annotated[
+            Texture,
+            TexturePixelFormats(HDR_LAYER_FORMAT),
+            Description("The HDR picture, rgba16_float, distance in alpha"),
+        ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """The camera over the real map: skyline, sea, sky and the chart reveal, in HDR.
 
     In `take` mode the take's choreography flies the camera; in `stage` mode the stage view
@@ -481,129 +545,86 @@ class NeonHorizonRenderer:
     is wired.
     """
 
-    width: Annotated[int, NumberRange(minimum=8), Description("The picture's width in pixels.")] = 1080
-    height: Annotated[int, NumberRange(minimum=8), Description("The picture's height in pixels.")] = 1920
-    vertical_field_of_view_degrees: Annotated[
-        float, NumberRange(minimum=1.0, maximum=170.0), Description("The lens's vertical field of view.")
-    ] = 62.0
-    exposure: Annotated[
-        float, NumberRange(minimum=0.05, maximum=2.0), Description("How bright the picture is exposed.")
-    ] = 0.5
-    skyline_height: Annotated[
-        float, NumberRange(minimum=0.0, maximum=0.15), Description("How tall the skyline stands.")
-    ] = 0.055
-    mode: Annotated[
-        Literal["take", "stage"],
-        Description("`take` flies the take's camera; `stage` follows the stage view."),
-    ] = "take"
-    time_of_day: Annotated[
-        float, NumberRange(minimum=0.0, maximum=1.0), Description("0 golden hour to 1 night.")
-    ] = 0.35
-    morph: Annotated[
-        float, NumberRange(minimum=0.0, maximum=1.0), Description("0 the real chart to 1 neon.")
-    ] = 1.0
-    glow: Annotated[
-        float, NumberRange(minimum=0.0, maximum=3.0), Description("How bright the neon glows.")
-    ] = 1.0
-    contours: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("From BathymetryRelief")]]
-    relief: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("From BathymetryRelief")]]
-    trails: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("From GulfStreamCurrent")]]
-    soundtrack: InputPin[
-        Annotated[SoundtrackPulseReading, StreamDelivery("newest"), Description("beat, energy: from SoundtrackPulse")]
-    ]
-    station: InputPin[
-        Annotated[StationReading, StreamDelivery("newest"), Description("wind: from NoaaStationFeed")]
-    ]
-    stage: InputPin[
-        Annotated[StageCamera, StreamDelivery("newest"), Description("The stage view's camera: orbit, zoom and fly")]
-    ]
-    look: InputPin[
-        Annotated[StageLookReading, StreamDelivery("newest"), Description("The stage's smoothed look: morph, time of day, skyline, neon")]
-    ]
-    scene: OutputPin[
-        Annotated[
-            Texture,
-            TexturePixelFormats(HDR_LAYER_FORMAT),
-            Description("The HDR picture, rgba16_float, distance in alpha"),
-        ]
-    ]
+    take_clock = TakeClock()
+    kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=RENDERER_SLANG, push_constant_size=RENDERER_DIALS.size
+    )
+    scene_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
+    latest = {"contours": None, "relief": None, "trails": None}
+    latest_soundtrack = SoundtrackPulseReading()
+    latest_station: StationReading | None = None
+    latest_stage = StageCamera()
+    latest_look: StageLookReading | None = None
+    last_rendered_ns: int | None = None
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.take_clock = TakeClock()
-        self.kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=RENDERER_SLANG, push_constant_size=RENDERER_DIALS.size
-        )
-        self.scene_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
-        self.latest = {"contours": None, "relief": None, "trails": None}
-        self.latest_soundtrack = SoundtrackPulseReading()
-        self.latest_station: StationReading | None = None
-        self.latest_stage = StageCamera()
-        self.latest_look: StageLookReading | None = None
-        self.last_rendered_ns: int | None = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        for name in ("contours", "relief", "trails"):
-            frame = getattr(self, name).read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal last_rendered_ns, latest_look, latest_soundtrack, latest_stage, latest_station
+        for name, layer in (
+            ("contours", contours),
+            ("relief", relief),
+            ("trails", trails),
+        ):
+            frame = layer.read()
             if frame is not None:
-                self.latest[name] = frame
-        soundtrack = self.soundtrack.read()
-        if soundtrack is not None:
-            self.latest_soundtrack = soundtrack
-        station = self.station.read()
-        if station is not None:
-            self.latest_station = station
-        stage = self.stage.read()
-        if stage is not None:
-            self.latest_stage = stage
-        look = self.look.read()
-        if look is not None:
-            self.latest_look = look
-        if any(frame is None for frame in self.latest.values()):
+                latest[name] = frame
+        newest_soundtrack = soundtrack.read()
+        if newest_soundtrack is not None:
+            latest_soundtrack = newest_soundtrack
+        newest_station = station.read()
+        if newest_station is not None:
+            latest_station = newest_station
+        newest_stage = stage.read()
+        if newest_stage is not None:
+            latest_stage = newest_stage
+        newest_look = look.read()
+        if newest_look is not None:
+            latest_look = newest_look
+        if any(frame is None for frame in latest.values()):
             return
-        frame_ns = self.latest["trails"].timestamp_ns
-        if frame_ns == self.last_rendered_ns:
+        frame_ns = latest["trails"].timestamp_ns
+        if frame_ns == last_rendered_ns:
             return
         # On a stepped take every layer of a step lands before it is drawn; live, the newest of each will do.
-        if ctx.stream_clock.mode == "stepped" and self.latest["contours"].timestamp_ns != frame_ns:
+        if ctx.stream_clock.mode == "stepped" and latest["contours"].timestamp_ns != frame_ns:
             return
-        self.last_rendered_ns = frame_ns
+        last_rendered_ns = frame_ns
 
-        width, height = self.width, self.height
-        seconds = self.take_clock.seconds_at(ctx, frame_ns)
-        # A wired look (smoothed in the graph) leads; the settings are the fallback.
-        look = self.latest_look or StageLookReading(
-            morph=self.morph,
-            time_of_day=self.time_of_day,
-            skyline_height=self.skyline_height,
-            neon=self.glow,
+        newest_width, newest_height = width.get(), height.get()
+        seconds = take_clock.seconds_at(ctx, frame_ns)
+        # A wired look (smoothed in the graph) leads; the value inputs are the fallback.
+        newest_look = latest_look or StageLookReading(
+            morph=morph.get(),
+            time_of_day=time_of_day.get(),
+            skyline_height=skyline_height.get(),
+            neon=glow.get(),
         )
-        if self.mode == "stage":
-            moment = stage_moment(self.latest_stage, look.time_of_day, 1.0 - look.morph)
+        if mode.get() == "stage":
+            moment = stage_moment(latest_stage, newest_look.time_of_day, 1.0 - newest_look.morph)
         else:
-            moment = take_moment_at(seconds, width / height)
+            moment = take_moment_at(seconds, newest_width / newest_height)
         forward, right, up = camera_basis(
             moment.camera_yaw_degrees, moment.camera_pitch_degrees, moment.camera_roll_degrees
         )
-        beat = self.latest_soundtrack.beat
-        energy = self.latest_soundtrack.energy
+        beat = latest_soundtrack.beat
+        energy = latest_soundtrack.energy
         # Before the station's first reading, a light easterly.
-        station = self.latest_station or StationReading(wind_speed_mps=5.0, wind_from_degrees=110.0)
-        wind_speed = station.wind_speed_mps
-        wind_from = math.radians(station.wind_from_degrees)
-        focal = 1.0 / math.tan(math.radians(self.vertical_field_of_view_degrees) / 2.0)
+        newest_station = latest_station or StationReading(wind_speed_mps=5.0, wind_from_degrees=110.0)
+        wind_speed = newest_station.wind_speed_mps
+        wind_from = math.radians(newest_station.wind_from_degrees)
+        focal = 1.0 / math.tan(math.radians(vertical_field_of_view_degrees.get()) / 2.0)
         gpu = ctx.gpu_limited_access
-        texture = self.scene_textures.next_texture_for_this_frame(gpu, width, height)
-        self.kernel.dispatch(
+        texture = scene_textures.next_texture_for_this_frame(gpu, newest_width, newest_height)
+        kernel.dispatch(
             bindings={
-                "contour_layer": self.latest["contours"].surface_id,
-                "current_layer": self.latest["trails"].surface_id,
-                "relief_layer": self.latest["relief"].surface_id,
+                "contour_layer": latest["contours"].surface_id,
+                "current_layer": latest["trails"].surface_id,
+                "relief_layer": latest["relief"].surface_id,
                 "scene": texture,
             },
-            group_count=((width + 7) // 8, (height + 7) // 8, 1),
+            group_count=((newest_width + 7) // 8, (newest_height + 7) // 8, 1),
             push_constants=RENDERER_DIALS.pack(
-                width,
-                height,
+                newest_width,
+                newest_height,
                 seconds,
                 moment.time_of_day,
                 moment.camera_x,
@@ -611,7 +632,7 @@ class NeonHorizonRenderer:
                 moment.camera_altitude,
                 focal,
                 *forward,
-                look.neon * (1.0 + 0.4 * moment.drop + 0.3 * energy),
+                newest_look.neon * (1.0 + 0.4 * moment.drop + 0.3 * energy),
                 *right,
                 beat,
                 *up,
@@ -620,11 +641,13 @@ class NeonHorizonRenderer:
                 moment.drop,
                 -wind_speed * math.sin(wind_from),
                 -wind_speed * math.cos(wind_from),
-                look.skyline_height,
-                self.exposure,
+                newest_look.skyline_height,
+                exposure.get(),
             ),
         )
-        self.scene.write(
+        scene.write(
             TextureToWrite.of_texture(texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=frame_ns,
         )
+
+    return each_frame

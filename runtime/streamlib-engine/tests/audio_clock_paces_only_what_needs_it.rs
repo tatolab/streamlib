@@ -20,7 +20,7 @@ use serial_test::serial;
 use streamlib::sdk::nodes::NodeSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::context::{
-    AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, CaptureDeviceAccessPrompting,
+    AudioDeviceBackend, AudioDeviceStreamRequest, CaptureDeviceAccessPrompting,
     RequestedAudioStreamFormat, SilentNullAudioDeviceBackend,
 };
 use streamlib_engine::core::nodes::NODE_REGISTRY;
@@ -30,58 +30,31 @@ static AUDIO_CLOCK_WAS_RUNNING_IN_A_GRAPH_WITH_NO_AUDIO: AtomicBool = AtomicBool
 static AUDIO_CLOCK_WAS_RUNNING_ONCE_A_CAPTURE_STREAM_DELIVERED: AtomicBool = AtomicBool::new(false);
 
 #[streamlib::sdk::node(execution = manual)]
-pub struct NodeThatNeedsNoAudioClock;
-
-impl streamlib_engine::ManualNode for NodeThatNeedsNoAudioClock::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        AUDIO_CLOCK_WAS_RUNNING_IN_A_GRAPH_WITH_NO_AUDIO
-            .store(ctx.audio_clock().is_running(), Ordering::SeqCst);
-        Ok(())
-    }
+pub fn node_that_needs_no_audio_clock(ctx: &RuntimeContextFullAccess<'_>) {
+    AUDIO_CLOCK_WAS_RUNNING_IN_A_GRAPH_WITH_NO_AUDIO
+        .store(ctx.audio_clock().is_running(), Ordering::SeqCst);
 }
 
 #[streamlib::sdk::node(execution = manual)]
-pub struct NodeThatPacesOnTheAudioClock {
-    capture_stream: Option<Box<dyn AudioCaptureStream>>,
-}
-
-impl streamlib_engine::ManualNode for NodeThatPacesOnTheAudioClock::Node {
-    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // The null arm by name rather than through the chain's probe: what is
-        // under test is the timer that paces a *deviceless* graph, and the
-        // probe hands back whatever audio server the machine running this
-        // happens to have — a device-paced arm ignores the clock by design,
-        // which is the very thing that makes one cadence source true.
-        self.capture_stream = Some(SilentNullAudioDeviceBackend.open_capture_stream(
-            &AudioDeviceStreamRequest {
-                device_id: None,
-                deviceless_pacing_clock: std::sync::Arc::clone(ctx.audio_clock()),
-                capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
-                requested_format: RequestedAudioStreamFormat::default(),
-            },
-        )?);
-        Ok(())
-    }
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.capture_stream = None;
-        Ok(())
-    }
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let capture_stream = self
-            .capture_stream
-            .as_mut()
-            .expect("setup opened the capture stream");
-        capture_stream.start_delivering_to(Box::new(|_| {}))?;
-        AUDIO_CLOCK_WAS_RUNNING_ONCE_A_CAPTURE_STREAM_DELIVERED
-            .store(ctx.audio_clock().is_running(), Ordering::SeqCst);
-        Ok(())
-    }
+pub fn node_that_paces_on_the_audio_clock(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    // The null arm by name rather than through the chain's probe: what is
+    // under test is the timer that paces a *deviceless* graph, and the
+    // probe hands back whatever audio server the machine running this
+    // happens to have — a device-paced arm ignores the clock by design,
+    // which is the very thing that makes one cadence source true.
+    let mut capture_stream =
+        SilentNullAudioDeviceBackend.open_capture_stream(&AudioDeviceStreamRequest {
+            device_id: None,
+            deviceless_pacing_clock: std::sync::Arc::clone(ctx.audio_clock()),
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            requested_format: RequestedAudioStreamFormat::default(),
+        })?;
+    capture_stream.start_delivering_to(Box::new(|_| {}))?;
+    AUDIO_CLOCK_WAS_RUNNING_ONCE_A_CAPTURE_STREAM_DELIVERED
+        .store(ctx.audio_clock().is_running(), Ordering::SeqCst);
+    // What is under test is that beginning delivery starts the clock; the stream closes as the
+    // body returns.
+    Ok(())
 }
 
 fn run_a_graph_of(node: NodeSpec) {

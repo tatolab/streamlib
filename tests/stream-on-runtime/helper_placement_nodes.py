@@ -7,12 +7,15 @@ import dataclasses
 import json
 import os
 import time
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 
 from tatolab.stream import (
     EncodedVideo,
+    Input,
     InputPin,
     OutputPin,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     SettingOnly,
     State,
     Stateful,
@@ -51,46 +54,54 @@ class ProducedIn:
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsItsOwnProcessSource:
+def ReportsItsOwnProcessSource(
+    *,
+    label: Input[str] = Input("unlabelled"),
+    frames_to_downstream: OutputPin[ProducedIn],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Stamps every message with the pid it was produced in."""
 
-    label: str = "unlabelled"
+    announced = False
 
-    frames_to_downstream: OutputPin[ProducedIn]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal announced
+        if not announced:
+            report("SOURCE_PID", {"label": label.get(), "pid": os.getpid()})
+            announced = True
+        frames_to_downstream.write(ProducedIn(produced_in_pid=os.getpid()))
 
-    def __init__(self) -> None:
-        self._announced = False
-
-    def process(self, ctx) -> None:
-        if not self._announced:
-            report("SOURCE_PID", {"label": self.label, "pid": os.getpid()})
-            self._announced = True
-        self.frames_to_downstream.write(ProducedIn(produced_in_pid=os.getpid()))
+    return each_frame
 
 
-@node
-class ReportsUpstreamProcessSink:
+@node(execution="reactive")
+def ReportsUpstreamProcessSink(
+    *,
+    frames_from_upstream: InputPin[Annotated[ProducedIn, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Announces the pid a message was produced in, alongside its own."""
 
-    frames_from_upstream: InputPin[Annotated[ProducedIn, StreamDelivery("newest")]]
+    messages_seen = 0
 
-    def __init__(self) -> None:
-        self._messages_seen = 0
-
-    def process(self, ctx) -> None:
-        produced_in = self.frames_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal messages_seen
+        produced_in = frames_from_upstream.read()
         if produced_in is None:
             return
-        self._messages_seen += 1
-        if self._messages_seen % 10 == 1:
+        messages_seen += 1
+        if messages_seen % 10 == 1:
             report(
                 "SINK_PID",
                 {"sink_pid": os.getpid(), "upstream_pid": produced_in.produced_in_pid},
             )
 
+    return each_frame
 
-@node
-class ReportsItsOwnProcessIntegerSink:
+
+@node(execution="reactive")
+def ReportsItsOwnProcessIntegerSink(
+    *,
+    integers_from_upstream: InputPin[Annotated[int, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Announces its own process at setup, downstream of a native built-in.
 
     The integers come from `FloatToInteger`, which is native and therefore
@@ -98,30 +109,30 @@ class ReportsItsOwnProcessIntegerSink:
     is what discriminates the two sides of the boundary.
     """
 
-    integers_from_upstream: InputPin[Annotated[int, StreamDelivery("newest")]]
+    report("INTEGER_SINK_PID", {"pid": os.getpid()})
 
-    def setup(self, ctx) -> None:
-        report("INTEGER_SINK_PID", {"pid": os.getpid()})
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        integers_from_upstream.read()
 
-    def process(self, ctx) -> None:
-        self.integers_from_upstream.read()
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class WritesRawMessagePayloadSource:
+def WritesRawMessagePayloadSource(
+    *,
+    raw_messages_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes `RAW_MESSAGE_PAYLOAD_BYTES` every tick, after reporting once what
     handing `write` a dict raised."""
 
-    raw_messages_to_downstream: OutputPin[EncodedVideo]
+    reported_the_dict_write = False
 
-    def __init__(self) -> None:
-        self._reported_the_dict_write = False
-
-    def process(self, ctx) -> None:
-        if not self._reported_the_dict_write:
-            self._reported_the_dict_write = True
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported_the_dict_write
+        if not reported_the_dict_write:
+            reported_the_dict_write = True
             try:
-                self.raw_messages_to_downstream.write({"not": "bytes"})
+                raw_messages_to_downstream.write({"not": "bytes"})
             except Exception as refusal:  # noqa: BLE001 — the refusal is the observation
                 refusal_type, refusal_text = type(refusal).__name__, str(refusal)
             else:
@@ -134,23 +145,26 @@ class WritesRawMessagePayloadSource:
                     "refusal_text": refusal_text,
                 },
             )
-        self.raw_messages_to_downstream.write(RAW_MESSAGE_PAYLOAD_BYTES)
+        raw_messages_to_downstream.write(RAW_MESSAGE_PAYLOAD_BYTES)
+
+    return each_frame
 
 
-@node
-class ReportsTheRawMessagePayloadItReadSink:
+@node(execution="reactive")
+def ReportsTheRawMessagePayloadItReadSink(
+    *,
+    raw_messages_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the first payload it reads, as hex, with its type and its own pid."""
 
-    raw_messages_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]]
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
-
-    def process(self, ctx) -> None:
-        unit = self.raw_messages_from_upstream.read()
-        if unit is None or self._reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        unit = raw_messages_from_upstream.read()
+        if unit is None or reported:
             return
-        self._reported = True
+        reported = True
         report(
             "RAW_MESSAGE_PAYLOAD_READ",
             {
@@ -160,24 +174,29 @@ class ReportsTheRawMessagePayloadItReadSink:
             },
         )
 
+    return each_frame
+
 
 @node(execution="continuous", interval_ms=10)
-class DiesAbruptlyProbe:
+def DiesAbruptlyProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Takes its own process down mid-run, the way a segfaulting native call
     inside a user callback would."""
 
-    frames_to_downstream: OutputPin[Trigger]
+    frames_before_dying = 3
 
-    def __init__(self) -> None:
-        self._frames_before_dying = 3
-
-    def process(self, ctx) -> None:
-        self._frames_before_dying -= 1
-        if self._frames_before_dying <= 0:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames_before_dying
+        frames_before_dying -= 1
+        if frames_before_dying <= 0:
             report("ABOUT_TO_DIE", {"pid": os.getpid()})
             # Not an exception: the point is a process that stops existing
             # without unwinding, which is what a segfaulting native call does.
             os._exit(1)
+
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
@@ -203,25 +222,28 @@ class SleepsThroughItsOwnShutdownProbe:
 
 
 @node(execution="continuous", interval_ms=50)
-class ForksAWorkerThatOutlivesItProbe:
+def ForksAWorkerThatOutlivesItProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Starts a worker of its own the way `os.system("sleep 60 &")` does.
 
     The worker is the descendant the process-group rung exists to reach. Its
     pid is announced so a test can go looking for it after `tatolabd` is gone.
     """
 
-    frames_to_downstream: OutputPin[Trigger]
+    worker_pid = None
 
-    def __init__(self) -> None:
-        self._worker_pid = None
-
-    def process(self, ctx) -> None:
-        if self._worker_pid is None:
-            self._worker_pid = os.fork()
-            if self._worker_pid == 0:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal worker_pid
+        if worker_pid is None:
+            worker_pid = os.fork()
+            if worker_pid == 0:
                 time.sleep(120)
                 os._exit(0)
-            report("WORKER_PID", {"worker_pid": self._worker_pid, "helper_pid": os.getpid()})
+            report("WORKER_PID", {"worker_pid": worker_pid, "helper_pid": os.getpid()})
+
+    return each_frame
 
 
 @node(execution="manual")
@@ -244,29 +266,30 @@ FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING = 20
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsTheFunctionNodeValuesItReadSink:
+def ReportsTheFunctionNodeValuesItReadSink(
+    *,
+    brightness: Input[float | None] = Input(None),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the value a function node island feeds `brightness`, and reports
     the values of its first reads with its own pid."""
 
-    brightness: float | None = None
+    values_read: "list[float]" = []
 
-    def __init__(self) -> None:
-        self._values_read: "list[float]" = []
+    report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
 
-    def setup(self, ctx) -> None:
-        report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
-
-    def process(self, ctx) -> None:
-        if len(self._values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        if len(values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             return
-        if self.brightness is None:
+        if brightness.get() is None:
             return
-        self._values_read.append(self.brightness)
-        if len(self._values_read) == FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+        values_read.append(brightness.get())
+        if len(values_read) == FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             report(
                 "FUNCTION_NODE_VALUES_READ",
-                {"sink_pid": os.getpid(), "values": self._values_read},
+                {"sink_pid": os.getpid(), "values": values_read},
             )
+
+    return each_frame
 
 
 #: How many reads a batch-reporting sink makes into each batch: past a second at
@@ -300,47 +323,53 @@ class BatchesOfValuesReported:
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfFunctionNodeValuesItReadSink:
+def ReportsEachBatchOfFunctionNodeValuesItReadSink(
+    *,
+    brightness: InputPin[Annotated[float, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the value an island feeds `brightness`, and reports the range of
     each batch of reads with its own pid and when the batch started."""
 
-    brightness: InputPin[Annotated[float, StreamDelivery("newest")]]
+    batches = BatchesOfValuesReported()
 
-    def __init__(self) -> None:
-        self._batches = BatchesOfValuesReported()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        newest_brightness = brightness.read()
+        if newest_brightness is not None:
+            batches.add(newest_brightness)
 
-    def process(self, ctx) -> None:
-        brightness = self.brightness.read()
-        if brightness is not None:
-            self._batches.add(brightness)
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfItsLevel:
+def ReportsEachBatchOfItsLevel(
+    *,
+    level: Input[float] = Input(0.25),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads its `level` setting at each run, which a live set or a link changes,
     and reports the range of each batch."""
 
-    level: float = 0.25
+    batches = BatchesOfValuesReported()
 
-    def __init__(self) -> None:
-        self._batches = BatchesOfValuesReported()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        batches.add(level.get())
 
-    def process(self, ctx) -> None:
-        self._batches.add(self.level)
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfPinValuesItReadSink:
+def ReportsEachBatchOfPinValuesItReadSink(
+    *,
+    brightness: Input[float] = Input(0.25),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads `brightness`, which nothing is linked into and which declares 0.25,
     and reports the range of each batch of reads."""
 
-    brightness: float = 0.25
+    batches = BatchesOfValuesReported()
 
-    def __init__(self) -> None:
-        self._batches = BatchesOfValuesReported()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        batches.add(brightness.get())
 
-    def process(self, ctx) -> None:
-        self._batches.add(self.brightness)
+    return each_frame
 
 
 @node
@@ -417,29 +446,31 @@ def read_each_count_in_order_and_report_each_batch(
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfCountsItReadInOrderAsTheFirstReader:
+def ReportsEachBatchOfCountsItReadInOrderAsTheFirstReader(
+    *,
+    count: InputPin[Annotated[float, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads every count written on `count`, in order, and reports each batch as `first`."""
+    counts_read: "list[float]" = []
 
-    count: InputPin[Annotated[float, StreamDelivery("ordered")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        read_each_count_in_order_and_report_each_batch(count, counts_read, "first")
 
-    def __init__(self) -> None:
-        self._counts_read: "list[float]" = []
-
-    def process(self, ctx) -> None:
-        read_each_count_in_order_and_report_each_batch(self.count, self._counts_read, "first")
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfCountsItReadInOrderAsTheSecondReader:
+def ReportsEachBatchOfCountsItReadInOrderAsTheSecondReader(
+    *,
+    count: InputPin[Annotated[float, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads every count written on `count`, in order, and reports each batch as `second`."""
+    counts_read: "list[float]" = []
 
-    count: InputPin[Annotated[float, StreamDelivery("ordered")]]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        read_each_count_in_order_and_report_each_batch(count, counts_read, "second")
 
-    def __init__(self) -> None:
-        self._counts_read: "list[float]" = []
-
-    def process(self, ctx) -> None:
-        read_each_count_in_order_and_report_each_batch(self.count, self._counts_read, "second")
+    return each_frame
 
 
 #: The stream milliseconds between the steps of the stepped LFO stream.
@@ -450,32 +481,34 @@ STEPPED_LFO_STEPS_REPORTED = 12
 
 
 @node(execution="continuous", interval_ms=STEPPED_LFO_STEP_MS)
-class ReportsTheLfoValueOfEachStepSink:
+def ReportsTheLfoValueOfEachStepSink(
+    *,
+    wave: Input[float | None] = Input(None),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the value an `Lfo` island evaluates to at each step, and reports
     the first `STEPPED_LFO_STEPS_REPORTED` with their step indices."""
 
-    wave: float | None = None
+    value_read_at_each_step: "dict[int, float]" = {}
 
-    def __init__(self) -> None:
-        self._value_read_at_each_step: "dict[int, float]" = {}
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         step_index = ctx.stream_clock.step_index
-        if step_index in self._value_read_at_each_step:
+        if step_index in value_read_at_each_step:
             return
-        if len(self._value_read_at_each_step) >= STEPPED_LFO_STEPS_REPORTED:
+        if len(value_read_at_each_step) >= STEPPED_LFO_STEPS_REPORTED:
             return
-        if self.wave is None:
+        if wave.get() is None:
             return
-        self._value_read_at_each_step[step_index] = self.wave
-        if len(self._value_read_at_each_step) == STEPPED_LFO_STEPS_REPORTED:
+        value_read_at_each_step[step_index] = wave.get()
+        if len(value_read_at_each_step) == STEPPED_LFO_STEPS_REPORTED:
             report(
                 "STEPPED_LFO_VALUES_READ",
                 {
                     "pid": os.getpid(),
-                    "steps": [[step, value] for step, value in sorted(self._value_read_at_each_step.items())],
+                    "steps": [[step, value] for step, value in sorted(value_read_at_each_step.items())],
                 },
             )
+
+    return each_frame
 
 
 #: How many counts a sink of a counter reads before it reports them.
@@ -483,23 +516,25 @@ COUNTS_READ_IN_ORDER_BEFORE_REPORTING = 20
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsTheCountsItReadInOrderSink:
+def ReportsTheCountsItReadInOrderSink(
+    *,
+    count: InputPin[Annotated[float, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads every count written on `count`, in order, and reports the first
     `COUNTS_READ_IN_ORDER_BEFORE_REPORTING` with its own pid."""
 
-    count: InputPin[Annotated[float, StreamDelivery("ordered")]]
+    counts_read: "list[float]" = []
 
-    def __init__(self) -> None:
-        self.counts_read: "list[float]" = []
-
-    def process(self, ctx) -> None:
-        while len(self.counts_read) < COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
-            count = self.count.read()
-            if count is None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        while len(counts_read) < COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
+            newest_count = count.read()
+            if newest_count is None:
                 return
-            self.counts_read.append(float(count))
-            if len(self.counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
-                report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": self.counts_read})
+            counts_read.append(float(newest_count))
+            if len(counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
+                report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": counts_read})
+
+    return each_frame
 
 
 #: How many records of a function node run as Python a sink reads before it reports them.
@@ -521,27 +556,30 @@ def LabelsTheLevel(level: float = 0.75) -> LevelLabel:  # noqa: N802
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsTheRecordsItReadSink:
+def ReportsTheRecordsItReadSink(
+    *,
+    label: Input[LevelLabel | None] = Input(None),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the bundle a function node island feeds `label`, and reports its
     first bundles, as records, with its own pid."""
 
-    label: LevelLabel | None = None
+    records_read: "list[dict]" = []
+    reported_its_start = False
 
-    def __init__(self) -> None:
-        self._records_read: "list[dict]" = []
-        self._reported_its_start = False
-
-    def process(self, ctx) -> None:
-        if not self._reported_its_start:
-            self._reported_its_start = True
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported_its_start
+        if not reported_its_start:
+            reported_its_start = True
             report("RECORDS_SINK_STARTED", {"pid": os.getpid()})
-        if len(self._records_read) >= RECORDS_READS_BEFORE_REPORTING:
+        if len(records_read) >= RECORDS_READS_BEFORE_REPORTING:
             return
-        if self.label is None:
+        if label.get() is None:
             return
-        self._records_read.append(dataclasses.asdict(self.label))
-        if len(self._records_read) == RECORDS_READS_BEFORE_REPORTING:
-            report("RECORDS_READ", {"sink_pid": os.getpid(), "records": self._records_read})
+        records_read.append(dataclasses.asdict(label.get()))
+        if len(records_read) == RECORDS_READS_BEFORE_REPORTING:
+            report("RECORDS_READ", {"sink_pid": os.getpid(), "records": records_read})
+
+    return each_frame
 
 
 @node
@@ -566,24 +604,26 @@ LEVELS_READ_BEFORE_REPORTING = 10
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsTheLevelsItReadSink:
+def ReportsTheLevelsItReadSink(
+    *,
+    levels: InputPin[Annotated[int, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the integer a native converter casts of a pooled island's value,
     and reports its first levels with its own pid."""
 
-    levels: InputPin[Annotated[int, StreamDelivery("newest")]]
+    levels_read: "list[int]" = []
 
-    def __init__(self) -> None:
-        self.levels_read: "list[int]" = []
-
-    def process(self, ctx) -> None:
-        if len(self.levels_read) >= LEVELS_READ_BEFORE_REPORTING:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        if len(levels_read) >= LEVELS_READ_BEFORE_REPORTING:
             return
-        level = self.levels.read()
+        level = levels.read()
         if level is None:
             return
-        self.levels_read.append(level)
-        if len(self.levels_read) == LEVELS_READ_BEFORE_REPORTING:
-            report("LEVELS_READ", {"sink_pid": os.getpid(), "levels": self.levels_read})
+        levels_read.append(level)
+        if len(levels_read) == LEVELS_READ_BEFORE_REPORTING:
+            report("LEVELS_READ", {"sink_pid": os.getpid(), "levels": levels_read})
+
+    return each_frame
 
 
 @dataclasses.dataclass(frozen=True)
@@ -594,31 +634,37 @@ class Count:
 
 
 @node(execution="continuous", interval_ms=10)
-class CountsEachTickRecordsSource:
+def CountsEachTickRecordsSource(
+    *,
+    counts_to_downstream: OutputPin[Count],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes a `Count` every tick, counting from 1."""
 
-    counts_to_downstream: OutputPin[Count]
+    _count = 0
 
-    def __init__(self) -> None:
-        self._count = 0
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal _count
+        _count += 1
+        counts_to_downstream.write(Count(count=_count))
 
-    def process(self, ctx) -> None:
-        self._count += 1
-        self.counts_to_downstream.write(Count(count=self._count))
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class CountsEachTickAsALevelSource:
+def CountsEachTickAsALevelSource(
+    *,
+    level_to_downstream: OutputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes the count every tick as a level, counting from 1."""
 
-    level_to_downstream: OutputPin[float]
+    count = 0
 
-    def __init__(self) -> None:
-        self.count = 0
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal count
+        count += 1
+        level_to_downstream.write(float(count))
 
-    def process(self, ctx) -> None:
-        self.count += 1
-        self.level_to_downstream.write(float(self.count))
+    return each_frame
 
 
 #: How many reads a gated sink makes into each batch it reports.
@@ -626,52 +672,56 @@ GATED_READS_PER_REPORTED_BATCH = 50
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfGatedCountsItReadSink:
+def ReportsEachBatchOfGatedCountsItReadSink(
+    *,
+    gated_counts: InputPin[Annotated[Count, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the counts a `Gate` hands on, and reports each batch of reads with
     its own pid and when the batch started: the counts it read, and how many
     reads found nothing."""
 
-    gated_counts: InputPin[Annotated[Count, StreamDelivery("newest")]]
+    counts_in_this_batch: "list[int]" = []
+    reads_in_this_batch = 0
+    this_batch_started_at_monotonic_ns = time.monotonic_ns()
 
-    def __init__(self) -> None:
-        self._counts_in_this_batch: "list[int]" = []
-        self._reads_in_this_batch = 0
-        self._this_batch_started_at_monotonic_ns = time.monotonic_ns()
-
-    def process(self, ctx) -> None:
-        if self._reads_in_this_batch == 0:
-            self._this_batch_started_at_monotonic_ns = time.monotonic_ns()
-        count = self.gated_counts.read()
-        self._reads_in_this_batch += 1
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal counts_in_this_batch, reads_in_this_batch, this_batch_started_at_monotonic_ns
+        if reads_in_this_batch == 0:
+            this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        count = gated_counts.read()
+        reads_in_this_batch += 1
         if count is not None:
-            self._counts_in_this_batch.append(count.count)
-        if self._reads_in_this_batch == GATED_READS_PER_REPORTED_BATCH:
+            counts_in_this_batch.append(count.count)
+        if reads_in_this_batch == GATED_READS_PER_REPORTED_BATCH:
             report(
                 "GATED_COUNT_BATCH_READ",
                 {
                     "sink_pid": os.getpid(),
-                    "started_at_monotonic_ns": self._this_batch_started_at_monotonic_ns,
-                    "counts": self._counts_in_this_batch,
+                    "started_at_monotonic_ns": this_batch_started_at_monotonic_ns,
+                    "counts": counts_in_this_batch,
                 },
             )
-            self._counts_in_this_batch = []
-            self._reads_in_this_batch = 0
+            counts_in_this_batch = []
+            reads_in_this_batch = 0
+
+    return each_frame
 
 
 @node(execution="manual")
-class LendsTheLabelToItsNativeHalf:
+def LendsTheLabelToItsNativeHalf(
+    *,
+    label: InputPin[Annotated[LevelLabel, StreamDelivery("newest")]],
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Lends `label` to native code at setup, as a module's native half does,
     and reports whether the lend was taken."""
 
-    label: InputPin[Annotated[LevelLabel, StreamDelivery("newest")]]
-
-    def setup(self, ctx) -> None:
-        try:
-            ctx.open_module_host_table(input_ports=["label"])
-        except ValueError as refused:
-            report("LABEL_LEND", {"pid": os.getpid(), "refused": str(refused)})
-            return
-        report("LABEL_LEND", {"pid": os.getpid(), "refused": None})
+    try:
+        ctx.open_module_host_table(input_ports=["label"])
+    except ValueError as refused:
+        report("LABEL_LEND", {"pid": os.getpid(), "refused": str(refused)})
+        return
+    report("LABEL_LEND", {"pid": os.getpid(), "refused": None})
 
 
 #: How long each call of `SleepsPastThePoolsFrameInterval` sleeps, past the pool's 10 ms interval.
@@ -722,23 +772,26 @@ COUNTS_READ_BETWEEN_REPORTS = 25
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsTheCountsItReadSink:
+def ReportsTheCountsItReadSink(
+    *,
+    counts: InputPin[Annotated[int, StreamDelivery("newest")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads the integer a native converter casts of a pooled counter, and
     reports each `COUNTS_READ_BETWEEN_REPORTS` counts it read."""
 
-    counts: InputPin[Annotated[int, StreamDelivery("newest")]]
+    counts_since_the_last_report: "list[int]" = []
 
-    def __init__(self) -> None:
-        self.counts_since_the_last_report: "list[int]" = []
-
-    def process(self, ctx) -> None:
-        count = self.counts.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal counts_since_the_last_report
+        count = counts.read()
         if count is None:
             return
-        self.counts_since_the_last_report.append(count)
-        if len(self.counts_since_the_last_report) == COUNTS_READ_BETWEEN_REPORTS:
-            report("COUNTS_READ", {"pid": os.getpid(), "counts": self.counts_since_the_last_report})
-            self.counts_since_the_last_report = []
+        counts_since_the_last_report.append(count)
+        if len(counts_since_the_last_report) == COUNTS_READ_BETWEEN_REPORTS:
+            report("COUNTS_READ", {"pid": os.getpid(), "counts": counts_since_the_last_report})
+            counts_since_the_last_report = []
+
+    return each_frame
 
 
 #: The width `WritesOneWidthSource` writes at each tick.
@@ -749,38 +802,44 @@ WIDTH_HELD_UNLINKED = 4
 
 
 @node(execution="continuous", interval_ms=10)
-class WritesOneWidthSource:
+def WritesOneWidthSource(
+    *,
+    width: OutputPin[int],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Writes `WIDTH_WRITTEN` every tick."""
 
-    width: OutputPin[int]
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        width.write(WIDTH_WRITTEN)
 
-    def process(self, ctx) -> None:
-        self.width.write(WIDTH_WRITTEN)
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsEachBatchOfTheWidthItHolds:
+def ReportsEachBatchOfTheWidthItHolds(
+    *,
+    width: Input[int] = Input(WIDTH_HELD_UNLINKED),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reads its `width` setting at each run, as `SolidColor` reads its size, and reports the
     range of each batch with its own pid and when the batch started."""
 
-    width: int = WIDTH_HELD_UNLINKED
+    widths_in_this_batch: "list[int]" = []
+    this_batch_started_at_monotonic_ns = time.monotonic_ns()
 
-    def __init__(self) -> None:
-        self.widths_in_this_batch: "list[int]" = []
-        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
-
-    def process(self, ctx) -> None:
-        if not self.widths_in_this_batch:
-            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
-        self.widths_in_this_batch.append(self.width)
-        if len(self.widths_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal this_batch_started_at_monotonic_ns, widths_in_this_batch
+        if not widths_in_this_batch:
+            this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        widths_in_this_batch.append(width.get())
+        if len(widths_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
             report(
                 "FUNCTION_NODE_VALUE_BATCH_READ",
                 {
                     "sink_pid": os.getpid(),
-                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
-                    "lowest": min(self.widths_in_this_batch),
-                    "highest": max(self.widths_in_this_batch),
+                    "started_at_monotonic_ns": this_batch_started_at_monotonic_ns,
+                    "lowest": min(widths_in_this_batch),
+                    "highest": max(widths_in_this_batch),
                 },
             )
-            self.widths_in_this_batch = []
+            widths_in_this_batch = []
+
+    return each_frame

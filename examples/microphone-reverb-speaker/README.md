@@ -41,7 +41,7 @@ On the way in, the engine mixes the capture device's stereo down to mono and
 reframes it into exactly-128-sample windows. On the way out, `SpeakerSink`'s own
 input declares `match_device`, so the same stage duplicates the reverb's mono to
 stereo and reframes it into 480-sample windows. Both conversions are engine
-stages that run before anyone's `process()` does.
+stages that run before anyone's frame does.
 
 `tatolab graph --stream main` reports each input port as an object carrying its
 `audio_window`, and the `resolved_from` field is where the two halves show up —
@@ -144,7 +144,7 @@ closed on a machine with no audio hardware attached. Set `microphonesource`'s
 
 ## Knobs
 
-Each knob is a field of its node, stored in `streams/main.graph.json`. Change it in Tato
+Each knob is an input of its node, stored in `streams/main.graph.json`. Change it in Tato
 Studio's inspector, which records the edit in the project's history and applies it to the
 running stream. The four reverb dials are read on every window, so a change is heard at once.
 

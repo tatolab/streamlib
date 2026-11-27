@@ -29,7 +29,7 @@ use streamlib::sdk::descriptors::{
 };
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
+use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
     ProjectOpenOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
@@ -106,13 +106,7 @@ mod view_output_of_a_playing_stream_tests;
 
 /// A native source with one output port, `video`, and nothing to do.
 #[streamlib::sdk::node(execution = manual, output("video", pin_type = Texture, formats = ["rgba8_unorm"]))]
-pub struct StreamToolsTestSource;
-
-impl ManualNode for StreamToolsTestSource::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn stream_tools_test_source() {}
 
 fn register_the_stream_tools_test_source_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -456,13 +450,7 @@ async fn the_stream_action_once(
     execution = manual,
     input("video", delivery_profile = "newest", pin_type = Texture)
 )]
-pub struct StreamToolsTestSink;
-
-impl ManualNode for StreamToolsTestSink::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn stream_tools_test_sink() {}
 
 fn register_the_stream_tools_test_sink_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();

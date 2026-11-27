@@ -11,21 +11,21 @@ slow one; an overlay redrawn at 30 Hz is what it is for.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 import skia
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     NodeOutputTextureRing,
     NumberRange,
     OutputPin,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
+    computed,
     node,
 )
 
@@ -45,56 +45,57 @@ from ..neon_overlay_canvas import (
 OVERLAY_REDRAW_INTERVAL_MS = 33
 
 
+class OverlayHostPixels:
+    """The host buffer skia draws the overlay into, at one size, and the skia surface over it."""
+
+    def __init__(self, width: int, height: int) -> None:
+        self.width = width
+        self.height = height
+        # skia draws straight into this one host buffer; the surface borrows it
+        # without holding a reference, so this object keeps it alive.
+        self.pixels = numpy.zeros((height, width, 4), dtype=numpy.uint8)
+        self.skia_surface = skia.Surface(self.pixels, OVERLAY_COLOR_TYPE, OVERLAY_ALPHA_TYPE)
+
+
 @node.meta(description="Cyberpunk lower third and spray-paint watermark, drawn with skia")
 @node(execution="continuous", interval_ms=OVERLAY_REDRAW_INTERVAL_MS)
-class NeonOverlaySource:
-    """A transparent RGBA layer, redrawn every tick."""
-
-    width: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The overlay's width in pixels.")
-    ] = 1920
-    height: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("The overlay's height in pixels.")
-    ] = 1080
+def NeonOverlaySource(
+    *,
+    width: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The overlay's width in pixels.")]
+    ] = Input(1920),
+    height: Input[
+        Annotated[int, NumberRange(minimum=1), Description("The overlay's height in pixels.")]
+    ] = Input(1080),
     overlay_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(TEXTURE_FORMAT),
             Description("The overlay, premultiplied RGBA over a transparent frame"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """A transparent RGBA layer, redrawn every tick, at the size its inputs hold."""
+    host_pixels = computed(lambda: OverlayHostPixels(width.get(), height.get()))
+    elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
+    output_ring = NodeOutputTextureRing(TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE)
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # skia draws straight into this one host buffer; the surface borrows it
-        # without holding a reference, so the node keeps it alive.
-        self.overlay_host_pixels = numpy.zeros(
-            (self.height, self.width, 4), dtype=numpy.uint8
-        )
-        self.skia_surface_over_overlay_host_pixels = skia.Surface(
-            self.overlay_host_pixels, OVERLAY_COLOR_TYPE, OVERLAY_ALPHA_TYPE
-        )
-        self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
-        self.output_ring = NodeOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
-        )
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         tick_time_ns = ctx.time
-        elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(
-            tick_time_ns
+        elapsed_seconds = elapsed_seconds_since_first_process.seconds_at(tick_time_ns)
+        overlay = host_pixels.get()
+
+        with overlay.skia_surface as canvas:
+            draw_neon_overlay(canvas, overlay.width, overlay.height, elapsed_seconds)
+
+        overlay_texture = output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, overlay.width, overlay.height
         )
+        copy_host_pixels_into_ring_texture(overlay_texture, overlay.pixels)
 
-        with self.skia_surface_over_overlay_host_pixels as canvas:
-            draw_neon_overlay(
-                canvas, self.width, self.height, elapsed_seconds
-            )
-
-        overlay_texture = self.output_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, self.width, self.height
-        )
-        copy_host_pixels_into_ring_texture(overlay_texture, self.overlay_host_pixels)
-
-        self.overlay_to_downstream.write(
+        overlay_to_downstream.write(
             TextureToWrite.of_texture(overlay_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=tick_time_ns,
         )
+
+    return each_frame

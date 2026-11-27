@@ -4,7 +4,7 @@
 """Probes for named-binding ray tracing, from where a kernel really runs.
 
 A probe builds its own scene — a bottom-level structure over triangle
-geometry, a top-level one placing it — and its own kernel in `setup()` where
+geometry, a top-level one placing it — and its own kernel in its body where
 the capability is Full, then traces into a storage image it acquired. Every
 probe runs in a node interpreter of its own and reports one `MARKER:PROBE_RESULT`
 JSON line.
@@ -31,7 +31,6 @@ from tatolab.stream import (
     GpuSurfaceHandle,
     RayTracingKernel,
     RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess,
     log,
     node,
 )
@@ -183,15 +182,15 @@ def _traced_triangle_kernel(
 
 
 class _RayTracingKernelProbeBase:
-    """Builds the scene, the kernel and the traced output in `setup`, and
-    reports from `setup`.
+    """Builds the scene, the kernel and the traced output, and reports, from the
+    node's body.
 
     Nothing upstream is needed: the probe acquires its own storage image, which
     is the point — a trace's output is an engine-owned texture the node
     names, not something handed to it.
     """
 
-    # Declared, not merely assigned: `setup` assigns them inside a nested
+    # Declared, not merely assigned: `report_from` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
     _gpu_full_access: GpuContextFullAccess
     _kernel: RayTracingKernel
@@ -199,7 +198,7 @@ class _RayTracingKernelProbeBase:
     _top_level_structure: AccelerationStructureHandle
     _traced_output: GpuSurfaceHandle
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+    def report_from(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             self._gpu_full_access = gpu
@@ -228,9 +227,6 @@ class _RayTracingKernelProbeBase:
 
         _report(observe)
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        pass
-
     def trace_the_conformance_grid(self) -> None:
         """The one trace every probe here spells the same way."""
         self._kernel.trace(
@@ -245,16 +241,7 @@ class _RayTracingKernelProbeBase:
         raise NotImplementedError
 
 
-@node.meta(description="Builds a BLAS and a TLAS and traces them into a storage image")
-@node(execution="manual")
-class TracedTriangleProbe(_RayTracingKernelProbeBase):
-    """The demo: a Python node builds a scene and traces it.
-
-    No bridge is installed anywhere, and no acceleration-structure id string
-    reaches Python — the handle each build returned is the whole way to name
-    it.
-    """
-
+class _TracedTriangleProbe(_RayTracingKernelProbeBase):
     def observe(self) -> dict:
         self.trace_the_conformance_grid()
         # Twice, over the same scene: the kernel keeps no binding state, so a
@@ -270,12 +257,19 @@ class TracedTriangleProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.meta(description="Every way of getting a trace's bindings wrong, refused by name")
+@node.meta(description="Builds a BLAS and a TLAS and traces them into a storage image")
 @node(execution="manual")
-class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
-    """Unknown, missing and kind-mismatched, each raising with a message naming
-    what the shaders actually declare."""
+def TracedTriangleProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The demo: a Python node builds a scene and traces it.
 
+    No bridge is installed anywhere, and no acceleration-structure id string
+    reaches Python — the handle each build returned is the whole way to name
+    it.
+    """
+    _TracedTriangleProbe().report_from(ctx)
+
+
+class _RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
     def observe(self) -> dict:
         gpu = self._gpu_full_access
         grid = (SURFACE_WIDTH, SURFACE_HEIGHT, 1)
@@ -336,18 +330,15 @@ class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.meta(description="A binding declared for a stage this kernel has no module for")
+@node.meta(description="Every way of getting a trace's bindings wrong, refused by name")
 @node(execution="manual")
-class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
-    """The ticket's named validation case, at the line it belongs to.
+def RayTracingBindingRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Unknown, missing and kind-mismatched, each raising with a message naming
+    what the shaders actually declare."""
+    _RayTracingBindingRefusalProbe().report_from(ctx)
 
-    This kernel is built from ray-gen, miss and closest-hit modules and no
-    other, so declaring a binding for `any_hit` is a claim no trace could ever
-    make true — and a trace never revisits which stage reads what. The
-    traceback proves the `create_ray_tracing_kernel` line raised: there is no
-    kernel object to trace with afterwards.
-    """
 
+class _RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
     def observe(self) -> dict:
         gpu = self._gpu_full_access
 
@@ -377,16 +368,21 @@ class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.meta(description="A uniform-buffer binding a trace cannot name a surface for")
+@node.meta(description="A binding declared for a stage this kernel has no module for")
 @node(execution="manual")
-class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
-    """A uniform-buffer binding is reflected, and refused at the trace.
+def RayTracingStageMismatchProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """The ticket's named validation case, at the line it belongs to.
 
-    The name is read back off the kernel rather than spelled here — how
-    reflection names a uniform block is the shader's business, and the refusal
-    has to name whatever it named.
+    This kernel is built from ray-gen, miss and closest-hit modules and no
+    other, so declaring a binding for `any_hit` is a claim no trace could ever
+    make true — and a trace never revisits which stage reads what. The
+    traceback proves the `create_ray_tracing_kernel` line raised: there is no
+    kernel object to trace with afterwards.
     """
+    _RayTracingStageMismatchProbe().report_from(ctx)
 
+
+class _RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
     def observe(self) -> dict:
         tinted = self._gpu_full_access.create_ray_tracing_kernel(
             stages=[
@@ -416,13 +412,19 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.meta(description="An acceleration structure is named by its handle, or not at all")
+@node.meta(description="A uniform-buffer binding a trace cannot name a surface for")
 @node(execution="manual")
-class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
-    """Nothing publishes an acceleration structure for another node to
-    resolve, so a surface id is not a spelling for one — and the structure a
-    trace binds is the top-level one, which is what holds the instances."""
+def RayTracingBufferBindingRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """A uniform-buffer binding is reflected, and refused at the trace.
 
+    The name is read back off the kernel rather than spelled here — how
+    reflection names a uniform block is the shader's business, and the refusal
+    has to name whatever it named.
+    """
+    _RayTracingBufferBindingRefusalProbe().report_from(ctx)
+
+
+class _AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
     def observe(self) -> dict:
         gpu = self._gpu_full_access
         grid = (SURFACE_WIDTH, SURFACE_HEIGHT, 1)
@@ -473,40 +475,48 @@ class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
+@node.meta(description="An acceleration structure is named by its handle, or not at all")
+@node(execution="manual")
+def AccelerationStructureHandleRefusalProbe(*, ctx: RuntimeContextFullAccess) -> None:
+    """Nothing publishes an acceleration structure for another node to
+    resolve, so a surface id is not a spelling for one — and the structure a
+    trace binds is the top-level one, which is what holds the instances."""
+    _AccelerationStructureHandleRefusalProbe().report_from(ctx)
+
+
 # What every ray-tracing constructor says on a device without the tier.
 RAY_TRACING_TIER_ABSENT = "the ray-tracing tier is absent"
 
 
-@node.meta(description="Ray-tracing constructors refuse at setup() naming the absent tier")
+@node.meta(description="Ray-tracing constructors refuse in a node's body naming the absent tier")
 @node(execution="manual")
-class RayTracingTierAbsentRefusalProbe:
-    """Each ray-tracing constructor called from `setup()`, answered or refused.
+def RayTracingTierAbsentRefusalProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """Each ray-tracing constructor called from the node's body, answered or refused.
 
     Reports `tier_present` when the device builds both, so the asserting test
     can say the device is out of its scope rather than pass on it.
     """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        def observe() -> dict:
-            gpu = ctx.gpu_full_access
-            refusals: dict[str, str] = {}
-            try:
-                gpu.build_triangles_blas(
-                    vertices=TRIANGLE_VERTICES,
-                    indices=TRIANGLE_INDICES,
-                    label="python-triangle-blas",
-                )
-            except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
-                refusals["build_triangles_blas"] = str(refusal)
-            try:
-                _traced_triangle_kernel(gpu, DECLARED_BINDINGS)
-            except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
-                refusals["create_ray_tracing_kernel"] = str(refusal)
-            if not refusals:
-                return {"tier_present": True}
-            return {"refusals": refusals}
+    def observe() -> dict:
+        gpu = ctx.gpu_full_access
+        refusals: dict[str, str] = {}
+        try:
+            gpu.build_triangles_blas(
+                vertices=TRIANGLE_VERTICES,
+                indices=TRIANGLE_INDICES,
+                label="python-triangle-blas",
+            )
+        except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
+            refusals["build_triangles_blas"] = str(refusal)
+        try:
+            _traced_triangle_kernel(gpu, DECLARED_BINDINGS)
+        except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
+            refusals["create_ray_tracing_kernel"] = str(refusal)
+        if not refusals:
+            return {"tier_present": True}
+        return {"refusals": refusals}
 
-        _report(observe)
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        pass
+    _report(observe)

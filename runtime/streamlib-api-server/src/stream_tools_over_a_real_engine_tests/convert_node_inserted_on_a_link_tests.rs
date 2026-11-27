@@ -29,13 +29,7 @@ use super::*;
     output("gate", pin_type = Boolean),
     output("level", pin_type = Float),
 )]
-pub(super) struct ConvertNodeTestEnd;
-
-impl ManualNode for ConvertNodeTestEnd::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(super) fn convert_node_test_end() {}
 
 /// A conversion a module states, of a Boolean into Audio, which `connect` never places.
 #[streamlib::sdk::node(
@@ -47,13 +41,7 @@ impl ManualNode for ConvertNodeTestEnd::Node {
     conversion = true,
     description = "Sounds a tone while the gate is open."
 )]
-pub(super) struct ConvertNodeTestModuleGateToAudio;
-
-impl ManualNode for ConvertNodeTestModuleGateToAudio::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub(super) fn convert_node_test_module_gate_to_audio() {}
 
 /// Register the test ends, the module's conversion and the built-in conversions, once per test
 /// binary.

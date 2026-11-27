@@ -3,7 +3,7 @@
 
 """The real seafloor off Miami, drawn as neon depth contours in a world-space texture.
 
-Importable as `nodes.bathymetry_relief:BathymetryRelief`. `setup()` uploads
+Importable as `nodes.bathymetry_relief:BathymetryRelief`. Its body uploads
 NOAA's ETOPO 2022 elevation for the map's square once and a kernel bakes it
 into a held texture; each frame a second kernel draws its isobaths, coloured
 by depth and pulsing outward on the soundtrack's beat. It sends both: the
@@ -14,11 +14,11 @@ skyline on the real coast and draw the real chart at the reveal.
 from __future__ import annotations
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     NumberRange,
@@ -28,6 +28,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     log,
     node,
 )
@@ -132,76 +133,82 @@ def workgroups(pixels: int) -> int:
     category="Gulf Stream Neon",
     description="The real seafloor off Miami (NOAA ETOPO 2022) as neon isobaths that pulse on the beat, plus the raw relief.",
 )
-@node
-class BathymetryRelief:
-    """Neon isobaths of the real Florida Straits, pulsing on the beat."""
-
-    line_spacing_m: Annotated[
-        float, NumberRange(minimum=0.01), Description("The depth between two isobaths, in metres.")
-    ] = 1.6
-    glow: Annotated[
-        float, NumberRange(minimum=0.0), Description("How bright the isobaths glow.")
-    ] = 1.0
+@node(execution="reactive")
+def BathymetryRelief(
+    *,
+    line_spacing_m: Input[
+        Annotated[
+            float, NumberRange(minimum=0.01), Description("The depth between two isobaths, in metres.")
+        ]
+    ] = Input(1.6),
+    glow: Input[
+        Annotated[float, NumberRange(minimum=0.0), Description("How bright the isobaths glow.")]
+    ] = Input(1.0),
     soundtrack: InputPin[
         Annotated[
             SoundtrackPulseReading,
             StreamDelivery("newest"),
             Description("beat, energy: from SoundtrackPulse"),
         ]
-    ]
+    ],
     contours: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(HDR_LAYER_FORMAT),
             Description("The isobath layer in world space, HDR"),
         ]
-    ]
+    ],
     relief: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(RELIEF_FORMAT),
             Description("Elevation km, land, city density, km to the coast, in world space"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Neon isobaths of the real Florida Straits, pulsing on the beat."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.take_clock = TakeClock()
-        gpu = ctx.gpu_full_access
-        size = WORLD_TEXTURE_SIZE
-        self.contour_kernel = ctx.gpu_limited_access.create_compute_kernel(source=CONTOUR_SLANG, push_constant_size=CONTOUR_DIALS.size)
-        baked = baked_relief(size)
-        # The relief is held at full float precision: elevations of a few metres matter on the banks.
-        self.held_relief = gpu.acquire_texture(size, size, RELIEF_FORMAT, LAYER_USAGE)
-        self.held_relief.lock(read_only=False)
-        self.held_relief.as_numpy().reshape(size * size, 4)[:] = baked
-        self.held_relief.unlock()
-        self.contour_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
-        self.relief_textures = NodeOutputTextureRing(RELIEF_FORMAT, LAYER_USAGE)
-        self.latest_soundtrack = SoundtrackPulseReading()
-        log.info("bathymetry uploaded", texels=size * size, deepest_km=float(baked[:, 0].min()))
+    take_clock = TakeClock()
+    gpu = ctx.gpu_full_access
+    size = WORLD_TEXTURE_SIZE
+    contour_kernel = ctx.gpu_limited_access.create_compute_kernel(source=CONTOUR_SLANG, push_constant_size=CONTOUR_DIALS.size)
+    baked = baked_relief(size)
+    # The relief is held at full float precision: elevations of a few metres matter on the banks.
+    held_relief = gpu.acquire_texture(size, size, RELIEF_FORMAT, LAYER_USAGE)
+    held_relief.lock(read_only=False)
+    held_relief.as_numpy().reshape(size * size, 4)[:] = baked
+    held_relief.unlock()
+    contour_textures = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
+    relief_textures = NodeOutputTextureRing(RELIEF_FORMAT, LAYER_USAGE)
+    latest_soundtrack = SoundtrackPulseReading()
+    log.info("bathymetry uploaded", texels=size * size, deepest_km=float(baked[:, 0].min()))
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        soundtrack = self.soundtrack.read()
-        if soundtrack is not None:
-            self.latest_soundtrack = soundtrack
-        seconds = self.take_clock.seconds_at(ctx)
-        beat = self.latest_soundtrack.beat
-        glow = self.glow * self.latest_soundtrack.glow
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal latest_soundtrack
+        newest_soundtrack = soundtrack.read()
+        if newest_soundtrack is not None:
+            latest_soundtrack = newest_soundtrack
+        seconds = take_clock.seconds_at(ctx)
+        beat = latest_soundtrack.beat
+        glow_now = glow.get() * latest_soundtrack.glow
         size = WORLD_TEXTURE_SIZE
         gpu = ctx.gpu_limited_access
-        contour_texture = self.contour_textures.next_texture_for_this_frame(gpu, size, size)
-        self.contour_kernel.dispatch(
-            bindings={"relief": self.held_relief, "contour_layer": contour_texture},
+        contour_texture = contour_textures.next_texture_for_this_frame(gpu, size, size)
+        contour_kernel.dispatch(
+            bindings={"relief": held_relief, "contour_layer": contour_texture},
             group_count=(workgroups(size), workgroups(size), 1),
-            push_constants=CONTOUR_DIALS.pack(size, seconds, glow, beat, self.line_spacing_m),
+            push_constants=CONTOUR_DIALS.pack(size, seconds, glow_now, beat, line_spacing_m.get()),
         )
-        relief_texture = self.relief_textures.next_texture_for_this_frame(gpu, size, size)
-        gpu.copy_surface_to_surface(self.held_relief.surface_id, relief_texture)
-        self.contours.write(
+        relief_texture = relief_textures.next_texture_for_this_frame(gpu, size, size)
+        gpu.copy_surface_to_surface(held_relief.surface_id, relief_texture)
+        contours.write(
             TextureToWrite.of_texture(contour_texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )
-        self.relief.write(
+        relief.write(
             TextureToWrite.of_texture(relief_texture, RENDERED_FRAME_COLOUR),
             timestamp_ns=ctx.time,
         )
+
+    return each_frame

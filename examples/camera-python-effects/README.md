@@ -15,7 +15,7 @@ CameraSource ─┬─ CameraFrameToTexture ─ CyberpunkGlitch ─ CrtFilmGrain
 ## The model this example teaches
 
 **A stream with many nodes is still one graph asset.** `streams/main.graph.json`
-holds the seven nodes, their settings and their links; the nodes, the code they
+holds the seven nodes, their input values and their links; the nodes, the code they
 share and their shaders live in an ordinary installable package,
 `src/camera_python_effects/`.
 
@@ -56,7 +56,7 @@ viewer.
 Runs on Linux with an NVIDIA GPU and a V4L2 camera, and on macOS arm64. The
 first run downloads MediaPipe's pose model (`pose_landmarker_lite.task`,
 ~5.5 MB) into `~/.cache/camera-python-effects`; the shaders need no toolchain —
-the runtime compiles them when each node's `setup()` builds its kernel.
+the runtime compiles them when each node's body builds its kernel.
 
 `tatolab dev` follows the project's log and loads the project again on every
 saved edit; `tatolab start` queues the load and returns, and `tatolab reload` re-reads a project that already runs. Ctrl-C ends `tatolab dev`
@@ -77,13 +77,14 @@ The effects live in `src/camera_python_effects/shaders/` as ordinary `.slang`
 files. The `dev` watch follows `.py` files only, so after editing a shader save
 any `.py` file (or restart `tatolab dev`) to load it.
 
-Each node's settings are annotated fields on its class with ordinary Python
-defaults, and each shows as a row in Tato Studio — dragging `crtfilmgrain`'s
+Each node's value inputs are `Input[...]` parameters of its function with
+ordinary Python defaults, and each shows as a row in Tato Studio — dragging `crtfilmgrain`'s
 `barrel_curve` slider to `0.0` flattens the tube while the stream plays.
 `CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar` takes
 `scene_width`, `scene_height`, `detection_confidence` and `pose_model_path` (a
-local `.task` file, which skips the download), each read at setup, so a change
-builds the node again.
+local `.task` file, which skips the download), each read by the computed value
+that builds the stage or the tracker, so a change builds that one again while
+frames go on with the old.
 
 The avatar is three third-party worlds in one child process — numpy reads the
 camera frame's host side through `numpy.from_dlpack(frame, device="cpu")`,

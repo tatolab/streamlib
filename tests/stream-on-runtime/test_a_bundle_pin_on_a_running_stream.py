@@ -43,9 +43,9 @@ dependencies = ["tatolab-stream"]
 NODES_OF_THE_PROJECT = '''\
 import json
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import InputPin, PinMeaning, log, node
+from tatolab.stream import InputPin, PinMeaning, RuntimeContextLimitedAccess, log, node
 
 
 @dataclass(frozen=True)
@@ -74,17 +74,20 @@ def ToneAsOneNumber(tone: Tone = Tone(0.0)) -> float:
 
 @node.meta(description="Reports the number it reads, once.")
 @node(execution="continuous", interval_ms=20)
-class ReportsTheToneItReads:
-    tone: InputPin[float]
+def ReportsTheToneItReads(
+    *,
+    tone: InputPin[float],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        newest_tone = tone.read()
+        if newest_tone is not None and not reported:
+            reported = True
+            log.info("MARKER:BUNDLE_TONE_READ " + json.dumps({"tone": newest_tone}))
 
-    def process(self, ctx) -> None:
-        tone = self.tone.read()
-        if tone is not None and not self._reported:
-            self._reported = True
-            log.info("MARKER:BUNDLE_TONE_READ " + json.dumps({"tone": tone}))
+    return each_frame
 '''
 
 

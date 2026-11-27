@@ -10,11 +10,11 @@ name the runtime spawns this node's child interpreter with.
 from __future__ import annotations
 
 import struct
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
-    TextureToWrite,
+    Input,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
@@ -23,6 +23,7 @@ from tatolab.stream import (
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    TextureToWrite,
     log,
     node,
 )
@@ -97,65 +98,62 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
 
 @node.meta(description="Barrels each camera frame the way a wide-FOV lens would, on the GPU")
-@node
-class SyntheticFisheyeLens:
-    """Camera frame in, the same picture through a synthetic fisheye lens out.
-
-    Both coefficients are read on each frame, so the barrel follows a change
-    while the stream plays.
-    """
-
-    radial_distortion_k1: Annotated[
-        float, Description("The lens's first radial distortion coefficient.")
-    ] = DEFAULT_RADIAL_DISTORTION_K1
-    radial_distortion_k2: Annotated[
-        float, Description("The lens's second radial distortion coefficient.")
-    ] = DEFAULT_RADIAL_DISTORTION_K2
+@node(execution="reactive")
+def SyntheticFisheyeLens(
+    *,
+    radial_distortion_k1: Input[
+        Annotated[float, Description("The lens's first radial distortion coefficient.")]
+    ] = Input(DEFAULT_RADIAL_DISTORTION_K1),
+    radial_distortion_k2: Input[
+        Annotated[float, Description("The lens's second radial distortion coefficient.")]
+    ] = Input(DEFAULT_RADIAL_DISTORTION_K2),
     camera_frame_from_upstream: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames from the camera")]
-    ]
+    ],
     fisheye_frame_to_downstream: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(FRAME_TEXTURE_FORMAT),
             Description("The same frames with a barrel distortion applied"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Camera frame in, the same picture through a synthetic fisheye lens out.
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        # Depth 1: `dispatch` returns with the GPU work retired, and nothing
-        # outside this node names the landing texture.
-        self.camera_frame_landing_ring = NodeOutputTextureRing(
-            FRAME_TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
-        )
-        self.fisheye_frame_ring = NodeOutputTextureRing(
-            FRAME_TEXTURE_FORMAT,
-            STORAGE_AND_SAMPLED_TEXTURE_USAGE,
-            depth=FISHEYE_FRAME_RING_DEPTH,
-        )
-        self.fisheye_warp_kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=FISHEYE_WARP_SLANG,
-            push_constant_size=LENS_COEFFICIENT_PUSH_CONSTANT_SIZE,
-            bindings={
-                CAMERA_FRAME_BINDING: "sampled_texture",
-                FISHEYE_FRAME_BINDING: "storage_image",
-            },
-        )
-        log.info(
-            "synthetic fisheye lens ready",
-            radial_distortion_k1=self.radial_distortion_k1,
-            radial_distortion_k2=self.radial_distortion_k2,
-        )
+    Both coefficients are read on each frame, so the barrel follows a change
+    while the stream plays.
+    """
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.camera_frame_from_upstream.read()
+    # Depth 1: `dispatch` returns with the GPU work retired, and nothing
+    # outside this node names the landing texture.
+    camera_frame_landing_ring = NodeOutputTextureRing(
+        FRAME_TEXTURE_FORMAT, SAMPLED_TEXTURE_USAGE, depth=1
+    )
+    fisheye_frame_ring = NodeOutputTextureRing(
+        FRAME_TEXTURE_FORMAT,
+        STORAGE_AND_SAMPLED_TEXTURE_USAGE,
+        depth=FISHEYE_FRAME_RING_DEPTH,
+    )
+    fisheye_warp_kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=FISHEYE_WARP_SLANG,
+        push_constant_size=LENS_COEFFICIENT_PUSH_CONSTANT_SIZE,
+        bindings={
+            CAMERA_FRAME_BINDING: "sampled_texture",
+            FISHEYE_FRAME_BINDING: "storage_image",
+        },
+    )
+    log.info("synthetic fisheye lens ready")
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        frame = camera_frame_from_upstream.read()
         if frame is None:
             return
 
         # The camera publishes a buffer-backed frame and a dispatch samples
         # textures only, so the engine copies it device-to-device into one.
         camera_frame_landing_texture = (
-            self.camera_frame_landing_ring.next_texture_for_this_frame(
+            camera_frame_landing_ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, frame.width, frame.height
             )
         )
@@ -163,10 +161,10 @@ class SyntheticFisheyeLens:
             frame.surface_id, camera_frame_landing_texture
         )
 
-        fisheye_frame_texture = self.fisheye_frame_ring.next_texture_for_this_frame(
+        fisheye_frame_texture = fisheye_frame_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        self.fisheye_warp_kernel.dispatch(
+        fisheye_warp_kernel.dispatch(
             bindings={
                 CAMERA_FRAME_BINDING: camera_frame_landing_texture,
                 FISHEYE_FRAME_BINDING: fisheye_frame_texture,
@@ -180,13 +178,15 @@ class SyntheticFisheyeLens:
             # kernel, so the coefficients are packed for every one.
             push_constants=struct.pack(
                 LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT,
-                self.radial_distortion_k1,
-                self.radial_distortion_k2,
+                radial_distortion_k1.get(),
+                radial_distortion_k2.get(),
             ),
         )
 
         # The capture's timestamp, not the lens's: downstream orders by it.
-        self.fisheye_frame_to_downstream.write(
+        fisheye_frame_to_downstream.write(
             TextureToWrite.of_texture(fisheye_frame_texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
+
+    return each_frame

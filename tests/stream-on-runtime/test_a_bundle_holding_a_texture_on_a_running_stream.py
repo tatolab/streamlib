@@ -43,17 +43,20 @@ dependencies = ["tatolab-stream"]
 """
 
 NODES_OF_THE_PROJECT = '''\
+from typing import Callable
 import json
 from dataclasses import dataclass
 
 from tatolab.stream import (
     ColorInfo,
-    TextureToWrite,
     InputPin,
     NodeOutputTextureRing,
     OutputPin,
     Rectangle,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     Texture,
+    TextureToWrite,
     log,
     node,
 )
@@ -70,44 +73,49 @@ class Framed:
 
 @node.meta(description="Sends one texture of its own pool, with the region of it that matters.")
 @node(execution="continuous", interval_ms=10)
-class FramesAPicture:
-    framed: OutputPin[Framed]
+def FramesAPicture(
+    *,
+    framed: OutputPin[Framed],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    texture = NodeOutputTextureRing(
+        "rgba8_unorm", ["render_attachment", "texture_binding", "copy_src", "copy_dst"], depth=1
+    ).next_texture_for_this_frame(ctx.gpu_full_access, PICTURE_WIDTH, PICTURE_HEIGHT)
+    reported = False
 
-    def setup(self, ctx) -> None:
-        self.texture = NodeOutputTextureRing(
-            "rgba8_unorm", ["render_attachment", "texture_binding", "copy_src", "copy_dst"], depth=1
-        ).next_texture_for_this_frame(ctx.gpu_full_access, PICTURE_WIDTH, PICTURE_HEIGHT)
-        self.reported = False
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
         picture = TextureToWrite.of_texture(
-            self.texture, ColorInfo(primaries="bt709", transfer="srgb", matrix="identity", range="full")
+            texture, ColorInfo(primaries="bt709", transfer="srgb", matrix="identity", range="full")
         )
-        self.framed.write(Framed(picture, Rectangle(0.25, 0.5, 0.5, 0.25)))
-        if not self.reported:
-            self.reported = True
+        framed.write(Framed(picture, Rectangle(0.25, 0.5, 0.5, 0.25)))
+        if not reported:
+            reported = True
             log.info("MARKER:FRAMED_PICTURE_WRITTEN " + json.dumps({"surface_id": picture.surface_id}))
+
+    return each_frame
 
 
 @node.meta(description="Reports the first framed picture it reads.")
 @node(execution="continuous", interval_ms=10)
-class ReportsTheFramedPicture:
-    framed: InputPin[Framed]
+def ReportsTheFramedPicture(
+    *,
+    framed: InputPin[Framed],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    reported = False
 
-    def setup(self, ctx) -> None:
-        self.reported = False
-
-    def process(self, ctx) -> None:
-        framed = self.framed.read()
-        if framed is None or self.reported:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
+        newest_framed = framed.read()
+        if newest_framed is None or reported:
             return
-        self.reported = True
-        picture = framed.picture
+        reported = True
+        picture = newest_framed.picture
         log.info(
             "MARKER:FRAMED_PICTURE_READ "
             + json.dumps(
                 {
-                    "is_framed": type(framed) is Framed,
+                    "is_framed": type(newest_framed) is Framed,
                     "surface_id": picture.surface_id,
                     "width": picture.width,
                     "height": picture.height,
@@ -118,10 +126,12 @@ class ReportsTheFramedPicture:
                         picture.colour.matrix,
                         picture.colour.range,
                     ],
-                    "region": list(framed.region.parts),
+                    "region": list(newest_framed.region.parts),
                 }
             )
         )
+
+    return each_frame
 '''
 
 FRAMED_BUNDLE = {

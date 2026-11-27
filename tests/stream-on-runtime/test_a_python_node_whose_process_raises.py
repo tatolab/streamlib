@@ -31,26 +31,30 @@ RAISE_SEEN_AND_CLEARED_TIMEOUT_SECONDS = 30.0
 RAISING_NODES_SOURCE = f'''\
 """A node whose `process()` raises for its first seconds, then runs cleanly."""
 
+from typing import Callable
 import time
 
 from tatolab.stream import OutputPin, RuntimeContextLimitedAccess, Trigger, node
 
 
 @node(execution="continuous", interval_ms=10)
-class RaisesForItsFirstSeconds:
+def RaisesForItsFirstSeconds(
+    *,
+    nothing_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Raises on every call for {RAISES_FOR_SECONDS} s after its first."""
 
-    nothing_to_downstream: OutputPin[Trigger]
+    first_call_at = None
 
-    def __init__(self) -> None:
-        self._first_call_at = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal first_call_at
         now = time.monotonic()
-        if self._first_call_at is None:
-            self._first_call_at = now
-        if now - self._first_call_at < {RAISES_FOR_SECONDS}:
+        if first_call_at is None:
+            first_call_at = now
+        if now - first_call_at < {RAISES_FOR_SECONDS}:
             raise RuntimeError("broke on purpose")
+
+    return each_frame
 '''
 
 RAISING_STREAM_SOURCE = '''\

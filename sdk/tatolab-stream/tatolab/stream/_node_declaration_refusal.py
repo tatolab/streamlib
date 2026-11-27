@@ -50,6 +50,7 @@ type NodeDeclarationFindingCode = Literal[
     "input_default_not_an_input",
     "setting_on_a_node_function",
     "node_function_parameter_private",
+    "pin_type_choice_on_a_node_function",
     "node_function_not_a_plain_def",
     "node_function_takes_the_context_twice",
 ]

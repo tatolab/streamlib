@@ -4,7 +4,7 @@
 """A Python node's compute kernel built in a computed value that reads its `width` input is built
 again for each of a hundred widths set while its stream plays, on the limited GPU capability:
 frames dispatch each new kernel in the process the node set up in, every kernel replaced is closed
-and handed back to the engine, a kernel created in the scope's body keeps dispatching, a frame
+and handed back to the engine, a kernel created in the node's body keeps dispatching, a frame
 whose dispatches overlap a build takes no longer than one with no build in flight, and the stream
 stays healthy.
 """
@@ -105,7 +105,6 @@ def test_a_computed_kernel_is_rebuilt_for_each_width_set_while_playing_and_each_
         "the kernels are built, dispatched and closed in the process the probe set up in"
     )
     assert len(tatolabd.marker_payloads("PROBE_SETUP")) == 1, tatolabd.recent_stderr()
-    assert tatolabd.marker_payloads("PROBE_TEARDOWN") == [], tatolabd.recent_stderr()
     assert A_RELEASE_THE_PARENT_DID_NOT_TAKE not in tatolabd.stderr_text, (
         tatolabd.recent_stderr()
     )

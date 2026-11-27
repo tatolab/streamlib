@@ -4,18 +4,19 @@
 use streamlib::sdk::json_schema::NodeDescriptorOutput;
 use streamlib::sdk::nodes::GeneratedNode;
 use streamlib::sdk::serde_json::{self, Map, Value, json};
-use streamlib_test_fixtures::test_configured_node::{ConfiguredNode, ConfiguredNodeSettings};
+use streamlib_test_fixtures::test_configured_node::ConfiguredNode;
 
 fn held(values: Value) -> Map<String, Value> {
     values.as_object().cloned().expect("an object of values")
 }
 
-/// The catalog lists `threshold` as the fixture's one input, a Float setting read at setup
-/// holding its default, and no config schema.
+/// The catalog lists `threshold` as the fixture's one input, a Float value input read each run
+/// holding its default.
 ///
-/// Mental-revert: a fixture declaring `config =` lists no input and states a config schema.
+/// Mental-revert: a value input listed as read at setup would be held on the graph and rebuild
+/// the node when set.
 #[test]
-fn the_catalog_lists_its_setting_as_an_input_read_at_setup() {
+fn the_catalog_lists_its_value_input_as_an_input_read_each_run() {
     let descriptor = <ConfiguredNode::Node as GeneratedNode>::descriptor().expect("a descriptor");
     let rendered = serde_json::to_value(NodeDescriptorOutput::from(&descriptor)).unwrap();
     let inputs = rendered["inputs"].as_array().unwrap();
@@ -30,36 +31,24 @@ fn the_catalog_lists_its_setting_as_an_input_read_at_setup() {
     assert_eq!(threshold["default_value"], json!(0.0), "{rendered}");
     assert_eq!(
         threshold["input_mode"],
-        json!({"mode": "setting_only", "read": "at_setup"})
+        json!({"mode": "setting_only", "read": "each_run"}),
+        "{rendered}"
     );
-    assert!(descriptor.config_schema.is_none(), "{rendered}");
 }
 
-/// The settings the input values hold before setup are the ones the node holds; a value its
-/// setting does not take is refused, naming the node.
+/// A value its input takes is taken before setup; a value it does not take is refused, naming
+/// the node.
 ///
-/// Mental-revert: settings left at their defaults hold `0.0` after the input holds `0.5`.
+/// Mental-revert: a value input that took any JSON would take `"high"` as a Float.
 #[test]
-fn the_settings_held_before_setup_are_the_ones_it_holds() {
+fn a_value_its_input_does_not_take_is_refused_naming_the_node() {
     let mut node = ConfiguredNode::Node::from_config(Default::default()).unwrap();
-    assert_eq!(node.settings, ConfiguredNodeSettings::default());
 
     node.set_unlinked_input_values(&held(json!({"threshold": 0.5})))
-        .expect("the settings are taken");
-    assert_eq!(node.settings.threshold, 0.5);
+        .expect("a Float is taken");
 
     let refusal = node
         .set_unlinked_input_values(&held(json!({"threshold": "high"})))
         .expect_err("a string is no Float");
     assert!(refusal.to_string().contains("ConfiguredNode"), "{refusal}");
-}
-
-/// A spec of the node built from settings holds them as its input values, under each key the
-/// config held.
-///
-/// Mental-revert: a spec built from a config holds `threshold` in its config.
-#[test]
-fn a_spec_built_from_settings_holds_them_as_input_values() {
-    let spec = ConfiguredNode::node(ConfiguredNodeSettings { threshold: 0.8 });
-    assert_eq!(spec.input_values, held(json!({"threshold": 0.8_f32})));
 }

@@ -5,6 +5,7 @@
 process: an edit, a lagged reader, the copy door refused, and the row pitch."""
 
 import traceback
+from typing import Callable
 
 import numpy
 
@@ -17,16 +18,15 @@ from device_exchange_probe_shared_surfaces_and_reporting import (
     report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
-    Texture,
     InputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    Texture,
     node,
 )
 
 
-@node
-class GraphFrameToTorchProbe(DeviceExchangeFrameProbeBase):
+class _GraphFrameToTorchProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -53,8 +53,15 @@ class GraphFrameToTorchProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node
-class DeviceEditProbe(DeviceExchangeFrameProbeBase):
+@node(execution="reactive")
+def GraphFrameToTorchProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    return _GraphFrameToTorchProbe(video_from_upstream).each_frame
+
+
+class _DeviceEditProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -85,8 +92,15 @@ class DeviceEditProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node
-class WithBlockEditProbe(DeviceExchangeFrameProbeBase):
+@node(execution="reactive")
+def DeviceEditProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    return _DeviceEditProbe(video_from_upstream).each_frame
+
+
+class _WithBlockEditProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -114,8 +128,15 @@ class WithBlockEditProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node
-class TensorOutlivesHandleProbe(DeviceExchangeFrameProbeBase):
+@node(execution="reactive")
+def WithBlockEditProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    return _WithBlockEditProbe(video_from_upstream).each_frame
+
+
+class _TensorOutlivesHandleProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -139,8 +160,15 @@ class TensorOutlivesHandleProbe(DeviceExchangeFrameProbeBase):
         }
 
 
-@node
-class HostSideProbe(DeviceExchangeFrameProbeBase):
+@node(execution="reactive")
+def TensorOutlivesHandleProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    return _TensorOutlivesHandleProbe(video_from_upstream).each_frame
+
+
+class _HostSideProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock()
@@ -159,40 +187,21 @@ class HostSideProbe(DeviceExchangeFrameProbeBase):
             return observation
 
 
-@node
-class LaggedConsumerHoldsItsFrameProbe:
-    """View identity across ring cycles, plus a frame held past the pool's own
-    depth.
+@node(execution="reactive")
+def HostSideProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    return _HostSideProbe(video_from_upstream).each_frame
 
-    Two claims, and the second is the one #1755 needs. Identity alone cannot
-    fail for the reason the issue exists: two views of one recycled slot agree
-    with each other by construction. Holding one frame while the producer runs
-    well past the pool's depth is what proves the pixels under a surface id are
-    still the ones the bag was published with.
 
-    The frame is held through a view whose handle has already been closed,
-    which is the stricter half of the same contract: `close()` drops only the
-    handle's share of the surface, so a lease that rode `close()` rather than
-    the last share would let the producer recycle the slot underneath a live
-    array.
-
-    The read goes through the Texture pin and that is load-bearing,
-    not style: the claim is taken as the read builds its `Texture`. A read
-    by name returns the payload bytes and takes no claim at all, so the held
-    frame would ride pool depth like any other — and this probe would assert a
-    lease it never took.
-
-    Mental-revert: without the checkout lease the producer rehands the held
-    slot within a ring cycle and `held_frame_unchanged` reads False.
-    """
-
-    video_from_upstream: InputPin[FramesInOrder]
-
+class _LaggedConsumerHoldsItsFrame:
     # Comfortably past the pool's pre-allocated depth, so the producer has
     # cycled its ring several times over while the first frame is still held.
     FRAMES_TO_LAG_BY = 16
 
-    def __init__(self) -> None:
+    def __init__(self, video_from_upstream: InputPin[FramesInOrder]) -> None:
+        self.video_from_upstream = video_from_upstream
         self._comparisons: "list[bool]" = []
         self._view_of_the_delivered_frame = None
         self._pixels_as_delivered = None
@@ -201,7 +210,7 @@ class LaggedConsumerHoldsItsFrameProbe:
         self._frames_recycled_before_this_probe_read_them = 0
         self._reported = False
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = self.video_from_upstream.read()
         if frame is None or self._reported:
             return
@@ -293,11 +302,39 @@ class LaggedConsumerHoldsItsFrameProbe:
         report_device_exchange_probe_observation(lambda: observation)
 
 
-@node
-class CopyRequestRefusedAtBothDoorsProbe(DeviceExchangeFrameProbeBase):
-    """`copy=True` asks for memory the consumer owns; both doors export in
-    place, so both refuse by name rather than hand back an alias."""
+@node(execution="reactive")
+def LaggedConsumerHoldsItsFrameProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """View identity across ring cycles, plus a frame held past the pool's own
+    depth.
 
+    Two claims, and the second is the one #1755 needs. Identity alone cannot
+    fail for the reason the issue exists: two views of one recycled slot agree
+    with each other by construction. Holding one frame while the producer runs
+    well past the pool's depth is what proves the pixels under a surface id are
+    still the ones the bag was published with.
+
+    The frame is held through a view whose handle has already been closed,
+    which is the stricter half of the same contract: `close()` drops only the
+    handle's share of the surface, so a lease that rode `close()` rather than
+    the last share would let the producer recycle the slot underneath a live
+    array.
+
+    The read goes through the Texture pin and that is load-bearing,
+    not style: the claim is taken as the read builds its `Texture`. A read
+    by name returns the payload bytes and takes no claim at all, so the held
+    frame would ride pool depth like any other — and this probe would assert a
+    lease it never took.
+
+    Mental-revert: without the checkout lease the producer rehands the held
+    slot within a ring cycle and `held_frame_unchanged` reads False.
+    """
+    return _LaggedConsumerHoldsItsFrame(video_from_upstream).each_frame
+
+
+class _CopyRequestRefusedAtBothDoorsProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         observation = {}
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -320,6 +357,16 @@ class CopyRequestRefusedAtBothDoorsProbe(DeviceExchangeFrameProbeBase):
                 except BufferError as refusal:
                     observation["scope_refusal"] = str(refusal)
         return observation
+
+
+@node(execution="reactive")
+def CopyRequestRefusedAtBothDoorsProbe(
+    *,
+    video_from_upstream: InputPin[FramesInOrder],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """`copy=True` asks for memory the consumer owns; both doors export in
+    place, so both refuse by name rather than hand back an alias."""
+    return _CopyRequestRefusedAtBothDoorsProbe(video_from_upstream).each_frame
 
 
 ROW_END_PIXEL_RGBA = [11, 22, 33, 44]
@@ -349,16 +396,16 @@ def _store_at_the_end_of_a_row_and_read_it_back(tensor_scope_or_handle, host_rea
 
 
 @node(execution="manual")
-class DeviceTensorStridesFollowTheRowPitchProbe:
+def DeviceTensorStridesFollowTheRowPitchProbe(
+    *,
+    ctx: RuntimeContextFullAccess,
+) -> None:
     """Both backings at a width whose GPU-image rows pad: the device tensor's
     row stride is the surface's own pitch, so a store at the last pixel of a
     row lands where the host view finds it rather than shearing into the next
     row."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        report_device_exchange_probe_observation(lambda: self._probe(ctx))
-
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def probe(ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             PADDED_SURFACE_WIDTH, PADDED_SURFACE_HEIGHT
@@ -401,3 +448,5 @@ class DeviceTensorStridesFollowTheRowPitchProbe:
                 texture.as_device_tensor(), texture_host_view
             )
         return observation
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))

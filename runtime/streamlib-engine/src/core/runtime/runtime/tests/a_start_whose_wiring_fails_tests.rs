@@ -11,61 +11,41 @@ use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::test_support::{MockInputOnlyNode, ensure_test_mocks_registered};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 
-/// How many times a [`SourceCountingItsSetupsAndStarts`] has run `setup()` or `start()`.
-static SETUPS_AND_STARTS_OF_THE_SOURCE: AtomicUsize = AtomicUsize::new(0);
+/// How many times the body of a [`SourceCountingItsBodyRuns`] has run.
+static BODY_RUNS_OF_THE_SOURCE: AtomicUsize = AtomicUsize::new(0);
 
-/// A source with two outputs that counts each `setup()` and `start()` it runs.
+/// A source with two outputs written as one function that counts each run of its body, which
+/// runs when the node is set up.
 #[crate::node(
     execution = manual,
     output("out1", pin_type = String, flow = Stream),
     output("out2", pin_type = String, flow = Stream),
 )]
-pub(crate) struct SourceCountingItsSetupsAndStarts;
-
-impl crate::core::ManualNode for SourceCountingItsSetupsAndStarts::Node {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        SETUPS_AND_STARTS_OF_THE_SOURCE.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        SETUPS_AND_STARTS_OF_THE_SOURCE.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
+pub(crate) fn source_counting_its_body_runs() {
+    BODY_RUNS_OF_THE_SOURCE.fetch_add(1, Ordering::SeqCst);
 }
 
 /// A start whose second link's channel is already held with room for fewer subscribers than
 /// the link needs is refused naming that channel and what the open asked for. No node of the
-/// stream sets up or starts on links the refused start never finished wiring, and the stream
+/// stream sets up on links the refused start never finished wiring, and the stream
 /// unloads, unwinding the first link's channel, and ends.
 ///
 /// Mental-revert: a compile that fails at WIRE drops each parked node thread's CONTINUE sender,
 /// and a node thread that reads the dropped sender as CONTINUE sets up and starts with its
-/// ports unwired, so the count of setups and starts is no longer zero; and the refusal without
+/// ports unwired, so the count of runs of its body is no longer zero; and the refusal without
 /// the channel's name fails the name assertions.
 #[test]
 #[serial]
 fn a_start_whose_channel_cannot_open_is_refused_by_name_and_sets_up_no_node() {
     ensure_test_mocks_registered();
-    NODE_REGISTRY.register::<SourceCountingItsSetupsAndStarts::Node>();
-    SETUPS_AND_STARTS_OF_THE_SOURCE.store(0, Ordering::SeqCst);
+    NODE_REGISTRY.register::<SourceCountingItsBodyRuns::Node>();
+    BODY_RUNS_OF_THE_SOURCE.store(0, Ordering::SeqCst);
     let project_directory = a_project_directory_this_test_owns();
     let runner = Runner::new().expect("Runner::new");
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "wiring");
     let source = stream
         .add_node(NodeSpec::new(
-            SourceCountingItsSetupsAndStarts::node_class_import_path(),
+            SourceCountingItsBodyRuns::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("the source is added");
@@ -114,8 +94,8 @@ fn a_start_whose_channel_cannot_open_is_refused_by_name_and_sets_up_no_node() {
         .expect("the stream a failed start leaves unloads cleanly");
     assert!(stream.has_ended());
     assert_eq!(
-        SETUPS_AND_STARTS_OF_THE_SOURCE.load(Ordering::SeqCst),
+        BODY_RUNS_OF_THE_SOURCE.load(Ordering::SeqCst),
         0,
-        "a node set up or started on links its refused start never finished wiring"
+        "a node set up on links its refused start never finished wiring"
     );
 }

@@ -151,6 +151,8 @@ pub use rhi::NativeTextureHandle;
 pub(crate) use runtime::TheMachinesShutdownEscalationClearedOnDrop;
 #[cfg(any(test, feature = "test-support"))]
 pub use runtime::a_project_on_disk_for_a_test;
+#[cfg(any(test, feature = "test-support"))]
+pub use runtime::a_stream_of_one_node_for_a_test;
 pub use runtime::{
     ArmedEngineTeardownWatchdog, BoxFuture, CrashOfThePreviousRuntimeRun, CreateProjectRequest,
     CreatedProjectFirstCommit, DescriptionOfTheAbandonedNodeThreads,

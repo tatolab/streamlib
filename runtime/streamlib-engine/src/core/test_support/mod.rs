@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, Once};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
+use crate::core::context::RuntimeContextLimitedAccess;
+use crate::core::error::Result;
 use crate::core::nodes::NODE_REGISTRY;
 
 mod a_setting_read_at_setup_for_a_test;
@@ -26,167 +28,47 @@ pub(crate) mod rig_only_capability_skip;
     output("out1", pin_type = String, flow = Stream),
     output("out2", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockNode;
-
-impl crate::core::ManualNode for MockNode::Node {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_node() {}
 
 #[crate::node(
     execution = manual,
     output("out1", pin_type = String, flow = Stream),
     output("out2", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockOutputOnlyNode;
-
-impl crate::core::ManualNode for MockOutputOnlyNode::Node {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_output_only_node() {}
 
 /// Mock source with one Channels output, written to by a test.
 #[crate::node(execution = manual, output("audio", pin_type = Audio))]
-pub(crate) struct MockChannelsSourceNode;
-
-impl crate::core::ManualNode for MockChannelsSourceNode::Node {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_channels_source_node() {}
 
 #[crate::node(
     execution = manual,
     input("in1", delivery_profile = "newest", pin_type = String, flow = Stream),
     input("in2", delivery_profile = "newest", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockInputOnlyNode;
-
-impl crate::core::ManualNode for MockInputOnlyNode::Node {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_input_only_node() {}
 
 /// A node reading the Trigger input `in1`, which reads by its pin's default delivery.
 #[crate::node(
     execution = manual,
     input("in1", pin_type = Trigger),
 )]
-pub(crate) struct MockTriggerReaderNode;
-
-impl crate::core::ManualNode for MockTriggerReaderNode::Node {
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_trigger_reader_node() {}
 
 #[crate::node(
     execution = manual,
     input("in1", delivery_profile = "ordered", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockOrderedInputOnlyNode;
-
-impl crate::core::ManualNode for MockOrderedInputOnlyNode::Node {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_ordered_input_only_node() {}
 
 #[crate::node(
     execution = reactive,
     input("in1", delivery_profile = "newest", pin_type = String, flow = Stream),
     input("in2", delivery_profile = "newest", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockReactiveInputOnlyNode;
-
-impl crate::core::ReactiveNode for MockReactiveInputOnlyNode::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+pub(crate) fn mock_reactive_input_only_node()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 /// Mock consumer whose audio input port declares a window contract — the
@@ -206,15 +88,9 @@ impl crate::core::ReactiveNode for MockReactiveInputOnlyNode::Node {
         pin_type = Audio,
     ),
 )]
-pub(crate) struct MockWindowedAudioConsumerNode;
-
-impl crate::core::ReactiveNode for MockWindowedAudioConsumerNode::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+pub(crate) fn mock_windowed_audio_consumer_node()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 /// Mock consumer whose input port declares a borrow quota past the default.
@@ -222,15 +98,9 @@ impl crate::core::ReactiveNode for MockWindowedAudioConsumerNode::Node {
     execution = reactive,
     input("frames", delivery_profile = "ordered", borrow_quota = 5, pin_type = Texture),
 )]
-pub(crate) struct MockBorrowingConsumerNode;
-
-impl crate::core::ReactiveNode for MockBorrowingConsumerNode::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+pub(crate) fn mock_borrowing_consumer_node()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 /// Mock node whose ports are declared by pin type.
@@ -239,15 +109,8 @@ impl crate::core::ReactiveNode for MockBorrowingConsumerNode::Node {
     input("gain", delivery_profile = "newest", pin_type = Float),
     output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub(crate) struct MockPinTypedNode;
-
-impl crate::core::ReactiveNode for MockPinTypedNode::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+pub(crate) fn mock_pin_typed_node() -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 /// Mock consumer whose audio input port declares the `match_device` sentinel.
@@ -257,15 +120,9 @@ impl crate::core::ReactiveNode for MockPinTypedNode::Node {
     execution = reactive,
     input("audio", delivery_profile = "ordered", audio_window = match_device, pin_type = Audio),
 )]
-pub(crate) struct MockDeviceMatchedAudioConsumerNode;
-
-impl crate::core::ReactiveNode for MockDeviceMatchedAudioConsumerNode::Node {
-    fn process(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+pub(crate) fn mock_device_matched_audio_consumer_node()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 /// Mock source declaring its one output port in camelCase, `outOne`, which
@@ -274,16 +131,7 @@ impl crate::core::ReactiveNode for MockDeviceMatchedAudioConsumerNode::Node {
     execution = manual,
     output("outOne", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockNodeWithACamelCaseOutputPort;
-
-impl crate::core::ManualNode for MockNodeWithACamelCaseOutputPort::Node {
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_node_with_a_camel_case_output_port() {}
 
 /// The one setting [`MockSourceTakingOneSetting`] takes.
 #[derive(
@@ -300,16 +148,7 @@ pub(crate) struct MockSourceTakingOneSettingConfig {
     execution = manual,
     output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub(crate) struct MockSourceTakingOneSetting;
-
-impl crate::core::ManualNode for MockSourceTakingOneSetting::Node {
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_source_taking_one_setting() {}
 
 /// The two settings [`MockSourceTakingAFrameSize`] takes.
 #[derive(
@@ -328,16 +167,7 @@ pub(crate) struct MockSourceTakingAFrameSizeConfig {
     execution = manual,
     output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub(crate) struct MockSourceTakingAFrameSize;
-
-impl crate::core::ManualNode for MockSourceTakingAFrameSize::Node {
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
+pub(crate) fn mock_source_taking_a_frame_size() {}
 
 /// The one setting [`MockSourceReadingAnImageAsset`] takes: the image, by asset reference.
 #[derive(
@@ -354,57 +184,31 @@ pub(crate) struct MockSourceReadingAnImageAssetConfig {
     execution = manual,
     output("video", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub(crate) struct MockSourceReadingAnImageAsset;
+pub(crate) fn mock_source_reading_an_image_asset() {}
 
-impl crate::core::ManualNode for MockSourceReadingAnImageAsset::Node {
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
-
-/// Mock source whose `setup()` refuses, as a capture device does, when its
+/// Mock source whose body refuses, as a capture device does, when its
 /// stream may not ask the user for an access nobody has answered.
 #[crate::node(
     execution = manual,
     output("out1", pin_type = String, flow = Stream),
 )]
-pub(crate) struct MockSourceRefusingAnAccessNobodyAskedFor;
+pub(crate) fn mock_source_refusing_an_access_nobody_asked_for(
+    ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+) -> crate::core::error::Result<()> {
+    match ctx.capture_device_access_prompting() {
+        crate::core::context::CaptureDeviceAccessPrompting::MayAskTheUser => Ok(()),
+        crate::core::context::CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor => Err(
+            crate::core::error::Error::CaptureDeviceAccessNeverAskedFor {
+                device: crate::core::error::PrivacyGatedCaptureDevice::Camera,
+                refusal: MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR.to_string(),
+            },
+        ),
+    }
+}
 
 /// What [`MockSourceRefusingAnAccessNobodyAskedFor`] refuses with.
 pub(crate) const MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR: &str =
     "mock camera access has not been asked for yet: restart this stream to be asked";
-
-impl crate::core::ManualNode for MockSourceRefusingAnAccessNobodyAskedFor::Node {
-    fn setup(
-        &mut self,
-        ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        match ctx.capture_device_access_prompting() {
-            crate::core::context::CaptureDeviceAccessPrompting::MayAskTheUser => Ok(()),
-            crate::core::context::CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor => Err(
-                crate::core::error::Error::CaptureDeviceAccessNeverAskedFor {
-                    device: crate::core::error::PrivacyGatedCaptureDevice::Camera,
-                    refusal: MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR.to_string(),
-                },
-            ),
-        }
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
 
 pub(crate) fn ensure_test_mocks_registered() {
     static REGISTER: Once = Once::new();

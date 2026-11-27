@@ -6,7 +6,7 @@ from the copy the runtime unit carries, played, saved and opened again.
 
 `examples/every-pin-kind` holds typed function and shader nodes, Graph Inputs
 whose `pin_type` setting chooses Float, one choosing Integer that names a dial, as an input
-promoted from `Caption`'s `lines` does, a class node that holds a setting, a node type
+promoted from `Caption`'s `lines` does, a node function with a value input, a node type
 whose inputs each name the control the Studio draws, and two nodes whose Texture pins state
 different formats, which `connect` links through a `TextureFormatConvert`. Its `SweepPosition`
 states that it converts the sample's own `Sweep` to a Float, so a link from a `Sweep` into a
@@ -136,8 +136,8 @@ VALUE_THE_DOCUMENT_HOLDS_BY_NODE_AND_INPUT = {
     ("tally", "report_every_frames"): 20,
 }
 
-#: The values saved over the sample's: a typed input of a function node, and the setting of
-#: a class node.
+#: The values saved over the sample's: a typed input of a function node, and the value input
+#: of a node function.
 SAVED_VALUE_BY_NODE_AND_INPUT = {("beat", "beats_per_minute"): 100.0, ("tally", "report_every_frames"): 15}
 
 

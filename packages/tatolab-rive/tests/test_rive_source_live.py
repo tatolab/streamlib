@@ -66,6 +66,8 @@ def playing(riv_files: "dict[str, str]") -> "Any":
         RiveSource,
         values_to_build_with={"riv_path": riv_files["first"], "width": 640, "height": 360},
         pins={"data": object(), "video": object()},
+        bind_pins=lambda members: {},
+        slot_counts={},
     )
     running.setup(ctx)
     wait_until(lambda: WHAT_THE_SCENES_DID == [("opened", riv_files["first"], 640, 360)])

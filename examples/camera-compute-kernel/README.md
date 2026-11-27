@@ -6,8 +6,8 @@ string.
 
 ## The model this example teaches
 
-**A kernel is an object.** It is built once in `setup()`, on the limited
-capability every node holds, and dispatched per frame in `process()`. No handle string, fence,
+**A kernel is an object.** It is built once in the node's body, on the limited
+capability every node holds, and dispatched each frame by the function the body returns. No handle string, fence,
 timeline or slot number ever reaches Python — the object is the handle:
 
 ```python
@@ -39,15 +39,15 @@ Four things fall out of that pair, and they are the whole lesson:
 - **Bindings are passed at dispatch, by name, and never persist.** The names
   are the shader's own, read off it by reflection; the `bindings=` mapping at
   construction merely *asserts* that reflection, so renaming `camera_frame` in
-  the Slang and forgetting the Python is refused at `setup()` rather than
+  the Slang and forgetting the Python is refused in the node's body rather than
   producing a wrong picture. Every dispatch supplies every binding — there is
   no implicit default and no value carried over from the previous frame — and
   an unknown or omitted name raises before any GPU work is submitted.
 - **Dispatch is synchronous.** It returns when the work has retired and the
   writes are visible. Several passes that want one submission and one stall are
   recorded inside a `kernel_dispatch_batch()` scope instead — a scope opened on
-  the **Full** capability, the one `setup()` is handed, not on the limited
-  context `process()` gets. This effect is one pass, so it needs neither.
+  the **Full** capability, the one the node's body is handed, not on the limited
+  context each frame gets. This effect is one pass, so it needs neither.
 - **The kernel's output is an engine-owned texture named by surface id.** The
   node writes it with `TextureToWrite.of_texture(texture, frame.colour)`, so
   the frame downstream carries that id, an extent, the camera's colour and its
@@ -137,8 +137,8 @@ else the shader and the Python share is a name, and names are checked.
 
 Two edits worth making on purpose, because each fails in an instructive way:
 
-- Rename a binding in the Slang but not in the Python. The refusal lands at
-  `setup()`, before a single frame, and names the shader's own bindings.
+- Rename a binding in the Slang but not in the Python. The refusal lands in
+  the node's body, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
   `camera_frame_landing_texture` — and skip the landing copy. The dispatch
   refuses it, because the camera's frame is buffer-backed. That refusal is why

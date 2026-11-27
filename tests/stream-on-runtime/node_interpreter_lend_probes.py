@@ -11,24 +11,25 @@ standard library at module scope.
 import json
 import os
 import sys
-from typing import Annotated
+from typing import Annotated, Callable
 
-from tatolab.stream import EncodedVideo, InputPin, OutputPin, StreamDelivery, log, node
+from tatolab.stream import EncodedVideo, InputPin, OutputPin, RuntimeContextLimitedAccess, StreamDelivery, log, node
 
 BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS = 20
 
 
 @node(execution="continuous", interval_ms=10)
-class ReportsItsInterpreterSource:
+def ReportsItsInterpreterSource(
+    *,
+    bags_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Announces its interpreter and the lent runtime's file, then emits a JSON bag per tick."""
 
-    def __init__(self) -> None:
-        self._announced = False
+    announced = False
 
-    bags_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx) -> None:
-        if not self._announced:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal announced
+        if not announced:
             # Lent by the runtime unit; the venv this runs from has none of its own.
             import tatolab.runtime  # pyright: ignore[reportMissingImports]
 
@@ -42,35 +43,40 @@ class ReportsItsInterpreterSource:
                     }
                 )
             )
-            self._announced = True
-        self.bags_to_downstream.write(
+            announced = True
+        bags_to_downstream.write(
             json.dumps({"produced_by_interpreter": sys.executable}).encode()
         )
 
+    return each_frame
 
-@node
-class CountsBagsFromUpstreamSink:
+
+@node(execution="reactive")
+def CountsBagsFromUpstreamSink(
+    *,
+    bags_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Announces once it has processed enough messages to call the stream live."""
 
-    def __init__(self) -> None:
-        self._bags_processed = 0
+    bags_processed = 0
 
-    bags_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("ordered")]]
-
-    def process(self, ctx) -> None:
-        unit = self.bags_from_upstream.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal bags_processed
+        unit = bags_from_upstream.read()
         if unit is None:
             return
         payload = json.loads(bytes(unit.payload))
-        self._bags_processed += 1
-        if self._bags_processed == BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS:
+        bags_processed += 1
+        if bags_processed == BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS:
             log.info(
                 "MARKER:BAGS_PROCESSED "
                 + json.dumps(
                     {
-                        "bags_processed": self._bags_processed,
+                        "bags_processed": bags_processed,
                         "sink_interpreter": sys.executable,
                         "upstream_interpreter": payload["produced_by_interpreter"],
                     }
                 )
             )
+
+    return each_frame

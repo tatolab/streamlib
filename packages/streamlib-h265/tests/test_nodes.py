@@ -54,6 +54,8 @@ def an_encoder(**input_values: object) -> NodeFunctionRunning:
         H265Encoder,
         values_to_build_with=input_values,
         pins={VIDEO_INPUT_PORT: object(), ENCODED_VIDEO_OUTPUT_PORT: object()},
+        bind_pins=lambda members: {},
+        slot_counts={},
     )
 
 
@@ -63,6 +65,8 @@ def a_decoder(**input_values: object) -> NodeFunctionRunning:
         H265Decoder,
         values_to_build_with=input_values,
         pins={ENCODED_VIDEO_OUTPUT_PORT: object(), VIDEO_INPUT_PORT: object()},
+        bind_pins=lambda members: {},
+        slot_counts={},
     )
 
 

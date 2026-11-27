@@ -8,9 +8,10 @@ In its own module because a helper process imports each class by its import path
 declared inside a pytest module would have the child import the test suite.
 """
 
+from typing import Callable
 import json
 
-from tatolab.stream import Connection, OutputPin, connection_type, log, node
+from tatolab.stream import Connection, Input, OutputPin, RuntimeContextLimitedAccess, connection_type, log, node
 
 REACHED_MARKER_PREFIX = "MARKER:CONNECTION_REACHED_"
 
@@ -21,28 +22,34 @@ class HubConnection(Connection):
 
 
 @node(execution="continuous", interval_ms=50)
-class Hub:
+def Hub(
+    *,
+    connection: OutputPin[HubConnection],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Gives itself out on `connection`; it writes nothing, since the wire brings the node."""
 
-    connection: OutputPin[HubConnection]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         del ctx
+
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=20)
-class Spoke:
+def Spoke(
+    *,
+    hub: Input[HubConnection | None] = Input(None),
+    spoke: Input[str] = Input("spoke"),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Reports the node its `hub` wire brings, once, under a marker named for `spoke`."""
 
-    hub: HubConnection | None = None
-    spoke: str = "spoke"
+    reported = False
 
-    def __init__(self) -> None:
-        self._reported = False
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal reported
         del ctx
-        if self.hub is None or self._reported:
+        if hub.get() is None or reported:
             return
-        self._reported = True
-        log.info(f"{REACHED_MARKER_PREFIX}{self.spoke.upper()} " + json.dumps({"hub": self.hub.name}))
+        reported = True
+        log.info(f"{REACHED_MARKER_PREFIX}{spoke.get().upper()} " + json.dumps({"hub": hub.get().name}))
+
+    return each_frame

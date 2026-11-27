@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 
 use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::nodes::{Input, ReactiveNode};
+use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
+use streamlib::sdk::nodes::Input;
 
 use super::*;
 
@@ -75,11 +75,11 @@ fn a_source_whose_format_chooses_its_type(
     execution = reactive,
     input("word", delivery_profile = "newest", pin_type = String, flow = Stream)
 )]
-pub struct StreamToolsTestWordCounter;
-
-impl ReactiveNode for StreamToolsTestWordCounter::Node {
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while self.inputs.read_raw("word")?.is_some() {
+pub(super) fn stream_tools_test_word_counter(
+    inputs: InputMailboxes,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |ctx| {
+        while inputs.read_raw("word")?.is_some() {
             count_in(ctx.stream_id(), |counted| counted.words_read += 1);
         }
         Ok(())
