@@ -10,7 +10,7 @@ A body the wheel builds reads and writes each port by name; the parent names its
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 from tatolab.stream import LinkInputDataReader, LinkOutputDataWriter
 from tatolab.stream._node_declaration import (
@@ -25,6 +25,7 @@ __all__ = [
     "link_input_data_reader_of",
     "link_output_data_writer_of",
     "stamp_the_ports_of_a_node_the_wheel_hosts",
+    "the_settings_a_node_the_wheel_builds_takes",
 ]
 
 
@@ -65,3 +66,15 @@ def link_input_data_reader_of(context: Any) -> LinkInputDataReader:
 def link_output_data_writer_of(context: Any) -> LinkOutputDataWriter:
     """The writer `context` keeps for the wheel's hosts, which node code writes through its pins."""
     return context._link_output_data_writer
+
+
+def the_settings_a_node_the_wheel_builds_takes(
+    node_class: Any, input_values: "dict[str, Any]"
+) -> "Optional[dict[str, Any]]":
+    """The settings a node the wheel builds from them, a function node run as a node of its own,
+    takes of `input_values`: each naming none of its input ports. `None` for an author's node,
+    which takes each value as the input of its name."""
+    if not getattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, False):
+        return None
+    input_ports = {port["name"] for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, [])}
+    return {name: value for name, value in input_values.items() if name not in input_ports}

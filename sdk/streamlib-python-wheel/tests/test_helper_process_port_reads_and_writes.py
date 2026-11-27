@@ -285,8 +285,8 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
 
 def test_unwire_link_is_dispatched_mid_run_and_answers_nothing(stand_in_parent):
     """The parent sends this from its compiler while it holds the graph write
-    lock, so it cannot wait for a reply — and a reply nobody reads would be
-    taken as the answer to the next command, exactly like one to `run`.
+    lock, so it cannot wait for a reply — and a reply nobody waits on would end
+    the wait of the next command, exactly like one to `run`.
 
     It must also reach a child that is already in its execution loop, which is
     the only state a disconnect can arrive in.

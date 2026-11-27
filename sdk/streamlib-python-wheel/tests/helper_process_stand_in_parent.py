@@ -13,6 +13,12 @@ import time
 
 FRAME_LENGTH_PREFIX = struct.Struct(">I")
 
+# The commands a helper answers, which a parent stamps with the id their answer
+# echoes.
+COMMANDS_ANSWERED_BY_A_REPLY = frozenset(
+    {"setup", "stop", "teardown", "on_pause", "on_resume", "carry_links", "wire_link", "feed_island"}
+)
+
 
 class StandInParent:
     """The parent half of the socketpair, speaking the same framing.
@@ -25,13 +31,23 @@ class StandInParent:
 
     def __init__(self) -> None:
         self.parent_end, self.child_end = socket.socketpair()
+        self._next_command_id = 1
+        self._command_ids_stamped_here: "set[int]" = set()
 
     def send(self, message: dict) -> None:
+        """Send `message`, stamped with a command id as the parent stamps every
+        command it awaits an answer to, unless the test named one itself."""
+        if message.get("cmd") in COMMANDS_ANSWERED_BY_A_REPLY and "command_id" not in message:
+            message = {**message, "command_id": self._next_command_id}
+            self._command_ids_stamped_here.add(self._next_command_id)
+            self._next_command_id += 1
         payload = json.dumps(message).encode("utf-8")
         self.parent_end.sendall(FRAME_LENGTH_PREFIX.pack(len(payload)) + payload)
 
     def receive(self, timeout_seconds: float = 5.0):
-        """The next frame, or `None` if none arrives inside the deadline."""
+        """The next frame, or `None` if none arrives inside the deadline. The id
+        an answer echoes is taken off it when this stand-in stamped it, so a
+        test reads the answer alone."""
         deadline = time.monotonic() + timeout_seconds
         length_prefix = self._read_exactly(FRAME_LENGTH_PREFIX.size, deadline)
         if length_prefix is None:
@@ -40,7 +56,10 @@ class StandInParent:
         payload = self._read_exactly(payload_length, deadline)
         if payload is None:
             return None
-        return json.loads(payload.decode("utf-8"))
+        frame = json.loads(payload.decode("utf-8"))
+        if frame.get("command_id") in self._command_ids_stamped_here:
+            self._command_ids_stamped_here.discard(frame.pop("command_id"))
+        return frame
 
     def receive_answering_each_escalate(
         self, timeout_seconds: float = 5.0, escalates_answered: "list | None" = None

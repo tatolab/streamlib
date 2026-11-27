@@ -4,6 +4,10 @@
 use std::time::Duration;
 
 use crate::core::compiler::compiler_ops::function_node_pool::FUNCTION_NODE_POOL_NODE_TYPE;
+use crate::core::compiler::compiler_ops::subprocess_bridge::{
+    LifecycleCommandAnsweredByAReply, LifecycleCommandFields, LifecycleCommandSent,
+    SubprocessBridge,
+};
 use crate::core::error::{Error, Result};
 
 use super::{
@@ -12,79 +16,92 @@ use super::{
 };
 
 impl NodeInterpreterSpawnHost {
-    pub(super) fn send_to_child(&mut self, message: &serde_json::Value) -> Result<()> {
+    /// Send the helper a command it answers nothing to, such as `run`.
+    pub(super) fn send_to_child_a_command_answered_by_nothing(
+        &mut self,
+        message: &serde_json::Value,
+    ) -> Result<()> {
+        self.sending_to_child(|bridge| bridge.send_a_command_answered_by_nothing(message))
+    }
+
+    /// Send the helper `command` carrying `fields`, stamped with the id its
+    /// reply is matched to.
+    pub(super) fn send_to_child_a_command_awaiting_its_reply(
+        &mut self,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
+    ) -> Result<LifecycleCommandSent> {
+        self.sending_to_child(|bridge| {
+            bridge.send_a_lifecycle_command_awaiting_its_reply(command, fields)
+        })
+    }
+
+    /// Send through `send`, giving up on the helper when it could not be sent.
+    pub(super) fn sending_to_child<Sent>(
+        &mut self,
+        send: impl FnOnce(&SubprocessBridge) -> Result<Sent>,
+    ) -> Result<Sent> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
                 "[{}] there is no helper process to send to",
                 self.node_display_name
             ))
         })?;
-        let sent = bridge.send(message);
+        let sent = send(bridge);
         if sent.is_err() {
             self.give_up_on_the_helper_process();
         }
         sent
     }
 
+    /// Send `command` and wait for the reply carrying its id, giving up on the
+    /// helper when that reply does not come.
     pub(super) fn exchange_with_child(
         &mut self,
-        message: &serde_json::Value,
-        lifecycle_command_name: &str,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
     ) -> Option<serde_json::Value> {
         if self.child_is_gone {
             return None;
         }
-        if let Err(send_failure) = self.send_to_child(message) {
-            tracing::warn!(
-                "[{}] helper process stopped listening during {lifecycle_command_name}: \
-                 {send_failure}",
-                self.node_display_name
-            );
-            self.give_up_on_the_helper_process();
-            return None;
-        }
-        let reply = self
-            .bridge
-            .as_ref()
-            .map(|bridge| bridge.recv_lifecycle_timeout(REPLY_DEADLINE));
-        match reply {
-            Some(Ok(reply)) => Some(reply),
-            Some(Err(no_reply)) => {
+        let sent = match self.send_to_child_a_command_awaiting_its_reply(command, fields) {
+            Ok(sent) => sent,
+            Err(send_failure) => {
                 tracing::warn!(
-                    "[{}] helper process did not answer {lifecycle_command_name} within {}s \
-                     ({no_reply}); giving up on it",
+                    "[{}] helper process stopped listening during {}: {send_failure}",
                     self.node_display_name,
-                    REPLY_DEADLINE.as_secs(),
+                    command.command_tag(),
                 );
+                return None;
+            }
+        };
+        let bridge = self.bridge.as_ref()?;
+        match bridge.await_the_reply_to(sent, REPLY_DEADLINE) {
+            Ok(reply) => Some(reply),
+            Err(no_reply) => {
+                bridge.abandon_the_reply_to(sent);
+                tracing::warn!("[{}] {no_reply}; giving up on it", self.node_display_name);
                 self.give_up_on_the_helper_process();
                 None
             }
-            None => None,
         }
     }
 
-    /// Send a command, wait for its reply, and warn if the child answered with
-    /// something other than the tag this command expects.
-    ///
-    /// A mismatch means the child's lifecycle has desynchronized from the
-    /// parent's — the reply in hand belongs to an earlier command — which is
-    /// worth saying out loud even though there is nothing to do about it here.
-    pub(super) fn exchange_with_child_expecting(
+    /// Send `command`, wait for its reply, and warn if the helper refused it.
+    pub(super) fn exchange_with_child_expecting_ok(
         &mut self,
-        message: &serde_json::Value,
-        lifecycle_command_name: &str,
-        expected_reply_tag: &str,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
     ) {
-        let Some(reply) = self.exchange_with_child(message, lifecycle_command_name) else {
+        let Some(reply) = self.exchange_with_child(command, fields) else {
             return;
         };
-        let reply_tag = lifecycle_reply_tag(&reply).unwrap_or("");
-        if reply_tag != expected_reply_tag {
-            let reported = reported_reason(&reply);
+        if lifecycle_reply_tag(&reply) != Some("ok") {
             tracing::warn!(
-                "[{}] helper process answered {lifecycle_command_name} with {reply_tag:?} rather \
-                 than {expected_reply_tag:?}: {reported}",
-                self.node_display_name
+                "[{}] helper process refused {}: {}",
+                self.node_display_name,
+                command.command_tag(),
+                reported_reason(&reply),
             );
         }
     }

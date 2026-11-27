@@ -5,13 +5,14 @@ use super::*;
 use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::PortDirection;
 use crate::core::nodes::{
-    OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
+    OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireAnswerNoted, OutOfProcessLinkWireOutcome,
+    OutOfProcessLinkWireReply,
 };
 
 use crate::core::compiler::compiler_ops::subprocess_escalate::{
@@ -69,14 +70,16 @@ mod incoming_frame_routing {
         assert_eq!(
             classify_an_incoming_subprocess_frame(&serde_json::json!({
                 "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
+                "command_id": 4,
                 "link_id": "L-late",
             })),
             IncomingSubprocessFrame::LinkWireAnswer {
+                command_id: OutOfProcessCommandId::from_the_wire(4),
                 link_id: "L-late".to_string(),
                 outcome: OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
             },
-            "routed to the lifecycle queue it would be read as the answer to the next \
-             command the host sends"
+            "routed to the lifecycle queue it would end the wait of the lifecycle command \
+             the host is waiting on"
         );
     }
 
@@ -85,10 +88,12 @@ mod incoming_frame_routing {
         assert_eq!(
             classify_an_incoming_subprocess_frame(&serde_json::json!({
                 "rpc": OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC,
+                "command_id": 5,
                 "link_id": "L-late",
                 "reason": "ExceedsMaxSupportedSubscribers",
             })),
             IncomingSubprocessFrame::LinkWireAnswer {
+                command_id: OutOfProcessCommandId::from_the_wire(5),
                 link_id: "L-late".to_string(),
                 outcome: OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
                     reason: "ExceedsMaxSupportedSubscribers".to_string(),
@@ -104,6 +109,7 @@ mod incoming_frame_routing {
             ..
         } = classify_an_incoming_subprocess_frame(&serde_json::json!({
             "rpc": OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC,
+            "command_id": 6,
             "link_id": "L-late",
         }))
         else {
@@ -120,12 +126,25 @@ mod incoming_frame_routing {
         assert_eq!(
             classify_an_incoming_subprocess_frame(&serde_json::json!({
                 "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
+                "command_id": 7,
             })),
             IncomingSubprocessFrame::LinkWireAnswerNamingNoLink
         );
     }
+
+    #[test]
+    fn a_wire_answer_naming_no_command_is_never_read_as_a_lifecycle_reply() {
+        assert_eq!(
+            classify_an_incoming_subprocess_frame(&serde_json::json!({
+                "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
+                "link_id": "L-late",
+            })),
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommand
+        );
+    }
 }
 
+mod lifecycle_commands_to_one_subprocess;
 mod reader_and_escalate_workers;
 
 /// Links handed to a subprocess after its setup command, over a real
@@ -165,6 +184,84 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
         serde_json::json!({"link_id": "L-late", "name": "frames_from_upstream"})
     }
 
+    fn command_id_of_the_frame(frame: &serde_json::Value) -> OutOfProcessCommandId {
+        out_of_process_command_id_of(frame).expect("a command expecting an answer carries its id")
+    }
+
+    /// The race at the seam the compiler drives: a link handed over, unwired
+    /// and handed over again before the subprocess's first answer is read.
+    /// The subprocess answers in order, the first attempt opened and the
+    /// second refused.
+    ///
+    /// Fail-without-fix: match the answer by link id alone and the first
+    /// answer settles the second attempt's cell, so the link reads `wired`
+    /// though its new wiring failed.
+    #[test]
+    fn a_link_wired_again_before_its_first_answer_reads_as_the_second_attempt_answered() {
+        let LinkDeliveryWithTheSubprocessEndInHand {
+            delivery,
+            mut subprocess_end_reader,
+        } = link_delivery_with_the_subprocess_end_in_hand();
+        delivery
+            .hand_over_a_link_wired_after_setup(
+                PortDirection::Input,
+                &late_input_link(),
+                OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
+            )
+            .expect("a live subprocess takes the link");
+        let first_attempt =
+            command_id_of_the_frame(&read_frame(&mut subprocess_end_reader).expect("wire_link"));
+        delivery
+            .tell_the_far_side_a_link_was_unwired(
+                PortDirection::Input,
+                "frames_from_upstream",
+                "L-late",
+            )
+            .expect("a live subprocess is told");
+        read_frame(&mut subprocess_end_reader).expect("the unwire_link frame");
+        let second_attempts_cell = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        delivery
+            .hand_over_a_link_wired_after_setup(
+                PortDirection::Input,
+                &late_input_link(),
+                Arc::clone(&second_attempts_cell),
+            )
+            .expect("a live subprocess takes the link again");
+        let second_attempt =
+            command_id_of_the_frame(&read_frame(&mut subprocess_end_reader).expect("wire_link"));
+        assert_ne!(
+            first_attempt, second_attempt,
+            "each attempt goes out with an id of its own"
+        );
+
+        let awaiting = &delivery.parent_side.links_awaiting_their_wire_reply;
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                first_attempt,
+                "L-late",
+                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+            ),
+            OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt
+        );
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                second_attempt,
+                "L-late",
+                OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                    reason: "no such service".to_string()
+                }
+            ),
+            OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
+        );
+        assert_eq!(
+            second_attempts_cell.the_far_sides_answer(),
+            Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: "no such service".to_string()
+            }),
+            "the link reads its second attempt's own answer, never the first attempt's"
+        );
+    }
+
     #[test]
     fn a_link_handed_over_goes_out_as_a_wire_link_frame_and_its_answer_lands_on_its_cell() {
         let LinkDeliveryWithTheSubprocessEndInHand {
@@ -181,22 +278,28 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
             )
             .expect("a live subprocess takes the link");
 
+        let wire_link =
+            read_frame(&mut subprocess_end_reader).expect("the frame reached the subprocess");
+        let command_id = command_id_of_the_frame(&wire_link);
         assert_eq!(
-            read_frame(&mut subprocess_end_reader).expect("the frame reached the subprocess"),
+            wire_link,
             serde_json::json!({
                 "cmd": "wire_link",
+                "command_id": command_id,
                 "direction": "input",
                 "link": late_input_link(),
             })
         );
-        assert!(
+        assert_eq!(
             delivery
                 .parent_side
                 .links_awaiting_their_wire_reply
-                .note_the_far_sides_answer_for_link(
+                .note_the_far_sides_answer_to(
+                    command_id,
                     "L-late",
                     OutOfProcessLinkWireOutcome::OpenedByTheFarSide
                 ),
+            OutOfProcessLinkWireAnswerNoted::SettledItsAttempt,
             "the cell is registered for the answer the reader routes"
         );
         assert_eq!(
@@ -218,7 +321,9 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
                 OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
             )
             .expect("a live subprocess takes the link");
-        read_frame(&mut subprocess_end_reader).expect("the wire_link frame");
+        let wire_link = command_id_of_the_frame(
+            &read_frame(&mut subprocess_end_reader).expect("the wire_link frame"),
+        );
 
         delivery
             .tell_the_far_side_a_link_was_unwired(
@@ -237,14 +342,16 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
                 "link_id": "L-late",
             })
         );
-        assert!(
-            !delivery
+        assert_eq!(
+            delivery
                 .parent_side
                 .links_awaiting_their_wire_reply
-                .note_the_far_sides_answer_for_link(
+                .note_the_far_sides_answer_to(
+                    wire_link,
                     "L-late",
                     OutOfProcessLinkWireOutcome::OpenedByTheFarSide
                 ),
+            OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt,
             "a link on its way out is owed no answer"
         );
     }
@@ -410,16 +517,21 @@ fn log_frame_does_not_leak_to_lifecycle_channel() {
     // If reader_loop regresses, the log frame arrives on lifecycle_rx
     // within a few ms. With the fix, it's consumed by
     // `process_bridge_message` and the lifecycle channel stays empty.
-    let result = bridge.recv_lifecycle_timeout(Duration::from_millis(250));
-    match result {
-        Err(RecvTimeoutError::Timeout) => {}
+    let setup_sent = bridge
+        .send_a_lifecycle_command_awaiting_its_reply(
+            LifecycleCommandAnsweredByAReply::Setup,
+            LifecycleCommandFields::new(),
+        )
+        .expect("the setup command goes out");
+    match bridge.await_the_reply_to(setup_sent, Duration::from_millis(250)) {
+        Err(LifecycleReplyNotReceived::DeadlinePassed { .. }) => {}
         Ok(frame) => panic!(
             "log frame leaked to lifecycle channel \
              — reader_loop classification has regressed: {frame}"
         ),
-        Err(RecvTimeoutError::Disconnected) => panic!(
-            "bridge reader exited before the test could assert — \
-             check for panics in the reader thread"
+        Err(other) => panic!(
+            "the log frame reached the lifecycle queue, or the bridge reader exited before the \
+             test could assert: {other}"
         ),
     }
 
@@ -447,13 +559,19 @@ fn lifecycle_frame_still_routes_to_lifecycle_channel() {
     )
     .expect("bridge construction");
 
-    let ready = serde_json::json!({"rpc": "ready"});
+    let setup_sent = bridge
+        .send_a_lifecycle_command_awaiting_its_reply(
+            LifecycleCommandAnsweredByAReply::Setup,
+            LifecycleCommandFields::new(),
+        )
+        .expect("the setup command goes out");
+    let ready = serde_json::json!({"rpc": "ready", "command_id": setup_sent.command_id});
     let mut child_writer = BufWriter::new(child_end);
     write_frame(&mut child_writer, &ready).expect("write ready frame");
     drop(child_writer);
 
     let got = bridge
-        .recv_lifecycle_timeout(Duration::from_millis(500))
+        .await_the_reply_to(setup_sent, Duration::from_millis(500))
         .expect("lifecycle frame must route through");
     assert_eq!(got.get("rpc").and_then(|v| v.as_str()), Some("ready"));
 }

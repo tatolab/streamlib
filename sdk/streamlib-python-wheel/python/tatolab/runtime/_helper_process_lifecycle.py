@@ -54,7 +54,7 @@ from tatolab.runtime._node_hosting import (
     is_a_node_function,
     the_slots_its_pin_groups_are_built_with,
 )
-from tatolab.runtime._node_the_wheel_hosts import NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG
+from tatolab.runtime._node_the_wheel_hosts import the_settings_a_node_the_wheel_builds_takes
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
 from tatolab.runtime._node_class_description import load_node_class
 from tatolab.runtime._hosted_node import (
@@ -278,40 +278,37 @@ class HelperProcessLifecycle:
     def _tear_down_after_the_parent_went_away(self) -> None:
         if self._hosted is None or self._torn_down or self._setup_raised_on_its_own:
             return
-        self._stop()
+        self._stop(None)
         if sys.platform == "darwin":
             note_this_helper_processes_callbacks_returned_after_its_parent_went_away()
-        self._teardown()
+        self._teardown(None)
 
     def _dispatch(self, command: "dict[str, Any]") -> None:
         verb = command.get("cmd", "")
         if verb == "setup":
             self._setup(command)
         elif verb == "run":
-            # Deliberately unanswered: `run` enters the execution loop, and a
-            # reply here would be read as the answer to whatever the parent
-            # sends next.
+            # Unanswered: `run` enters the execution loop, and the parent waits
+            # on no reply to it.
             self._run(command)
         elif verb == "stop":
-            self._stop()
+            self._stop(command)
         elif verb == "teardown":
-            self._teardown()
+            self._teardown(command)
         elif verb in ("on_pause", "on_resume"):
-            self._note_pause(verb)
+            self._note_pause(command)
         elif verb == "carry_links":
             self._carry_links(command)
         elif verb == "unwire_link":
-            # Deliberately unanswered, like `run`: the parent sends this from
-            # its compiler while it holds the graph write lock, so it cannot
-            # wait, and a reply nobody reads becomes the answer to whatever it
-            # sends next.
+            # Unanswered, like `run`: the parent sends this from its compiler
+            # while it holds the graph write lock, so it cannot wait.
             self._unwire_link(command)
         elif verb == "wire_link":
             # A link the engine handed over after `setup` read the envelope.
             # Answered, unlike `unwire_link`: the parent reports the link wired
-            # only once this side says its port is open, and the answer rides
-            # its own link-scoped rpc tag so it never becomes the reply to the
-            # next lifecycle command.
+            # only once this side says its port is open. The answer rides its
+            # own rpc tag and echoes the command's id, which the parent matches
+            # it to.
             self._wire_link(command)
         elif verb == "feed_island":
             # Answered on the island's link, like `wire_link`.
@@ -329,7 +326,7 @@ class HelperProcessLifecycle:
     def _setup(self, command: "dict[str, Any]") -> None:
         try:
             input_values = command.get("input_values") or {}
-            configuration = _the_settings_a_node_the_wheel_builds_takes(self._node_class, input_values)
+            configuration = the_settings_a_node_the_wheel_builds_takes(self._node_class, input_values)
             if self._node_class is FunctionNodePool:
                 self._runs_the_function_node_pool = True
                 self._node_class = the_node_class_the_function_node_pool_runs_as(
@@ -422,20 +419,22 @@ class HelperProcessLifecycle:
             # The ladder interrupted a setup that outran its budget. The parent
             # hears a refusal rather than nothing, and this helper stays up to
             # take the `teardown` the same ladder sends next.
-            self._bridge.send(
+            self._answer_the_parent(
+                command,
                 {
                     "rpc": "error",
                     "error": "setup() was interrupted by the engine's shutdown ladder",
-                }
+                },
             )
             return
         except Exception as setup_failure:
             self._setup_raised_on_its_own = True
-            self._bridge.send(
+            self._answer_the_parent(
+                command,
                 {
                     "rpc": "error",
                     "error": f"{setup_failure}\n{traceback.format_exc()}",
-                }
+                },
             )
             return
         self._set_up_succeeded = True
@@ -455,7 +454,19 @@ class HelperProcessLifecycle:
         if self._pin_group_slots_followed is not None:
             # The parent gives this node no rebuild when its slots change: it follows them here.
             ready["takes_its_pin_group_slots_live"] = True
-        self._bridge.send(ready)
+        self._answer_the_parent(command, ready)
+
+    def _answer_the_parent(
+        self, command: "Optional[dict[str, Any]]", reply: "dict[str, Any]"
+    ) -> None:
+        """Send `reply` as the answer to `command`, echoing the id the parent
+        matches it to. `None`, the shutdown run once the parent is gone, has
+        nobody to answer."""
+        command_id = None if command is None else command.get("command_id")
+        if command_id is not None:
+            self._bridge.send({**reply, "command_id": command_id})
+        elif command is not None:
+            log.error(f"the parent sent `{command.get('cmd')}` with no id, so it goes unanswered")
 
     def _run(self, command: "dict[str, Any]") -> None:
         if self._hosted is None:
@@ -707,16 +718,16 @@ class HelperProcessLifecycle:
             return
         self._dispatch(command)
 
-    def _stop(self) -> None:
+    def _stop(self, command: "Optional[dict[str, Any]]") -> None:
         self._running = False
         if self._hosted is not None:
             note_stop_request_from_parent_on_runtime_context(
                 self._hosted.full_access_context, True
             )
             self._hosted.call_hook("stop", self._hosted.full_access_context)
-        self._bridge.send({"rpc": "stopped"})
+        self._answer_the_parent(command, {"rpc": "stopped"})
 
-    def _teardown(self) -> None:
+    def _teardown(self, command: "Optional[dict[str, Any]]") -> None:
         self._running = False
         self._torn_down = True
         if self._hosted is not None:
@@ -737,11 +748,12 @@ class HelperProcessLifecycle:
                 "this helper answered teardown with releases still unsent; what they "
                 "name may stay allocated until the runtime stops"
             )
-        self._bridge.send({"rpc": "done"})
+        self._answer_the_parent(command, {"rpc": "done"})
 
-    def _note_pause(self, verb: str) -> None:
+    def _note_pause(self, command: "dict[str, Any]") -> None:
         """Record the pause the parent announced; while a scheduling loop runs,
         the loop makes the callback itself."""
+        verb = command.get("cmd", "")
         self._paused = verb == "on_pause"
         if self._hosted is not None:
             note_pause_state_from_parent_on_runtime_context(
@@ -749,7 +761,7 @@ class HelperProcessLifecycle:
             )
             if not self._scheduling_loop_runs:
                 self._call_the_pause_hook_on_the_step_ledger(verb)
-        self._bridge.send({"rpc": "ok"})
+        self._answer_the_parent(command, {"rpc": "ok"})
 
     def _call_the_pause_hook_on_the_step_ledger(self, hook_name: str) -> None:
         """Call `hook_name` outside a scheduling loop, counted in flight on the
@@ -782,7 +794,7 @@ class HelperProcessLifecycle:
         link_id = link.get("link_id")
         if not self._set_up_succeeded:
             self._answer_the_parents_wire_link(
-                link_id, "this node's setup did not succeed, so it opens no port"
+                command, link_id, "this node's setup did not succeed, so it opens no port"
             )
             return
         if direction == "input":
@@ -795,12 +807,12 @@ class HelperProcessLifecycle:
                 direction=direction,
                 link_id=link_id,
             )
-            self._answer_the_parents_wire_link(link_id, f"unknown link direction {direction!r}")
+            self._answer_the_parents_wire_link(command, link_id, f"unknown link direction {direction!r}")
             return
         slots_refused = self._follow_a_link_wired_into_a_pin_group_slot(link_id, link.get("name"))
         if slots_refused is not None:
             self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
-            self._answer_the_parents_wire_link(link_id, slots_refused)
+            self._answer_the_parents_wire_link(command, link_id, slots_refused)
             return
         try:
             wire_link_data_access(self._link_data_access, port_wiring)
@@ -812,9 +824,9 @@ class HelperProcessLifecycle:
                 error=str(wire_failure),
             )
             self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
-            self._answer_the_parents_wire_link(link_id, str(wire_failure))
+            self._answer_the_parents_wire_link(command, link_id, str(wire_failure))
             return
-        self._answer_the_parents_wire_link(link_id, None)
+        self._answer_the_parents_wire_link(command, link_id, None)
 
     def _feed_island(self, command: "dict[str, Any]") -> None:
         island = command.get("island") or {}
@@ -822,13 +834,13 @@ class HelperProcessLifecycle:
         input_port = island.get("input_port")
         if not self._set_up_succeeded or self._function_node_islands_it_reads is None:
             self._answer_the_parents_wire_link(
-                link_id, "this node's setup did not succeed, so no island feeds its inputs"
+                command, link_id, "this node's setup did not succeed, so no island feeds its inputs"
             )
             return
         slots_refused = self._follow_a_link_wired_into_a_pin_group_slot(link_id, input_port)
         if slots_refused is not None:
             self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
-            self._answer_the_parents_wire_link(link_id, slots_refused)
+            self._answer_the_parents_wire_link(command, link_id, slots_refused)
             return
         try:
             self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
@@ -840,9 +852,9 @@ class HelperProcessLifecycle:
                 error=str(feed_failure),
             )
             self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
-            self._answer_the_parents_wire_link(link_id, str(feed_failure))
+            self._answer_the_parents_wire_link(command, link_id, str(feed_failure))
             return
-        self._answer_the_parents_wire_link(link_id, None)
+        self._answer_the_parents_wire_link(command, link_id, None)
 
     def _unfeed_island(self, command: "dict[str, Any]") -> None:
         input_port = command.get("port")
@@ -936,27 +948,30 @@ class HelperProcessLifecycle:
             return str(slots_refused)
         return None
 
-    def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
+    def _answer_the_parents_wire_link(
+        self, command: "dict[str, Any]", link_id: "Optional[str]", refusal: "Optional[str]"
+    ) -> None:
         if link_id is None:
             log.warn("the parent asked to wire a link it did not name")
             return
         if refusal is None:
-            self._bridge.send({"rpc": "link_wired", "link_id": link_id})
+            self._answer_the_parent(command, {"rpc": "link_wired", "link_id": link_id})
         else:
-            self._bridge.send(
-                {"rpc": "link_wire_failed", "link_id": link_id, "reason": refusal}
+            self._answer_the_parent(
+                command, {"rpc": "link_wire_failed", "link_id": link_id, "reason": refusal}
             )
 
     def _carry_links(self, command: "dict[str, Any]") -> None:
         # Answered with the cause rather than logged: the parent puts the pool back as it was
         # only when it hears the refusal.
         if self._hosted is None or not self._set_up_succeeded or not self._runs_the_function_node_pool:
-            self._bridge.send(
+            self._answer_the_parent(
+                command,
                 {
                     "rpc": "error",
                     "error": "this helper runs no function node pool that is set up, so it "
                     "carries no link",
-                }
+                },
             )
             return
         try:
@@ -967,9 +982,9 @@ class HelperProcessLifecycle:
                 command.get("output_ports_keeping_their_last_message") or []
             )
         except Exception as carries_refused:
-            self._bridge.send({"rpc": "error", "error": str(carries_refused)})
+            self._answer_the_parent(command, {"rpc": "error", "error": str(carries_refused)})
             return
-        self._bridge.send({"rpc": "ok"})
+        self._answer_the_parent(command, {"rpc": "ok"})
         self._tell_the_parent_whether_the_node_is_ready()
 
 def _the_number_each_input_value_reads(input_values: "Optional[dict[str, Any]]") -> "dict[str, float]":
@@ -982,14 +997,3 @@ def _the_number_each_input_value_reads(input_values: "Optional[dict[str, Any]]")
         if isinstance(value, (bool, int, float))
     }
 
-
-def _the_settings_a_node_the_wheel_builds_takes(
-    node_class: Any, input_values: "dict[str, Any]"
-) -> "Optional[dict[str, Any]]":
-    """The settings a node the wheel builds from them, a function node run as a node of its own,
-    takes of `input_values`: each naming none of its input ports. `None` for an author's node,
-    which takes each value as the input of its name."""
-    if not getattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, False):
-        return None
-    input_ports = {port["name"] for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, [])}
-    return {name: value for name, value in input_values.items() if name not in input_ports}

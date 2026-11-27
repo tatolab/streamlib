@@ -8,6 +8,9 @@ use crate::core::error::{Error, Result};
 
 use super::{NodeInterpreterSpawnHost, lifecycle_reply_tag, reported_reason};
 use crate::core::compiler::compiler_ops::function_node_pool::FUNCTION_NODE_POOL_CARRIES_INPUT;
+use crate::core::compiler::compiler_ops::subprocess_bridge::{
+    LifecycleCommandAnsweredByAReply, lifecycle_command_fields,
+};
 
 impl NodeInterpreterSpawnHost {
     /// Hand the running pool's helper `carries`, every carry it names, those it does not
@@ -35,13 +38,14 @@ impl NodeInterpreterSpawnHost {
             .collect();
         let reply = self
             .exchange_with_child(
-                &serde_json::json!({
-                    "cmd": "carry_links",
-                    "carries": &carries,
-                    "output_ports_keeping_their_last_message":
-                        output_ports_keeping_their_last_message,
-                }),
-                "carry_links",
+                LifecycleCommandAnsweredByAReply::CarryLinks,
+                lifecycle_command_fields([
+                    ("carries", carries.clone()),
+                    (
+                        "output_ports_keeping_their_last_message",
+                        serde_json::json!(output_ports_keeping_their_last_message),
+                    ),
+                ]),
             )
             .ok_or_else(|| {
                 Error::Runtime(format!(

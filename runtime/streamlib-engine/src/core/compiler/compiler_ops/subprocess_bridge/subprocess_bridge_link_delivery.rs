@@ -9,7 +9,7 @@ use crate::core::error::{Error, PortDirection, Result};
 use crate::core::nodes::{OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireReply};
 
 use super::{
-    ParentSideOfOneSubprocessBridgeSharedByItsThreads,
+    OUT_OF_PROCESS_COMMAND_ID_FIELD, ParentSideOfOneSubprocessBridgeSharedByItsThreads,
     refusal_of_a_link_into_a_helper_process_that_failed,
 };
 
@@ -21,9 +21,10 @@ pub struct SubprocessBridgeLinkDelivery {
 }
 
 impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
-    /// The answer arrives on its own rpc tag, which the reader routes to
-    /// `answer_cell`. The send never waits on that answer: the compiler hands
-    /// links over holding the graph's write lock.
+    /// The answer arrives on its own rpc tag, carrying the command's id, which
+    /// the reader routes to `answer_cell`. The send never waits on that answer:
+    /// the compiler hands links over holding the graph's write lock. A link end
+    /// handed over again cancels the attempt before it.
     fn hand_over_a_link_wired_after_setup(
         &self,
         port_direction: PortDirection,
@@ -45,21 +46,28 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
                 self.node_display_name, self.parent_side.node_run_id
             )));
         };
+        let command_id = self.parent_side.mint_an_out_of_process_command_id();
         // Registered before the send: the subprocess can answer the moment the
         // frame lands.
         self.parent_side
             .links_awaiting_their_wire_reply
-            .await_an_answer_for_link(link_id.to_string(), answer_cell);
+            .await_the_answer_to_a_link_wire_attempt(
+                command_id,
+                link_id.to_string(),
+                port_direction,
+                answer_cell,
+            );
         self.parent_side
             .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
                 "cmd": "wire_link",
+                OUT_OF_PROCESS_COMMAND_ID_FIELD: command_id,
                 "direction": port_direction.as_wire_str(),
                 "link": link_wiring,
             }))
     }
 
-    /// Unanswered, like `run`: a reply nobody reads is read as the answer to
-    /// the next lifecycle command.
+    /// Unanswered, like `run`. Cancels every attempt still waiting to wire
+    /// the link.
     fn tell_the_far_side_a_link_was_unwired(
         &self,
         port_direction: PortDirection,
@@ -70,7 +78,7 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
         // that dies later would refuse a link the graph no longer has.
         self.parent_side
             .links_awaiting_their_wire_reply
-            .stop_awaiting_an_answer_for_link(link_id);
+            .cancel_every_attempt_to_wire_link(link_id);
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Ok(());
         }
@@ -83,8 +91,9 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
             }))
     }
 
-    /// Answered like `wire_link`, on the island's link id: the reader imports
-    /// and compiles the island's nodes before it says it evaluates them.
+    /// Answered like `wire_link`, for the island's link and the input end it
+    /// feeds: the reader imports and compiles the island's nodes before it says
+    /// it evaluates them.
     fn hand_over_a_function_node_island_wired_after_setup(
         &self,
         function_node_island: &serde_json::Value,
@@ -108,12 +117,19 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
                 self.node_display_name, self.parent_side.node_run_id
             )));
         };
+        let command_id = self.parent_side.mint_an_out_of_process_command_id();
         self.parent_side
             .links_awaiting_their_wire_reply
-            .await_an_answer_for_link(link_id.to_string(), answer_cell);
+            .await_the_answer_to_a_link_wire_attempt(
+                command_id,
+                link_id.to_string(),
+                PortDirection::Input,
+                answer_cell,
+            );
         self.parent_side
             .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
                 "cmd": "feed_island",
+                OUT_OF_PROCESS_COMMAND_ID_FIELD: command_id,
                 "island": function_node_island,
             }))
     }
@@ -126,7 +142,7 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
     ) -> Result<()> {
         self.parent_side
             .links_awaiting_their_wire_reply
-            .stop_awaiting_an_answer_for_link(link_id);
+            .cancel_every_attempt_to_wire_link(link_id);
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Ok(());
         }

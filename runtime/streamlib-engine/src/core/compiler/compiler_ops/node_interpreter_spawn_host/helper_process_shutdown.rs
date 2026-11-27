@@ -5,7 +5,7 @@ use crate::core::compiler::compiler_ops::node_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
 };
 use crate::core::compiler::compiler_ops::subprocess_bridge::{
-    HelperProcessShutdownCommand, refusal_of_a_link_into_a_helper_process_that_failed,
+    ShutdownCommandsSent, refusal_of_a_link_into_a_helper_process_that_failed,
 };
 use crate::core::nodes::{
     FunctionNodeCallUnderWayInTheFarSide, FunctionNodeThatOverranItsFarSidesFrameInterval,
@@ -55,20 +55,17 @@ impl NodeInterpreterSpawnHost {
         // Warned once rather than per command: a helper that did not take the
         // first will not take the second either, and one unusable child owes
         // one line, which is the posture `exchange_with_child` already keeps.
-        for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
-            let asked = self.send_to_child(&serde_json::json!({
-                "cmd": command.command_tag(),
-                "capability": "full",
-            }));
-            if let Err(unreachable_helper) = asked {
-                tracing::warn!(
-                    "[{}] its helper process did not take the {} command, so neither it nor \
-                     anything after it was asked for: {unreachable_helper}",
-                    self.node_display_name,
-                    command.command_tag(),
-                );
-                return;
-            }
+        let mut shutdown_commands_sent = ShutdownCommandsSent::default();
+        let sent = self.sending_to_child(|bridge| {
+            bridge.send_the_shutdown_commands(&mut shutdown_commands_sent)
+        });
+        self.shutdown_commands_sent = shutdown_commands_sent;
+        if let Err(unreachable_helper) = sent {
+            tracing::warn!(
+                "[{}] its helper process did not take its shutdown commands: \
+                 {unreachable_helper}",
+                self.node_display_name,
+            );
         }
     }
 
@@ -79,6 +76,8 @@ impl NodeInterpreterSpawnHost {
         self.ask_the_helper_to_stop_and_tear_down();
         let outcome = self.child.take().map(|child| {
             let bridge = self.bridge.as_ref();
+            let shutdown_commands_sent = &self.shutdown_commands_sent;
+            let node_display_name = &self.node_display_name;
             HelperProcessShutdownLadder::taking_over(
                 self.node_display_name.clone(),
                 child,
@@ -87,7 +86,13 @@ impl NodeInterpreterSpawnHost {
                     .clone(),
             )
             .walk_every_rung(|command, slice| match bridge {
-                Some(bridge) => await_the_reply_to(bridge, command, slice),
+                Some(bridge) => await_the_reply_to(
+                    node_display_name,
+                    bridge,
+                    shutdown_commands_sent,
+                    command,
+                    slice,
+                ),
                 None => LifecycleReplyAwaited::NoReplyCanArrive,
             })
         });

@@ -8,10 +8,13 @@
 //! not wait for that answer: it returns with the link pending, and
 //! these cells are what `graph` reads afterwards.
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
+
+use crate::core::error::PortDirection;
 
 /// What one out-of-process far side answered about one link.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,73 +65,191 @@ impl OutOfProcessLinkWireReply {
     }
 }
 
+/// The id the engine stamps on one command it sends an out-of-process far side
+/// that expects an answer, and which the far side echoes on that answer.
+///
+/// Minted per bridge, so it names one command to one far side and never
+/// repeats for the life of that bridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub(crate) struct OutOfProcessCommandId(u64);
+
+impl OutOfProcessCommandId {
+    /// The id a frame carries as its `command_id`.
+    pub(crate) fn from_the_wire(command_id: u64) -> Self {
+        Self(command_id)
+    }
+}
+
+impl std::fmt::Display for OutOfProcessCommandId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// What became of one far side's answer to a `wire_link` or `feed_island`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OutOfProcessLinkWireAnswerNoted {
+    /// It settled the attempt it answers.
+    SettledItsAttempt,
+    /// It answers an attempt a newer one for the same link end, or the link's
+    /// unwiring, cancelled; it settles nothing.
+    DroppedAsTheAnswerToACancelledAttempt,
+    /// It answers a command this far side was never sent, or one already
+    /// answered.
+    DroppedAsTheAnswerToNoCommandAwaited,
+    /// It names a link other than the one its command wired, so that
+    /// attempt was refused rather than left pending.
+    RefusedItsAttemptForNamingAnotherLink {
+        /// The link the command it answers wired.
+        link_id_the_command_wired: String,
+    },
+}
+
+/// One `wire_link` or `feed_island` still waiting on its far side's answer.
+#[derive(Debug)]
+struct LinkWireAttemptAwaitingItsAnswer {
+    link_id: String,
+    port_direction: PortDirection,
+    reply: Arc<OutOfProcessLinkWireReply>,
+}
+
+#[derive(Debug, Default)]
+struct LinkWireAttemptsOfOneFarSide {
+    awaiting_by_command_id: HashMap<OutOfProcessCommandId, LinkWireAttemptAwaitingItsAnswer>,
+    /// The attempt each link end is waiting on, which a newer one replaces.
+    latest_command_id_by_link_end: HashMap<(String, PortDirection), OutOfProcessCommandId>,
+    /// Each attempt cancelled before its answer arrived, held until that
+    /// answer arrives so it is dropped by name. The far side answers every
+    /// command it is sent, so each entry leaves with its answer.
+    cancelled_command_ids_still_owed_an_answer: HashSet<OutOfProcessCommandId>,
+}
+
+impl LinkWireAttemptsOfOneFarSide {
+    fn cancel_the_attempt_awaiting(&mut self, command_id: OutOfProcessCommandId) {
+        if self.awaiting_by_command_id.remove(&command_id).is_some() {
+            self.cancelled_command_ids_still_owed_an_answer
+                .insert(command_id);
+        }
+    }
+}
+
+/// The `wire_link` and `feed_island` attempts one far side still owes an
+/// answer for, matched to their answers by [`OutOfProcessCommandId`].
+///
+/// The last attempt wins, per link end: a newer attempt for the same link in
+/// the same direction, or the link's unwiring, cancels the one before it, and
+/// an answer to a cancelled attempt settles nothing. A link whose two ends are
+/// both this far side waits on one attempt per end.
 #[derive(Debug, Default)]
 pub(crate) struct LinksAwaitingTheirOutOfProcessWireReply {
-    replies_by_link_id: Mutex<HashMap<String, Vec<Arc<OutOfProcessLinkWireReply>>>>,
+    attempts: Mutex<LinkWireAttemptsOfOneFarSide>,
 }
 
 impl LinksAwaitingTheirOutOfProcessWireReply {
-    /// Start waiting on one more answer for a link.
-    pub(crate) fn await_an_answer_for_link(
+    /// Start waiting on the answer to the attempt `command_id` that wires
+    /// `link_id`'s end facing `port_direction`, cancelling that end's earlier
+    /// attempt.
+    pub(crate) fn await_the_answer_to_a_link_wire_attempt(
         &self,
+        command_id: OutOfProcessCommandId,
         link_id: String,
+        port_direction: PortDirection,
         reply: Arc<OutOfProcessLinkWireReply>,
     ) {
-        self.replies_by_link_id
-            .lock()
-            .entry(link_id)
-            .or_default()
-            .push(reply);
+        let mut attempts = self.attempts.lock();
+        if let Some(superseded) = attempts
+            .latest_command_id_by_link_end
+            .insert((link_id.clone(), port_direction), command_id)
+        {
+            attempts.cancel_the_attempt_awaiting(superseded);
+        }
+        attempts.awaiting_by_command_id.insert(
+            command_id,
+            LinkWireAttemptAwaitingItsAnswer {
+                link_id,
+                port_direction,
+                reply,
+            },
+        );
     }
 
-    /// Note an answer that names a link, reporting whether any end was waiting
-    /// for it — a far side answering for a link nobody is waiting on is worth a
-    /// log line rather than a silent drop.
-    ///
-    /// One answer settles one of that link's outstanding ends, and which one
-    /// does not matter: a link is `wired` only when every end opened and
-    /// `error` the moment any end refused, so what the link reports depends on
-    /// the answers it got and never on which end sent which.
-    pub(crate) fn note_the_far_sides_answer_for_link(
+    /// Note the far side's answer to the attempt `command_id`, which names
+    /// `link_id`, saying what became of it so an answer that settles nothing
+    /// is logged rather than dropped silently.
+    pub(crate) fn note_the_far_sides_answer_to(
         &self,
+        command_id: OutOfProcessCommandId,
         link_id: &str,
         outcome: OutOfProcessLinkWireOutcome,
-    ) -> bool {
-        let reply = {
-            let mut replies = self.replies_by_link_id.lock();
-            let Some(ends_still_waiting) = replies.get_mut(link_id) else {
-                return false;
-            };
-            let reply = ends_still_waiting.pop();
-            if ends_still_waiting.is_empty() {
-                replies.remove(link_id);
+    ) -> OutOfProcessLinkWireAnswerNoted {
+        let answered = {
+            let mut attempts = self.attempts.lock();
+            if attempts
+                .cancelled_command_ids_still_owed_an_answer
+                .remove(&command_id)
+            {
+                return OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt;
             }
-            reply
+            let Entry::Occupied(awaiting) = attempts.awaiting_by_command_id.entry(command_id)
+            else {
+                return OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToNoCommandAwaited;
+            };
+            let answered = awaiting.remove();
+            attempts
+                .latest_command_id_by_link_end
+                .remove(&(answered.link_id.clone(), answered.port_direction));
+            answered
         };
-        let Some(reply) = reply else {
-            return false;
-        };
-        reply.note_the_far_sides_answer(outcome);
-        true
+        if answered.link_id != link_id {
+            answered.reply.note_the_far_sides_answer(
+                OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                    reason: format!("its far side answered for link '{link_id}' instead"),
+                },
+            );
+            return OutOfProcessLinkWireAnswerNoted::RefusedItsAttemptForNamingAnotherLink {
+                link_id_the_command_wired: answered.link_id,
+            };
+        }
+        answered.reply.note_the_far_sides_answer(outcome);
+        OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
     }
 
-    /// Stop waiting on a link that is going away before it was ever answered
-    /// for, so a disconnect leaves nothing behind for its far side to answer.
-    /// Every end of it goes, since the whole link is being taken down.
-    pub(crate) fn stop_awaiting_an_answer_for_link(&self, link_id: &str) {
-        self.replies_by_link_id.lock().remove(link_id);
+    /// Cancel every attempt still waiting to wire an end of a link that is
+    /// going away, so a disconnect leaves nothing for its far side's answer to
+    /// settle. Every end of it goes, since the whole link is being taken down.
+    pub(crate) fn cancel_every_attempt_to_wire_link(&self, link_id: &str) {
+        let mut attempts = self.attempts.lock();
+        let LinkWireAttemptsOfOneFarSide {
+            awaiting_by_command_id,
+            latest_command_id_by_link_end,
+            cancelled_command_ids_still_owed_an_answer,
+        } = &mut *attempts;
+        latest_command_id_by_link_end.retain(|(end_link_id, _), command_id| {
+            if end_link_id != link_id {
+                return true;
+            }
+            if awaiting_by_command_id.remove(command_id).is_some() {
+                cancelled_command_ids_still_owed_an_answer.insert(*command_id);
+            }
+            false
+        });
     }
 
-    /// Refuse every link still waiting, because the far side is gone, and hand
-    /// back how many there were so the caller can say so once. A link whose far
-    /// side died unanswered never reads `wired`.
+    /// Refuse every attempt still waiting, because the far side is gone, and
+    /// hand back how many there were so the caller can say so once. A link
+    /// whose far side died unanswered never reads `wired`.
     pub(crate) fn refuse_every_link_still_awaiting_an_answer(&self, reason: &str) -> usize {
-        let refused: Vec<Arc<OutOfProcessLinkWireReply>> = self
-            .replies_by_link_id
-            .lock()
-            .drain()
-            .flat_map(|(_, ends)| ends)
-            .collect();
+        let refused: Vec<Arc<OutOfProcessLinkWireReply>> = {
+            let mut attempts = self.attempts.lock();
+            attempts.latest_command_id_by_link_end.clear();
+            attempts.cancelled_command_ids_still_owed_an_answer.clear();
+            attempts
+                .awaiting_by_command_id
+                .drain()
+                .map(|(_, attempt)| attempt.reply)
+                .collect()
+        };
         for reply in &refused {
             reply.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
                 reason: reason.to_string(),
@@ -146,6 +267,27 @@ mod tests {
         OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
             reason: reason.to_string(),
         }
+    }
+
+    fn command(id: u64) -> OutOfProcessCommandId {
+        OutOfProcessCommandId::from_the_wire(id)
+    }
+
+    /// A board waiting on `link_id`'s input end under `command_id`, and that
+    /// attempt's cell.
+    fn awaiting_an_input_end(
+        awaiting: &LinksAwaitingTheirOutOfProcessWireReply,
+        command_id: u64,
+        link_id: &str,
+    ) -> Arc<OutOfProcessLinkWireReply> {
+        let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        awaiting.await_the_answer_to_a_link_wire_attempt(
+            command(command_id),
+            link_id.to_string(),
+            PortDirection::Input,
+            Arc::clone(&reply),
+        );
+        reply
     }
 
     #[test]
@@ -167,17 +309,19 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_reaches_the_link_it_names_and_no_other() {
+    fn an_answer_reaches_the_attempt_its_id_names_and_no_other() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
-        let answered = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        let untouched = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        awaiting.await_an_answer_for_link("L-answered".to_string(), Arc::clone(&answered));
-        awaiting.await_an_answer_for_link("L-untouched".to_string(), Arc::clone(&untouched));
+        let answered = awaiting_an_input_end(&awaiting, 1, "L-answered");
+        let untouched = awaiting_an_input_end(&awaiting, 2, "L-untouched");
 
-        assert!(awaiting.note_the_far_sides_answer_for_link(
-            "L-answered",
-            OutOfProcessLinkWireOutcome::OpenedByTheFarSide
-        ));
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(1),
+                "L-answered",
+                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+            ),
+            OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
+        );
 
         assert_eq!(
             answered.the_far_sides_answer(),
@@ -187,30 +331,119 @@ mod tests {
         assert_eq!(
             awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
             1,
-            "an answered link is off the board, so only the untouched one is left to refuse"
+            "an answered attempt is off the board, so only the untouched one is left to refuse"
         );
     }
 
-    /// A link whose source and destination are the same helper is handed over
-    /// twice under one link id, and the helper answers each. Both ends have to
-    /// land, or the link reads `pending` for the life of the runtime.
+    /// The race this board exists for: a link unwired and wired again before
+    /// the far side's answer to the first attempt was read. The first answer
+    /// arrives first and says the port opened; the second says it did not.
     ///
-    /// Fail-without-fix: key the board one deep and the second registration
-    /// evicts the first — the source end below stays `None`, the second answer
-    /// routes to nothing, and `graph` never leaves `pending`.
+    /// Fail-without-fix: match answers by link id alone and the first answer
+    /// settles the second attempt — the link reads `wired` though its new
+    /// wiring failed — and the second answer, the true one, is dropped.
     #[test]
-    fn a_link_whose_two_ends_are_one_helper_has_both_of_them_answered() {
+    fn a_link_wired_again_before_its_first_answer_reads_as_the_second_attempt_answered() {
+        let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
+        let first_attempt = awaiting_an_input_end(&awaiting, 1, "L-reconnected");
+        awaiting.cancel_every_attempt_to_wire_link("L-reconnected");
+        let second_attempt = awaiting_an_input_end(&awaiting, 2, "L-reconnected");
+
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(1),
+                "L-reconnected",
+                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+            ),
+            OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt
+        );
+        assert_eq!(
+            second_attempt.the_far_sides_answer(),
+            None,
+            "the first attempt's answer settles nothing"
+        );
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(2),
+                "L-reconnected",
+                refusal("no such service")
+            ),
+            OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
+        );
+
+        assert_eq!(
+            second_attempt.the_far_sides_answer(),
+            Some(refusal("no such service")),
+            "the link reads the second attempt's own answer"
+        );
+        assert_eq!(first_attempt.the_far_sides_answer(), None);
+    }
+
+    /// A newer attempt for the same end supersedes the older one with no
+    /// unwiring in between: the last request wins.
+    #[test]
+    fn a_newer_attempt_for_the_same_end_cancels_the_one_before_it() {
+        let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
+        awaiting_an_input_end(&awaiting, 1, "L-retried");
+        let retried = awaiting_an_input_end(&awaiting, 2, "L-retried");
+
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(1),
+                "L-retried",
+                refusal("the first attempt failed")
+            ),
+            OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt
+        );
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(2),
+                "L-retried",
+                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+            ),
+            OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
+        );
+        assert_eq!(
+            retried.the_far_sides_answer(),
+            Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide)
+        );
+        assert_eq!(
+            awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
+            0,
+            "the superseded attempt is not left on the board to be refused"
+        );
+    }
+
+    /// A link whose source and destination are the same far side is handed
+    /// over once per end under one link id, and both ends wait within one
+    /// attempt: neither end supersedes the other.
+    #[test]
+    fn a_link_whose_two_ends_are_one_far_side_has_both_of_them_answered() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
         let source_end = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         let destination_end = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        awaiting.await_an_answer_for_link("L-self".to_string(), Arc::clone(&source_end));
-        awaiting.await_an_answer_for_link("L-self".to_string(), Arc::clone(&destination_end));
+        awaiting.await_the_answer_to_a_link_wire_attempt(
+            command(1),
+            "L-self".to_string(),
+            PortDirection::Output,
+            Arc::clone(&source_end),
+        );
+        awaiting.await_the_answer_to_a_link_wire_attempt(
+            command(2),
+            "L-self".to_string(),
+            PortDirection::Input,
+            Arc::clone(&destination_end),
+        );
 
-        for _ in 0..2 {
-            assert!(awaiting.note_the_far_sides_answer_for_link(
-                "L-self",
-                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
-            ));
+        for command_id in [1, 2] {
+            assert_eq!(
+                awaiting.note_the_far_sides_answer_to(
+                    command(command_id),
+                    "L-self",
+                    OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+                ),
+                OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
+            );
         }
 
         assert_eq!(
@@ -221,55 +454,23 @@ mod tests {
             destination_end.the_far_sides_answer(),
             Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide)
         );
-        assert_eq!(
-            awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
-            0,
-            "both ends were answered, so the board holds nothing for this link"
-        );
     }
 
-    /// One end refusing is what the link reports, whichever end it was.
+    /// A disconnect cancels every end of the link, not one of them.
     #[test]
-    fn one_end_of_a_self_link_refusing_still_reaches_a_cell() {
+    fn unwiring_a_self_link_cancels_both_of_its_ends() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
-        let ends: Vec<Arc<OutOfProcessLinkWireReply>> = (0..2)
-            .map(|_| OutOfProcessLinkWireReply::awaiting_the_far_sides_answer())
-            .collect();
-        for end in &ends {
-            awaiting.await_an_answer_for_link("L-self".to_string(), Arc::clone(end));
-        }
-
-        awaiting.note_the_far_sides_answer_for_link(
-            "L-self",
-            OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
-        );
-        awaiting.note_the_far_sides_answer_for_link("L-self", refusal("no such service"));
-
-        let answers: Vec<Option<OutOfProcessLinkWireOutcome>> =
-            ends.iter().map(|end| end.the_far_sides_answer()).collect();
-        assert!(
-            answers.contains(&Some(refusal("no such service"))),
-            "the refusal has to land on one of the link's ends, so the link reads error: \
-             {answers:?}"
-        );
-        assert!(
-            answers.iter().all(|answer| answer.is_some()),
-            "no end may be left unanswered: {answers:?}"
-        );
-    }
-
-    /// A disconnect takes every end of the link, not one of them.
-    #[test]
-    fn stopping_a_self_link_leaves_neither_end_on_the_board() {
-        let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
-        for _ in 0..2 {
-            awaiting.await_an_answer_for_link(
+        for (command_id, port_direction) in [(1, PortDirection::Output), (2, PortDirection::Input)]
+        {
+            awaiting.await_the_answer_to_a_link_wire_attempt(
+                command(command_id),
                 "L-self".to_string(),
+                port_direction,
                 OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
             );
         }
 
-        awaiting.stop_awaiting_an_answer_for_link("L-self");
+        awaiting.cancel_every_attempt_to_wire_link("L-self");
 
         assert_eq!(
             awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
@@ -278,19 +479,44 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_naming_a_link_nobody_awaits_is_reported_rather_than_dropped_silently() {
+    fn an_answer_to_a_command_never_sent_is_reported_rather_than_dropped_silently() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
-        assert!(!awaiting.note_the_far_sides_answer_for_link(
-            "L-nobody-waits",
-            OutOfProcessLinkWireOutcome::OpenedByTheFarSide
-        ));
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(7),
+                "L-nobody-waits",
+                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+            ),
+            OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToNoCommandAwaited
+        );
+    }
+
+    #[test]
+    fn an_answer_naming_another_link_than_its_command_wired_refuses_that_attempt() {
+        let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
+        let reply = awaiting_an_input_end(&awaiting, 1, "L-wired");
+
+        assert_eq!(
+            awaiting.note_the_far_sides_answer_to(
+                command(1),
+                "L-other",
+                OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+            ),
+            OutOfProcessLinkWireAnswerNoted::RefusedItsAttemptForNamingAnotherLink {
+                link_id_the_command_wired: "L-wired".to_string()
+            }
+        );
+        assert_eq!(
+            reply.the_far_sides_answer(),
+            Some(refusal("its far side answered for link 'L-other' instead")),
+            "an attempt answered out of step never stays pending"
+        );
     }
 
     #[test]
     fn a_far_side_that_dies_refuses_every_link_it_never_answered_for() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
-        let unanswered = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        awaiting.await_an_answer_for_link("L-unanswered".to_string(), Arc::clone(&unanswered));
+        let unanswered = awaiting_an_input_end(&awaiting, 1, "L-unanswered");
 
         assert_eq!(
             awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
@@ -305,12 +531,11 @@ mod tests {
     }
 
     #[test]
-    fn a_link_that_stopped_awaiting_is_not_refused_when_its_far_side_dies() {
+    fn a_link_unwired_is_not_refused_when_its_far_side_dies() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
-        let disconnected = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        awaiting.await_an_answer_for_link("L-disconnected".to_string(), Arc::clone(&disconnected));
+        let disconnected = awaiting_an_input_end(&awaiting, 1, "L-disconnected");
 
-        awaiting.stop_awaiting_an_answer_for_link("L-disconnected");
+        awaiting.cancel_every_attempt_to_wire_link("L-disconnected");
 
         assert_eq!(
             awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),

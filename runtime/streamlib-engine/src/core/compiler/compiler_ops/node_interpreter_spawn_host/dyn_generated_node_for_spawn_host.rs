@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use crate::core::child_process_lifetime::a_child_process_has_exited_without_being_reaped;
 use crate::core::compiler::compiler_ops::node_interpreter_shutdown_ladder::HelperProcessShutdownOutcome;
+use crate::core::compiler::compiler_ops::subprocess_bridge::{
+    LifecycleCommandAnsweredByAReply, lifecycle_command_fields,
+};
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
@@ -20,7 +23,7 @@ use crate::core::nodes::{
 use super::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE,
     LONGEST_WAIT_FOR_A_COMPILE_TO_CLAIM_A_FUNCTION_NODE_PROMOTION, NodeInterpreterSpawnHost,
-    standard_error_tail_as_a_refusal_quotes_it,
+    ShutdownCommandsSent, standard_error_tail_as_a_refusal_quotes_it,
 };
 
 impl DynGeneratedNode for NodeInterpreterSpawnHost {
@@ -42,9 +45,8 @@ impl DynGeneratedNode for NodeInterpreterSpawnHost {
         if self.child_is_gone {
             return Ok(());
         }
-        // `run` enters the child's execution loop and is deliberately
-        // unanswered — a reply would be read as the answer to the next command.
-        self.send_to_child(&serde_json::json!({
+        // `run` enters the child's execution loop and is answered by nothing.
+        self.send_to_child_a_command_answered_by_nothing(&serde_json::json!({
             "cmd": "run",
             "capability": "limited",
             "execution": self.child_execution_mode(),
@@ -67,19 +69,17 @@ impl DynGeneratedNode for NodeInterpreterSpawnHost {
     }
 
     fn __generated_on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.exchange_with_child_expecting(
-            &serde_json::json!({"cmd": "on_pause", "capability": "limited"}),
-            "on_pause",
-            "ok",
+        self.exchange_with_child_expecting_ok(
+            LifecycleCommandAnsweredByAReply::OnPause,
+            lifecycle_command_fields([("capability", serde_json::json!("limited"))]),
         );
         Ok(())
     }
 
     fn __generated_on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.exchange_with_child_expecting(
-            &serde_json::json!({"cmd": "on_resume", "capability": "limited"}),
-            "on_resume",
-            "ok",
+        self.exchange_with_child_expecting_ok(
+            LifecycleCommandAnsweredByAReply::OnResume,
+            lifecycle_command_fields([("capability", serde_json::json!("limited"))]),
         );
         Ok(())
     }
@@ -305,6 +305,7 @@ impl DynGeneratedNode for NodeInterpreterSpawnHost {
             .record(Vec::new());
         self.child_is_gone = false;
         self.shutdown_was_already_asked_of_this_helper = false;
+        self.shutdown_commands_sent = ShutdownCommandsSent::default();
         self.child_standard_error_tail = None;
         self.bridge = None;
         self.link_wiring

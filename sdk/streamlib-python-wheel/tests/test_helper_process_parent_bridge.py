@@ -44,7 +44,11 @@ def test_a_frame_written_by_the_parent_arrives_as_a_lifecycle_command(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     stand_in_parent.send({"cmd": "stop", "capability": "full"})
-    assert bridge.next_lifecycle_command() == {"cmd": "stop", "capability": "full"}
+    assert bridge.next_lifecycle_command() == {
+        "cmd": "stop",
+        "capability": "full",
+        "command_id": 1,
+    }
 
 
 def test_an_escalate_response_never_reaches_the_lifecycle_queue(stand_in_parent):
@@ -55,7 +59,7 @@ def test_an_escalate_response_never_reaches_the_lifecycle_queue(stand_in_parent)
     bridge.start_reading()
     stand_in_parent.send({"rpc": "escalate_response", "request_id": "r-1", "result": "ok"})
     stand_in_parent.send({"cmd": "teardown"})
-    assert bridge.next_lifecycle_command() == {"cmd": "teardown"}
+    assert bridge.next_lifecycle_command() == {"cmd": "teardown", "command_id": 1}
 
 
 def test_a_closed_channel_surfaces_as_a_command_of_none(stand_in_parent):
