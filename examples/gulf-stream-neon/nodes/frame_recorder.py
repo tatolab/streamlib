@@ -29,6 +29,20 @@ from tatolab.stream import (
 )
 
 
+#: The files a take still open writes to. A take built while another still writes its file — a
+#: new rate set at the same path — takes the next free numbered name beside it instead, so the
+#: two encoders never write one file.
+_PATHS_OF_THE_OPEN_TAKES: "set[Path]" = set()
+
+
+def _a_path_no_open_take_writes(path: Path) -> Path:
+    candidate, number = path, 1
+    while candidate in _PATHS_OF_THE_OPEN_TAKES:
+        number += 1
+        candidate = path.with_name(f"{path.stem}-{number}{path.suffix}")
+    return candidate
+
+
 class TakeBeingRecorded:
     """One take: an ffmpeg encoder writing to one file, started on its first frame and closed
     with the take."""
@@ -38,7 +52,8 @@ class TakeBeingRecorded:
         if not path.is_absolute():
             path = Path(__file__).resolve().parent.parent / path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = path
+        self.path = _a_path_no_open_take_writes(path)
+        _PATHS_OF_THE_OPEN_TAKES.add(self.path)
         self.frames_per_second = frames_per_second
         self.encoder: subprocess.Popen | None = None
         self.frames_written = 0
@@ -74,10 +89,13 @@ class TakeBeingRecorded:
             log.info("recorded", frames=self.frames_written, path=str(self.path))
 
     def close(self) -> None:
-        if self.encoder is not None:
-            self.encoder.stdin.close()
-            self.encoder.wait(timeout=120)
-            log.info("take closed", frames=self.frames_written, path=str(self.path))
+        try:
+            if self.encoder is not None:
+                self.encoder.stdin.close()
+                self.encoder.wait(timeout=120)
+                log.info("take closed", frames=self.frames_written, path=str(self.path))
+        finally:
+            _PATHS_OF_THE_OPEN_TAKES.discard(self.path)
 
 
 @node.meta(
@@ -97,7 +115,8 @@ def FrameRecorder(
         Annotated[Texture, StreamDelivery("ordered"), Description("The frames to record")]
     ],
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
-    """An ordered sink that pipes frames into ffmpeg; a new path or rate starts a new take."""
+    """An ordered sink that pipes frames into ffmpeg; a new path or rate starts a new take, in a
+    numbered file beside the old one while that one is still being written."""
     take = computed(lambda: TakeBeingRecorded(output_path.get(), frames_per_second.get()))
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
