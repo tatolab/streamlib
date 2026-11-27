@@ -39,6 +39,7 @@ use tatolab_module_sdk::{
     ModuleHostTablePayloadDescriptor,
 };
 
+use crate::browser_page_refused::BrowserPageRefused;
 use crate::page_audio_blocks::{PageAudioStreamTimeline, samples_of_little_endian_f32_bytes};
 use crate::page_audio_silence_watch::PageAudioSilenceWatch;
 use crate::page_data_messages::{
@@ -188,7 +189,7 @@ pub struct BrowserPageCounters {
 
 impl BrowserPageCounters {
     /// Count one audio input block that reached the page, and whether it held sound.
-    fn count_an_input_audio_block_delivered(&self, carries_sound: bool) {
+    pub(crate) fn count_an_input_audio_block_delivered(&self, carries_sound: bool) {
         self.page_input_audio_blocks_delivered
             .fetch_add(1, Ordering::Relaxed);
         if carries_sound {
@@ -1081,73 +1082,12 @@ fn checked_in_painted_iosurface_receiver()
     Ok((service_name, receiver))
 }
 
-fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
+pub(crate) fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
     match level {
         BrowserHostTabLogLevel::Error => ModuleHostLogLevel::Error,
         BrowserHostTabLogLevel::Warn => ModuleHostLogLevel::Warn,
         BrowserHostTabLogLevel::Info => ModuleHostLogLevel::Info,
         BrowserHostTabLogLevel::Debug => ModuleHostLogLevel::Debug,
-    }
-}
-
-/// Why a page could not be opened, each refusal its own kind; each displays as its words.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BrowserPageRefused {
-    /// The url, size, frame rate, sample rate or pool depth is one CEF cannot render with.
-    NotRenderable(String),
-    /// A port the node lent could not be opened.
-    PortRefused(String),
-    /// The runtime did not lease the machine's browser host.
-    BrowserHostNotLeased(String),
-    /// The browser host did not accept the connection, or did not answer the open.
-    BrowserHostUnreachable(String),
-    /// The browser host refused to open the page.
-    PageRefusedByTheBrowserHost(String),
-    /// The browser host answered outside the tab protocol, or the frame slots it handed over
-    /// could not be taken.
-    TabProtocolBroken(String),
-    /// What the node sets up on its own side to open a page on, a socket or a port the host
-    /// hands painted surfaces over, could not be set up; the host was not at fault.
-    NodeSetUpNothingToOpenItOn(String),
-    /// A thread the page needs could not start.
-    ThreadNotStarted(String),
-}
-
-impl BrowserPageRefused {
-    fn of_the_socket(failure: std::io::Error) -> Self {
-        BrowserPageRefused::NodeSetUpNothingToOpenItOn(format!(
-            "the socket to the browser host could not be set up: {failure}"
-        ))
-    }
-
-    /// A tab protocol message that did not cross: one that could not be encoded or decoded, or
-    /// came without its descriptor, broke the protocol; any other failure left the host
-    /// unreachable.
-    fn of_the_tab_protocol(failure: TabProtocolSocketFailure, what_failed: &str) -> Self {
-        let why = format!("{what_failed}: {failure}");
-        match failure {
-            TabProtocolSocketFailure::Encoding(_) | TabProtocolSocketFailure::MissingDescriptor => {
-                BrowserPageRefused::TabProtocolBroken(why)
-            }
-            TabProtocolSocketFailure::Ended | TabProtocolSocketFailure::Io(_) => {
-                BrowserPageRefused::BrowserHostUnreachable(why)
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for BrowserPageRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BrowserPageRefused::NotRenderable(why)
-            | BrowserPageRefused::PortRefused(why)
-            | BrowserPageRefused::BrowserHostNotLeased(why)
-            | BrowserPageRefused::BrowserHostUnreachable(why)
-            | BrowserPageRefused::PageRefusedByTheBrowserHost(why)
-            | BrowserPageRefused::TabProtocolBroken(why)
-            | BrowserPageRefused::NodeSetUpNothingToOpenItOn(why)
-            | BrowserPageRefused::ThreadNotStarted(why) => f.write_str(why),
-        }
     }
 }
 
@@ -1596,130 +1536,6 @@ fn count_a_data_message_that_did_not_reach_the_page(tab: &BrowserHostTabOfOneNod
         tab.log(
             ModuleHostLogLevel::Warn,
             &format!("a data message did not reach the page: {refusal}"),
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config() -> BrowserPageConfig {
-        BrowserPageConfig {
-            url: "https://example.com".to_string(),
-            width: 1920,
-            height: 1080,
-            frame_rate: 60,
-            transparent_background: true,
-            audio_sample_rate: 48_000,
-            output_pool_rotation_depth: 4,
-        }
-    }
-
-    #[test]
-    fn a_message_that_did_not_cross_is_refused_by_why() {
-        assert!(matches!(
-            BrowserPageRefused::of_the_tab_protocol(
-                TabProtocolSocketFailure::Encoding("too large".into()),
-                "the browser host did not answer the open",
-            ),
-            BrowserPageRefused::TabProtocolBroken(_)
-        ));
-        assert!(matches!(
-            BrowserPageRefused::of_the_tab_protocol(
-                TabProtocolSocketFailure::MissingDescriptor,
-                "the browser host did not answer the open",
-            ),
-            BrowserPageRefused::TabProtocolBroken(_)
-        ));
-        assert_eq!(
-            BrowserPageRefused::of_the_tab_protocol(
-                TabProtocolSocketFailure::Ended,
-                "the browser host did not answer the open",
-            ),
-            BrowserPageRefused::BrowserHostUnreachable(
-                "the browser host did not answer the open: the connection ended".into()
-            )
-        );
-    }
-
-    #[test]
-    fn a_config_cef_can_render_passes() {
-        refuse_a_config_cef_cannot_render(&config()).expect("1080p60 renders");
-    }
-
-    #[test]
-    fn what_cef_cannot_render_is_refused_by_name() {
-        for (broken, named) in [
-            (
-                BrowserPageConfig {
-                    url: " ".into(),
-                    ..config()
-                },
-                "needs a url",
-            ),
-            (
-                BrowserPageConfig {
-                    width: 0,
-                    ..config()
-                },
-                "0x1080",
-            ),
-            (
-                BrowserPageConfig {
-                    frame_rate: 120,
-                    ..config()
-                },
-                "not 120",
-            ),
-            (
-                BrowserPageConfig {
-                    audio_sample_rate: 4_000,
-                    ..config()
-                },
-                "not 4000",
-            ),
-            (
-                BrowserPageConfig {
-                    output_pool_rotation_depth: 0,
-                    ..config()
-                },
-                "at least 1",
-            ),
-        ] {
-            let refusal = refuse_a_config_cef_cannot_render(&broken).expect_err(named);
-            assert!(refusal.contains(named), "{refusal}");
-        }
-    }
-
-    #[test]
-    fn an_input_audio_block_with_sound_is_counted_as_delivered_and_as_sounding() {
-        let counters = BrowserPageCounters::default();
-        counters.count_an_input_audio_block_delivered(false);
-        counters.count_an_input_audio_block_delivered(true);
-        counters.count_an_input_audio_block_delivered(false);
-        let delivered = &counters.page_input_audio_blocks_delivered;
-        let with_sound = &counters.page_input_audio_blocks_with_sound_delivered;
-        assert_eq!(delivered.load(Ordering::Relaxed), 3);
-        assert_eq!(with_sound.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn every_host_log_level_keeps_its_loudness() {
-        assert_eq!(
-            [
-                BrowserHostTabLogLevel::Error,
-                BrowserHostTabLogLevel::Warn,
-                BrowserHostTabLogLevel::Info,
-                BrowserHostTabLogLevel::Debug,
-            ]
-            .map(module_log_level_of),
-            [
-                ModuleHostLogLevel::Error,
-                ModuleHostLogLevel::Warn,
-                ModuleHostLogLevel::Info,
-                ModuleHostLogLevel::Debug,
-            ]
         );
     }
 }

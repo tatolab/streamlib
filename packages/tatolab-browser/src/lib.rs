@@ -12,6 +12,9 @@
 compile_error!("tatolab-browser runs on Linux and macOS");
 
 pub mod browser_host_tab_client;
+#[cfg(test)]
+mod browser_host_tab_client_tests;
+pub mod browser_page_refused;
 pub mod page_audio_blocks;
 pub mod page_audio_silence_watch;
 #[cfg(test)]
@@ -31,8 +34,9 @@ use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
 use tatolab_browser_tab_protocol::{PageInputTrack, PageInputTrackKind};
 
 use crate::browser_host_tab_client::{
-    BrowserPageConfig, BrowserPagePorts, BrowserPageRefused, BrowserPageRendering, PageInputPort,
+    BrowserPageConfig, BrowserPagePorts, BrowserPageRendering, PageInputPort,
 };
+use crate::browser_page_refused::BrowserPageRefused;
 
 create_exception!(
     tatolab.browser._native,
