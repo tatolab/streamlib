@@ -264,6 +264,7 @@ pub(crate) fn generate_from_a_node_function(
                     #(#argument_bindings)*
                     let running = #private::NodeFunctionRunning::run_the_body_once(
                         Self::NAME,
+                        ctx,
                         declaring,
                         || {
                             let per_frame = #per_frame_function_taken;

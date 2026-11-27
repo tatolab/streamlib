@@ -5747,6 +5747,7 @@ dependencies = [
  "streamlib-media-builtins",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
+ "streamlib-scope",
  "streamlib-surface-client",
  "tatolab-module-sdk",
  "tracing",

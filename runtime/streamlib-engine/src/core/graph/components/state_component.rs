@@ -10,8 +10,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticPlaceOnTheWire,
     HelperProcessRestartsOnTheWire, NodeHealthOnTheWire,
 };
+use streamlib_scope::BuildsOfAScope;
 
 use super::GraphRenders;
+use super::computed_value_build_diagnostics::the_diagnostics_of_the_builds_of;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
 use crate::core::graph::NodeRunId;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
@@ -33,6 +35,9 @@ pub struct ObservableNodeState {
     /// Why the node, running, is not ready, in its own words, while it says
     /// so; the runtime keeps its outputs flowing meanwhile.
     not_ready_because: Mutex<Option<String>>,
+    /// How the builds of the computed values of the node's body stand, for a node written as one
+    /// function whose body ran; read whenever its health is, so it shows with no frame run.
+    builds_of_its_computed_values: Mutex<Option<BuildsOfAScope>>,
     state_changes_published_as: Mutex<Option<NodeStateChangesPublishedOnItsStreamsTopic>>,
 }
 
@@ -60,6 +65,7 @@ impl ObservableNodeState {
             helper_process_restarts: Mutex::new(HelperProcessRestartRecord::default()),
             process_raising_because: Mutex::new(None),
             not_ready_because: Mutex::new(None),
+            builds_of_its_computed_values: Mutex::new(None),
             state_changes_published_as: Mutex::new(None),
         }
     }
@@ -121,9 +127,16 @@ impl ObservableNodeState {
         self.fail_with(reason);
     }
 
+    /// Read how the builds of the computed values its body declared stand from `builds`, in
+    /// place of the body that ran before.
+    pub fn read_the_builds_of_its_computed_values_from(&self, builds: BuildsOfAScope) {
+        *self.builds_of_its_computed_values.lock() = Some(builds);
+    }
+
     /// The node's health, read from its state and why, and each diagnostic behind it, placed
     /// at `place`: failed while its state is `Error`, as a placeholder or for its failure;
-    /// otherwise raising while its `process()` keeps raising, and not ready while it says so.
+    /// otherwise raising while its `process()` keeps raising or a build of a computed value
+    /// failed, and not ready while it says so or a computed value has no first value yet.
     pub fn the_health_of_the_node(
         &self,
         place: &DiagnosticPlaceOnTheWire,
@@ -148,14 +161,40 @@ impl ObservableNodeState {
                 .unwrap_or_else(|| "it failed, and gave no reason".to_owned());
             return (NodeHealthOnTheWire::Failed, vec![diagnostic(kind, words)]);
         }
-        let health = if raising.is_some() {
+        // Read only while the node may report itself not ready, as its own report is: a node
+        // stopping keeps its scope until its teardown, and reports neither.
+        let builds = self
+            .builds_of_its_computed_values
+            .lock()
+            .clone()
+            .filter(|_| self.current().holds_a_not_ready_report());
+        let (builds_failed, builds_pending): (Vec<_>, Vec<_>) = the_diagnostics_of_the_builds_of(
+            &builds
+                .map(|builds| builds.of_each_computed_value())
+                .unwrap_or_default(),
+        )
+        .into_iter()
+        .partition(|(health, _)| *health == NodeHealthOnTheWire::Raising);
+        let [builds_failed, builds_pending] = [builds_failed, builds_pending].map(|builds| {
+            builds
+                .into_iter()
+                .map(|(_, (kind, words))| diagnostic(kind, words))
+                .collect::<Vec<_>>()
+        });
+        let health = if raising.is_some() || !builds_failed.is_empty() {
             NodeHealthOnTheWire::Raising
-        } else if not_ready.is_some() {
+        } else if not_ready.is_some() || !builds_pending.is_empty() {
             NodeHealthOnTheWire::NotReady
         } else {
             NodeHealthOnTheWire::Healthy
         };
-        (health, raising.into_iter().chain(not_ready).collect())
+        let diagnostics = raising
+            .into_iter()
+            .chain(builds_failed)
+            .chain(not_ready)
+            .chain(builds_pending)
+            .collect();
+        (health, diagnostics)
     }
 
     pub fn fail_with_the_setup_refusal(&self, setup_refusal: &Error) {

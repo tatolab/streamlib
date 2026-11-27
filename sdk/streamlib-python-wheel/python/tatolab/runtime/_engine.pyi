@@ -22,7 +22,7 @@ conformance gate prints as its allowlist.
 
 import sys
 from collections.abc import Callable
-from typing import Any, final
+from typing import Any, Literal, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
 
@@ -30,7 +30,17 @@ __all__ = [
     "MODULE_HOST_TABLE_ABI_MAJOR",
     "MODULE_HOST_TABLE_ABI_MINOR",
     "FunctionNodeEvaluatedAsAStandaloneNode",
+    "LastBuildOfANodeScopeComputedValue",
+    "NodeScopeBeingDeclared",
+    "NodeScopeComputedOutsideADeclaration",
+    "NodeScopeComputedValue",
+    "NodeScopeComputedValueNotYetBuilt",
+    "NodeScopeHandleOfAnotherScope",
+    "NodeScopeInput",
+    "NodeScopeReadOutsideABuildOrAFrame",
+    "RunningNodeScope",
     "capture_this_helper_processes_engine_log_records",
+    "computed",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "feed_an_input_port_from_a_function_node_island",
@@ -93,6 +103,91 @@ class FunctionNodeEvaluatedAsAStandaloneNode:
         input_values: list[float | dict[str, Any] | bytes | _stream_protocols.UnreadMessage | None],
     ) -> list[float | dict[str, Any] | bytes | _stream_protocols.UnreadMessage | None]:
         """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict`, the `bytes` of a named type, the `UnreadMessage` it hands on, or `None` for one that hands out nothing."""
+
+class NodeScopeReadOutsideABuildOrAFrame(RuntimeError):
+    """`.get()` reads only in a computed value's build or in the per-frame function."""
+
+class NodeScopeHandleOfAnotherScope(RuntimeError):
+    """The handle belongs to another node's scope than the one it was handed to."""
+
+class NodeScopeComputedOutsideADeclaration(RuntimeError):
+    """`computed` declares only while a node's body declares its scope."""
+
+class NodeScopeComputedValueNotYetBuilt(RuntimeError):
+    """A build read a computed value that has no value yet; it builds again once that value is built."""
+
+@final
+class NodeScopeInput:
+    """An input of a Python node's scope, read with `get()` in a build or a frame."""
+
+    def get(self) -> Any:
+        """The input's value: in a build, as the build started, recorded as read; in a frame, as of the frame's boundary."""
+
+@final
+class NodeScopeComputedValue:
+    """A value computed from a Python node's inputs, read with `get()` in a build or a frame."""
+
+    def get(self) -> Any:
+        """The computed value: in a build, as the build started, recorded as read; in a frame, always a value."""
+
+def computed(build: Callable[[], Any]) -> NodeScopeComputedValue:
+    """Declare a value `build` computes from what it reads with `get()`, into the scope a node's body declares on this thread.
+
+    `build` runs on the scope's worker thread, which holds the GIL while it runs, and briefly to
+    compare a value with `==` and to release one. A value it
+    replaces is closed there with its `close()`, if it has one, once nothing in a scope holds it;
+    an object that came in as an input's value is never closed.
+    """
+
+@final
+class NodeScopeBeingDeclared:
+    """A Python node's scope while its body declares it: its inputs, then its computed values."""
+
+    def __new__(cls) -> NodeScopeBeingDeclared: ...
+    def input(self, value: Any) -> NodeScopeInput:
+        """An input holding `value` until it is written."""
+    def declare(self, body: Callable[[], Any]) -> Any:
+        """Call the node's body once, with every `computed` it calls declared into this scope, and answer what it returned."""
+    def start(self) -> RunningNodeScope:
+        """Start the scope's worker, which builds every computed value from here on."""
+
+@final
+class LastBuildOfANodeScopeComputedValue:
+    """How the last build of a computed value went, for a node's diagnostics."""
+
+    @property
+    def state(self) -> Literal["not_yet_built", "built", "failed"]:
+        """`"not_yet_built"`, `"built"` or `"failed"`."""
+    @property
+    def builds(self) -> int:
+        """How many builds have run."""
+    @property
+    def failure(
+        self,
+    ) -> Literal["raised", "read_a_computed_value_not_yet_built", "panicked", "comparison_panicked"] | None:
+        """Of a failed build: `"raised"`, `"read_a_computed_value_not_yet_built"`, `"panicked"` or `"comparison_panicked"`."""
+    @property
+    def why(self) -> str | None:
+        """Of a failed build: why, as the exception or the panic said it."""
+
+@final
+class RunningNodeScope:
+    """A Python node's running scope: sets and wires write its inputs, and the frame thread runs each frame through it.
+
+    Close it with `close()`: the cycle a build function can make back to the node holding it is not
+    one the garbage collector can see. A scope left open is closed at interpreter exit.
+    """
+
+    def write(self, input: NodeScopeInput, value: Any) -> None:
+        """Write `value` to `input`; a value equal to the one it holds builds nothing."""
+    def run_frame(self, frame: Callable[[], object]) -> bool:
+        """Take the values built since the last frame, then call `frame` with `get()` reading them, once every computed value has its first value; whether `frame` ran."""
+    def last_build_of(self, computed_value: NodeScopeComputedValue) -> LastBuildOfANodeScopeComputedValue:
+        """How the last build of `computed_value` went."""
+    def wait_until_settled(self, timeout_seconds: float) -> bool:
+        """Wait up to `timeout_seconds` until no computed value is left to build; whether it settled."""
+    def close(self) -> None:
+        """Wait for a frame running on another thread, stop the worker once its build in flight returns, and close every value a build made. Refused inside a frame or a build of this scope."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,

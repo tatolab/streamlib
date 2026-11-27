@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 mod darwin_close_on_exec_kqueue;
 #[cfg(unix)]
 mod helper_process_native_escalate_channel;
+mod python_attached_from_any_thread;
 mod python_bag_conversion;
 #[cfg(test)]
 mod python_class_from_source_for_tests;
@@ -30,6 +31,7 @@ mod python_monotonic_timer;
 mod python_node_context;
 mod python_node_declaration;
 mod python_node_link_data_access;
+mod python_node_scope;
 mod python_port_payload;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
@@ -45,6 +47,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         tatolab_module_sdk::MODULE_HOST_TABLE_ABI_MINOR,
     )?;
     module.add_class::<python_node_link_data_access::PythonNodeLinkDataAccess>()?;
+    python_node_scope::add_the_node_scope_to(module)?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
     module.add_class::<python_message_kind_read_types::PythonAudio>()?;
