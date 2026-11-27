@@ -69,7 +69,8 @@ impl<C> Default for CamerasHeldByOneCaptureEach<C> {
 }
 
 fn close<C>(capture: &Mutex<Option<C>>) {
-    // Taken out before it drops, so its drop, which stops its thread, runs with no lock held.
+    // Taken out before it drops, so its drop, which stops its thread, runs with its own lock
+    // released; a takeover runs it under the registry's, which no frame waits on.
     let closed = locked(capture).take();
     drop(closed);
 }

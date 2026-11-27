@@ -324,19 +324,27 @@ pub(super) unsafe extern "C" fn audio_playback_stream_liveness(
 ) -> ModuleHostTableStatus {
     let node_host = unsafe { node_host_of(node_host) };
     match node_host.audio_playback_streams.opened_stream(stream) {
-        Ok(opened_stream) => match opened_stream
-            .liveness_report
-            .failure_that_ended_the_stream()
-        {
-            None => MODULE_HOST_TABLE_STATUS_OK,
-            Some(failure) => {
-                // SAFETY: the SDK hands a buffer live for the call, or null.
-                if let Some(error_message) = unsafe { error_message.as_mut() } {
-                    error_message.write(&failure.to_string());
+        Ok(opened_stream) => {
+            // A stream taken over has ended for its module as surely as one its device failed.
+            let failure = if opened_stream.playback_stream.is_taken_over() {
+                Some(refusal_of_a_stream_taken_over("playback"))
+            } else {
+                opened_stream
+                    .liveness_report
+                    .failure_that_ended_the_stream()
+                    .map(|failure| failure.to_string())
+            };
+            match failure {
+                None => MODULE_HOST_TABLE_STATUS_OK,
+                Some(failure) => {
+                    // SAFETY: the SDK hands a buffer live for the call, or null.
+                    if let Some(error_message) = unsafe { error_message.as_mut() } {
+                        error_message.write(&failure);
+                    }
+                    MODULE_HOST_TABLE_STATUS_ENDED
                 }
-                MODULE_HOST_TABLE_STATUS_ENDED
             }
-        },
+        }
         Err(refusal) => unsafe { refuse(error_message, &refusal) },
     }
 }

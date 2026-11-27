@@ -119,7 +119,7 @@ def CameraSource(
         capture = _CameraCapture(
             module_host_table,
             VIDEO_OUTPUT_PORT,
-            device_id.get(),
+            device_id.get() or None,
             max_width.get(),
             max_height.get(),
             output_pool_rotation_depth.get(),

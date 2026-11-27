@@ -30,6 +30,11 @@ impl<S: ?Sized> AudioStreamOnADevice<S> {
         self.device_id.as_deref() == device_id
     }
 
+    /// Whether a later open took the stream's device over.
+    pub(super) fn is_taken_over(&self) -> bool {
+        locked(&self.stream).is_none()
+    }
+
     /// Run `with` on the stream, or answer `None` once a later open took its device over.
     pub(super) fn while_it_holds_its_device<T>(&self, with: impl FnOnce(&mut S) -> T) -> Option<T> {
         locked(&self.stream).as_deref_mut().map(with)

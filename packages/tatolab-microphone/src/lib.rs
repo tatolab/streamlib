@@ -240,17 +240,19 @@ impl MicrophoneCapture {
         self.end_the_delivery();
         let failure_that_ended_the_capture = capture_stream.failure_that_ended_the_stream();
         drop(capture_stream);
-        self.failure_that_ended_the_closed_capture = failure_that_ended_the_capture
-            .as_ref()
-            .ok()
-            .cloned()
-            .flatten();
+        let failure_that_ended_the_capture = match failure_that_ended_the_capture {
+            Ok(failure) => {
+                self.failure_that_ended_the_closed_capture = failure;
+                format!("{:?}", self.failure_that_ended_the_closed_capture)
+            }
+            Err(refusal) => format!("unknown, the host refused to say: {refusal}"),
+        };
         self.module_host.log(
             ModuleHostLogLevel::Info,
             MICROPHONE_LOG_TARGET,
             &format!(
                 "MicrophoneSource: closed. published_blocks={} dropped_blocks={} \
-                 capture_device_failure={failure_that_ended_the_capture:?}",
+                 capture_device_failure={failure_that_ended_the_capture}",
                 self.published_block_count.load(Ordering::Relaxed),
                 self.dropped_block_count_of_ended_deliveries,
             ),

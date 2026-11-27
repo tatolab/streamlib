@@ -232,17 +232,26 @@ impl PythonAvFoundationZeroCopyCameraCapture {
         )?;
         let capture = python
             .detach(|| {
-                let camera = device_id.as_deref().unwrap_or_default();
-                CAMERAS_HELD_BY_AVFOUNDATION_CAPTURES.open_taking_over(camera, || {
-                    AvFoundationZeroCopyCameraCapture::open(
-                        module_host,
-                        &video_output_port,
-                        device_id.as_deref(),
-                        max_width,
-                        max_height,
-                        output_pool_rotation_depth,
-                    )
-                })
+                // The camera an unset id opens, by its unique id, so either name of it is one key.
+                let camera = device_id.clone().or_else(|| {
+                    avfoundation_camera_capture::list_avfoundation_capture_devices()
+                        .into_iter()
+                        .next()
+                        .map(|(unique_id, _)| unique_id)
+                });
+                CAMERAS_HELD_BY_AVFOUNDATION_CAPTURES.open_taking_over(
+                    camera.as_deref().unwrap_or_default(),
+                    || {
+                        AvFoundationZeroCopyCameraCapture::open(
+                            module_host,
+                            &video_output_port,
+                            device_id.as_deref(),
+                            max_width,
+                            max_height,
+                            output_pool_rotation_depth,
+                        )
+                    },
+                )
             })
             .map_err(|refusal| PyOSError::new_err(refusal.0))?;
         let format = capture

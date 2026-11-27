@@ -337,18 +337,20 @@ impl SpeakerPlayback {
         self.end_the_playback();
         let failure_that_ended_the_playback = playback_stream.failure_that_ended_the_stream();
         drop(playback_stream);
-        self.failure_that_ended_the_closed_playback = failure_that_ended_the_playback
-            .as_ref()
-            .ok()
-            .cloned()
-            .flatten();
+        let failure_that_ended_the_playback = match failure_that_ended_the_playback {
+            Ok(failure) => {
+                self.failure_that_ended_the_closed_playback = failure;
+                format!("{:?}", self.failure_that_ended_the_closed_playback)
+            }
+            Err(refusal) => format!("unknown, the host refused to say: {refusal}"),
+        };
         self.module_host.log(
             ModuleHostLogLevel::Info,
             SPEAKER_LOG_TARGET,
             &format!(
                 "SpeakerSink: closed. played_blocks={} refused_blocks={} underrun_bytes={} \
                  silence_before_playback_began_bytes={} \
-                 playback_device_failure={failure_that_ended_the_playback:?}",
+                 playback_device_failure={failure_that_ended_the_playback}",
                 self.played_block_count.load(Ordering::Relaxed),
                 self.refused_block_count.load(Ordering::Relaxed),
                 self.silence_counts_of_ended_playbacks.underrun_byte_count,

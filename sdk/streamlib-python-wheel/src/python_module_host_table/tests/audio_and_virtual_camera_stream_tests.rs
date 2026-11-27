@@ -332,6 +332,17 @@ fn a_capture_opened_again_on_a_device_takes_it_over_from_the_stream_that_had_it(
     first
         .stop_delivering()
         .expect("a stream taken over is stopped already");
+    let ended = first
+        .failure_that_ended_the_stream()
+        .expect("the stream taken over answers")
+        .expect("the stream taken over has ended");
+    assert!(ended.contains("taken over by a later open"), "{ended}");
+    assert_eq!(
+        second
+            .failure_that_ended_the_stream()
+            .expect("the stream that took the device over answers"),
+        None
+    );
     let (second_sender, second_blocks) = std::sync::mpsc::sync_channel(64);
     second
         .start_delivering_to(Box::new(move |_| {
@@ -368,6 +379,17 @@ fn a_playback_opened_again_on_a_device_takes_it_over_from_the_stream_that_had_it
     first
         .stop_requesting()
         .expect("a stream taken over is stopped already");
+    let ended = first
+        .failure_that_ended_the_stream()
+        .expect("the stream taken over answers")
+        .expect("the stream taken over has ended");
+    assert!(ended.contains("taken over by a later open"), "{ended}");
+    assert_eq!(
+        second
+            .failure_that_ended_the_stream()
+            .expect("the stream that took the device over answers"),
+        None
+    );
     second
         .start_requesting_from(Box::new(|_| {}))
         .expect("the stream that took the device over starts");
