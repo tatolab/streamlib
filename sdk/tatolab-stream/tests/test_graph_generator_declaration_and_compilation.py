@@ -470,6 +470,7 @@ def test_the_builder_modules_import_nothing_native() -> None:
                 (1, "_built_in_node"),
                 (1, "_node_declaration"),
                 (1, "_function_node_declaration"),
+                (1, "_node_function"),
                 (1, "_stream_clock_spec"),
                 (1, "_stream_builder"),
                 (1, "_graph_generator_detection"),

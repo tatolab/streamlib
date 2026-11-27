@@ -27,6 +27,7 @@ from ._exposed_name_cast import (
     cast_exposed_name_to_url_safe,
 )
 from ._function_node_declaration import FunctionNode
+from ._node_function import NodeFunction
 from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 from ._typed_node_pins import TypedNodePins
 
@@ -239,7 +240,7 @@ class StreamBuilder:
     @overload
     def add(
         self,
-        node_class: FunctionNode[..., Any],
+        node_class: FunctionNode[..., Any] | NodeFunction,
         *,
         name: str | None = None,
         input_values: Mapping[str, Any] | None = None,
@@ -294,7 +295,7 @@ class StreamBuilder:
                 f"`@graph_generator`: pass its values as `input_values={{...}}`. Got "
                 f"{', '.join(f'`{key}`' for key in promoted_settings)}."
             )
-        if not isinstance(node_class, (type, FunctionNode)):
+        if not isinstance(node_class, (type, FunctionNode, NodeFunction)):
             raise TypeError(_not_a_node_refusal(node_class))
         node_type = _node_type_of(node_class)
         values = input_values
@@ -498,7 +499,7 @@ class StreamBuilder:
         return cast
 
     def _name_a_defaulted_node_takes(
-        self, node_class: type | FunctionNode[..., Any] | Callable[..., Any]
+        self, node_class: type | FunctionNode[..., Any] | NodeFunction | Callable[..., Any]
     ) -> str:
         cast = cast_exposed_name_to_url_safe(node_class.__name__)
         if cast not in self._recorded_nodes_by_name:
@@ -591,7 +592,7 @@ def _not_a_node_refusal(node_class: object) -> str:
     )
 
 
-def _node_type_of(node_class: type | FunctionNode[..., Any]) -> str:
+def _node_type_of(node_class: type | FunctionNode[..., Any] | NodeFunction) -> str:
     if hasattr(node_class, NODE_DECLARATION_DECLARED_STAMP):
         return _node_class_import_path(node_class)
     built_in_node_type = getattr(node_class, _BUILT_IN_NODE_TYPE_ATTRIBUTE, None)
@@ -600,7 +601,7 @@ def _node_type_of(node_class: type | FunctionNode[..., Any]) -> str:
     raise TypeError(_not_a_node_refusal(node_class))
 
 
-def _node_class_import_path(node_class: type | FunctionNode[..., Any]) -> str:
+def _node_class_import_path(node_class: type | FunctionNode[..., Any] | NodeFunction) -> str:
     module = node_class.__module__
     qualname = node_class.__qualname__
     # Before the entry-file check: a class inside a function is unimportable

@@ -167,14 +167,6 @@ def test_a_class_node_takes_how_it_runs_as_keyword_arguments() -> None:
     assert output_port(Ticker, "tick")["pin_declaration"]["flow"] == "trigger"
 
 
-def test_keyword_arguments_on_a_function_are_refused() -> None:
-    def Half(x: float = 0.0) -> float:
-        return x / 2
-
-    with pytest.raises(TypeError, match="A function takes `@node` bare"):
-        node(execution="continuous")(Half)  # pyright: ignore[reportArgumentType]
-
-
 def refusal_of(node_class: type) -> NodeDeclarationRefusal:
     with pytest.raises(NodeDeclarationRefusal) as refused:
         node(node_class)

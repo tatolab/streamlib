@@ -94,7 +94,6 @@ _A_PIN_TYPED_BY_WHAT_IT_CARRIES: Final = (
 )
 
 RETIRED_IMPORTS: Final = (
-    RetiredImport(name="Input", replaced_by=f"`InputPin[...]`, as {_A_CLASS_NODE_OF_TYPED_PINS}"),
     RetiredImport(name="Output", replaced_by=f"`OutputPin[...]`, as {_A_CLASS_NODE_OF_TYPED_PINS}"),
     RetiredImport(name="PortFamily", replaced_by=_A_PIN_TYPED_BY_WHAT_IT_CARRIES),
     RetiredImport(name="Image", replaced_by="`Texture`, the pin type of a picture"),

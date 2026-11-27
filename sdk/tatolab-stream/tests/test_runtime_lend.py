@@ -42,6 +42,7 @@ ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION: "dict[str, tuple[Any, ...]]" = {
     "monotonic_now_ns": (),
     "start_monotonic_timer": (1_000_000,),
     "gpu_limited_access_of_the_typed_read_in_progress": (),
+    "computed": (lambda: 0,),
 }
 
 LOG_FUNCTIONS_BY_NAME: "dict[str, Callable[..., None]]" = {

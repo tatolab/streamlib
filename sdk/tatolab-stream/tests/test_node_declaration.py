@@ -105,7 +105,7 @@ def test_node_function_is_refused_naming_bare_node(written_as: str):
 
 @pytest.mark.parametrize("retired", RETIRED_IMPORTS, ids=lambda retired: retired.name)
 def test_each_retired_name_is_refused_on_import_with_its_replacement(retired):
-    """`from tatolab.stream import Input` fails where it is written, saying what to write.
+    """`from tatolab.stream import Output` fails where it is written, saying what to write.
 
     Mental-revert: restoring the export imports the name and raises nothing.
     """

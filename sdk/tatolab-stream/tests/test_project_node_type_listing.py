@@ -766,3 +766,41 @@ def test_the_entry_answers_why_when_its_request_is_not_json(tmp_path: Path) -> N
 
     assert finished.returncode == 0, finished.stderr
     assert "JSONDecodeError" in json.loads(finished.stdout)["failed_because"]
+
+
+def test_a_function_under_node_with_its_keywords_is_listed_as_a_process_node() -> None:
+    module_source = "\n".join(
+        [
+            "from typing import Annotated, Callable",
+            "from tatolab.stream import Description, Input, InputPin, OutputPin, Texture, node",
+            "from tatolab.stream import RuntimeContextFullAccess",
+            "",
+            '@node.meta(description="Blurs each picture.")',
+            "@node(execution='reactive')",
+            "def blur(",
+            "    *,",
+            "    video: Annotated[InputPin[Texture], Description('The pictures.')],",
+            "    radius: Input[Annotated[float, Description('How far.')]] = Input(4.0),",
+            "    result: OutputPin[Texture],",
+            "    ctx: RuntimeContextFullAccess,",
+            ") -> Callable[..., None]: ...",
+            RAISES_AT_IMPORT,
+        ]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.blur", "nodes/blur.py", module_source)]
+    )
+
+    (blur,) = read["node_types"]
+    assert (blur["type"], blur["kind"], blur["description"]) == (
+        "nodes.blur:blur",
+        "process",
+        "Blurs each picture.",
+    )
+    assert [port["name"] for port in blur["inputs"]] == ["video", "radius"]
+    assert blur["inputs"][0]["description"] == "The pictures."
+    assert blur["inputs"][1]["description"] == "How far."
+    assert blur["inputs"][1]["pin_default"] == 4.0
+    assert blur["inputs"][1]["annotation"] == "Annotated[float, Description('How far.')]"
+    assert [port["name"] for port in blur["outputs"]] == ["result"]
