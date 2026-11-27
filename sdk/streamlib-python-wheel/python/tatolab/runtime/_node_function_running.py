@@ -128,8 +128,8 @@ class NodeFunctionRunning:
         self._written_before_the_scope_started: "dict[str, object]" = {}
         self._groups_reshaped_before_the_scope_started: "set[str]" = set()
         self._per_frame: "Optional[Callable[[Any], object]]" = None
-        # Held across each write and each reshape of the groups: a wire's value is written on
-        # the frame thread, a slot held or dropped on the thread the parent's commands run on.
+        # Held across each write and each reshape of the groups, so a wire's value written and a
+        # slot held or dropped never interleave, whichever thread each comes from.
         self._writes_and_reshapes = threading.RLock()
 
     def setup(self, ctx: Any) -> None:
