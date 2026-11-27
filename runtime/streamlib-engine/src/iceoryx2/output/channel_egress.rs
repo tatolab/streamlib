@@ -279,19 +279,28 @@ impl ChannelEgress {
 
     /// Publish `loaned_sample`, numbered already, then wake every destination; a send that
     /// `takes_the_next_number` moves the numbering on when it may have delivered.
+    ///
+    /// A send that reached no reader leaves the port's last send as it was: a new send reached
+    /// none of the readers connected now, and a send again still reached the ones its first send
+    /// did, so the readers that send missed are sent it again on the next pass.
     fn publish_and_wake_every_destination(
         &mut self,
         port: &str,
         loaned_sample: ChannelDataServiceLoanedSample,
         takes_the_next_number: bool,
     ) -> Result<()> {
+        let readers_the_last_send_reached =
+            (!takes_the_next_number).then(|| self.subscribers_connected_at_the_last_send.clone());
         self.channel.collect_connected_subscriber_ids_into(
             &mut self.subscribers_connected_at_the_last_send,
         );
         let send_outcome = loaned_sample.send();
         let may_have_delivered = a_send_may_have_delivered(&send_outcome);
-        if !may_have_delivered && takes_the_next_number {
-            self.subscribers_connected_at_the_last_send.clear();
+        if !may_have_delivered {
+            match readers_the_last_send_reached {
+                Some(readers) => self.subscribers_connected_at_the_last_send = readers,
+                None => self.subscribers_connected_at_the_last_send.clear(),
+            }
         }
         if takes_the_next_number {
             self.next_sequence_number =

@@ -30,6 +30,13 @@ impl<OneUnbrokenRun> Default for BagsAGapInTheNumberingSaysWereLost<OneUnbrokenR
 }
 
 impl<OneUnbrokenRun: Copy + PartialEq> BagsAGapInTheNumberingSaysWereLost<OneUnbrokenRun> {
+    /// Whether `sequence_number` in `run` is the number this reader received last: the same
+    /// message sent again for a reader that connected after it, which this reader holds.
+    pub fn is_the_last_number_received(&self, run: OneUnbrokenRun, sequence_number: u64) -> bool {
+        self.last
+            .is_some_and(|last| last.run == run && last.sequence_number == sequence_number)
+    }
+
     /// How many bags were lost before the one numbered `sequence_number` in
     /// `run`, remembering it as the last received.
     ///
@@ -39,13 +46,6 @@ impl<OneUnbrokenRun: Copy + PartialEq> BagsAGapInTheNumberingSaysWereLost<OneUnb
     /// that does not advance — a duplicate, or one arriving behind its
     /// successor — is no loss either, rather than the enormous one an unsigned
     /// subtraction below zero would report.
-    /// Whether `sequence_number` in `run` is the number this reader received last: the same
-    /// message sent again for a reader that connected after it, which this reader holds.
-    pub fn is_the_last_number_received(&self, run: OneUnbrokenRun, sequence_number: u64) -> bool {
-        self.last
-            .is_some_and(|last| last.run == run && last.sequence_number == sequence_number)
-    }
-
     pub fn how_many_were_lost_before(&mut self, run: OneUnbrokenRun, sequence_number: u64) -> u64 {
         let lost = match self.last {
             Some(last) if last.run == run => sequence_number
