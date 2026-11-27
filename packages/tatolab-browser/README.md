@@ -14,8 +14,6 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   each frame the host paints, handed over in shared memory, into a texture
   from the node's output pool (`surface_write_from_host_memory`), published as
   an RGBA Image frame in sRGB. Python never runs at frame or sample cadence.
-  Changing `url`, the size or any other input while the stream plays opens a
-  new tab while the one before keeps publishing, then closes the one before.
 - `data` input: each `PageMessage`, one JSON object and this module's own pin
   type, reaches the page as
   `window.dispatchEvent(new CustomEvent("tatolab:data", { detail }))`.
