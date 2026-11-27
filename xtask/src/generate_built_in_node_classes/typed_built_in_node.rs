@@ -143,10 +143,10 @@ fn render_input(
     let mode = match input.input_mode.as_ref() {
         None => None,
         Some(input_mode) if input_mode.mode == "setting_only" => {
-            if input_mode.read.as_deref() != Some("at_setup") {
+            if !matches!(input_mode.read.as_deref(), Some("at_setup" | "each_run")) {
                 bail!(
-                    "{port_label} is a setting read {:?}, and a built-in's setting is read at \
-                     setup",
+                    "{port_label} is an input taking no wire read {:?}, and a built-in's is read \
+                     at setup or each run",
                     input_mode.read
                 );
             }

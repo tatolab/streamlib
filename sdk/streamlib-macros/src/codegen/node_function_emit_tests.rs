@@ -120,6 +120,43 @@ fn each_value_input_is_declared_on_the_descriptor_with_its_default() {
     );
 }
 
+/// A value input chosen from its options is declared a Menu of them, and one choosing a bundle
+/// its stream declares is declared that choice, each checked against the type it holds.
+///
+/// Mental-revert: declaring each by its type alone serves `format` as a plain String and
+/// `bundle_type` as a choice of any pin type.
+#[test]
+fn a_value_input_chosen_from_a_list_is_declared_with_the_list() {
+    let rendered = expanded(
+        quote! {
+            execution = reactive,
+            input("format", value = String, default = "a", options = ["a", "b"]),
+            input("bundle_type", value = Option<PinType>, default = None,
+                  among_the_bundles_its_stream_declares = true),
+        },
+        quote! {
+            fn a_node(
+                format: Input<String>,
+                bundle_type: Input<Option<PinType>>,
+            ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        rendered.contains(
+            "the_input_taking_no_wire(\"format\",\"\",__streamlib_sdk::descriptors::the_menu_of_a_setting::<String>(&[\"a\",\"b\"],),"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "the_input_taking_no_wire(\"bundle_type\",\"\",__streamlib_sdk::descriptors::the_choice_among_the_bundles_its_stream_declares::<Option<PinType>,>(),"
+        ),
+        "{rendered}"
+    );
+}
+
 fn refusal_of(attribute: proc_macro2::TokenStream, function: proc_macro2::TokenStream) -> String {
     let rendered = expanded(attribute, function);
     let start = rendered

@@ -38,8 +38,8 @@ pub use number_conversions::{
     BooleanToFloat, BooleanToInteger, FloatToBoolean, FloatToInteger, IntegerToBoolean,
     IntegerToFloat,
 };
-pub use tensor_to_audio::{TensorToAudio, TensorToAudioSettings};
-pub use tensor_to_texture::{TensorToTexture, TensorToTextureSettings};
+pub use tensor_to_audio::{TensorToAudio, TensorToAudioInputs};
+pub use tensor_to_texture::TensorToTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use texture_format_convert::TextureFormatConvert;
 pub use texture_to_tensor::TextureToTensor;
