@@ -15,7 +15,7 @@ fn this_sdk_reads_table_1_13() {
 }
 
 #[test]
-fn a_module_built_against_1_13_loads_on_a_runtime_lending_1_13_and_reaches_its_ports() {
+fn a_module_built_against_1_13_loads_on_a_runtime_lending_1_14_and_reaches_its_ports() {
     let node_host = stood_up_node_host();
     let mut fields_of_minor_13 = v1_13_table_over(node_host);
     fields_of_minor_13.abi_minor = 14;

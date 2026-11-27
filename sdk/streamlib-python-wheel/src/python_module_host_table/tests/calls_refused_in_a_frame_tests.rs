@@ -209,3 +209,25 @@ fn a_modules_own_refusal_reaches_python_as_the_hosts_exception_of_its_kind() {
         );
     });
 }
+
+#[test]
+fn a_module_reads_each_refusal_by_the_code_the_host_leads_it_with() {
+    use streamlib_scope::CallTooSlowForAFrame;
+    let kinds = [
+        (
+            CallTooSlowForAFrame::CreatesAKernel,
+            ModuleHostCallTooSlowForAFrame::CreatesAKernel,
+        ),
+        (
+            CallTooSlowForAFrame::OpensADevice,
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+        ),
+        (
+            CallTooSlowForAFrame::StartsASession,
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+        ),
+    ];
+    for (hosts, modules) in kinds {
+        assert_eq!(hosts.code(), modules.code());
+    }
+}
