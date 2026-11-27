@@ -21,10 +21,10 @@ use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, HelperProcessRestartsComponent,
-    LinkState, LinkStateComponent, LinkUniqueId, NodeInstanceComponent, NodeMetrics,
-    NodePauseGateComponent, NodeRunId, OutOfProcessLinkWiringComponent,
-    ShaderNodeFusedGroupComponent, ShutdownChannelComponent, StateComponent,
-    StepProgressOfOneNodeComponent,
+    LinkPinTypesDifferComponent, LinkState, LinkStateComponent, LinkUniqueId,
+    NodeInstanceComponent, NodeMetrics, NodePauseGateComponent, NodeRunId,
+    OutOfProcessLinkWiringComponent, ShaderNodeFusedGroupComponent, ShutdownChannelComponent,
+    StateComponent, StepProgressOfOneNodeComponent,
 };
 use crate::core::nodes::NodeState;
 
@@ -54,7 +54,8 @@ impl RunningNodesALiveEditRestarts {
 
 /// The running nodes of `nodes_to_rebuild` the compile restarts so each reads its settings read
 /// at setup as the graph holds them now, with every link into or out of them that the edit does
-/// not add or remove. A node the same edit adds or removes is built or taken out instead, so it
+/// not add or remove and whose two ends still carry types that connect; one whose ends differ
+/// stays unwired. A node the same edit adds or removes is built or taken out instead, so it
 /// is not restarted.
 ///
 /// A link into it from a function node island it evaluates itself is restarted with it, the
@@ -116,6 +117,11 @@ pub(crate) fn the_running_nodes_a_rebuild_restarts(
             .collect();
         for (link_id, source_id, reader_id) in links_of_the_node {
             if links_changed.contains(&link_id)
+                || graph
+                    .traversal()
+                    .e(&link_id)
+                    .first()
+                    .is_some_and(|link| link.has::<LinkPinTypesDifferComponent>())
                 || nodes_to_remove.contains(&source_id)
                 || nodes_to_remove.contains(&reader_id)
             {
@@ -169,7 +175,13 @@ pub(crate) fn unwire_each_link_of_the_nodes_restarted(
     graph: &mut Graph,
     restarted: &RunningNodesALiveEditRestarts,
 ) -> Result<()> {
-    for link_id in &restarted.links {
+    unwire_each_link_keeping_it(graph, &restarted.links)
+}
+
+/// Close the channel of each of `links` the way it was wired, keeping it in the graph, as
+/// [`unwire_each_link_of_the_nodes_restarted`] does for the links of a node restarted.
+pub(crate) fn unwire_each_link_keeping_it(graph: &mut Graph, links: &[LinkUniqueId]) -> Result<()> {
+    for link_id in links {
         let Some((source_id, reader_id, reader_port)) =
             graph.traversal().e(link_id).first().map(|link| {
                 (

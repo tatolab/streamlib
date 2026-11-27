@@ -761,7 +761,7 @@ fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
         audio_window: None,
         annotations: Default::default(),
         pin_type: None,
-        pin_type_from_setting: None,
+        pin_type_chosen_by: None,
         lifetime: streamlib_node_schema::NodeValueLifetime::Kept,
         flow: None,
         former_names: Vec::new(),

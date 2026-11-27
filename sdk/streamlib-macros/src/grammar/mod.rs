@@ -13,6 +13,7 @@ use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized}
 mod port_grammar;
 mod value_input_grammar;
 
+pub(crate) use port_grammar::PinTypeChosenBy;
 use port_grammar::{DeclaredPort, parse_port};
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
@@ -262,9 +263,9 @@ pub(crate) struct ParsedPort {
     pub annotations: PinAnnotations,
     /// The pin type the port declares with `pin_type = …`; `None` when a setting chooses it.
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
-    /// The setting whose chosen pin type the port carries, as `pin_type = from_setting("…")`
-    /// states it; `None` when the port states its type itself.
-    pub pin_type_from_setting: Option<String>,
+    /// The input whose chosen pin type the port carries, as `pin_type = from_setting("…")` or
+    /// `pin_type = from_input(…)` names it; `None` when the port states its type itself.
+    pub pin_type_chosen_by: Option<PinTypeChosenBy>,
     /// How long a value set live on the input lives, as `lifetime = …` declares it; kept when
     /// it declares none, and always kept on an output.
     pub lifetime: streamlib_node_schema::NodeValueLifetime,
@@ -335,7 +336,10 @@ impl ParsedNodeAttr {
             audio_window: p.audio_window.clone(),
             annotations: p.annotations.clone(),
             pin_type: p.pin_type.clone(),
-            pin_type_from_setting: p.pin_type_from_setting.clone(),
+            pin_type_from_setting: p
+                .pin_type_chosen_by
+                .as_ref()
+                .map(|chosen_by| chosen_by.input_name().to_owned()),
             lifetime: p.lifetime,
             flow: p.flow,
             former_names: p.former_names.clone(),

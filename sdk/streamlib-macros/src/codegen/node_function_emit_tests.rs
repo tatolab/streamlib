@@ -281,3 +281,92 @@ fn a_function_whose_name_makes_no_node_name_is_refused() {
     );
     assert!(refusal.contains("namesnonode"), "{refusal}");
 }
+
+fn a_function_of_its_format() -> proc_macro2::TokenStream {
+    quote! {
+        fn a_node(format: Input<Option<PinType>>)
+            -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>
+        {
+            move |_ctx| Ok(())
+        }
+    }
+}
+
+#[test]
+fn an_output_typed_by_a_value_input_declares_the_type_that_input_chooses() {
+    let rendered = expanded(
+        quote! {
+            execution = reactive,
+            input("format", value = Option<PinType>, default = None),
+            output("out", pin_type = from_input(format)),
+        },
+        a_function_of_its_format(),
+    );
+    assert!(
+        rendered.contains(
+            "pin_type:__streamlib_sdk::descriptors::DeclaredPinType::SetByInput{input_name:::std::string::String::from(\"format\"),}"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("compile_error!"), "{rendered}");
+}
+
+#[test]
+fn a_port_typed_by_an_undeclared_value_input_is_refused() {
+    let refusal = refusal_of(
+        quote! {
+            execution = reactive,
+            input("format", value = Option<PinType>, default = None),
+            output("out", pin_type = from_input(shape)),
+        },
+        a_function_of_its_format(),
+    );
+    assert!(
+        refusal
+            .contains("takesitspintype`from_input(shape)`,andthenodedeclaresnovalueinput`shape`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_port_typed_by_a_value_input_holding_no_pin_type_is_refused() {
+    let refusal = refusal_of(
+        quote! {
+            execution = reactive,
+            input("gain", value = f32, default = 0.5),
+            output("out", pin_type = from_input(gain)),
+        },
+        a_function_of_its_gain(),
+    );
+    assert!(
+        refusal.contains("holdsthechoiceofone:`value=Option<PinType>`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_port_of_a_node_function_typed_by_a_setting_is_refused() {
+    let refusal = refusal_of(
+        quote! {
+            execution = reactive,
+            input("format", value = Option<PinType>, default = None),
+            output("out", pin_type = from_setting("format")),
+        },
+        a_function_of_its_format(),
+    );
+    assert!(refusal.contains("anodefunctionhasnosettings"), "{refusal}");
+}
+
+#[test]
+fn a_port_of_a_struct_typed_by_a_value_input_is_refused() {
+    let refusal = refusal_of_a_value_input_on_a_struct(&parsed(quote! {
+        execution = reactive,
+        output("out", pin_type = from_input(format)),
+    }))
+    .expect("a struct port typed by a value input is refused")
+    .to_string();
+    assert!(
+        refusal.contains("value input `format` is an input of a node written as one function"),
+        "{refusal}"
+    );
+}

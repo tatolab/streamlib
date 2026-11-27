@@ -17,6 +17,11 @@ pub(super) struct CompilationPlan {
     /// Each running node to stop and build again, once, so it reads its settings read at setup
     /// as the graph holds them now.
     pub(super) nodes_to_rebuild: Vec<NodeRunId>,
+    /// Each node whose type choices are judged again against the links they reach, once.
+    pub(super) nodes_whose_type_choices_are_judged_again: Vec<NodeRunId>,
+    /// Each wired link whose two ends no longer carry types that connect, to unwire and keep in
+    /// the graph, carrying nothing.
+    pub(super) links_to_hold_unwired: Vec<LinkUniqueId>,
     /// Each function node to promote out of the islands of the reader whose
     /// helper it crashed, beside that reader and why.
     pub(super) function_node_promotions:
@@ -40,6 +45,7 @@ impl CompilationPlan {
             && self.nodes_to_remove.is_empty()
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
+            && self.links_to_hold_unwired.is_empty()
             && self.function_node_promotions.is_empty()
     }
 

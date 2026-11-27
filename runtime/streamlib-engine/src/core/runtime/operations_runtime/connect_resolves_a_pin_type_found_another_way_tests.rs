@@ -4,8 +4,8 @@
 //! `connect` judges a port whose type is found another way than stated exactly by the type its
 //! graph resolves: one of several by the best of them, any type as taking every typed output,
 //! the type linked into an input by that link, and the type a setting chooses by that choice,
-//! which a wired link that would not fit refuses, through every output following an input on
-//! downstream.
+//! which marks a wired link that would not fit as differing rather than refusing the choice,
+//! through every output following an input on downstream.
 
 use std::sync::Arc;
 
@@ -20,8 +20,8 @@ use crate::core::descriptors::{
     PortDescriptor, SettingReadTime,
 };
 use crate::core::graph::{
-    InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
-    refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
+    GraphEdgeWithComponents, InputLinkPortRef, LinkPinTypesDifferComponent, LinkUniqueId,
+    NodeRunId, OutputLinkPortRef,
 };
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};
@@ -439,9 +439,13 @@ fn an_output_whose_type_a_setting_chooses_links_by_that_choice_and_graph_serves_
     );
 }
 
-/// Set the setting `kind` of `chosen` to `pin_type` in `compiler`'s graph and answer how the
-/// wired links of the node take the choice.
-fn choose_and_judge(compiler: &Compiler, chosen: &NodeRunId, pin_type: PinType) -> Result<()> {
+/// Set the setting `kind` of `chosen` to `pin_type` in `compiler`'s graph and answer each link
+/// the choice reaches whose ends then differ, as it is marked.
+fn choose_and_judge(
+    compiler: &Compiler,
+    chosen: &NodeRunId,
+    pin_type: PinType,
+) -> Vec<LinkPinTypesDifferComponent> {
     compiler.scope(|graph, _tx| {
         graph
             .traversal_mut()
@@ -450,7 +454,20 @@ fn choose_and_judge(compiler: &Compiler, chosen: &NodeRunId, pin_type: PinType) 
             .expect("the node is held")
             .input_values
             .insert("kind".to_owned(), json!(pin_type));
-        refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(graph, chosen, "kind")
+        let judged_again = graph.judge_again_each_link_the_type_choices_of_the_node_reach(chosen);
+        judged_again
+            .differing
+            .iter()
+            .map(|link_id| {
+                graph
+                    .traversal()
+                    .e(link_id)
+                    .first()
+                    .and_then(|link| link.get::<LinkPinTypesDifferComponent>())
+                    .expect("a link judged differing is marked")
+                    .clone()
+            })
+            .collect()
     })
 }
 
@@ -478,22 +495,30 @@ fn the_type_served_on_the_output_of(compiler: &Compiler, node: &NodeRunId) -> Op
         .map(|pin| pin.pin_type.clone())
 }
 
+/// A choice a wired link does not take marks the link as differing, naming both pin types, and
+/// choosing back what it takes takes the mark off.
+///
+/// Mental-revert: judging the choice only as a link is made leaves the wired link carrying a
+/// type its input does not read, unmarked.
 #[test]
-fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_link() {
+fn a_setting_choosing_a_type_a_wired_link_does_not_take_marks_the_link_naming_both_types() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
     let string_sink = a_node_of(&compiler, STRING_SINK);
     connect(&compiler, &chosen, &string_sink).expect("the setting chose a String");
 
-    let refused = choose_and_judge(&compiler, &chosen, PinType::Audio {});
+    let differing = choose_and_judge(&compiler, &chosen, PinType::Audio {});
 
-    let words = refused
-        .expect_err("Audio does not connect to the String input wired")
-        .to_string();
+    assert_eq!(differing.len(), 1, "{differing:?}");
     assert!(
-        words.contains("setting `kind`") && words.contains("Audio"),
-        "{words}"
+        differing[0].output_pin_type.contains("Audio")
+            && differing[0].input_pin_type.contains("String"),
+        "{differing:?}"
+    );
+    assert!(
+        choose_and_judge(&compiler, &chosen, PinType::String {}).is_empty(),
+        "a String fits again"
     );
 }
 
@@ -513,13 +538,13 @@ fn a_bundle_of_floats(member_names: &[&str]) -> PinType {
     }
 }
 
-/// A new choice keeps a wire whose member it still holds as that member's type, and refuses one
-/// whose member it no longer holds, naming the wire.
+/// A new choice keeps a wire whose member it still holds as that member's type, and marks one
+/// whose member it no longer holds as differing, naming the member.
 ///
 /// Mental-revert: a check reading only links between two typed ends passes over the wire at a
-/// member the bundle no longer holds, and the choice is taken with the wire left dangling.
+/// member the bundle no longer holds, and the wire is left dangling, unmarked.
 #[test]
-fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire() {
+fn a_setting_choosing_a_bundle_without_a_wired_member_marks_the_wire() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(
@@ -536,25 +561,22 @@ fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire
     )
     .expect("the bundle chosen holds a Float `pan`");
 
-    choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["pan", "width"]))
-        .expect("the bundle still holds `pan`");
-    let refused = choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["level"]));
-
-    let words = refused
-        .expect_err("the bundle holds no `pan` for the wire to start at")
-        .to_string();
     assert!(
-        words.contains("setting `kind`") && words.contains("pan"),
-        "{words}"
+        choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["pan", "width"])).is_empty(),
+        "the bundle still holds `pan`"
     );
+    let differing = choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["level"]));
+
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    let words = &differing[0].why;
+    assert!(words.contains("pan"), "{words}");
     assert!(
         !words.contains(&chosen.to_string()) && !words.contains(&float_sink.to_string()),
         "the wire is named by its nodes' names, not their run ids: {words}"
     );
-    assert_eq!(
-        words.matches("To fix:").count(),
-        1,
-        "one fix is named: {words}"
+    assert!(
+        !words.contains("To fix:"),
+        "the fix is named where the link is reported: {words}"
     );
 }
 
@@ -633,7 +655,7 @@ fn a_link_into_the_first_of_a_chain_of_pass_ons_is_refused_when_the_last_ones_li
 }
 
 #[test]
-fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_is_refused_naming_that_link() {
+fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_marks_that_link() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
@@ -642,17 +664,22 @@ fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_is_refused_nami
     connect(&compiler, &chosen, &pass_on).expect("an Any input takes a String");
     connect(&compiler, &pass_on, &string_sink).expect("a String passed on fits");
 
-    let words = choose_and_judge(&compiler, &chosen, PinType::Audio {})
-        .expect_err("Audio passed on would reach the String input wired past the pass-on")
-        .to_string();
+    let differing = choose_and_judge(&compiler, &chosen, PinType::Audio {});
 
-    assert!(
-        words.contains("setting `kind`")
-            && words.contains("takes the type linked into `value`")
-            && words.contains("Audio"),
-        "{words}"
+    assert_eq!(
+        differing.len(),
+        1,
+        "Audio passed on reaches the String input wired past the pass-on: {differing:?}"
     );
-    choose_and_judge(&compiler, &chosen, PinType::String {}).expect("a String still fits");
+    assert!(
+        differing[0].output_pin_type.contains("Audio")
+            && differing[0].input_pin_type.contains("String"),
+        "{differing:?}"
+    );
+    assert!(
+        choose_and_judge(&compiler, &chosen, PinType::String {}).is_empty(),
+        "a String still fits"
+    );
 }
 
 #[test]

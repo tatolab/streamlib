@@ -213,6 +213,21 @@ impl GraphNode {
             );
     }
 
+    /// Whether a port of this node takes its type from input `input`, which chooses it.
+    pub(crate) fn a_port_takes_its_type_from(&self, input: &str) -> bool {
+        self.ports
+            .inputs
+            .iter()
+            .chain(&self.ports.outputs)
+            .any(|port| {
+                matches!(
+                    port.declared_pin_type.as_ref().map(|declared| &declared.pin_type),
+                    Some(crate::core::descriptors::DeclaredPinType::SetByInput { input_name })
+                        if input_name == input
+                )
+            })
+    }
+
     /// Refuse a link into input `input` when it is a setting that takes no wire: one read each
     /// run, one of a type no message carries, and every setting of a node type of the graph
     /// itself, which names a port of its stream or a variable rather than running on a value.

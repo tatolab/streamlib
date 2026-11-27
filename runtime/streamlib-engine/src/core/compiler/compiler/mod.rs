@@ -63,6 +63,7 @@ use nodes_set_up_after_the_sources_of_their_wired_settings::{
 };
 
 mod commit_of_the_logged_operations;
+mod links_whose_pin_types_differ;
 mod nodes_set_up_after_the_sources_of_their_wired_settings;
 mod transaction_held_for_one_commit;
 pub(crate) use commit_of_the_logged_operations::{ACommitFailed, WhatTheHeldCommitFound};
@@ -230,6 +231,10 @@ impl Compiler {
             let graph = graph_arc.read();
             plan.drop_link_adds_into_removed_nodes(&graph);
         }
+        links_whose_pin_types_differ::judge_the_links_each_type_choice_reaches(
+            &mut graph_arc.write(),
+            &mut plan,
+        );
         refuse_an_edit_an_island_cannot_take(
             &graph_arc.read(),
             &plan.nodes_to_add,
@@ -286,17 +291,23 @@ impl Compiler {
         }
 
         tracing::info!(
-            "Compiling: +{} -{} nodes, +{} -{} links",
+            "Compiling: +{} -{} nodes, +{} -{} links, {} held unwired",
             plan.nodes_to_add.len(),
             plan.nodes_to_remove.len(),
             plan.links_to_add.len(),
             plan.links_to_remove.len(),
+            plan.links_to_hold_unwired.len(),
         );
 
         // Publish compile start event
         the_stream_the_compile_belongs_to
             .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
         result.began_changing_what_runs = true;
+
+        links_whose_pin_types_differ::hold_each_link_unwired(
+            &mut graph_arc.write(),
+            &plan.links_to_hold_unwired,
+        )?;
 
         let abandoned_in_this_compile: Vec<NodeDisplayNameAndId> = if !plan
             .links_to_remove
@@ -564,7 +575,8 @@ fn the_restarted_nodes_an_abandoned_thread_still_runs(
 }
 
 /// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
-/// before and after; how many were wired. A link that cannot be wired fails
+/// before and after; how many were wired. A link whose ends no longer carry
+/// types that connect stays unwired, in error; one that cannot be wired fails
 /// the phase.
 fn wire_every_link_a_plan_adds(
     graph_arc: &RwLock<Graph>,
@@ -574,6 +586,12 @@ fn wire_every_link_a_plan_adds(
 ) -> Result<usize> {
     let mut links_wired = 0;
     for link_id in links_to_add {
+        if links_whose_pin_types_differ::stays_unwired_while_its_pin_types_differ(
+            &mut graph_arc.write(),
+            link_id,
+        ) {
+            continue;
+        }
         let (from_port, to_port) = {
             let graph = graph_arc.read();
             let link = graph
@@ -819,6 +837,15 @@ fn the_plan_these_operations_make(
             PendingOperation::RebuildNode(node_run_id) => {
                 if !plan.nodes_to_rebuild.contains(&node_run_id) {
                     plan.nodes_to_rebuild.push(node_run_id);
+                }
+            }
+            PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(node_run_id) => {
+                if !plan
+                    .nodes_whose_type_choices_are_judged_again
+                    .contains(&node_run_id)
+                {
+                    plan.nodes_whose_type_choices_are_judged_again
+                        .push(node_run_id);
                 }
             }
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {

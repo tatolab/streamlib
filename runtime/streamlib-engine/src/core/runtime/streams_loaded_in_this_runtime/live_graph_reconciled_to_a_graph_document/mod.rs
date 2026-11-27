@@ -426,12 +426,19 @@ impl LoadedStreamInThisRuntime {
                 });
             }
         }
+        let nodes_whose_saved_values_change: Vec<NodeRunId> = kept_nodes_whose_saved_values_change
+            .iter()
+            .map(|kept_node| kept_node.node_run_id.clone())
+            .collect();
         let saved_values_handed_over = self.with_no_other_input_value_change(|| {
             set_the_saved_values_of_each_kept_node_and_hand_them_over(
                 self.compiler.graph_lock(),
                 kept_nodes_whose_saved_values_change,
             )
         });
+        for node_run_id in &nodes_whose_saved_values_change {
+            self.judge_again_the_links_the_type_choices_of_the_node_reach(node_run_id);
+        }
 
         let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = self
             .the_live_nodes()

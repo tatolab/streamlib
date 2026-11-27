@@ -12,6 +12,7 @@ use super::LoadedStreamInThisRuntime;
 use super::input_values_set_live::{
     hand_back_each, hand_each_island_again_or_put_the_values_back, is_held_on_the_graph,
 };
+use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compiler_ops::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
@@ -132,8 +133,10 @@ impl LoadedStreamInThisRuntime {
     /// read now; whole or not at all. When a set is on a setting, its type's config schema lists
     /// or a setting port, the values the node holds once every set is made are checked once: by
     /// the schema the type states of each setting and of its settings whole, and by each port the
-    /// graph's interface declares, before any is made, and by each wired link out of the node and
-    /// each reference it makes once all are; a refusal puts back each value set, last first.
+    /// graph's interface declares, before any is made, and by each reference it makes once all
+    /// are; a refusal puts back each value set, last first. A set is never refused for a wired
+    /// link it leaves with two ends that no longer connect: the next commit holds that link
+    /// unwired, as [`Self::judge_again_the_links_the_type_choices_of_the_node_reach`] says.
     pub(crate) fn set_the_input_values_of_a_node(
         &self,
         node_run_id: &NodeRunId,
@@ -168,7 +171,7 @@ impl LoadedStreamInThisRuntime {
                     return Ok(());
                 }
                 self.compiler.scope_reading(|graph| {
-                    refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
+                    refuse_input_values_naming_a_node_the_graph_does_not_hold(
                         graph,
                         &self.node_types_this_stream_resolves,
                         node_run_id,
@@ -194,11 +197,37 @@ impl LoadedStreamInThisRuntime {
                 }
                 return Err(refused);
             }
+            self.judge_again_the_links_the_type_choices_of_the_node_reach(node_run_id);
             for change in changes_announced {
                 self.publish_on_this_streams_topic(change);
             }
             Ok(())
         })
+    }
+
+    /// Log that the next commit judges again each link the type choices of the node
+    /// `node_run_id` reach, when an input of it chooses the type of one of its ports: a set is
+    /// never refused for the links it leaves differing, and the commit holds each such link
+    /// unwired, or wires it again once it connects.
+    pub(in crate::core::runtime) fn judge_again_the_links_the_type_choices_of_the_node_reach(
+        &self,
+        node_run_id: &NodeRunId,
+    ) {
+        self.compiler.scope(|graph, tx| {
+            let a_type_choice_types_a_port =
+                graph
+                    .traversal()
+                    .v(node_run_id)
+                    .first()
+                    .is_some_and(|node| {
+                        crate::core::graph::a_type_choice_of_the_node_types_a_port(graph, node)
+                    });
+            if a_type_choice_types_a_port {
+                tx.log(PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(
+                    node_run_id.clone(),
+                ));
+            }
+        });
     }
 
     /// Refuse `sets` on the node `node_run_id` when the values it would hold once all are made
@@ -814,17 +843,6 @@ fn set_the_saved_value(
         .first_mut()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
     let saved_value_before = node.set_input_value(input, value);
-    let refused = crate::core::graph::refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
-        graph,
-        node_run_id,
-        input,
-    );
-    if let Err(refused) = refused {
-        if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
-            node.set_input_value(input, saved_value_before);
-        }
-        return Err(refused);
-    }
     graph.reshape_the_pin_group_slots_of_the_node(node_run_id);
     let live_value_before = graph
         .live_input_values()
@@ -842,9 +860,9 @@ fn set_the_saved_value(
     })
 }
 
-/// Refuse the input values the node `node_run_id` of `graph` holds when a wired link out of a
-/// convert node it is would refuse them, or when one names a node the graph does not hold.
-fn refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
+/// Refuse the input values the node `node_run_id` of `graph` holds when one names a node the
+/// graph does not hold.
+fn refuse_input_values_naming_a_node_the_graph_does_not_hold(
     graph: &Graph,
     node_types: &crate::core::nodes::NodeTypesOneStreamResolves,
     node_run_id: &NodeRunId,
@@ -852,16 +870,10 @@ fn refuse_input_values_a_link_or_a_reference_of_the_node_would_refuse(
     let Some(node) = graph.traversal().v(node_run_id).first() else {
         return Ok(());
     };
-    let input_values = &node.input_values;
-    crate::core::graph::refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
-        graph,
-        node_run_id,
-        input_values,
-    )?;
     crate::core::graph::refuse_input_values_naming_a_node_the_graph_does_not_hold(
         graph,
         node_types,
         node_run_id,
-        input_values,
+        &node.input_values,
     )
 }

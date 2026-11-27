@@ -179,6 +179,10 @@ pub enum DiagnosticKindOnTheWire {
     /// A link the running graph holds that could not be wired, so its reader reads nothing
     /// from it: the words say why, in the words of the end that refused it.
     LinkNotWired,
+    /// A link whose two ends no longer carry types that connect, since an input choosing one
+    /// end's type changed: it carries nothing until the input is changed back or the link is
+    /// removed. The words name both pin types.
+    LinkPinTypesDiffer,
     /// A problem of a kind this client does not know; the runtime never sends it. Its `words`
     /// say what it is, and its `recovery` what recovers from it.
     // `#[serde(other)]` holds only on the last variant, so a new kind goes above this one.
@@ -197,7 +201,7 @@ impl DiagnosticKindOnTheWire {
             Self::StartRefused | Self::NodeFailed | Self::EditNotLive | Self::LinkNotWired => {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
-            Self::LinkRefused => DiagnosticRecoveryOnTheWire::FixTheLink,
+            Self::LinkRefused | Self::LinkPinTypesDiffer => DiagnosticRecoveryOnTheWire::FixTheLink,
             Self::KeepsCrashingTheRuntime | Self::Other => {
                 DiagnosticRecoveryOnTheWire::RetryTheLoad
             }
