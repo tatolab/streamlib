@@ -307,3 +307,25 @@ def test_a_node_pacing_itself_takes_a_value_its_wire_gives_at_its_next_tick(stan
         ("closed", 0.5),
     ]
     stop_and_tear_down(stand_in_parent, lifecycle_thread)
+
+
+def test_a_node_pacing_itself_answers_its_parent_while_a_build_is_held(stand_in_parent: Any):
+    """Mental-revert: a tick that waited for the scope to settle would answer no lifecycle
+    command while the build of 0.75 is held, so `on_pause` would go unanswered."""
+    from node_function_probes import PUBLISHING_BUILDS_LET_GO
+
+    lifecycle_thread = start_the_level_publishing_probe(stand_in_parent, {})
+    PUBLISHING_BUILDS_LET_GO.clear()
+    try:
+        stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": 0.75}})
+        time.sleep(0.2)
+        stand_in_parent.send({"cmd": "on_pause"})
+        answer = stand_in_parent.receive(timeout_seconds=1.0)
+        while answer is not None and answer.get("op") == "log":
+            answer = stand_in_parent.receive(timeout_seconds=1.0)
+        assert answer == {"rpc": "ok"}, f"the helper answered {answer!r} while a build is held"
+        assert what_the_publishing_probe_did() == [("opened", 0.5)]
+    finally:
+        PUBLISHING_BUILDS_LET_GO.set()
+    wait_until_the_publishing_probe_did(("closed", 0.5))
+    stop_and_tear_down(stand_in_parent, lifecycle_thread)

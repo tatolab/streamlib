@@ -54,8 +54,7 @@ fn the_body_is_called_with_each_parameter_its_type_names() {
         },
     );
     assert!(
-        rendered
-            .contains("::std::boxed::Box::new(super::a_node(outputs,handles.gain,ctx,inputs),)"),
+        rendered.contains("::std::boxed::Box::new(super::a_node(outputs,handles.gain,ctx,inputs))"),
         "{rendered}"
     );
     assert!(rendered.contains("modANode{"), "{rendered}");
@@ -90,7 +89,7 @@ fn a_body_that_can_fail_is_called_with_its_error_handed_on() {
         },
     );
     assert!(
-        rendered.contains("::std::boxed::Box::new(super::a_node(handles.gain)?,)"),
+        rendered.contains("::std::boxed::Box::new(super::a_node(handles.gain)?)"),
         "{rendered}"
     );
     assert!(
@@ -152,7 +151,7 @@ fn a_gain_on_its_own_clock() -> proc_macro2::TokenStream {
 }
 
 #[test]
-fn a_node_pacing_itself_returns_nothing_and_takes_new_values_at_each_tick() {
+fn a_node_pacing_itself_returns_nothing_and_has_nothing_to_start_or_stop() {
     let rendered = expanded(
         a_gain_on_its_own_clock(),
         quote! {
@@ -163,10 +162,6 @@ fn a_node_pacing_itself_returns_nothing_and_takes_new_values_at_each_tick() {
     );
     assert!(
         rendered.contains("||{super::a_node(handles.gain);Ok(::std::option::Option::None)}"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains("fntake_the_new_values_at_a_tick(&mutself){"),
         "{rendered}"
     );
     assert!(rendered.contains("fnstart("), "{rendered}");
@@ -199,6 +194,7 @@ fn a_node_pacing_itself_that_returns_a_per_frame_function_is_refused() {
 fn a_frame_driven_node_has_no_start_or_stop_of_its_own() {
     let rendered = expanded(a_gain_and_a_video_port(), a_function_of_its_gain());
     assert!(!rendered.contains("fnstart("), "{rendered}");
+    assert!(!rendered.contains("fnstop("), "{rendered}");
 }
 
 #[test]

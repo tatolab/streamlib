@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! What a node written as one function runs on once its body has run: the scope its body
-//! declared, the view its frames or ticks read and the per-frame function its body returned,
-//! which a node that paces itself (`execution = manual`) has none of.
+//! declared, the view its frames read and the per-frame function its body returned, which a
+//! node that paces itself (`execution = manual`) has none of: its computed values publish on
+//! their own, and a value set on it reaches its scope at once.
 
 use streamlib_scope::{FrameView, Scope, ScopeBeingDeclared, Writes};
 
@@ -65,20 +66,14 @@ impl NodeFunctionRunning {
         let Self {
             per_frame, view, ..
         } = self;
+        // A node that paces itself has no per-frame function, and its runner sends it no frame.
         let Some(per_frame) = per_frame else {
-            view.flush();
             return Ok(());
         };
         view.run_frame(|| per_frame(ctx)).unwrap_or_else(|| {
             std::thread::sleep(UNBUILT_FRAME_BACKOFF);
             Ok(())
         })
-    }
-
-    /// Take the values built or written since the last tick, at a tick of a node that paces
-    /// itself: each value they replace is dropped on the scope's worker. Never waits on a build.
-    pub fn take_the_new_values_at_a_tick(&mut self) {
-        self.view.flush();
     }
 
     /// Write the inputs `writes` names to the scope, all as one write.

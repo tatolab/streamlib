@@ -32,9 +32,6 @@ pub trait DynGeneratedNode: Send + 'static {
 
     fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
 
-    /// Take the values built or written since the last tick of a node that paces itself.
-    fn take_the_new_values_at_a_tick(&mut self) {}
-
     fn name(&self) -> &str;
     fn descriptor(&self) -> Option<NodeDescriptor>;
 
@@ -161,10 +158,6 @@ where
 
     fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         <Self as GeneratedNode>::stop(self, ctx)
-    }
-
-    fn take_the_new_values_at_a_tick(&mut self) {
-        <Self as GeneratedNode>::take_the_new_values_at_a_tick(self)
     }
 
     fn name(&self) -> &str {

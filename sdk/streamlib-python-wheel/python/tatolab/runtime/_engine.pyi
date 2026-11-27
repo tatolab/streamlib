@@ -169,8 +169,6 @@ class RunningNodeScope:
         """Write each `(input, value)` of `writes` in one write, so a build or a frame sees all of them or none, and a computed value reading several builds once; a value equal to the one its input holds builds nothing."""
     def run_frame(self, frame: Callable[[], object]) -> bool:
         """Take the values built since the last frame, then call `frame` with `get()` reading them, once every computed value has its first value; whether `frame` ran."""
-    def flush(self) -> None:
-        """Take the values built or written since the last flush, at a tick of a node that paces itself: each value they replace is closed on the worker. Never waits on a build, nor on a frame running on another thread, which takes them itself."""
     def last_build_of(self, computed_value: _stream_node_function.NodeScopeComputedValue[Any]) -> LastBuildOfANodeScopeComputedValue:
         """How the last build of `computed_value` went."""
     def wait_until_settled(self, timeout_seconds: float) -> bool:

@@ -310,10 +310,6 @@ fn run_manual_mode(
             break;
         }
 
-        // A node that paces itself takes the values built or written since the last tick here,
-        // as any other node takes them at a frame.
-        node.lock().take_the_new_values_at_a_tick();
-
         // Periodic check for pause/resume state changes
         let is_paused = pause_gate.load(Ordering::Acquire);
 

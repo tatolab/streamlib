@@ -8,7 +8,7 @@ Each value input is an input of the node's scope, holding its set value or its d
 pin is bound before the body runs. The body declares its computed values into the scope, which
 builds them on its worker from then on; a value set or wired after is written to the scope, and
 rebuilds only what read it. A frame runs once every computed value has its first value; a node
-that paces itself, whose body returns no per-frame function, takes new values at each tick. Stopping
+that paces itself returns no per-frame function, and its computed values publish on their own. Stopping
 the node closes the scope, and with it every value a build made.
 """
 
@@ -125,14 +125,6 @@ class NodeFunctionRunning:
             return
         if not running.run_frame(lambda: per_frame(ctx)):
             time.sleep(UNBUILT_FRAME_BACKOFF_SECONDS)
-
-    def take_the_new_values_at_a_tick(self) -> None:
-        """Take the values built and written since the last tick, at a tick of a node that paces
-        itself, whose body returned no per-frame function: each value they replace is closed on
-        the scope's worker. Never waits on a build."""
-        running = self._running
-        if running is not None:
-            running.flush()
 
     def stop(self, ctx: Any) -> None:
         """Close the node's scope: its worker stops once a build in flight returns, and every

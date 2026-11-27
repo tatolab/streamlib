@@ -132,8 +132,8 @@ class HelperProcessLifecycle:
         self,
     ) -> "Optional[dict[str, Any]]":
         """The next lifecycle command. While a manual node runs, the wait ticks
-        on a steady beat: each tick takes the values set, wired and built since
-        the last, as a frame of any other node does; tells the parent whether
+        on a steady beat: each tick takes the values a node function's wires
+        gave since the last, as a frame of any other node does; tells the parent whether
         the node is ready, since a node's own thread may report either; and
         while it is not ready and not paused sends a transparent frame on each
         of its Image outputs."""
@@ -151,15 +151,12 @@ class HelperProcessLifecycle:
         return self._bridge.next_lifecycle_command()
 
     def _take_the_new_values_at_a_tick(self) -> None:
-        """Give each field a wire feeds the newest value its wire gave, and a node written as
-        one function the values built and written since the last tick. Never waits on a build."""
+        """Give each value input of a node written as one function that a wire feeds the newest
+        value its wire gave, written to its scope as a frame of any other node does. Never waits
+        on a build."""
         assert self._hosted is not None
-        if self._hosted.fields is not None:
+        if self._hosted.a_node_function:
             self._take_each_new_value_a_wire_gives_a_field()
-        from tatolab.runtime._node_function_running import NodeFunctionRunning
-
-        if isinstance(self._hosted.instance, NodeFunctionRunning):
-            self._hosted.instance.take_the_new_values_at_a_tick()
 
     def _a_manual_node_runs(self) -> bool:
         return self._running and not self._scheduling_loop_runs and self._hosted is not None

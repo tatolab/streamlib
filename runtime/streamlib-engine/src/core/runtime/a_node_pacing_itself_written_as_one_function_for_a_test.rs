@@ -9,10 +9,11 @@
 
 use std::sync::Once;
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::nodes::NODE_REGISTRY;
+use crate::core::runtime::builds_held_for_a_test::{BuildsHeldGate, TheBuildsHeld};
 use crate::sdk::nodes::{Input, computed};
 
 /// What the node of the type did, since a test last forgot it.
@@ -35,9 +36,8 @@ static DID: Mutex<WhatTheNodePacingItselfDid> = Mutex::new(WhatTheNodePacingItse
     gains_closed: Vec::new(),
 });
 
-/// Whether each build of the publishing waits until a test lets the builds go.
-static BUILDS_HELD: Mutex<bool> = Mutex::new(false);
-static BUILDS_LET_GO: Condvar = Condvar::new();
+/// Where each build of the publishing waits while a test holds the builds.
+static BUILDS: BuildsHeldGate = BuildsHeldGate::new();
 
 /// The computed value: a publishing of one gain, recording its close.
 struct PublishingOfAGain {
@@ -65,11 +65,7 @@ fn a_node_pacing_itself(gain: Input<i32>) {
     computed(move || {
         let gain = *gain.get();
         DID.lock().builds_started += 1;
-        let mut held = BUILDS_HELD.lock();
-        while *held {
-            BUILDS_LET_GO.wait(&mut held);
-        }
-        drop(held);
+        BUILDS.wait_while_held();
         DID.lock().gains_opened.push(gain);
         Ok::<_, String>(PublishingOfAGain { gain })
     });
@@ -90,27 +86,10 @@ pub fn what_the_node_pacing_itself_did() -> WhatTheNodePacingItselfDid {
 /// Forget what the node of the type did, and let its builds go, for a test starting afresh.
 pub fn forget_what_the_node_pacing_itself_did() {
     *DID.lock() = WhatTheNodePacingItselfDid::default();
-    let_the_builds_go();
-}
-
-/// Each build of the node's publishing held until this is dropped, so a test that fails while
-/// builds are held lets them go as it unwinds instead of waiting on them forever.
-#[must_use = "the builds are let go when this is dropped"]
-pub struct ThePublishingBuildsHeld(());
-
-impl Drop for ThePublishingBuildsHeld {
-    fn drop(&mut self) {
-        let_the_builds_go();
-    }
+    BUILDS.let_go();
 }
 
 /// Hold each build of the node's publishing until what this returns is dropped.
-pub fn hold_the_publishing_builds() -> ThePublishingBuildsHeld {
-    *BUILDS_HELD.lock() = true;
-    ThePublishingBuildsHeld(())
-}
-
-fn let_the_builds_go() {
-    *BUILDS_HELD.lock() = false;
-    BUILDS_LET_GO.notify_all();
+pub fn hold_the_publishing_builds() -> TheBuildsHeld {
+    BUILDS.hold()
 }

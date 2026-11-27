@@ -3,6 +3,7 @@
 
 """Nodes written as one function, which the helper-process tests run as a helper runs them."""
 
+import threading
 from typing import Callable
 
 from tatolab.stream import Input, RuntimeContextFullAccess, RuntimeContextLimitedAccess, computed, node
@@ -56,11 +57,18 @@ WHAT_THE_LEVEL_PUBLISHING_PROBE_DID: "list[tuple[str, float]]" = []
 """Each `("opened", level)` and `("closed", level)` the publishing probe did, in order."""
 
 
+PUBLISHING_BUILDS_LET_GO = threading.Event()
+"""Set while the publishing probe's builds run; a test clears it to hold each build until it sets
+it again."""
+PUBLISHING_BUILDS_LET_GO.set()
+
+
 class PublishingOfALevel:
     """A value built from one level that would publish it on its own, recording its open and its
-    close."""
+    close; its build waits while a test holds the builds."""
 
     def __init__(self, level: float) -> None:
+        PUBLISHING_BUILDS_LET_GO.wait()
         self.level = level
         WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.append(("opened", level))
 
