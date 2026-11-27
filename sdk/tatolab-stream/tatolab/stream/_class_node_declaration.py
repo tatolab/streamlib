@@ -652,6 +652,14 @@ class _NodeFunctionReading(_ClassNodeReading):
                 )
             annotation = hints[name]
             if annotation is RuntimeContextFullAccess:
+                if self.full_access_context_parameter is not None:
+                    raise self._refusal(
+                        f"`{self._node}` takes the runtime context as both "
+                        f"`{self.full_access_context_parameter}` and `{name}`, and the runtime "
+                        f"hands it once. To fix: keep one of them.",
+                        "node_function_takes_the_context_twice",
+                        pin=name,
+                    )
                 self.full_access_context_parameter = name
                 continue
             if name.startswith("_"):

@@ -284,7 +284,9 @@ class _ModuleDeclarationReading:
         if self._note_a_retired_form(function, qualname):
             return
         if isinstance(self._decorated_with(function, TYPED_NODE_DECORATOR), ast.Call):
-            self.node_types.append(self._node_function_type(function, qualname))
+            # An `async def` is refused as a node function, so it lists as no node type.
+            if isinstance(function, ast.FunctionDef):
+                self.node_types.append(self._node_function_type(function, qualname))
             return
         for decorator_name, kind in (
             (TYPED_NODE_DECORATOR, "function"),
@@ -860,31 +862,44 @@ def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[st
 
 
 def _node_function_input_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:
-    """`Input` and the type inside it for a node function's `Input[...]`, inside any
-    `Annotated[...]`; `None` and the annotation itself for any other."""
+    """`Input` and the type inside it for a node function's `Input[...]`, with what an
+    `Annotated[...]` around it states put back around that type, as the runtime reads it; `None`
+    and the annotation itself for any other."""
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
         try:
             return _node_function_input_and_its_type(ast.parse(annotation.value, mode="eval").body)
         except SyntaxError:
             return None, annotation
     written = annotation
+    stated_around: list[ast.expr] = []
     if isinstance(written, ast.Subscript) and _annotated_type_name(written) == _ANNOTATED_ANNOTATION:
         arguments = _subscript_arguments(written)
         if arguments:
-            written = arguments[0]
+            written, *stated_around = arguments
     if isinstance(written, ast.Subscript) and _annotated_type_name(written) == _NODE_FUNCTION_INPUT_ANNOTATION:
         arguments = _subscript_arguments(written)
         if arguments:
-            return _NODE_FUNCTION_INPUT_ANNOTATION, arguments[0]
+            if not stated_around:
+                return _NODE_FUNCTION_INPUT_ANNOTATION, arguments[0]
+            assert isinstance(annotation, ast.Subscript)
+            return _NODE_FUNCTION_INPUT_ANNOTATION, ast.Subscript(
+                value=annotation.value,
+                slice=ast.Tuple(elts=[arguments[0], *stated_around], ctx=ast.Load()),
+                ctx=ast.Load(),
+            )
     return None, annotation
 
 
 def _the_default_an_input_call_states(default: Optional[ast.expr]) -> Optional[ast.expr]:
-    """The value `Input(value)` holds; `None` for no default or for another expression."""
-    if (
+    """The value `Input(value)` or `Input(default=value)` holds; `None` for no default or for
+    another expression."""
+    if not (
         isinstance(default, ast.Call)
         and _annotated_type_name(default.func) == _NODE_FUNCTION_INPUT_ANNOTATION
-        and len(default.args) == 1
     ):
+        return None
+    if len(default.args) == 1 and not default.keywords:
         return default.args[0]
+    if not default.args and [keyword.arg for keyword in default.keywords] == ["default"]:
+        return default.keywords[0].value
     return None

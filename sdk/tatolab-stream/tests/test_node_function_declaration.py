@@ -205,6 +205,13 @@ def test_a_parameter_named_private_is_refused() -> None:
     assert (refused.finding_code, refused.pin) == ("node_function_parameter_private", "_hidden")
 
 
+def test_the_context_taken_twice_is_refused() -> None:
+    def gain(*, ctx: RuntimeContextFullAccess, again: RuntimeContextFullAccess) -> None: ...
+
+    refused = refusal_of(declared_with_keywords(gain))
+    assert (refused.finding_code, refused.pin) == ("node_function_takes_the_context_twice", "again")
+
+
 def test_a_generator_body_is_refused() -> None:
     def gain(*, level: Input[float] = Input(1.0)) -> Iterator[None]:
         yield None
