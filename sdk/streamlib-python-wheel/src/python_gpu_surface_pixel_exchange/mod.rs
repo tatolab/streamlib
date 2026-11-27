@@ -24,6 +24,7 @@
 use std::ffi::{CStr, c_void};
 use std::sync::Arc;
 
+use crate::python_attached_from_any_thread::attached_from_any_thread;
 use parking_lot::Mutex;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -263,31 +264,14 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
     )
 }
 
-/// A capsule owner that is dropped holding the interpreter's thread state.
-///
-/// A consumer runs the DLPack deleter wherever it frees the tensor: torch
-/// can free one inside its own `gil_scoped_release`, on a thread pyo3 still
-/// counts as attached, so a bare `Python::attach` in the owner's `Drop`
-/// would run Python (or `detach`) with no thread state and abort the
-/// interpreter. `PyGILState_Ensure` asks CPython itself, so it reacquires
-/// a released thread state, nests under a held one, and creates one on a
-/// foreign thread.
+/// A capsule owner that is dropped holding the interpreter's thread state, wherever a consumer
+/// runs the DLPack deleter that frees the tensor.
 struct CapsuleOwnerDroppedWithTheInterpreterAttached(Option<dlpack::CapsuleOwner>);
 
 impl Drop for CapsuleOwnerDroppedWithTheInterpreterAttached {
     fn drop(&mut self) {
         let owner = self.0.take();
-        // SAFETY: `Py_IsInitialized` may be called at any time; the ensure is
-        // paired with exactly one release on this thread.
-        unsafe {
-            if pyo3::ffi::Py_IsInitialized() == 0 {
-                drop(owner);
-                return;
-            }
-            let interpreter_state_before_the_owner_drop = pyo3::ffi::PyGILState_Ensure();
-            drop(owner);
-            pyo3::ffi::PyGILState_Release(interpreter_state_before_the_owner_drop);
-        }
+        attached_from_any_thread(|_| drop(owner));
     }
 }
 
