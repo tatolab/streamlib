@@ -18,7 +18,9 @@ use syn::{Item, ItemFn, ItemStruct, parse_macro_input};
 /// On a function, the node is written as one function: its body runs once, when the node is set
 /// up, declares the node's `computed(…)` values and returns its per-frame function. Its
 /// parameters are the node's value inputs as `Input<T>` handles, each declared with
-/// `input("name", value = T, default = …)` and named after its input, its `InputMailboxes`, its
+/// `input("name", value = T, default = …)`, a String chosen from a list stating `options = ["…",
+/// …]` and an `Option<PinType>` choosing a bundle its stream declares stating
+/// `among_the_bundles_its_stream_declares = true`, and named after its input, its `InputMailboxes`, its
 /// `OutputWriter` and the `&RuntimeContextFullAccess<'_>` the body runs with.
 #[proc_macro_attribute]
 pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {

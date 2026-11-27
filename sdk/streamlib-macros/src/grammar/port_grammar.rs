@@ -19,7 +19,8 @@ use super::pin_type_chosen_by_an_input::{
     pin_typed_by_the_input_choosing_it,
 };
 use super::value_input_grammar::{
-    note_the_first_port_key, reject_a_value_input_key_on_an_output, value_input_type_and_default,
+    note_the_first_port_key, reject_a_choice_on_a_port, reject_a_value_input_key_on_an_output,
+    value_input_chosen_from, value_input_type_and_default,
 };
 use super::{DeclaredDescription, ParsedPort, ParsedValueInput, PortDirection};
 
@@ -36,7 +37,8 @@ pub(crate) enum DeclaredPort {
 /// audio_window(...) | audio_window = match_device, pin_type = <PinType> |
 /// pin_type = from_setting("<setting>") | pin_type = from_input(<value input>), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
 /// takes_a_value = true, <stream fact key> = …]`, or, for a value input of a node written as
-/// one function, `<name-string>, value = <Type>, default = <expression>[, description = "..."]`.
+/// one function, `<name-string>, value = <Type>, default = <expression>[, description = "...",
+/// options = ["…", …] | among_the_bundles_its_stream_declares = true]`.
 ///
 /// A port states its pin type. A Texture port states the pixel formats it carries with
 /// `formats = […]`, and an output states what it knows of its stream as the annotations of its
@@ -100,6 +102,8 @@ pub(super) fn parse_port(
     let mut stream_facts = StreamFactsStated::default();
     let mut value_type: Option<syn::Type> = None;
     let mut value_default: Option<syn::Expr> = None;
+    let mut options: Option<(proc_macro2::Span, Vec<LitStr>)> = None;
+    let mut among_the_bundles_its_stream_declares: Option<proc_macro2::Span> = None;
     // The first key but `description`, `value` and `default`, which a value input takes no
     // other of.
     let mut first_port_key: Option<(String, proc_macro2::Span)> = None;
@@ -148,6 +152,22 @@ pub(super) fn parse_port(
             "default" => {
                 reject_a_value_input_key_on_an_output(direction, &name, "default", key_span)?;
                 value_default = Some(content.parse()?);
+            }
+            "options" => {
+                reject_a_value_input_key_on_an_output(direction, &name, "options", key_span)?;
+                options = Some((key_span, parse_string_literals(&content, "options")?));
+            }
+            "among_the_bundles_its_stream_declares" => {
+                reject_a_value_input_key_on_an_output(
+                    direction,
+                    &name,
+                    "among_the_bundles_its_stream_declares",
+                    key_span,
+                )?;
+                let stated: syn::LitBool = content.parse()?;
+                if stated.value {
+                    among_the_bundles_its_stream_declares = Some(key_span);
+                }
             }
             "delivery_profile" => {
                 let lit: LitStr = content.parse()?;
@@ -258,7 +278,8 @@ pub(super) fn parse_port(
                         "unknown port key `{other}` — expected `delivery_profile`, \
                          `borrow_quota`, `description`, `audio_window`, `pin_type`, \
                          `lifetime`, `flow`, `former_names`, `may_be_unset`, `takes_a_value`, \
-                         `value`, `default`, or one of the stream fact keys `rate`, `frame_rate`, \
+                         `value`, `default`, `options`, `among_the_bundles_its_stream_declares`, \
+                         or one of the stream fact keys `rate`, `frame_rate`, \
                          `dtype`, `formats`, `residency`"
                     ),
                 ));
@@ -274,13 +295,26 @@ pub(super) fn parse_port(
             value_default,
             first_port_key,
         )?;
+        let chosen_from =
+            value_input_chosen_from(&name, options, among_the_bundles_its_stream_declares)?;
         return Ok(DeclaredPort::Value(ParsedValueInput {
             declared_ident: declared_marker_ident,
             cast_name,
             description,
             value_type,
             default,
+            chosen_from,
         }));
+    }
+    if let Some((key_span, _)) = &options {
+        return Err(reject_a_choice_on_a_port(&name, "options", *key_span));
+    }
+    if let Some(key_span) = among_the_bundles_its_stream_declares {
+        return Err(reject_a_choice_on_a_port(
+            &name,
+            "among_the_bundles_its_stream_declares",
+            key_span,
+        ));
     }
 
     let stated_pin_type = match (pin_type, pin_type_chosen_by_an_input) {
@@ -579,25 +613,10 @@ fn parse_pin_type(pin_type_ident: &Ident, port_name: &str) -> syn::Result<PinTyp
 
 /// Parse `["a", "b"]`, a list of string literals.
 fn parse_string_literal_list(content: ParseStream<'_>, key: &str) -> syn::Result<Vec<String>> {
-    let list: syn::ExprArray = content.parse().map_err(|_| {
-        syn::Error::new(
-            content.span(),
-            format!("`{key}` takes a list of string literals, `[\"a\", \"b\"]`"),
-        )
-    })?;
-    list.elems
+    Ok(parse_string_literals(content, key)?
         .iter()
-        .map(|element| match element {
-            syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(literal),
-                ..
-            }) => Ok(literal.value()),
-            other => Err(syn::Error::new_spanned(
-                other,
-                format!("`{key}` takes a list of string literals"),
-            )),
-        })
-        .collect()
+        .map(LitStr::value)
+        .collect())
 }
 
 /// Parse `from_setting("name")`, when that is what follows, into the setting the fact is read
@@ -966,4 +985,27 @@ fn reject_delivery_profile_on_output(
         ));
     }
     Ok(())
+}
+
+/// Parse `["a", "b"]`, a list of string literals, keeping each literal and its span.
+fn parse_string_literals(content: ParseStream<'_>, key: &str) -> syn::Result<Vec<LitStr>> {
+    let list: syn::ExprArray = content.parse().map_err(|_| {
+        syn::Error::new(
+            content.span(),
+            format!("`{key}` takes a list of string literals, `[\"a\", \"b\"]`"),
+        )
+    })?;
+    list.elems
+        .iter()
+        .map(|element| match element {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(literal),
+                ..
+            }) => Ok(literal.clone()),
+            other => Err(syn::Error::new_spanned(
+                other,
+                format!("`{key}` takes a list of string literals"),
+            )),
+        })
+        .collect()
 }

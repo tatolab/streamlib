@@ -16,6 +16,7 @@ mod value_input_grammar;
 
 pub(crate) use pin_type_chosen_by_an_input::PinTypeChosenBy;
 use port_grammar::{DeclaredPort, parse_port};
+pub(crate) use value_input_grammar::ValueInputChosenFrom;
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
 /// setting only valid on an `input(...)`; the grammar rejects it on an
@@ -297,6 +298,9 @@ pub(crate) struct ParsedValueInput {
     pub value_type: syn::Type,
     /// The value it holds until it is set, as `default = …` states it.
     pub default: syn::Expr,
+    /// What its value is chosen from: any value of its type, the names `options = […]` lists, or
+    /// the bundles its stream declares, as `among_the_bundles_its_stream_declares = true` states.
+    pub chosen_from: ValueInputChosenFrom,
 }
 
 pub(crate) struct ParsedNodeAttr {
