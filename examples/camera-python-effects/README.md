@@ -82,9 +82,11 @@ ordinary Python defaults, and each shows as a row in Tato Studio — dragging `c
 `barrel_curve` slider to `0.0` flattens the tube while the stream plays.
 `CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar` takes
 `scene_width`, `scene_height`, `detection_confidence` and `pose_model_path` (a
-local `.task` file, which skips the download), each read by the computed value
-that builds the stage or the tracker, so a change builds that one again while
-frames go on with the old.
+local `.task` file, which skips the download). The detector's inputs are read by the
+computed value that builds the tracker, so a change builds it again while frames go
+on with the old one. The stage's size is read each frame, and a new size makes the
+stage again on the frame thread, because its GL context is current only on the
+thread that made it.
 
 The avatar is three third-party worlds in one child process — numpy reads the
 camera frame's host side through `numpy.from_dlpack(frame, device="cpu")`,
