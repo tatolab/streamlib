@@ -16,13 +16,13 @@ crate-type = ["rlib"]
 
 [dependencies]
 # Engine substrate — runtime context and node traits.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.70.29" }
 
 [dev-dependencies]
 # A stream the lifecycle tests run a fixture in, on the engine's test project.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82", features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.70.29", features = ["test-support"] }
 # The diagnostic a failed build reports.
-streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.68.82" }
+streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.70.29" }
 tempfile.workspace = true
 serial_test = "3.2"
 
@@ -32,7 +32,7 @@ hardware-tests = ["streamlib/hardware-tests"]
 
 [build-dependencies]
 # Compiles the fixtures' shaders for `include_bytes!`.
-streamlib-slang-shader-compiler = { path = "../../runtime/streamlib-slang-shader-compiler", version = "0.68.82" }
+streamlib-slang-shader-compiler = { path = "../../runtime/streamlib-slang-shader-compiler", version = "0.70.29" }
 
 [lints]
 workspace = true
