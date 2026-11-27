@@ -4,8 +4,8 @@
 //! A node written as one function, run in a stream: a value set on its input while the stream
 //! plays builds the computed value that reads it once more and runs its body no second time; a
 //! value it holds before the stream starts is the one its first build reads; no frame runs
-//! before its computed value is first built; and removing it drops every value it built, with no
-//! build after.
+//! before its computed value is first built; removing it drops every value it built, with no
+//! build after; and stopping its stream drops every value it built.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -244,4 +244,28 @@ fn every_value_built_is_dropped(ran: &WhatTheNodeFunctionRan) -> bool {
     let mut built = ran.gains_built_from.clone();
     built.sort_unstable();
     !built.is_empty() && dropped == built
+}
+
+/// Mental-revert: a stop that kept the node, or what its body made, would leave every value it
+/// built alive once the stream stops.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn stopping_the_stream_drops_every_value_the_node_built() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
+    start(&played.stream);
+    what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
+
+    played.stream.stop().expect("the stream stops");
+
+    let stopped = what_the_node_ran_once_it_holds(every_value_built_is_dropped);
+    assert!(
+        every_value_built_is_dropped(&stopped),
+        "every value the node built is dropped once its stream stops: {stopped:?}"
+    );
+    assert_eq!(stopped.bodies_run, 1, "{stopped:?}");
 }
