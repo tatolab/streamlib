@@ -220,11 +220,9 @@ def the_wiring_of_a_link_into_the_level(link_id: str, direction: str) -> "dict[s
     }
 
 
-def start_the_level_publishing_probe(
-    stand_in_parent: Any, ports: "dict[str, Any]"
-) -> "tuple[Any, list[dict[str, Any]]]":
-    """The probe set up with `ports` and running on its own clock, its level at 0.5, and the
-    frames other than a log the helper sent the parent after `ready`, each escalate answered."""
+def start_the_level_publishing_probe(stand_in_parent: Any, ports: "dict[str, Any]") -> Any:
+    """The thread driving the probe, set up with `ports` and running on its own clock, its level
+    at 0.5, once it opened its first publishing."""
     from node_function_probes import WHAT_THE_LEVEL_PUBLISHING_PROBE_DID
 
     WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.clear()
