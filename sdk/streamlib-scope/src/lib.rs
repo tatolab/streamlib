@@ -33,6 +33,11 @@ mod sync {
 
 use sync::{Mutex, MutexGuard, Thread};
 
+mod read_refusal;
+
+use read_refusal::{ReadOfAComputedValueNotYetBuilt, Refusal, refuse, refuse_the_read};
+pub use read_refusal::{ReadRefused, fail_this_build_on_a_computed_value_not_yet_built};
+
 type AnyValue = Arc<dyn Any + Send + Sync>;
 type BuildOfAnyValue = Arc<dyn Fn() -> Result<AnyValue, String> + Send + Sync>;
 type EqualityOfAnyValues = fn(&dyn Any, &dyn Any) -> bool;
@@ -95,78 +100,6 @@ impl<T> Clone for Computed<T> {
 }
 impl<T> Copy for Computed<T> {}
 
-/// Why a `.get()` read no value, for a binding that cannot let a panic cross its caller's frames.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadRefused {
-    /// The read ran outside a build or a frame.
-    OutsideABuildOrAFrame,
-    /// The handle belongs to another scope than the build or frame running on this thread.
-    HandleOfAnotherScope,
-    /// A build read a computed value that has no value yet; the read is recorded, so
-    /// [`fail_this_build_on_a_computed_value_not_yet_built`] makes it build again once that value
-    /// is built.
-    ComputedValueNotYetBuilt,
-}
-
-impl ReadRefused {
-    /// The refusal a panicking `.get()` raises for it; none for a value not yet built, which fails
-    /// the build instead.
-    fn refusal(self) -> Option<Refusal> {
-        match self {
-            ReadRefused::OutsideABuildOrAFrame => Some(Refusal::GetOutsideABuildOrAFrame),
-            ReadRefused::HandleOfAnotherScope => Some(Refusal::HandleOfAnotherScope),
-            ReadRefused::ComputedValueNotYetBuilt => None,
-        }
-    }
-}
-
-impl fmt::Display for ReadRefused {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.refusal() {
-            Some(refusal) => refusal.fmt(f),
-            None => BuildFailure::ReadAComputedValueNotYetBuilt.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for ReadRefused {}
-
-/// End the build running on this thread as [`BuildFailure::ReadAComputedValueNotYetBuilt`], for
-/// a binding whose build saw [`ReadRefused::ComputedValueNotYetBuilt`] and returned to Rust.
-pub fn fail_this_build_on_a_computed_value_not_yet_built() -> ! {
-    resume_unwind(Box::new(ReadOfAComputedValueNotYetBuilt))
-}
-
-/// A use of the scope's API that can never be right, refused with a panic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Refusal {
-    GetOutsideABuildOrAFrame,
-    ComputedOutsideADeclaration,
-    HandleOfAnotherScope,
-}
-
-impl fmt::Display for Refusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Refusal::GetOutsideABuildOrAFrame => {
-                "`.get()` reads only in a build or a frame; read the value in a `computed` build \
-                 or in the per-frame function"
-            }
-            Refusal::ComputedOutsideADeclaration => {
-                "`computed` declares only while a scope is being declared, in the node's body"
-            }
-            Refusal::HandleOfAnotherScope => "the handle belongs to another scope",
-        })
-    }
-}
-
-fn refuse(refusal: Refusal) -> ! {
-    panic!("{refusal}")
-}
-
-/// The unwind payload of a build's `.get()` of a computed value that has no value yet.
-struct ReadOfAComputedValueNotYetBuilt;
-
 /// What a build or a frame on this thread reads from.
 enum Reading {
     Build {
@@ -221,13 +154,6 @@ fn read_slot(slot: SlotOf) -> Result<Option<AnyValue>, ReadRefused> {
             Ok(values[slot.read_in_scope(*scope_id)?].clone())
         }
     })
-}
-
-fn refuse_the_read(refused: ReadRefused) -> ! {
-    match refused.refusal() {
-        Some(refusal) => refuse(refusal),
-        None => fail_this_build_on_a_computed_value_not_yet_built(),
-    }
 }
 
 impl<T: Send + Sync + 'static> Input<T> {
