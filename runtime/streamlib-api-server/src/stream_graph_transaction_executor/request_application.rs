@@ -79,11 +79,15 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut placements_not_named: BTreeMap<String, LoadedStreamHoldingAStreamFragment> =
             match &project_repository_held {
                 Some(project_repository) => self
-                    .the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(
-                        project_repository.project_directory(),
+                    .the_placements_an_edit_of_the_named_streams_can_reach(
+                        self.the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(
+                            project_repository.project_directory(),
+                        ),
+                        &stream_ids_in_order,
+                        stream_locations,
+                        project_repository,
                     )
                     .into_iter()
-                    .filter(|placement| !stream_ids_in_order.contains(&placement.stream_id))
                     .map(|placement| (placement.stream_id.clone(), placement))
                     .collect(),
                 None => BTreeMap::new(),
@@ -255,10 +259,10 @@ impl StreamGraphTransactionExecutor<'_> {
             );
             return Err(refusal);
         }
-        // A placement brought to its document in its batch has taken each edit of it the
-        // documents would have handed it once they hold it.
+        // A named stream brought to its graph as staged in its batch has taken each edit of its
+        // own the documents would have handed it once they hold it.
         made_live_once_the_documents_hold_them
-            .retain(|(stream_id, _)| !placements_reconciled.holds(stream_id));
+            .retain(|(stream_id, _)| !placements_reconciled.holds_a_named_stream(stream_id));
         if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut staged.streams) {
             self.put_back_what_the_refused_transaction_ran(
                 &staged.streams,

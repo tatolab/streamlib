@@ -21,9 +21,6 @@ use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
-use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    KeptNodesLeftToRebuild, LinksAReconcileMakes,
-};
 use crate::core::runtime::operations::{
     GraphEditBatch, GraphEditBatchRefused, HowFarARefusedBatchWasTakenBack,
 };
@@ -600,21 +597,18 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
         )
     }
 
-    fn reconcile_the_live_graph_to_the_document_an_edit_staged<'batch>(
+    fn reconcile_the_live_graph_to_the_streams_an_edit_staged<'batch>(
         &'batch self,
-        graph_document: serde_json::Value,
+        graph_document: Option<serde_json::Value>,
         stream_documents_an_edit_staged: &'batch StreamDocumentsAnEditStaged,
     ) -> BoxFuture<'batch, Result<()>> {
-        self.within_the_batch(async move {
+        self.within_the_batch(
             self.stream
-                .reconcile_the_live_graph_to_the_graph_document(
+                .reconcile_the_live_graph_to_the_streams_an_edit_staged(
                     graph_document,
-                    LinksAReconcileMakes::EachAsASavedGraphsLink,
-                    KeptNodesLeftToRebuild::HandedTheirValuesLive,
                     stream_documents_an_edit_staged,
-                )
-                .await
-        })
+                ),
+        )
     }
 
     fn close(mut self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused> {

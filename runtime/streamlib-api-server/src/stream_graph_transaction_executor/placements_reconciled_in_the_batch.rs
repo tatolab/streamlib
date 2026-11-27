@@ -10,17 +10,21 @@ use super::*;
 use streamlib_project_repository::{StreamDocumentsAnEditStaged, the_streams_a_live_graph_places};
 
 /// Each loaded stream a transaction brought, in its batch, to the streams it places, by its
-/// stream id: the graph its running stream is put back to when the transaction is refused.
+/// stream id, beside what it is put back to when the transaction is refused: a stream the
+/// transaction names to its graph document as it stood, and any other to its live graph as
+/// drawn, each to the streams it placed before.
 #[derive(Default)]
 pub(super) struct PlacementsReconciledInTheirBatches {
-    graph_put_back_to_of_each_stream_id: BTreeMap<String, Value>,
+    graph_put_back_to_of_each_stream_id: BTreeMap<String, Option<Value>>,
 }
 
 impl PlacementsReconciledInTheirBatches {
-    /// Whether the stream `stream_id` was brought to the streams it places in its batch.
-    pub(super) fn holds(&self, stream_id: &str) -> bool {
+    /// Whether the stream `stream_id`, one the transaction names, was brought to its graph as
+    /// staged in its batch.
+    pub(super) fn holds_a_named_stream(&self, stream_id: &str) -> bool {
         self.graph_put_back_to_of_each_stream_id
-            .contains_key(stream_id)
+            .get(stream_id)
+            .is_some_and(Option::is_some)
     }
 }
 
@@ -42,12 +46,56 @@ impl StreamGraphTransactionExecutor<'_> {
         )
     }
 
+    /// Each of `loaded`, none a stream `named` names, that places, at any depth, a stream of the
+    /// project `project_repository` holds that an edit of the streams `named` names can change:
+    /// one of them, or one they place, at any depth, as their documents are on disk now.
+    pub(super) fn the_placements_an_edit_of_the_named_streams_can_reach(
+        &self,
+        loaded: Vec<LoadedStreamHoldingAStreamFragment>,
+        named: &[String],
+        stream_locations: &HashMap<String, StreamLocation>,
+        project_repository: &ProjectRepository,
+    ) -> Vec<LoadedStreamHoldingAStreamFragment> {
+        let project = project_repository.project_file().project;
+        let mut an_edit_can_change: BTreeSet<Uuid> = BTreeSet::new();
+        let mut to_visit: Vec<Uuid> = named
+            .iter()
+            .filter_map(|stream_id| stream_locations.get(stream_id))
+            .filter(|stream_location| stream_location.project == project)
+            .map(|stream_location| stream_location.stream_asset)
+            .collect();
+        while let Some(stream_asset) = to_visit.pop() {
+            if !an_edit_can_change.insert(stream_asset) {
+                continue;
+            }
+            if let Ok(document) = project_repository.stream_graph_document(stream_asset) {
+                to_visit.extend(stream_assets_of_the_project_a_graph_document_places(
+                    &document.to_value(),
+                ));
+            }
+        }
+        loaded
+            .into_iter()
+            .filter(|placement| !named.contains(&placement.stream_id))
+            .filter(|placement| {
+                places_one_of_the_streams(
+                    &placement.stream_location,
+                    &placement.live_graph,
+                    None,
+                    project_repository,
+                    |held_project, stream_asset| {
+                        held_project == project && an_edit_can_change.contains(&stream_asset)
+                    },
+                )
+            })
+            .collect()
+    }
+
     /// Bring each of `streams` that places, at any depth, a stream whose document the
-    /// transaction changes, or, for a stream `named` does not hold, whose own document it
-    /// changes, to its graph as the transaction has staged it, inside its batch, each stream it
-    /// places as the transaction has staged it; each is recorded in `reconciled`. Refused at the
-    /// first stream that refuses, in that stream's words, the streams before it left in
-    /// `reconciled` to be put back.
+    /// transaction changes to the streams it places, inside its batch: a stream `named` names to
+    /// its graph as staged, any other to its live graph as drawn, each stream it places as the
+    /// transaction has staged it; each is recorded in `reconciled`. Refused at the first stream that refuses, in that stream's words, the
+    /// streams before it left in `reconciled` to be put back.
     pub(super) fn reconcile_each_placement_in_its_batch(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
@@ -62,34 +110,41 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository,
         )?;
         for (stream_id, stream) in streams {
-            let StreamLocation {
-                project,
-                stream_asset,
-                ..
-            } = stream.stream_location;
-            let staged_graph = stream_documents_the_edit_changed
-                .the_document_staged(project, stream_asset)
-                .cloned()
-                .unwrap_or_else(|| stream.staged_graph.to_value());
-            let its_own_document_changed = !named.contains(stream_id)
-                && stream_documents_the_edit_changed.holds(project, stream_asset);
-            if !its_own_document_changed
-                && !self.places_a_stream_the_edit_changed(
-                    stream,
-                    &staged_graph,
-                    &stream_documents_the_edit_changed,
-                    project_repository,
-                )
-            {
+            let places_a_changed_stream = self
+                .async_runtime
+                .block_on(stream.stream_operations.to_json_async())
+                .is_ok_and(|live_graph| {
+                    places_one_of_the_streams(
+                        &stream.stream_location,
+                        &live_graph,
+                        Some(&stream.staged_graph.to_value()),
+                        project_repository,
+                        |project, stream_asset| {
+                            stream_documents_the_edit_changed.holds(project, stream_asset)
+                        },
+                    )
+                });
+            if !places_a_changed_stream {
                 continue;
             }
-            let graph_put_back_to = self
-                .the_graph_document_of_a_loaded_stream_as_it_stands(
-                    Some(project_repository),
-                    &stream.stream_location,
-                    stream.stream_operations.as_ref(),
-                )?
-                .to_value();
+            // A stream the transaction names is brought to its graph as staged, which holds each
+            // edit of its own the documents hand it once they hold them; any other to its live
+            // graph as drawn, which holds what only it runs.
+            let (graph_document, graph_put_back_to) = if named.contains(stream_id) {
+                (
+                    Some(stream.staged_graph.to_value()),
+                    Some(
+                        self.the_graph_document_of_a_loaded_stream_as_it_stands(
+                            Some(project_repository),
+                            &stream.stream_location,
+                            stream.stream_operations.as_ref(),
+                        )?
+                        .to_value(),
+                    ),
+                )
+            } else {
+                (None, None)
+            };
             let graph_edit_batch = the_open_batch_of(streams, stream_id)
                 .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
             reconciled
@@ -97,8 +152,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 .insert(stream_id.clone(), graph_put_back_to);
             self.async_runtime
                 .block_on(
-                    graph_edit_batch.reconcile_the_live_graph_to_the_document_an_edit_staged(
-                        staged_graph,
+                    graph_edit_batch.reconcile_the_live_graph_to_the_streams_an_edit_staged(
+                        graph_document,
                         &stream_documents_the_edit_changed,
                     ),
                 )
@@ -107,55 +162,9 @@ impl StreamGraphTransactionExecutor<'_> {
         Ok(())
     }
 
-    /// Whether `stream`, its graph staged as `staged_graph`, places, at any depth, a stream
-    /// `changed` holds: one its live graph places, or one its staged graph places through the
-    /// streams of the project `project_repository` holds, each read as its document is on disk.
-    fn places_a_stream_the_edit_changed(
-        &self,
-        stream: &StreamATransactionEdits,
-        staged_graph: &Value,
-        changed: &StreamDocumentsAnEditStaged,
-        project_repository: &ProjectRepository,
-    ) -> bool {
-        let project_of_the_stream = stream.stream_location.project;
-        let live_graph_places_one = self
-            .async_runtime
-            .block_on(stream.stream_operations.to_json_async())
-            .is_ok_and(|live_graph| {
-                the_streams_a_live_graph_places(&live_graph, project_of_the_stream)
-                    .into_iter()
-                    .any(|(project, stream_asset)| changed.holds(project, stream_asset))
-            });
-        if live_graph_places_one {
-            return true;
-        }
-        let project = project_repository.project_file().project;
-        if project_of_the_stream != project {
-            return false;
-        }
-        let mut reached = BTreeSet::new();
-        let mut to_visit: Vec<Uuid> =
-            stream_assets_of_the_project_a_graph_document_places(staged_graph)
-                .into_iter()
-                .collect();
-        while let Some(placed_stream) = to_visit.pop() {
-            if !reached.insert(placed_stream) {
-                continue;
-            }
-            if changed.holds(project, placed_stream) {
-                return true;
-            }
-            if let Ok(placed_graph) = project_repository.stream_graph_document(placed_stream) {
-                to_visit.extend(stream_assets_of_the_project_a_graph_document_places(
-                    &placed_graph.to_value(),
-                ));
-            }
-        }
-        false
-    }
-
-    /// Put back what a refused transaction ran: each edit of `applied_live` reversed, and each
-    /// running stream of `reconciled` brought back to the graph it ran before.
+    /// Put back what a refused transaction ran: each edit of `applied_live` reversed, then each
+    /// running stream of `reconciled` brought back to what it records, each stream it places as
+    /// its document is on disk, which the refused transaction left as it was.
     pub(super) fn put_back_what_the_refused_transaction_ran(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
@@ -171,7 +180,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 .open_a_graph_edit_batch()
                 .and_then(|batch| {
                     self.async_runtime.block_on(
-                        batch.reconcile_the_live_graph_to_the_document_an_edit_staged(
+                        batch.reconcile_the_live_graph_to_the_streams_an_edit_staged(
                             graph_put_back_to,
                             &StreamDocumentsAnEditStaged::default(),
                         ),
@@ -183,11 +192,59 @@ impl StreamGraphTransactionExecutor<'_> {
                     stream = %stream_id,
                     %not_put_back,
                     "a stream a refused transaction brought to the streams it places was not put \
-                     back to the graph it ran before"
+                     back to the streams it placed before"
                 );
             }
         }
     }
+}
+
+/// Whether the loaded stream at `stream_location` places, at any depth, a stream `is_one`
+/// holds: one its live graph `live_graph` places, or, for a stream of the project
+/// `project_repository` holds, one its graph document, `staged_graph` or else the one on disk,
+/// places through that project's streams as their documents are on disk now.
+fn places_one_of_the_streams(
+    stream_location: &StreamLocation,
+    live_graph: &Value,
+    staged_graph: Option<&Value>,
+    project_repository: &ProjectRepository,
+    is_one: impl Fn(Uuid, Uuid) -> bool,
+) -> bool {
+    if the_streams_a_live_graph_places(live_graph, stream_location.project)
+        .into_iter()
+        .any(|(project, stream_asset)| is_one(project, stream_asset))
+    {
+        return true;
+    }
+    let project = project_repository.project_file().project;
+    if stream_location.project != project {
+        return false;
+    }
+    let document = match staged_graph {
+        Some(staged_graph) => staged_graph.clone(),
+        None => match project_repository.stream_graph_document(stream_location.stream_asset) {
+            Ok(document) => document.to_value(),
+            Err(_) => return false,
+        },
+    };
+    let mut reached = BTreeSet::new();
+    let mut to_visit: Vec<Uuid> = stream_assets_of_the_project_a_graph_document_places(&document)
+        .into_iter()
+        .collect();
+    while let Some(placed_stream) = to_visit.pop() {
+        if !reached.insert(placed_stream) {
+            continue;
+        }
+        if is_one(project, placed_stream) {
+            return true;
+        }
+        if let Ok(placed_graph) = project_repository.stream_graph_document(placed_stream) {
+            to_visit.extend(stream_assets_of_the_project_a_graph_document_places(
+                &placed_graph.to_value(),
+            ));
+        }
+    }
+    false
 }
 
 /// The graph document of each stream of the project `project_repository` holds that the

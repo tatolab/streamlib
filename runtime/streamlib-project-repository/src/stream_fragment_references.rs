@@ -328,14 +328,6 @@ impl StreamDocumentsAnEditStaged {
             .contains_key(&(project, stream_asset))
     }
 
-    /// The graph document of the stream asset `stream_asset` of the project `project` as the edit
-    /// staged it, when it did.
-    pub fn the_document_staged(&self, project: Uuid, stream_asset: Uuid) -> Option<&Value> {
-        self.each_by_project_and_stream_asset
-            .get(&(project, stream_asset))
-            .map(|staged| &staged.document)
-    }
-
     /// The graph document and name of the stream asset `stream_asset` of the project `project`,
     /// when the edit staged it.
     fn the_stream_staged(&self, project: Uuid, stream_asset: Uuid) -> Option<(Value, String)> {

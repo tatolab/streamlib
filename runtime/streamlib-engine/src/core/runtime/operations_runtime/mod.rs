@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::Arc;
+use streamlib_project_repository::StreamDocumentsAnEditStaged;
 
 use std::path::{Path, PathBuf};
 
@@ -742,9 +743,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
         &self,
     ) -> BoxFuture<'_, Result<()>> {
-        self.in_this_streams_log_route(
-            self.reconcile_each_stream_fragment_to_the_stream_it_references(),
-        )
+        self.in_this_streams_log_route(async move {
+            self.reconcile_the_live_graph_to_the_streams_an_edit_staged(
+                None,
+                &StreamDocumentsAnEditStaged::default(),
+            )
+            .await
+        })
     }
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {

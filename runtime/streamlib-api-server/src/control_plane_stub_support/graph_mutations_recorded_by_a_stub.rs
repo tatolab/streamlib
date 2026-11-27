@@ -309,9 +309,9 @@ impl<Stub: ::streamlib::sdk::runtime::RuntimeOperations + 'static>
         self.0.apply_a_stream_graph_operation_live(graph_operation)
     }
 
-    fn reconcile_the_live_graph_to_the_document_an_edit_staged<'batch>(
+    fn reconcile_the_live_graph_to_the_streams_an_edit_staged<'batch>(
         &'batch self,
-        _graph_document: ::serde_json::Value,
+        _graph_document: ::std::option::Option<::serde_json::Value>,
         _stream_documents_an_edit_staged: &'batch ::streamlib_project_repository::StreamDocumentsAnEditStaged,
     ) -> ::streamlib::sdk::runtime::BoxFuture<'batch, ::streamlib::sdk::error::Result<()>> {
         Box::pin(async { Ok(()) })

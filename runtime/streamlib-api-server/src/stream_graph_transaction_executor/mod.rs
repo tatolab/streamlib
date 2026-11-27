@@ -653,6 +653,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         stream_id: listing.stream_id,
                         stream_location,
                         stream_operations,
+                        live_graph,
                     },
                 )
             })
@@ -882,11 +883,12 @@ fn the_fragment_an_imported_stream_places(
     Ok((fragment, stream_name))
 }
 
-/// A loaded stream whose live graph holds a stream fragment.
+/// A loaded stream whose live graph holds a stream fragment, beside that live graph.
 pub(super) struct LoadedStreamHoldingAStreamFragment {
     pub(super) stream_id: String,
     pub(super) stream_location: StreamLocation,
     pub(super) stream_operations: Arc<dyn RuntimeOperations>,
+    pub(super) live_graph: Value,
 }
 
 #[cfg(test)]
