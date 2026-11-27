@@ -151,30 +151,17 @@ pub struct V4l2ZeroCopyCameraCapture {
 }
 
 impl V4l2ZeroCopyCameraCapture {
-    /// Open `device_path`, or the first capture device found, negotiate its
-    /// format and adopt its buffers, publishing nothing until [`Self::start`].
+    /// Open `device_path`, negotiate its format and adopt its buffers,
+    /// publishing nothing until [`Self::start`].
     pub fn open(
         module_host: ModuleHost,
         video_output_port_name: &str,
-        device_path: Option<&str>,
+        device_path: &str,
         max_width: u32,
         max_height: u32,
         output_pool_rotation_depth: u32,
     ) -> Result<Self, CameraCaptureRefusal> {
-        let device_path = match device_path {
-            Some(path) => path.to_string(),
-            None => list_v4l2_capture_devices()
-                .into_iter()
-                .next()
-                .map(|(path, _)| path)
-                .ok_or_else(|| {
-                    CameraCaptureRefusal(
-                        "no camera found: nothing under /dev/video* reports video capture"
-                            .to_string(),
-                    )
-                })?,
-        };
-        let device = v4l::Device::with_path(&device_path).map_err(|open_failure| {
+        let device = v4l::Device::with_path(device_path).map_err(|open_failure| {
             CameraCaptureRefusal(format!("could not open {device_path}: {open_failure}"))
         })?;
         let card_name = device
@@ -182,7 +169,7 @@ impl V4l2ZeroCopyCameraCapture {
             .map(|capabilities| capabilities.card)
             .unwrap_or_default();
         let format =
-            negotiate_nv12_or_yuyv(&device, &device_path, card_name, max_width, max_height)?;
+            negotiate_nv12_or_yuyv(&device, device_path, card_name, max_width, max_height)?;
         let video_output_port = module_host
             .open_output_port(video_output_port_name)
             .map_err(|refusal| CameraCaptureRefusal(refusal.to_string()))?;
@@ -599,6 +586,28 @@ fn dequeue_a_filled_buffer(device: &v4l::Device) -> std::io::Result<FilledDriver
     })
 }
 
+/// The capture device at `device_path`, resolved through its links so one camera
+/// has one path whichever of its names was given, or the first one found when
+/// none is named.
+pub fn the_capture_device_at_or_the_first_found(
+    device_path: Option<&str>,
+) -> Result<String, CameraCaptureRefusal> {
+    match device_path {
+        Some(path) => Ok(std::fs::canonicalize(path)
+            .map(|resolved| resolved.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string())),
+        None => list_v4l2_capture_devices()
+            .into_iter()
+            .next()
+            .map(|(path, _)| path)
+            .ok_or_else(|| {
+                CameraCaptureRefusal(
+                    "no camera found: nothing under /dev/video* reports video capture".to_string(),
+                )
+            }),
+    }
+}
+
 /// Every `/dev/video*` node that reports video capture, as `(path, card name)`, by node index.
 pub fn list_v4l2_capture_devices() -> Vec<(String, String)> {
     let Ok(entries) = std::fs::read_dir("/dev") else {
@@ -653,8 +662,14 @@ fn negotiate_nv12_or_yuyv(
         requested_format.fourcc = fourcc;
         requested_format.width = width;
         requested_format.height = height;
-        let Ok(negotiated) = device.set_format(&requested_format) else {
-            continue;
+        let negotiated = match device.set_format(&requested_format) {
+            Ok(negotiated) => negotiated,
+            Err(busy) if busy.kind() == std::io::ErrorKind::ResourceBusy => {
+                return Err(CameraCaptureRefusal(format!(
+                    "{device_path} is busy: another process is capturing from it ({busy})"
+                )));
+            }
+            Err(_) => continue,
         };
         if negotiated.fourcc != fourcc {
             continue;

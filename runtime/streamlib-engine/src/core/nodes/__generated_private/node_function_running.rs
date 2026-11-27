@@ -6,14 +6,73 @@
 //! node that paces itself (`execution = manual`) has none of: its computed values publish on
 //! their own, and a value set on it reaches its scope at once.
 
-use streamlib_scope::{FrameView, Scope, ScopeBeingDeclared, Writes};
+use std::cell::RefCell;
+use std::fmt;
 
-use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_scope::{Computed, FrameView, Scope, ScopeBeingDeclared, Writes};
+
+use crate::core::context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::{Error, Result};
 use crate::core::graph::BuildsOfItsComputedValues;
 
 /// How long a frame waits when a computed value has no first value yet.
 const UNBUILT_FRAME_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1);
+
+thread_local! {
+    /// The context of the node whose body runs on this thread, which each value the body
+    /// declares builds with.
+    static CONTEXT_OF_THE_BODY_RUNNING: RefCell<Option<RuntimeContext>> =
+        const { RefCell::new(None) };
+}
+
+/// Declare a value `build` computes from what it reads with `.get()`, in the body of a node
+/// written as one function. `build` runs off the frame thread with the node's limited context,
+/// whose GPU escalates for the work a frame may not do: creating a kernel, opening a device.
+/// Outside such a body: refused with the scope's own refusal where no scope is being declared,
+/// and in a scope no node's body declares, a value whose every build fails for want of a node's
+/// context.
+#[track_caller]
+pub fn computed<T, E, B>(build: B) -> Computed<T>
+where
+    T: PartialEq + Send + Sync + 'static,
+    E: fmt::Display,
+    B: for<'ctx> Fn(&RuntimeContextLimitedAccess<'ctx>) -> std::result::Result<T, E>
+        + Send
+        + Sync
+        + 'static,
+{
+    let Some(context_of_the_node) =
+        CONTEXT_OF_THE_BODY_RUNNING.with(|running| running.borrow().clone())
+    else {
+        return streamlib_scope::computed(|| Err(BUILT_WITH_NO_NODE_CONTEXT));
+    };
+    streamlib_scope::computed(move || {
+        build(&RuntimeContextLimitedAccess::new(&context_of_the_node))
+    })
+}
+
+/// Why a value declared in a scope no node's body declares never builds: it has no node's
+/// context to build with.
+const BUILT_WITH_NO_NODE_CONTEXT: &str =
+    "this value was declared outside a node's body, so it has no node's context to build with";
+
+/// The context of the node whose body runs on this thread, for as long as the body runs.
+struct BodyRunningWithTheContextOf;
+
+impl BodyRunningWithTheContextOf {
+    fn the_node(ctx: &RuntimeContextFullAccess<'_>) -> Self {
+        let context_of_the_node = ctx.host_base().clone();
+        CONTEXT_OF_THE_BODY_RUNNING
+            .with(|running| *running.borrow_mut() = Some(context_of_the_node));
+        Self
+    }
+}
+
+impl Drop for BodyRunningWithTheContextOf {
+    fn drop(&mut self) {
+        CONTEXT_OF_THE_BODY_RUNNING.with(|running| *running.borrow_mut() = None);
+    }
+}
 
 /// The per-frame function a node's body returns.
 pub type PerFrameFunction =
@@ -35,14 +94,18 @@ impl NodeFunctionRunning {
     /// into `declaring`, then start the scope, its computed values' builds shown in the health
     /// `ctx`'s node reports: refused with the body's own error, or when the thread its computed
     /// values build on does not start. The body returns the per-frame function, or `None` for a
-    /// node that paces itself.
+    /// node that paces itself. Each value the body declares with [`computed`] builds with `ctx`'s
+    /// limited access.
     pub fn run_the_body_once(
         node: &str,
         ctx: &RuntimeContextFullAccess<'_>,
         mut declaring: ScopeBeingDeclared,
         body: impl FnOnce() -> Result<Option<PerFrameFunction>>,
     ) -> Result<Self> {
-        let per_frame = declaring.declare(body)?;
+        let per_frame = {
+            let _body_running = BodyRunningWithTheContextOf::the_node(ctx);
+            declaring.declare(body)?
+        };
         let (scope, view) =
             declaring
                 .start()

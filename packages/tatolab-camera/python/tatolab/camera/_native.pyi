@@ -8,6 +8,7 @@ from typing import final
 
 if sys.platform == "linux":
     __all__ = [
+        "CameraCaptureClosed",
         "V4l2ZeroCopyCameraCapture",
         "list_v4l2_capture_devices",
         "monotonic_now_ns",
@@ -15,7 +16,10 @@ if sys.platform == "linux":
 
     @final
     class V4l2ZeroCopyCameraCapture:
-        """A camera publishing Image frames on a lent output port from a thread this wheel owns."""
+        """A camera publishing Image frames on a lent output port from a thread this wheel owns.
+
+        Opening a camera another capture in this process holds closes that capture first.
+        """
 
         def __new__(
             cls,
@@ -55,8 +59,12 @@ if sys.platform == "linux":
         @property
         def colour_range(self) -> str | None: ...
         def start(self) -> None:
-            """Stream on and publish every frame from the capture thread."""
-        def stop(self) -> None:
+            """Stream on and publish every frame from the capture thread.
+
+            Raises `CameraCaptureClosed` once closed, or once a later capture of the camera took
+            it over.
+            """
+        def close(self) -> None:
             """Stop streaming and release the device. Idempotent."""
 
     def list_v4l2_capture_devices() -> list[tuple[str, str]]:
@@ -65,13 +73,17 @@ if sys.platform == "linux":
 if sys.platform == "darwin":
     __all__ = [
         "AvFoundationZeroCopyCameraCapture",
+        "CameraCaptureClosed",
         "list_avfoundation_capture_devices",
         "monotonic_now_ns",
     ]
 
     @final
     class AvFoundationZeroCopyCameraCapture:
-        """A camera publishing Image frames on a lent output port from AVFoundation's own queues."""
+        """A camera publishing Image frames on a lent output port from AVFoundation's own queues.
+
+        Opening a camera another capture in this process holds closes that capture first.
+        """
 
         def __new__(
             cls,
@@ -105,11 +117,14 @@ if sys.platform == "darwin":
         def nominal_frames_per_second(self) -> int | None: ...
         def start(self) -> None:
             """Start the session, or start it once the user grants camera access."""
-        def stop(self) -> None:
+        def close(self) -> None:
             """Stop the session and give its surfaces back. Idempotent."""
 
     def list_avfoundation_capture_devices() -> list[tuple[str, str]]:
         """Every camera AVFoundation lists, as `(unique id, name)`: built-in cameras first."""
+
+class CameraCaptureClosed(OSError):
+    """A capture was started after it was closed, or after a later capture took its camera over."""
 
 def monotonic_now_ns() -> int:
     """Nanoseconds on the clock capture timestamps are on."""

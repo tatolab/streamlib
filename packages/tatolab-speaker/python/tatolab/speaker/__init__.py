@@ -8,8 +8,8 @@ half opens the playback stream through the engine's audio device backend, which
 the module host table exports, so PipeWire, ALSA and CoreAudio are the
 engine's own arms and no second audio device path exists. A native thread reads
 each block off the lent `audio` port into a ring the device callback fills
-from, with no Python attached: Python runs at setup, start, stop and teardown,
-never per block.
+from, with no Python attached: Python runs only when an input changes, never
+per block.
 """
 
 from __future__ import annotations
@@ -20,11 +20,12 @@ from tatolab.stream import (
     Audio,
     AudioWindowContract,
     Description,
+    Input,
     InputPin,
     PinControl,
     RuntimeContextFullAccess,
-    SettingOnly,
     StreamDelivery,
+    computed,
     log,
     node,
 )
@@ -64,33 +65,18 @@ the device's own period is."""
     ),
 )
 @node(execution="manual", scheduling="realtime", paced_by_real_time=True)
-class SpeakerSink:
-    """Plays timestamped Channels blocks on the machine's audio backend
-    (discarding where no backend exists).
-
-    The engine's backend chain is probed in this node's helper process with no
-    configuration dial; where no audio backend exists at all the samples are
-    discarded, so a pipeline authored on a workstation runs unchanged in a
-    headless container. `audio` takes Channels blocks at any rate, channel
-    count and sample type: the engine converts every block to 48 kHz stereo
-    `f32`, and the backend plays that on whatever the device opened at.
-    The device is never left waiting on the graph — a period the graph had no
-    samples for is silence, and the count of it is reported.
-
-    On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID.
-    Without a `device_id` playback follows the system default output as it
-    changes.
-    """
-
-    device_id: Annotated[
-        str | None,
-        SettingOnly(),
-        Description(
-            "Backend-named playback device. Unset: the backend's default device. A name the "
-            "backend cannot open raises rather than landing on a different device — a wrong "
-            "device id is a wiring error."
-        ),
-    ] = None
+def SpeakerSink(
+    *,
+    device_id: Input[
+        Annotated[
+            str | None,
+            Description(
+                "Backend-named playback device. Unset: the backend's default device. A name the "
+                "backend cannot open fails the open rather than landing on a different device — "
+                "a wrong device id is a wiring error."
+            ),
+        ]
+    ] = Input(None),
     audio: InputPin[
         Annotated[
             Audio,
@@ -104,55 +90,54 @@ class SpeakerSink:
             PinControl("meter"),
             Description("Timestamped blocks of samples to play"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """Plays timestamped Channels blocks on the machine's audio backend
+    (discarding where no backend exists).
 
-    def __init__(self) -> None:
-        self._playback: "_native.SpeakerPlayback | None" = None
+    The engine's backend chain is probed in this node's helper process with no
+    configuration dial; where no audio backend exists at all the samples are
+    discarded, so a pipeline authored on a workstation runs unchanged in a
+    headless container. `audio` takes Channels blocks at any rate, channel
+    count and sample type: the engine converts every block to 48 kHz stereo
+    `f32`, and the backend plays that on whatever the device opened at.
+    The device is never left waiting on the graph — a period the graph had no
+    samples for is silence, and the count of it is reported.
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        """Lend `audio` to the native half and open the playback stream, so a
-        device that cannot be opened refuses the node here."""
-        module_host_table = ctx.open_module_host_table(input_ports=[AUDIO_INPUT_PORT])
-        self._playback = _native.SpeakerPlayback(
+    The open playback stream is a computed value: setting `device_id` while the
+    stream plays closes the playback it has, then opens the device named, so two
+    devices never drain `audio` at once. A device that fails to open shows on the
+    node, and nothing plays until the next set.
+
+    On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID.
+    Without a `device_id` playback follows the system default output as it
+    changes.
+    """
+    del audio  # Lent to the native half, which drains it.
+    module_host_table = ctx.open_module_host_table(input_ports=[AUDIO_INPUT_PORT])
+
+    open_now: "list[_native.SpeakerPlayback]" = []
+
+    def open_the_speaker() -> _native.SpeakerPlayback:
+        named = device_id.get()
+        # The playback this one replaces closes first, so two devices never drain `audio` at once.
+        while open_now:
+            open_now.pop().close()
+        playback = _native.SpeakerPlayback(
             module_host_table,
             sample_rate=SPEAKER_SAMPLE_RATE,
             channels=SPEAKER_CHANNELS,
             sample_format=SPEAKER_SAMPLE_FORMAT,
-            device_id=self.device_id,
+            device_id=named,
         )
+        open_now.append(playback)
         log.info(
-            f"SpeakerSink: playback stream opened on "
-            f"{self.device_id or '<default>'} at {self._playback.sample_rate} Hz × "
-            f"{self._playback.channels} ch, {self._playback.sample_format}, device period "
-            f"{self._playback.device_period_in_per_channel_samples or 'unreported'}"
+            f"SpeakerSink: playback stream opened on {named or '<default>'} at "
+            f"{playback.sample_rate} Hz × {playback.channels} ch, {playback.sample_format}, "
+            f"device period {playback.device_period_in_per_channel_samples or 'unreported'}"
         )
+        playback.start()
+        return playback
 
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._opened_playback().start()
-
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        if self._playback is not None:
-            self._playback.stop()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        playback = self._playback
-        if playback is None:
-            return
-        playback.stop()
-        log.info(
-            f"SpeakerSink: teardown. played_blocks={playback.played_block_count} "
-            f"refused_blocks={playback.refused_block_count} "
-            f"underrun_bytes={playback.underrun_byte_count} "
-            f"silence_before_playback_began_bytes="
-            f"{playback.silence_before_playback_began_byte_count} "
-            f"playback_device_failure={playback.failure_that_ended_the_playback}"
-        )
-        self._playback = None
-
-    def _opened_playback(self) -> "_native.SpeakerPlayback":
-        if self._playback is None:
-            raise RuntimeError("SpeakerSink: start() ran before setup() opened the playback stream")
-        return self._playback
+    computed(open_the_speaker)

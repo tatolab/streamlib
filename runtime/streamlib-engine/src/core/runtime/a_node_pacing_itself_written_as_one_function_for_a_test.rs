@@ -62,7 +62,7 @@ impl Drop for PublishingOfAGain {
 )]
 fn a_node_pacing_itself(gain: Input<i32>) {
     DID.lock().bodies_run += 1;
-    computed(move || {
+    computed(move |_ctx| {
         let gain = *gain.get();
         DID.lock().builds_started += 1;
         BUILDS.wait_while_held();

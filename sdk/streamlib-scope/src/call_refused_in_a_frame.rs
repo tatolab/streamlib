@@ -96,7 +96,7 @@ impl CallRefusedInAFrame {
 impl fmt::Display for CallRefusedInAFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.words_with_the_fix(&format!(
-            "let {} = computed(move || … {}(…));",
+            "let {} = computed(move |ctx| … {}(…));",
             self.does.what_it_makes(),
             self.call
         )))

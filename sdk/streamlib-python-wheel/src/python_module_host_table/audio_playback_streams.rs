@@ -26,6 +26,9 @@ use tatolab_module_sdk::module_host_table_abi::{
 use super::audio_capture_streams::{
     locked, module_host_table_audio_stream_format_of, requested_audio_stream_format_of,
 };
+use super::audio_stream_on_a_device::{
+    AudioStreamOnADevice, refusal_of_a_stream_taken_over, take_the_device_over_from,
+};
 use super::{node_host_of, refuse, refused_while_a_frame_runs};
 
 /// The playback streams one node's native code opened, by handle.
@@ -37,7 +40,7 @@ pub(super) struct AudioPlaybackStreamsOpenedForOneNode {
 }
 
 pub(super) struct AudioPlaybackStreamOpenedForAModule {
-    playback_stream: Mutex<Box<dyn AudioPlaybackStream>>,
+    playback_stream: AudioStreamOnADevice<dyn AudioPlaybackStream>,
     liveness_report: DeviceStreamLivenessReport,
     /// Paces the null backend's requests; the stream's own, so closing it
     /// stops a clock nothing else ticks on.
@@ -73,6 +76,8 @@ impl ModuleAudioBlockRequestedByDeviceCallback {
 }
 
 impl AudioPlaybackStreamsOpenedForOneNode {
+    /// Open a playback stream on `device_id`, the default device's being `None`, after taking
+    /// the device over from a stream this node has open on it.
     pub(super) fn open(
         &self,
         node_id: &str,
@@ -86,6 +91,12 @@ impl AudioPlaybackStreamsOpenedForOneNode {
         ),
         String,
     > {
+        take_the_device_over_from(
+            &self.opened_streams,
+            device_id.as_deref(),
+            |opened| &opened.playback_stream,
+            stop_requesting_and_log_a_failure,
+        );
         let audio_device_backend = probe_audio_device_backend();
         let deviceless_pacing_clock = platform_audio_clock_for_one_stream();
         let playback_stream = open_playback_stream_in_requested_format(
@@ -114,7 +125,7 @@ impl AudioPlaybackStreamsOpenedForOneNode {
         );
         let opened_stream = Arc::new(AudioPlaybackStreamOpenedForAModule {
             liveness_report: playback_stream.liveness_report(),
-            playback_stream: Mutex::new(playback_stream),
+            playback_stream: AudioStreamOnADevice::opened_on(device_id, playback_stream),
             deviceless_pacing_clock,
         });
         let mut opened_streams = locked(&self.opened_streams);
@@ -159,11 +170,16 @@ impl AudioPlaybackStreamsOpenedForOneNode {
     }
 }
 
+fn stop_requesting_and_log_a_failure(playback_stream: &mut (dyn AudioPlaybackStream + 'static)) {
+    if let Err(stop_failure) = playback_stream.stop_requesting() {
+        tracing::warn!(error = %stop_failure, "a module's audio playback stream failed to stop");
+    }
+}
+
 impl AudioPlaybackStreamOpenedForAModule {
     fn stop_requesting_and_log_a_failure(&self) {
-        if let Err(stop_failure) = locked(&self.playback_stream).stop_requesting() {
-            tracing::warn!(error = %stop_failure, "a module's audio playback stream failed to stop");
-        }
+        self.playback_stream
+            .while_it_holds_its_device(stop_requesting_and_log_a_failure);
     }
 }
 
@@ -260,17 +276,21 @@ pub(super) unsafe extern "C" fn audio_playback_stream_start(
         fill_callback,
         callback_context,
     };
-    let mut playback_stream = locked(&opened_stream.playback_stream);
-    // Stopped first, so the callback being replaced is never called once this
-    // returns, whatever a backend does with a hand-off it replaces.
-    let started = playback_stream.stop_requesting().and_then(|()| {
-        playback_stream.start_requesting_from(Box::new(move |requested| {
-            module_callback.ask_to_fill(requested);
-        }))
-    });
+    let started = opened_stream
+        .playback_stream
+        .while_it_holds_its_device(|playback_stream| {
+            // Stopped first, so the callback being replaced is never called once this
+            // returns, whatever a backend does with a hand-off it replaces.
+            playback_stream.stop_requesting().and_then(|()| {
+                playback_stream.start_requesting_from(Box::new(move |requested| {
+                    module_callback.ask_to_fill(requested);
+                }))
+            })
+        });
     match started {
-        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
-        Err(start_failure) => unsafe { refuse(error_message, &start_failure.to_string()) },
+        Some(Ok(())) => MODULE_HOST_TABLE_STATUS_OK,
+        Some(Err(start_failure)) => unsafe { refuse(error_message, &start_failure.to_string()) },
+        None => unsafe { refuse(error_message, &refusal_of_a_stream_taken_over("playback")) },
     }
 }
 
@@ -284,8 +304,11 @@ pub(super) unsafe extern "C" fn audio_playback_stream_stop(
         .audio_playback_streams
         .opened_stream(stream)
         .and_then(|opened_stream| {
-            locked(&opened_stream.playback_stream)
-                .stop_requesting()
+            opened_stream
+                .playback_stream
+                .while_it_holds_its_device(|playback_stream| playback_stream.stop_requesting())
+                // A stream taken over is stopped already.
+                .unwrap_or(Ok(()))
                 .map_err(|stop_failure| stop_failure.to_string())
         });
     match stopped {
@@ -301,19 +324,27 @@ pub(super) unsafe extern "C" fn audio_playback_stream_liveness(
 ) -> ModuleHostTableStatus {
     let node_host = unsafe { node_host_of(node_host) };
     match node_host.audio_playback_streams.opened_stream(stream) {
-        Ok(opened_stream) => match opened_stream
-            .liveness_report
-            .failure_that_ended_the_stream()
-        {
-            None => MODULE_HOST_TABLE_STATUS_OK,
-            Some(failure) => {
-                // SAFETY: the SDK hands a buffer live for the call, or null.
-                if let Some(error_message) = unsafe { error_message.as_mut() } {
-                    error_message.write(&failure.to_string());
+        Ok(opened_stream) => {
+            // A stream taken over has ended for its module as surely as one its device failed.
+            let failure = if opened_stream.playback_stream.is_taken_over() {
+                Some(refusal_of_a_stream_taken_over("playback"))
+            } else {
+                opened_stream
+                    .liveness_report
+                    .failure_that_ended_the_stream()
+                    .map(|failure| failure.to_string())
+            };
+            match failure {
+                None => MODULE_HOST_TABLE_STATUS_OK,
+                Some(failure) => {
+                    // SAFETY: the SDK hands a buffer live for the call, or null.
+                    if let Some(error_message) = unsafe { error_message.as_mut() } {
+                        error_message.write(&failure);
+                    }
+                    MODULE_HOST_TABLE_STATUS_ENDED
                 }
-                MODULE_HOST_TABLE_STATUS_ENDED
             }
-        },
+        }
         Err(refusal) => unsafe { refuse(error_message, &refusal) },
     }
 }

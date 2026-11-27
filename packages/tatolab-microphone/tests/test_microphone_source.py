@@ -14,18 +14,14 @@ import time
 
 import pytest
 
+import tatolab.microphone
 from helper_process_link_wiring import wire_one_link
+from tatolab.runtime._node_function_running_for_a_test import NodeFunctionRunningForATest
 from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.stream import Audio, RuntimeContextFullAccess, log
-from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream._node_declaration import NODE_DECLARATION_INPUT_PORTS_STAMP
-
-
-def a_microphone(**field_values: object) -> MicrophoneSource:
-    """A `MicrophoneSource` built as its helper builds it, `audio` bound to a stand-in: its native half writes the port."""
-    return construct_class_node(MicrophoneSource, field_values=field_values, pins={"audio": object()})
 
 
 #: Long enough for the first block on any arm, which opens a device or starts
@@ -63,6 +59,17 @@ class MicrophoneWiredToAReader:
             )
         )
 
+    def a_microphone(self, **values: object) -> NodeFunctionRunningForATest:
+        """A `MicrophoneSource` running as its helper runs it, `audio` bound to a stand-in: its
+        native half writes the port."""
+        return NodeFunctionRunningForATest(
+            MicrophoneSource,
+            tatolab.microphone,
+            self.microphone_context,
+            values=values,
+            pins={"audio": object()},
+        )
+
     def read_blocks(self, block_count: int) -> "list[Audio]":
         blocks: "list[Audio]" = []
         deadline = time.monotonic() + FIRST_BLOCKS_DEADLINE_SECONDS
@@ -94,19 +101,15 @@ def microphone_wired_to_a_reader(
     return wired
 
 
-def test_a_started_microphone_publishes_device_stamped_blocks_in_the_format_it_opened(
+def test_a_microphone_publishes_device_stamped_blocks_in_the_format_it_opened(
     microphone_wired_to_a_reader,
 ):
-    microphone = a_microphone()
-    context = microphone_wired_to_a_reader.microphone_context
-    microphone.setup(context)
-    capture = microphone._opened_capture()
-    microphone.start(context)
+    microphone = microphone_wired_to_a_reader.a_microphone()
     try:
+        capture = microphone.built()
         blocks = microphone_wired_to_a_reader.read_blocks(BLOCKS_READ_PER_TEST)
     finally:
-        microphone.stop(context)
-        microphone.teardown(context)
+        microphone.stop()
 
     assert any(
         f"{capture.sample_rate} Hz × {capture.channels} ch" in record
@@ -127,68 +130,86 @@ def test_a_started_microphone_publishes_device_stamped_blocks_in_the_format_it_o
 def test_the_audio_port_is_lent_to_native_code_so_python_cannot_write_it(
     microphone_wired_to_a_reader,
 ):
-    microphone = a_microphone()
-    context = microphone_wired_to_a_reader.microphone_context
-    microphone.setup(context)
+    microphone = microphone_wired_to_a_reader.a_microphone()
     try:
         with pytest.raises(Exception, match=AUDIO_OUTPUT_PORT):
-            link_output_data_writer_of(context).write(AUDIO_OUTPUT_PORT, b"from python")
+            link_output_data_writer_of(microphone_wired_to_a_reader.microphone_context).write(
+                AUDIO_OUTPUT_PORT, b"from python"
+            )
     finally:
-        microphone.teardown(context)
+        microphone.stop()
 
 
-def test_a_device_the_backend_cannot_open_refuses_setup_naming_it(
+def test_a_device_the_backend_cannot_open_fails_the_open_naming_it(
     microphone_wired_to_a_reader,
 ):
-    microphone = a_microphone(device_id="tatolab-no-such-microphone")
-    with pytest.raises(RuntimeError, match="tatolab-no-such-microphone"):
-        microphone.setup(microphone_wired_to_a_reader.microphone_context)
+    microphone = microphone_wired_to_a_reader.a_microphone(device_id="tatolab-no-such-microphone")
+    try:
+        assert "tatolab-no-such-microphone" in microphone.why_the_last_build_failed()
+    finally:
+        microphone.stop()
 
 
 def test_an_empty_device_id_opens_the_backends_default_device(
     microphone_wired_to_a_reader,
 ):
-    microphone = a_microphone(device_id="")
-    context = microphone_wired_to_a_reader.microphone_context
-    microphone.setup(context)
+    microphone = microphone_wired_to_a_reader.a_microphone(device_id="")
     try:
+        microphone.built()
         assert any("<default>" in record for record in microphone_wired_to_a_reader.log_records)
     finally:
-        microphone.teardown(context)
+        microphone.stop()
 
 
-def test_a_microphone_stopped_and_started_again_keeps_publishing(
+def test_a_device_set_while_capturing_opens_it_and_keeps_publishing(
     microphone_wired_to_a_reader,
 ):
-    microphone = a_microphone()
-    context = microphone_wired_to_a_reader.microphone_context
-    microphone.setup(context)
+    """Mental-revert: leave the capture a set replaces open, and it keeps publishing beside the
+    new one."""
+    microphone = microphone_wired_to_a_reader.a_microphone()
     try:
-        microphone.start(context)
+        first = microphone.built()
         microphone_wired_to_a_reader.read_blocks(1)
-        microphone.stop(context)
-        microphone.start(context)
-        microphone_wired_to_a_reader.read_blocks(1)
+
+        microphone.set(device_id="")
+        second = microphone.built()
+        # What the capture taken over had handed off before the device was taken from it.
+        time.sleep(0.2)
+        published_by_the_first = first.published_block_count
+        microphone_wired_to_a_reader.read_blocks(BLOCKS_READ_PER_TEST)
     finally:
-        microphone.teardown(context)
+        microphone.stop()
+
+    assert second is not first
+    assert first.published_block_count == published_by_the_first, (
+        "the capture replaced publishes nothing more"
+    )
+    assert second.published_block_count >= BLOCKS_READ_PER_TEST
+    opened = [
+        record for record in microphone_wired_to_a_reader.log_records if "stream opened" in record
+    ]
+    assert len(opened) == 2, opened
 
 
-def test_a_microphone_never_set_up_or_started_tears_down_cleanly(
+def test_a_device_set_while_capturing_closes_the_capture_it_has_even_when_it_fails_to_open(
     microphone_wired_to_a_reader,
 ):
-    microphone = a_microphone()
-    context = microphone_wired_to_a_reader.microphone_context
-    microphone.stop(context)
-    microphone.teardown(context)
-    microphone.setup(context)
-    microphone.stop(context)
-    microphone.teardown(context)
+    """Mental-revert: open the device a set names beside the capture it replaces, and a device
+    that fails to open leaves the old one publishing."""
+    microphone = microphone_wired_to_a_reader.a_microphone()
+    try:
+        first = microphone.built()
+        microphone_wired_to_a_reader.read_blocks(1)
 
+        microphone.set(device_id="tatolab-no-such-microphone")
+        assert "tatolab-no-such-microphone" in microphone.why_the_last_build_failed()
+        published_once_closed = first.published_block_count
+        time.sleep(0.2)
+        published_after = first.published_block_count
+    finally:
+        microphone.stop()
 
-def test_start_before_setup_is_refused_by_name(microphone_wired_to_a_reader):
-    microphone = a_microphone()
-    with pytest.raises(RuntimeError, match="before setup"):
-        microphone.start(microphone_wired_to_a_reader.microphone_context)
+    assert published_after == published_once_closed, "the capture replaced publishes nothing more"
 
 
 def test_the_distribution_declares_the_node_for_the_node_catalog():
@@ -207,7 +228,7 @@ def test_the_distribution_declares_the_node_for_the_node_catalog():
     assert declared["MicrophoneSource"].load() is MicrophoneSource
 
 
-def test_the_device_is_a_setting_the_audio_capture_device_control_edits():
+def test_the_device_is_an_input_the_audio_capture_device_control_edits():
     device_id = next(
         port
         for port in getattr(MicrophoneSource, NODE_DECLARATION_INPUT_PORTS_STAMP)
@@ -220,5 +241,5 @@ def test_the_device_is_a_setting_the_audio_capture_device_control_edits():
         "annotations": {"control": "audio_capture_device"},
         "may_be_unset": True,
     }
-    assert device_id["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
+    assert device_id["input_mode"] == {"mode": "wire_or_value"}
     assert device_id["pin_default"] is None

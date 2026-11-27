@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use parking_lot::Mutex;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::descriptors::PinType;
-use streamlib::sdk::error::Error;
 use streamlib::sdk::nodes::ContinuousNode;
 use streamlib::sdk::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
 
@@ -93,11 +92,7 @@ impl ContinuousNode for NodeCountingItsBuilds::Node {
             counted.setups += 1;
             Arc::clone(&counted.device)
         });
-        self.lease = Some(
-            device
-                .open()
-                .map_err(|already_held| Error::Configuration(already_held.to_string()))?,
-        );
+        self.lease = Some(device.open());
         Ok(())
     }
 

@@ -642,7 +642,7 @@ mod tests {
         ));
         assert!(
             capture_refusal.to_string().contains(
-                "`let device = computed(move || … open_capture_stream_in_requested_format(…));`"
+                "`let device = computed(move |ctx| … open_capture_stream_in_requested_format(…));`"
             ),
             "{capture_refusal}"
         );
