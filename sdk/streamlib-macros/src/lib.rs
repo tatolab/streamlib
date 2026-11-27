@@ -41,7 +41,10 @@ fn node_function(attr: TokenStream, mut item_fn: ItemFn) -> TokenStream {
             Ok(node_meta) => node_meta,
             Err(err) => return err.to_compile_error().into(),
         };
-    let node_name = codegen::node_name_of_a_node_function(&item_fn.sig.ident);
+    let node_name = match codegen::node_name_of_a_node_function(&item_fn.sig.ident) {
+        Ok(node_name) => node_name,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let parsed = match attribute_grammar::parse2(attr.into(), node_meta, &node_name) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),

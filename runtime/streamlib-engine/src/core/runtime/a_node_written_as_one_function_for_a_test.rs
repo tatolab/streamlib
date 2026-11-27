@@ -22,6 +22,8 @@ use crate::sdk::nodes::{Input, computed};
 pub struct WhatTheNodeFunctionRan {
     /// How many times its body ran.
     pub bodies_run: usize,
+    /// How many builds of its computed value started, held or not.
+    pub builds_started: usize,
     /// The `gain` each build of its computed value read, in the order built.
     pub gains_built_from: Vec<i32>,
     /// How many frames ran.
@@ -34,6 +36,7 @@ pub struct WhatTheNodeFunctionRan {
 
 static RAN: Mutex<WhatTheNodeFunctionRan> = Mutex::new(WhatTheNodeFunctionRan {
     bodies_run: 0,
+    builds_started: 0,
     gains_built_from: Vec::new(),
     frames_run: 0,
     gain_the_latest_frame_read: None,
@@ -71,6 +74,7 @@ fn a_node_written_as_one_function(
     RAN.lock().bodies_run += 1;
     let built = computed(move || {
         let gain = *gain.get();
+        RAN.lock().builds_started += 1;
         let mut held = BUILDS_HELD.lock();
         while *held {
             BUILDS_LET_GO.wait(&mut held);

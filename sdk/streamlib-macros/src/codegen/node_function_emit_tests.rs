@@ -268,3 +268,16 @@ fn a_context_taken_mutably_is_refused() {
         "{refusal}"
     );
 }
+
+#[test]
+fn a_function_whose_name_makes_no_node_name_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn _1(gain: Input<f32>) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(refusal.contains("namesnonode"), "{refusal}");
+}

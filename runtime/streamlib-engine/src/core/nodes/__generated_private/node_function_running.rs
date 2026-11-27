@@ -9,6 +9,9 @@ use streamlib_scope::{FrameView, Scope, ScopeBeingDeclared, Writes};
 use crate::core::context::RuntimeContextLimitedAccess;
 use crate::core::error::{Error, Result};
 
+/// How long a frame waits when a computed value has no first value yet.
+const UNBUILT_FRAME_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1);
+
 /// The per-frame function a node's body returns.
 pub type PerFrameFunction =
     Box<dyn for<'ctx> FnMut(&RuntimeContextLimitedAccess<'ctx>) -> Result<()> + Send>;
@@ -48,12 +51,17 @@ impl NodeFunctionRunning {
     }
 
     /// Take the values built or written since the last frame, then run the per-frame function
-    /// once every computed value has its first value; until then, run nothing.
+    /// once every computed value has its first value. Until then, run nothing and wait
+    /// `UNBUILT_FRAME_BACKOFF`: a reactive node with a message waiting is called again at once,
+    /// and would otherwise spin its thread for as long as its first build runs.
     pub fn run_a_frame(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         let Self {
             per_frame, view, ..
         } = self;
-        view.run_frame(|| per_frame(ctx)).unwrap_or(Ok(()))
+        view.run_frame(|| per_frame(ctx)).unwrap_or_else(|| {
+            std::thread::sleep(UNBUILT_FRAME_BACKOFF);
+            Ok(())
+        })
     }
 
     /// Write the inputs `writes` names to the scope, all as one write.

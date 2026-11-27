@@ -207,6 +207,11 @@ fn removing_the_node_drops_every_value_it_built_and_builds_nothing_after() {
     what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
     let builds_held = hold_the_builds();
     set_the_gain(&played.stream, played.node, 7);
+    let building_7 = what_the_node_ran_once_it_holds(|ran| ran.builds_started == 2);
+    assert_eq!(
+        building_7.builds_started, 2,
+        "the build of 7 starts: {building_7:?}"
+    );
     // The build of 7 is held as the removal starts, and goes while the removal waits on it.
     let letting_go = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));

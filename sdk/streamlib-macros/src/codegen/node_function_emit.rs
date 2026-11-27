@@ -29,10 +29,21 @@ use crate::grammar::{
 };
 
 /// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase,
-/// as the struct form names a node after its struct.
-pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> Ident {
+/// as the struct form names a node after its struct. Refused when that is no identifier, as
+/// for `_1`.
+pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> syn::Result<Ident> {
     let name = streamlib_node_schema::to_pascal_case(&function_ident.to_string());
-    Ident::new(&name, function_ident.span())
+    let Ok(node_name) = syn::parse_str::<Ident>(&name) else {
+        return Err(syn::Error::new(
+            function_ident.span(),
+            format!(
+                "node function `{function_ident}` names no node: its name in UpperCamelCase, \
+                 `{name}`, is not an identifier — name the function in snake_case starting with \
+                 a letter"
+            ),
+        ));
+    };
+    Ok(Ident::new(&node_name.to_string(), function_ident.span()))
 }
 
 /// The refusal of a value input declared on a struct, which only a node written as one function
@@ -55,17 +66,17 @@ pub(crate) fn generate_from_a_node_function(
     parsed: &ParsedNodeAttr,
     sdk_root: TokenStream,
 ) -> TokenStream {
-    let read = refuse_a_form_the_function_does_not_take(&item, parsed)
-        .and_then(|()| read_the_node_function(&mut item, parsed));
-    let read = match read {
-        Ok(read) => read,
+    let read_and_named = refuse_a_form_the_function_does_not_take(&item, parsed)
+        .and_then(|()| node_name_of_a_node_function(&item.sig.ident))
+        .and_then(|module_name| Ok((read_the_node_function(&mut item, parsed)?, module_name)));
+    let (read, module_name) = match read_and_named {
+        Ok(read_and_named) => read_and_named,
         Err(refusal) => {
             let refusal = refusal.to_compile_error();
             return quote! { #item #refusal };
         }
     };
     let function_ident = &item.sig.ident;
-    let module_name = node_name_of_a_node_function(function_ident);
     let module_visibility = &item.vis;
     let member_visibility =
         author_visibility_written_from_a_nested_module(&item.vis, GENERATED_MODULE_MEMBER_DEPTH);
