@@ -250,3 +250,21 @@ fn a_value_input_on_a_struct_is_refused() {
         "{refusal}"
     );
 }
+
+#[test]
+fn a_context_taken_mutably_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node(gain: Input<f32>, ctx: &mut RuntimeContextFullAccess<'_>)
+                -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>
+            {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        refusal.contains("parameter`ctx`ofanodefunctionisnotoneanodefunctiontakes"),
+        "{refusal}"
+    );
+}

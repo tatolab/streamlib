@@ -106,13 +106,24 @@ pub fn forget_what_the_node_function_ran() {
     let_the_builds_go();
 }
 
-/// Hold each build of the node's computed value until `let_the_builds_go`.
-pub fn hold_the_builds() {
-    *BUILDS_HELD.lock() = true;
+/// Each build of the node's computed value held until this is dropped, so a test that fails
+/// while builds are held lets them go as it unwinds instead of waiting on them forever.
+#[must_use = "the builds are let go when this is dropped"]
+pub struct TheBuildsHeld(());
+
+impl Drop for TheBuildsHeld {
+    fn drop(&mut self) {
+        let_the_builds_go();
+    }
 }
 
-/// Let each held build of the node's computed value go, and each later one run at once.
-pub fn let_the_builds_go() {
+/// Hold each build of the node's computed value until what this returns is dropped.
+pub fn hold_the_builds() -> TheBuildsHeld {
+    *BUILDS_HELD.lock() = true;
+    TheBuildsHeld(())
+}
+
+fn let_the_builds_go() {
     *BUILDS_HELD.lock() = false;
     BUILDS_LET_GO.notify_all();
 }

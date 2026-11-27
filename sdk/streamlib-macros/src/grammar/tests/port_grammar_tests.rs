@@ -954,3 +954,12 @@ fn a_value_input_and_a_port_sharing_a_name_is_an_error() {
         "got: {msg}"
     );
 }
+
+#[test]
+fn a_port_stating_a_default_is_told_a_port_takes_none() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("gain", pin_type = Float, default = 0.5),
+    });
+    assert!(msg.contains("a port takes no `default`"), "got: {msg}");
+}

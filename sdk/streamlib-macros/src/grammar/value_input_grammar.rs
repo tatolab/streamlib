@@ -48,6 +48,15 @@ pub(super) fn value_input_type_and_default(
     default: Option<Expr>,
     first_port_key: Option<(String, proc_macro2::Span)>,
 ) -> syn::Result<(Type, Expr)> {
+    let Some(value_type) = value_type else {
+        return Err(syn::Error::new(
+            name_span,
+            format!(
+                "input `{name}` declares a `default` and no `value = <type>` — a port takes no \
+                 `default`, and a value input states the type of the value it holds"
+            ),
+        ));
+    };
     if let Some((key, key_span)) = first_port_key {
         return Err(syn::Error::new(
             key_span,
@@ -58,15 +67,6 @@ pub(super) fn value_input_type_and_default(
             ),
         ));
     }
-    let Some(value_type) = value_type else {
-        return Err(syn::Error::new(
-            name_span,
-            format!(
-                "input `{name}` declares a `default` and no `value = <type>` — a value input \
-                 states the type of the value it holds"
-            ),
-        ));
-    };
     let Some(default) = default else {
         return Err(syn::Error::new(
             name_span,

@@ -562,6 +562,7 @@ fn last_path_segment(ty: &Type) -> Option<&syn::PathSegment> {
 
 fn role_of_a_parameter(parameter: &Ident, ty: &Type) -> syn::Result<ParameterRole> {
     if let Type::Reference(reference) = ty
+        && reference.mutability.is_none()
         && last_path_segment(&reference.elem)
             .is_some_and(|segment| segment.ident == "RuntimeContextFullAccess")
     {

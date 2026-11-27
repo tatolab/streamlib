@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::core::graph::NodeRunId;
 use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_node_written_as_one_function_for_a_test::{
-    WhatTheNodeFunctionRan, forget_what_the_node_function_ran, hold_the_builds, let_the_builds_go,
+    WhatTheNodeFunctionRan, forget_what_the_node_function_ran, hold_the_builds,
     the_node_type_written_as_one_function, what_the_node_function_ran,
 };
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
@@ -170,7 +170,7 @@ fn a_value_held_before_the_stream_starts_is_the_one_the_first_build_reads() {
 fn no_frame_runs_before_the_computed_value_is_first_built() {
     let project_directory = tempfile::tempdir().unwrap();
     let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
-    hold_the_builds();
+    let builds_held = hold_the_builds();
     start(&played.stream);
 
     // The node is continuous at 5 ms, so an ungated node runs frames many times over in this.
@@ -186,7 +186,7 @@ fn no_frame_runs_before_the_computed_value_is_first_built() {
         "no frame runs before the computed value has its first value: {while_held:?}"
     );
 
-    let_the_builds_go();
+    drop(builds_held);
     let built = what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
     assert_eq!(built.gains_built_from, [1], "{built:?}");
     assert_eq!(built.gain_the_latest_frame_read, Some(1), "{built:?}");
@@ -205,19 +205,19 @@ fn removing_the_node_drops_every_value_it_built_and_builds_nothing_after() {
     let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
     start(&played.stream);
     what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read.is_some());
-    hold_the_builds();
+    let builds_held = hold_the_builds();
     set_the_gain(&played.stream, played.node, 7);
     // The build of 7 is held as the removal starts, and goes while the removal waits on it.
-    let letting_go = std::thread::spawn(|| {
+    let letting_go = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
-        let_the_builds_go();
+        drop(builds_held);
     });
 
     played
         .stream
         .remove_node(&played.node_run_id)
         .expect("the node is removed while the stream plays");
-    let removed = what_the_node_ran_once_it_holds(|ran| every_value_built_is_dropped(ran));
+    let removed = what_the_node_ran_once_it_holds(every_value_built_is_dropped);
     assert!(
         every_value_built_is_dropped(&removed),
         "every value the node built is dropped once it is removed: {removed:?}"
