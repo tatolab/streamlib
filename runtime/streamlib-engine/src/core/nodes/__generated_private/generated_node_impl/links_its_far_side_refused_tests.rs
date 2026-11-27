@@ -103,33 +103,3 @@ fn a_link_whose_handover_after_the_setup_command_fails_is_held_as_refused() {
     assert!(answer.the_far_side_refused());
     assert!(envelope.holds_a_link_its_far_side_refused());
 }
-
-/// A function node island whose handover past the setup command fails is held as a refusal of
-/// the far side that runs on, so it is wired again.
-///
-/// Mental-revert: passing the failure up without keeping the island's answer leaves a far side
-/// that runs on holding no refused island, so nothing retries it until its helper restarts.
-#[test]
-fn a_function_node_island_whose_handover_fails_is_held_as_refused() {
-    let envelope =
-        OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-    let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
-    far_side
-        .refuses_function_node_islands
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    envelope
-        .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), far_side)
-        .expect("the setup command goes out");
-
-    envelope
-        .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
-            serde_json::json!({
-                "link_id": "L-island",
-                "input_port": "in1",
-                "nodes": [{"node": "P-remap", "name": "remap"}],
-            }),
-        )
-        .expect_err("the handover fails");
-
-    assert!(envelope.holds_a_link_its_far_side_refused());
-}

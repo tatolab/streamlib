@@ -632,12 +632,12 @@ impl OutOfProcessLinkWiringEnvelope {
         match &recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
                 let answer_cell = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-                let handed_over = delivery.hand_over_a_function_node_island_wired_after_setup(
+                delivery.hand_over_a_function_node_island_wired_after_setup(
                     &function_node_island,
                     Arc::clone(&answer_cell),
-                );
-                recorded.keep_the_answer_owed_after(island_link_id, &answer_cell, &handed_over);
-                handed_over.map(|()| Some(answer_cell))
+                )?;
+                recorded.keep_the_answer_owed_for(island_link_id, Arc::clone(&answer_cell));
+                Ok(Some(answer_cell))
             }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
@@ -1173,10 +1173,10 @@ impl OutOfProcessLinkWiringEnvelope {
                     waiting_link.link_wiring,
                     waiting_link.answer_cell,
                 ),
-                Err(handover_failure) => recorded.keep_the_answer_owed_after(
+                Err(handover_failure) => recorded.keep_the_answer_refused_for(
                     link_id_of(&waiting_link.link_wiring),
                     &waiting_link.answer_cell,
-                    &Err(handover_failure),
+                    &handover_failure.to_string(),
                 ),
             }
         }

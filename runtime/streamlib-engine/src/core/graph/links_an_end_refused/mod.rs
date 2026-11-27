@@ -20,9 +20,10 @@ impl Graph {
         node_run_id: &NodeRunId,
     ) -> Vec<LinkUniqueId> {
         let mut refused: Vec<LinkUniqueId> = Vec::new();
-        let read_through_the_node = |link: &&Link| {
-            the_readers_a_link_into_reaches(self, link.to_port().node_run_id())
-                .contains(node_run_id)
+        let refused_and_read_through_the_node = |link: &&Link| {
+            an_end_refused_the_link(link)
+                && the_readers_a_link_into_reaches(self, link.to_port().node_run_id())
+                    .contains(node_run_id)
         };
         for link in self
             .traversal()
@@ -30,7 +31,12 @@ impl Graph {
             .in_e()
             .iter()
             .chain(self.traversal().v(node_run_id).out_e().iter())
-            .chain(self.traversal().e(()).iter().filter(read_through_the_node))
+            .chain(
+                self.traversal()
+                    .e(())
+                    .iter()
+                    .filter(refused_and_read_through_the_node),
+            )
         {
             if an_end_refused_the_link(link) && !refused.contains(&link.id) {
                 refused.push(link.id.clone());

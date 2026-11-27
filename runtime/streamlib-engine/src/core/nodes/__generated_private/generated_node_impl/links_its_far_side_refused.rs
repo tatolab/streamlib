@@ -10,7 +10,6 @@ use super::{
     LinkAwaitingHandoverBehindTheSetupCommand, OutOfProcessLinkWiringEnvelope,
     RecordedLinksAndHowTheNextReachesTheFarSide,
 };
-use crate::core::Result;
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
 impl OutOfProcessLinkWiringEnvelope {
@@ -38,17 +37,15 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
             .push((link_id, answer_cell));
     }
 
-    /// Keep `answer_cell` as the one answer owed for `link_id` after its handover, refused in
-    /// the words of the failure when `handed_over` failed, so the link is wired again.
-    pub(super) fn keep_the_answer_owed_after(
+    /// Keep `answer_cell` as the one answer owed for `link_id`, refused for `reason`, so the
+    /// link is wired again.
+    pub(super) fn keep_the_answer_refused_for(
         &mut self,
         link_id: Option<String>,
         answer_cell: &Arc<OutOfProcessLinkWireReply>,
-        handed_over: &Result<()>,
+        reason: &str,
     ) {
-        if let Err(handover_failure) = handed_over {
-            refuse_because(answer_cell, &handover_failure.to_string());
-        }
+        refuse_because(answer_cell, reason);
         self.keep_the_answer_owed_for(link_id, Arc::clone(answer_cell));
     }
 
