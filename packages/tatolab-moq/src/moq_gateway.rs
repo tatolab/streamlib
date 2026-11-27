@@ -43,10 +43,9 @@ const CONTENT_SAMPLES_A_PASS_WRITES_PER_TRACK: usize = 64;
 /// How long after a read ends a fresh one starts for the same request.
 const A_READ_THAT_ENDED_STARTS_AGAIN_AFTER: Duration = Duration::from_secs(1);
 
-/// How long a gateway this one takes its node's services from has to close its
-/// session and end: its pass wakes every 20 ms, and its async runtime is given
-/// a second to shut down.
-const A_GATEWAY_BEFORE_IT_ENDS_WITHIN: Duration = Duration::from_secs(3);
+/// How long a gateway of the same node this one takes over from has to close its session and
+/// end, its async runtime's shutdown included.
+const A_GATEWAY_BEFORE_ENDS_WITHIN: Duration = Duration::from_secs(3);
 
 /// How long a session that never connects is held before it is dialed afresh.
 const A_SESSION_THAT_NEVER_CONNECTS_IS_REDIALED_AFTER: Duration = Duration::from_secs(10);
@@ -74,7 +73,7 @@ impl MoqGatewayThread {
         let thread = MoqNodeThread::spawn_holding(
             &holding,
             "moq-gateway",
-            A_GATEWAY_BEFORE_IT_ENDS_WITHIN,
+            A_GATEWAY_BEFORE_ENDS_WITHIN,
             || {
                 let async_runtime = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)

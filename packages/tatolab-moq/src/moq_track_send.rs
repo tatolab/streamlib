@@ -21,6 +21,9 @@ use crate::moq_node_thread::MoqNodeThread;
 /// How often a running track node declares its track again.
 pub const A_TRACK_IS_DECLARED_AGAIN_EVERY: Duration = Duration::from_secs(1);
 
+/// How long a declaration of the same track node this one takes over from has to end.
+const A_TRACK_DECLARATION_BEFORE_ENDS_WITHIN: Duration = Duration::from_secs(2);
+
 /// What a track node declares.
 #[derive(Debug, Clone)]
 pub struct MoqTrackDeclared {
@@ -46,7 +49,7 @@ impl MoqTrackDeclarationThread {
         let thread = MoqNodeThread::spawn_holding(
             &holding,
             "moq-track-declaration",
-            A_THREAD_BEFORE_ENDS_WITHIN,
+            A_TRACK_DECLARATION_BEFORE_ENDS_WITHIN,
             || MoqTrackDeclarationOpened::open(ipc, &declared),
             |opened, stop_signal| loop {
                 match publish_slice(&opened.control, (), &opened.declaration) {
@@ -70,9 +73,6 @@ impl MoqTrackDeclarationThread {
         self.thread.stop_and_join(timeout)
     }
 }
-
-/// How long a declaration of the same track node this one takes over from has to end.
-const A_THREAD_BEFORE_ENDS_WITHIN: Duration = Duration::from_secs(2);
 
 /// What a track node's declaration thread holds while it declares.
 struct MoqTrackDeclarationOpened {

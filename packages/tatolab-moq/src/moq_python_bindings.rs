@@ -58,6 +58,18 @@ fn json_of(python_value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
 /// is bounded well under it; a relay session closing takes the longest.
 const A_NATIVE_THREAD_ENDS_WITHIN: Duration = Duration::from_secs(5);
 
+/// Wait, without the GIL, up to `A_NATIVE_THREAD_ENDS_WITHIN` for a node's native thread to
+/// stop, warning with `still_finishing` when it has not.
+fn close_waiting_for(
+    python: Python<'_>,
+    still_finishing: &str,
+    stop_and_join: impl FnOnce(Duration) -> bool + Send,
+) {
+    if !python.detach(|| stop_and_join(A_NATIVE_THREAD_ENDS_WITHIN)) {
+        tracing::warn!("{still_finishing}");
+    }
+}
+
 /// A gateway's `settings` input, opened once by its node and read by each
 /// gateway it starts: the settings the last message laid over the config
 /// outlive the gateway that read them, so a gateway started for a new relay
@@ -134,9 +146,11 @@ impl MoqGatewayThread {
     /// Close the relay session and stop the thread, waiting for it; a gateway
     /// started after it for the same node has closed it already.
     fn close(&mut self, python: Python<'_>) {
-        if !python.detach(|| self.gateway.stop_and_join(A_NATIVE_THREAD_ENDS_WITHIN)) {
-            tracing::warn!("MoqGateway: the relay session is still closing");
-        }
+        close_waiting_for(
+            python,
+            "MoqGateway: the relay session is still closing",
+            |timeout| self.gateway.stop_and_join(timeout),
+        );
     }
 }
 
@@ -151,6 +165,7 @@ fn the_settings_source_of(
 ) -> crate::moq_gateway::MoqGatewaySettingsSource {
     let mut settings_not_yet_read = true;
     Box::new(move || {
+        let first_read = std::mem::take(&mut settings_not_yet_read);
         let Ok(mut settings_read) = settings_read.lock() else {
             return None;
         };
@@ -165,20 +180,22 @@ fn the_settings_source_of(
                 }
             }
         }
-        if let Some(message) = newest_message {
-            match the_json_map_of_a_settings_message(message.payload()) {
-                Ok(values) => settings_read.values_the_last_message_set = values,
-                Err(refusal) => {
-                    tracing::warn!("MoqGateway: a `settings` message is refused: {refusal}");
-                    if !settings_not_yet_read {
-                        return None;
-                    }
-                }
+        let values_changed = match newest_message
+            .map(|message| the_json_map_of_a_settings_message(message.payload()))
+        {
+            Some(Ok(values)) => {
+                settings_read.values_the_last_message_set = values;
+                true
             }
-        } else if !std::mem::take(&mut settings_not_yet_read) {
+            Some(Err(refusal)) => {
+                tracing::warn!("MoqGateway: a `settings` message is refused: {refusal}");
+                false
+            }
+            None => false,
+        };
+        if !values_changed && !first_read {
             return None;
         }
-        settings_not_yet_read = false;
         let settings = the_config_with_the_message_values_laid_over(
             &config_settings,
             &settings_read.values_the_last_message_set,
@@ -258,9 +275,11 @@ impl MoqTrackDeclarationThread {
 
     /// Stop declaring the track and wait for the thread.
     fn close(&mut self, python: Python<'_>) {
-        if !python.detach(|| self.declaration.stop_and_join(A_NATIVE_THREAD_ENDS_WITHIN)) {
-            tracing::warn!("MoqTrack: the declaration thread is still finishing");
-        }
+        close_waiting_for(
+            python,
+            "MoqTrack: the declaration thread is still finishing",
+            |timeout| self.declaration.stop_and_join(timeout),
+        );
     }
 }
 
@@ -273,8 +292,8 @@ struct MoqTrackSendPublisher {
 impl MoqTrackSendPublisher {
     fn publisher(&mut self) -> PyResult<&mut MoqTrackSendRunningPublisher> {
         self.publisher.as_mut().ok_or_else(|| {
-            MoqModuleError::Refused {
-                what: "MoqTrackSend writes through a publisher it has closed".into(),
+            MoqModuleError::Closed {
+                what: "MoqTrackSend's publisher",
             }
             .into()
         })
@@ -482,9 +501,11 @@ impl MoqTrackReceiveThread {
     /// Stop the thread and wait for it; a receive started after it for the
     /// same node has stopped it already.
     fn close(&mut self, python: Python<'_>) {
-        if !python.detach(|| self.receive.stop_and_join(A_NATIVE_THREAD_ENDS_WITHIN)) {
-            tracing::warn!("MoqTrackReceive: the receive thread is still finishing");
-        }
+        close_waiting_for(
+            python,
+            "MoqTrackReceive: the receive thread is still finishing",
+            |timeout| self.receive.stop_and_join(timeout),
+        );
     }
 }
 

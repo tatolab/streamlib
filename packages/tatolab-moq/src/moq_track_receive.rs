@@ -7,16 +7,16 @@
 
 use std::time::{Duration, Instant};
 
+use iceoryx2::port::listener::Listener;
+use iceoryx2::port::notifier::Notifier;
+use iceoryx2::prelude::ipc_threadsafe;
+
 use crate::error::{MoqModuleError, Result};
 use crate::moq_catalog::{
     packets_stream_facts_read_from_hang_catalog_entry,
     the_track_carries_its_timestamp_in_the_hang_legacy_container,
 };
 use crate::moq_hang_legacy_container::read_hang_legacy_container_media_frame;
-use iceoryx2::port::listener::Listener;
-use iceoryx2::port::notifier::Notifier;
-use iceoryx2::prelude::ipc_threadsafe;
-
 use crate::moq_node_ipc::{
     MoqGatewayControlMessage, MoqNodeIpc, MoqNodeSlicePublisher, MoqNodeSliceSubscriber,
     MoqReceivedContentSampleKind, MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,

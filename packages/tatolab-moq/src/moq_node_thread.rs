@@ -10,65 +10,58 @@
 //! finds it already ended.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::error::{MoqModuleError, Result};
 
+/// A flag set once, which a thread may wait on. Only a bool is set under its lock, so a
+/// poisoned lock still holds a flag worth reading.
+#[derive(Default)]
+struct OneShotLatch {
+    set: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl OneShotLatch {
+    fn set(&self) {
+        *self.set.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.changed.notify_all();
+    }
+
+    fn is_set(&self) -> bool {
+        *self.set.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Wait up to `timeout` for the flag; whether it is set.
+    fn wait_up_to(&self, timeout: Duration) -> bool {
+        let set = self.set.lock().unwrap_or_else(PoisonError::into_inner);
+        *self
+            .changed
+            .wait_timeout_while(set, timeout, |set| !*set)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+    }
+}
+
 /// Asked once, when the node stops; its thread checks it between passes or
 /// waits on it.
 #[derive(Default)]
 pub struct MoqNodeThreadStopSignal {
-    stop_requested: Mutex<bool>,
-    stop_requested_changed: Condvar,
-    ended: Mutex<bool>,
-    ended_changed: Condvar,
+    stop_requested: OneShotLatch,
+    ended: OneShotLatch,
 }
 
 impl MoqNodeThreadStopSignal {
     /// Whether the node asked its thread to stop.
     pub fn is_requested(&self) -> bool {
-        self.stop_requested
-            .lock()
-            .map(|stop_requested| *stop_requested)
-            .unwrap_or(true)
+        self.stop_requested.is_set()
     }
 
     /// Wait up to `timeout` for a stop; whether one was asked.
     pub fn wait_for_a_stop_up_to(&self, timeout: Duration) -> bool {
-        let Ok(stop_requested) = self.stop_requested.lock() else {
-            return true;
-        };
-        self.stop_requested_changed
-            .wait_timeout_while(stop_requested, timeout, |stop_requested| !*stop_requested)
-            .map(|(stop_requested, _)| *stop_requested)
-            .unwrap_or(true)
-    }
-
-    fn request(&self) {
-        if let Ok(mut stop_requested) = self.stop_requested.lock() {
-            *stop_requested = true;
-        }
-        self.stop_requested_changed.notify_all();
-    }
-
-    fn mark_ended(&self) {
-        if let Ok(mut ended) = self.ended.lock() {
-            *ended = true;
-        }
-        self.ended_changed.notify_all();
-    }
-
-    /// Wait up to `timeout` for the thread to end; whether it did.
-    fn wait_until_ended_up_to(&self, timeout: Duration) -> bool {
-        let Ok(ended) = self.ended.lock() else {
-            return true;
-        };
-        self.ended_changed
-            .wait_timeout_while(ended, timeout, |ended| !*ended)
-            .map(|(ended, _)| *ended)
-            .unwrap_or(true)
+        self.stop_requested.wait_up_to(timeout)
     }
 }
 
@@ -77,26 +70,33 @@ struct MarkedEndedWhenDropped(Arc<MoqNodeThreadStopSignal>);
 
 impl Drop for MarkedEndedWhenDropped {
     fn drop(&mut self) {
-        self.0.mark_ended();
+        self.0.ended.set();
     }
 }
 
-/// The thread of this process holding each node's services, by the name of the service that
-/// names its holder.
-static THE_HOLDER_OF_EACH_NODES_SERVICES: LazyLock<
-    Mutex<HashMap<String, Arc<MoqNodeThreadStopSignal>>>,
-> = LazyLock::new(Mutex::default);
+/// The thread holding one node's services, if any; locked for the whole of a takeover, so two
+/// threads started for one node take the services in turn.
+type HoldersSlot = Arc<Mutex<Option<Arc<MoqNodeThreadStopSignal>>>>;
 
-fn the_holders() -> MutexGuard<'static, HashMap<String, Arc<MoqNodeThreadStopSignal>>> {
-    THE_HOLDER_OF_EACH_NODES_SERVICES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// The slot of each node's services in this process, by the name of the service that names its
+/// holder. Locked only to find a slot, never across a takeover.
+static THE_SLOT_OF_EACH_NODES_SERVICES: LazyLock<Mutex<HashMap<String, HoldersSlot>>> =
+    LazyLock::new(Mutex::default);
+
+fn the_slot_of(holding: &str) -> HoldersSlot {
+    Arc::clone(
+        THE_SLOT_OF_EACH_NODES_SERVICES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(holding.to_owned())
+            .or_default(),
+    )
 }
 
 /// A node's running thread, stopped and joined by its node.
 pub struct MoqNodeThread {
     stop_signal: Arc<MoqNodeThreadStopSignal>,
-    holding: Option<String>,
+    holding: Option<HoldersSlot>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -136,45 +136,44 @@ impl MoqNodeThread {
         open: impl FnOnce() -> Result<Opened>,
         body: impl FnOnce(Opened, &MoqNodeThreadStopSignal) + Send + 'static,
     ) -> Result<Self> {
-        let mut holders = the_holders();
-        if let Some(holder_before) = holders.get(holding) {
-            holder_before.request();
-            if !holder_before.wait_until_ended_up_to(taken_over_within) {
-                return Err(MoqModuleError::Ipc {
-                    what: format!(
-                        "the thread holding `{holding}` before did not end within \
-                         {taken_over_within:?}, so its services are not taken from it"
-                    ),
+        let slot = the_slot_of(holding);
+        let mut holder = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(holder_before) = holder.as_ref() {
+            holder_before.stop_requested.set();
+            if !holder_before.ended.wait_up_to(taken_over_within) {
+                return Err(MoqModuleError::HolderDidNotEnd {
+                    holding: holding.to_owned(),
+                    within: taken_over_within,
                 });
             }
-            holders.remove(holding);
         }
         let opened = open()?;
         let mut thread = Self::spawn(thread_name, move |stop_signal| body(opened, stop_signal))?;
-        holders.insert(holding.to_owned(), Arc::clone(&thread.stop_signal));
-        thread.holding = Some(holding.to_owned());
+        *holder = Some(Arc::clone(&thread.stop_signal));
+        drop(holder);
+        thread.holding = Some(slot);
         Ok(thread)
     }
 
     /// Stop the thread and wait up to `timeout` for it; whether it ended. A thread a later one
     /// took its services from has ended already.
     pub fn stop_and_join(&mut self, timeout: Duration) -> bool {
-        self.stop_signal.request();
+        self.stop_signal.stop_requested.set();
         let Some(thread) = self.thread.take() else {
             return true;
         };
-        if !self.stop_signal.wait_until_ended_up_to(timeout) {
+        if !self.stop_signal.ended.wait_up_to(timeout) {
             self.thread = Some(thread);
             return false;
         }
         let _ = thread.join();
-        if let Some(holding) = self.holding.take() {
-            let mut holders = the_holders();
-            if holders
-                .get(&holding)
+        if let Some(slot) = self.holding.take() {
+            let mut holder = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if holder
+                .as_ref()
                 .is_some_and(|holder| Arc::ptr_eq(holder, &self.stop_signal))
             {
-                holders.remove(&holding);
+                *holder = None;
             }
         }
         true
