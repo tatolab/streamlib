@@ -109,7 +109,8 @@ def CameraSource(
     The open camera is a computed value: a change to any input opens the camera again while the
     stream plays. Another camera opens while the one it replaces keeps publishing; the same
     camera is taken over, the capture it replaces closed first. A camera that fails to open
-    shows on the node, and the capture it was to replace keeps publishing.
+    shows on the node; the capture it was to replace keeps publishing when it holds another
+    camera, and nothing publishes until the next set when it held the same one.
     """
     del video  # Lent to the native half, which publishes on it.
     module_host_table = ctx.open_module_host_table(output_ports=[VIDEO_OUTPUT_PORT])

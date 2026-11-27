@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use StubExclusiveDeviceEvent::{Closed, Opened};
+use StubExclusiveDeviceEvent::{Closed, Opened, Released};
 
 #[test]
 fn one_holder_after_another_opens_and_closes_it_each_time() {
@@ -27,7 +27,7 @@ fn one_holder_after_another_opens_and_closes_it_each_time() {
 /// Mental-revert: an open beside the holder leaves two holders, the first closed only after the
 /// second opened.
 #[test]
-fn an_open_while_it_is_held_closes_the_holder_first_and_its_drop_closes_nothing_more() {
+fn an_open_while_it_is_held_closes_the_holder_first_and_its_drop_only_releases_it() {
     let device = Arc::new(StubExclusiveDevice::default());
     let first = device.open();
 
@@ -39,7 +39,8 @@ fn an_open_while_it_is_held_closes_the_holder_first_and_its_drop_closes_nothing_
         [
             Opened { holder: 0 },
             Closed { holder: 0 },
-            Opened { holder: 1 }
+            Opened { holder: 1 },
+            Released { holder: 0 }
         ]
     );
     drop(second);

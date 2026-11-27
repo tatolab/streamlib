@@ -6,7 +6,7 @@
 //! opens. So a computed value opening a device in place of the value it replaces never holds the
 //! device beside it, and an exclusive device is never refused as busy by its own node.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::audio_capture_streams::locked;
 
@@ -42,6 +42,25 @@ impl<S: ?Sized> AudioStreamOnADevice<S> {
         if let Some(mut stream) = given_up {
             stop(&mut *stream);
         }
+    }
+}
+
+/// Take `device_id` over from each stream in `opened` on it, stopping each with `stop`; the
+/// streams are collected first so no stop runs with `opened` locked.
+pub(super) fn take_the_device_over_from<O, S: ?Sized>(
+    opened: &Mutex<Vec<Option<Arc<O>>>>,
+    device_id: Option<&str>,
+    stream_of: impl Fn(&O) -> &AudioStreamOnADevice<S>,
+    stop: impl Fn(&mut S),
+) {
+    let taken_over: Vec<Arc<O>> = locked(opened)
+        .iter()
+        .flatten()
+        .filter(|opened| stream_of(opened).is_on(device_id))
+        .cloned()
+        .collect();
+    for opened in taken_over {
+        stream_of(&opened).give_its_device_up(&stop);
     }
 }
 

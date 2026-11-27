@@ -3,13 +3,14 @@
 
 //! A device held as a computed value is opened again by an input set while its stream plays,
 //! with no stop and no node rebuilt: the new open takes the device over, closing the value it
-//! replaces before it opens, so two holders never have it.
+//! replaces before it opens, so two holders never have it, and the replaced value is dropped.
 
 use super::node_holding_the_stub_device_as_a_computed_value::{
     NodeHoldingTheStubDevice, THE_DEVICE_HOLDING_NODES_WIDTH,
     register_the_node_holding_the_stub_device_once, the_device_held_in,
 };
-use super::stub_exclusive_device::StubExclusiveDeviceEvent::{Closed, Opened};
+use super::stub_exclusive_device::StubExclusiveDevice;
+use super::stub_exclusive_device::StubExclusiveDeviceEvent::{Closed, Opened, Released};
 use super::*;
 
 /// How long an open may take to follow the value it was opened at.
@@ -33,20 +34,25 @@ fn a_project_whose_main_stream_holds_the_stub_device_as_a_computed_value()
     }))
 }
 
-async fn wait_until_the_device_of(stream_id: &str, opened: usize) {
+async fn wait_until_the_device_of(
+    stream_id: &str,
+    counted: fn(&StubExclusiveDevice) -> usize,
+    reaches: usize,
+) {
     let deadline = std::time::Instant::now() + OPENED_WITHIN;
-    while the_device_held_in(stream_id, |held| held.device().opens()) < opened {
+    while the_device_held_in(stream_id, |held| counted(held.device())) < reaches {
         assert!(
             std::time::Instant::now() < deadline,
-            "the device opens {opened} times within {OPENED_WITHIN:?}: {:?}",
+            "the device's count reaches {reaches} within {OPENED_WITHIN:?}: {:?}",
             the_device_held_in(stream_id, |held| held.device().events())
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
-/// Mental-revert: an open beside the value it replaces leaves two holders, the first closed
-/// only after the second opened; a node rebuilt by the set runs its body again.
+/// Mental-revert: a set that never rebuilds the computed value opens the device once; an engine
+/// that keeps the replaced value never releases its lease; a node rebuilt by the set runs its
+/// body again.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_device_opened_again_by_an_input_set_while_playing_closes_the_one_it_replaces_first() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -54,7 +60,7 @@ async fn a_device_opened_again_by_an_input_set_while_playing_closes_the_one_it_r
     let (stream_id, _served) = engine
         .the_stream_main_of_the_project_started_and_served(&project)
         .await;
-    wait_until_the_device_of(&stream_id, 1).await;
+    wait_until_the_device_of(&stream_id, StubExclusiveDevice::opens, 1).await;
 
     let answer = engine
         .the_answer_or_the_refusal_of(
@@ -71,7 +77,7 @@ async fn a_device_opened_again_by_an_input_set_while_playing_closes_the_one_it_r
         answer.get("nodes_rebuilt").is_none(),
         "no node is rebuilt: {answer}"
     );
-    wait_until_the_device_of(&stream_id, 2).await;
+    wait_until_the_device_of(&stream_id, StubExclusiveDevice::releases, 1).await;
 
     let (bodies_run, events) = the_device_held_in(&stream_id, |held| {
         (held.bodies_run(), held.device().events())
@@ -82,9 +88,10 @@ async fn a_device_opened_again_by_an_input_set_while_playing_closes_the_one_it_r
         [
             Opened { holder: 0 },
             Closed { holder: 0 },
-            Opened { holder: 1 }
+            Opened { holder: 1 },
+            Released { holder: 0 }
         ],
-        "the device opened at 640 closes before the one at 1280 opens"
+        "the device opened at 640 closes before the one at 1280 opens, and its value is dropped"
     );
     let listing = the_listing_of(&engine.operations_on_the_loaded_streams(), &stream_id).await;
     assert_eq!(listing["state"], "running", "{listing}");

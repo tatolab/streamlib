@@ -52,7 +52,7 @@ fn each_call_is_refused_in_a_frame_by_its_own_code_and_shows_it_wrapped_in_a_com
     assert_eq!(
         kernel_refused.to_string(),
         "`create_compute_kernel` creates a kernel and can't run every frame; wrap it in a \
-         computed value in the node's body: `let kernel = computed(move || … \
+         computed value in the node's body: `let kernel = computed(move |ctx| … \
          create_compute_kernel(…));`, then read `kernel.get()` in the per-frame function"
     );
 }

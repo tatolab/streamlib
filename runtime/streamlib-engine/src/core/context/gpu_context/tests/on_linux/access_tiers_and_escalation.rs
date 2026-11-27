@@ -236,7 +236,7 @@ fn a_kernel_created_in_a_frame_is_refused_and_one_created_in_the_body_or_a_build
     assert!(
         refusal
             .to_string()
-            .contains("`let kernel = computed(move || … create_compute_kernel(…));`"),
+            .contains("`let kernel = computed(move |ctx| … create_compute_kernel(…));`"),
         "{refusal}"
     );
 }

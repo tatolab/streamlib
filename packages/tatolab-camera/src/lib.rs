@@ -232,8 +232,8 @@ impl PythonAvFoundationZeroCopyCameraCapture {
         )?;
         let capture = python
             .detach(|| {
-                let camera = device_id.clone().unwrap_or_default();
-                CAMERAS_HELD_BY_AVFOUNDATION_CAPTURES.open_taking_over(&camera, || {
+                let camera = device_id.as_deref().unwrap_or_default();
+                CAMERAS_HELD_BY_AVFOUNDATION_CAPTURES.open_taking_over(camera, || {
                     AvFoundationZeroCopyCameraCapture::open(
                         module_host,
                         &video_output_port,

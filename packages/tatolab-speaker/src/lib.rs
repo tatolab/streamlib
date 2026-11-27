@@ -102,7 +102,12 @@ struct SilenceCountsOfEndedPlaybacks {
 #[pyclass(name = "SpeakerPlayback", module = "tatolab.speaker._native")]
 struct SpeakerPlayback {
     module_host: ModuleHost,
-    playback_stream: ModuleHostAudioPlaybackStream,
+    /// `None` once closed, its device given back.
+    playback_stream: Option<ModuleHostAudioPlaybackStream>,
+    stream_format: ModuleHostAudioStreamFormat,
+    device_period_in_per_channel_samples: Option<u32>,
+    /// Why the device stopped serving the playback, as it stood when the playback closed.
+    failure_that_ended_the_closed_playback: Option<String>,
     playback: Option<AudioBlockPlayback>,
     played_block_count: Arc<AtomicU64>,
     refused_block_count: Arc<AtomicU64>,
@@ -153,7 +158,11 @@ impl SpeakerPlayback {
             .map_err(|refusal| PyRuntimeError::new_err(format!("SpeakerSink: {refusal}")))?;
         Ok(Self {
             module_host,
-            playback_stream,
+            stream_format: playback_stream.stream_format(),
+            device_period_in_per_channel_samples: playback_stream
+                .device_period_in_per_channel_samples(),
+            playback_stream: Some(playback_stream),
+            failure_that_ended_the_closed_playback: None,
             playback: None,
             played_block_count: Arc::new(AtomicU64::new(0)),
             refused_block_count: Arc::new(AtomicU64::new(0)),
@@ -164,19 +173,19 @@ impl SpeakerPlayback {
     /// The rate every block is played at, in hertz.
     #[getter]
     fn sample_rate(&self) -> u32 {
-        self.playback_stream.stream_format().sample_rate
+        self.stream_format.sample_rate
     }
 
     /// The channel count every block is interleaved by.
     #[getter]
     fn channels(&self) -> u32 {
-        self.playback_stream.stream_format().channels
+        self.stream_format.channels
     }
 
     /// The scalar encoding every block carries: `f32` or `i16`.
     #[getter]
     fn sample_format(&self) -> &'static str {
-        match self.playback_stream.stream_format().sample_format {
+        match self.stream_format.sample_format {
             ModuleHostAudioSampleFormat::F32 => "f32",
             ModuleHostAudioSampleFormat::I16 => "i16",
         }
@@ -186,7 +195,7 @@ impl SpeakerPlayback {
     /// the backend does not report its device's period.
     #[getter]
     fn device_period_in_per_channel_samples(&self) -> Option<u32> {
-        self.playback_stream.device_period_in_per_channel_samples()
+        self.device_period_in_per_channel_samples
     }
 
     /// Blocks queued for the device so far.
@@ -228,25 +237,33 @@ impl SpeakerPlayback {
     /// Why the device stopped serving the playback, or `None` while it serves it.
     #[getter]
     fn failure_that_ended_the_playback(&self) -> PyResult<Option<String>> {
-        self.playback_stream
+        let Some(playback_stream) = &self.playback_stream else {
+            return Ok(self.failure_that_ended_the_closed_playback.clone());
+        };
+        playback_stream
             .failure_that_ended_the_stream()
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
     }
 
     /// Begin draining `audio` and playing; a playback already started is left
-    /// as it is.
+    /// as it is, and a closed one is refused.
     fn start(&mut self, python: Python<'_>) -> PyResult<()> {
         if self.playback.is_some() {
             return Ok(());
         }
+        let Some(playback_stream) = self.playback_stream.as_mut() else {
+            return Err(PyRuntimeError::new_err(
+                "SpeakerSink: this playback is closed and its device given back; open a new one",
+            ));
+        };
         let audio_input_port = self
             .module_host
             .open_input_port(AUDIO_INPUT_PORT)
             .map_err(|refusal| PyRuntimeError::new_err(format!("SpeakerSink: {refusal}")))?;
-        let playback_stream_format = self.playback_stream.stream_format();
+        let playback_stream_format = self.stream_format;
         let sizing = SpeakerSizingFromTheDevicePeriod::for_format_and_reported_period(
             playback_stream_format,
-            self.playback_stream.device_period_in_per_channel_samples(),
+            self.device_period_in_per_channel_samples,
         );
         let samples_awaiting_playback = Arc::new(
             AudioSamplesAwaitingPlaybackRing::with_byte_capacity(sizing.ring_byte_capacity),
@@ -255,7 +272,7 @@ impl SpeakerPlayback {
         let draining = AudioBlockDraining {
             module_host: self.module_host.clone(),
             audio_input_port,
-            playback_stream_liveness: self.playback_stream.liveness(),
+            playback_stream_liveness: playback_stream.liveness(),
             playback_stream_format,
             samples_awaiting_playback: Arc::clone(&samples_awaiting_playback),
             silence_bytes_between_underrun_warnings: sizing.silence_bytes_between_underrun_warnings,
@@ -277,7 +294,6 @@ impl SpeakerPlayback {
             })?;
         let samples_awaiting_playback_in_the_device_callback =
             Arc::clone(&samples_awaiting_playback);
-        let playback_stream = &mut self.playback_stream;
         let started = python.detach(|| {
             playback_stream.start_requesting_from(Box::new(
                 move |requested_block: ModuleHostAudioBlockRequestedByDevice<'_>| {
@@ -299,8 +315,8 @@ impl SpeakerPlayback {
         Ok(())
     }
 
-    /// Stop playing, end the drain thread within its grace and log what the
-    /// playback played. Idempotent.
+    /// Stop playing, end the drain thread within its grace, give the device
+    /// back and log what the playback played. Idempotent.
     fn close(&mut self, python: Python<'_>) {
         python.detach(|| self.stop_playing_and_draining());
     }
@@ -308,13 +324,42 @@ impl SpeakerPlayback {
 
 impl SpeakerPlayback {
     fn stop_playing_and_draining(&mut self) {
-        if let Err(refusal) = self.playback_stream.stop_requesting() {
+        let Some(mut playback_stream) = self.playback_stream.take() else {
+            return;
+        };
+        if let Err(refusal) = playback_stream.stop_requesting() {
             self.module_host.log(
                 ModuleHostLogLevel::Warn,
                 SPEAKER_LOG_TARGET,
                 &format!("SpeakerSink: the playback stream failed to stop: {refusal}"),
             );
         }
+        self.end_the_playback();
+        let failure_that_ended_the_playback = playback_stream.failure_that_ended_the_stream();
+        drop(playback_stream);
+        self.failure_that_ended_the_closed_playback = failure_that_ended_the_playback
+            .as_ref()
+            .ok()
+            .cloned()
+            .flatten();
+        self.module_host.log(
+            ModuleHostLogLevel::Info,
+            SPEAKER_LOG_TARGET,
+            &format!(
+                "SpeakerSink: closed. played_blocks={} refused_blocks={} underrun_bytes={} \
+                 silence_before_playback_began_bytes={} \
+                 playback_device_failure={failure_that_ended_the_playback:?}",
+                self.played_block_count.load(Ordering::Relaxed),
+                self.refused_block_count.load(Ordering::Relaxed),
+                self.silence_counts_of_ended_playbacks.underrun_byte_count,
+                self.silence_counts_of_ended_playbacks
+                    .silence_before_playback_began_byte_count,
+            ),
+        );
+    }
+
+    /// End the playback in progress, if one is, within its drain thread's grace.
+    fn end_the_playback(&mut self) {
         let Some(playback) = self.playback.take() else {
             return;
         };
@@ -340,25 +385,6 @@ impl SpeakerPlayback {
         self.silence_counts_of_ended_playbacks
             .silence_before_playback_began_byte_count +=
             ended_ring.silence_played_before_the_cushion_filled_byte_count();
-        let failure_that_ended_the_playback = self
-            .playback_stream
-            .failure_that_ended_the_stream()
-            .ok()
-            .flatten();
-        self.module_host.log(
-            ModuleHostLogLevel::Info,
-            SPEAKER_LOG_TARGET,
-            &format!(
-                "SpeakerSink: closed. played_blocks={} refused_blocks={} underrun_bytes={} \
-                 silence_before_playback_began_bytes={} \
-                 playback_device_failure={failure_that_ended_the_playback:?}",
-                self.played_block_count.load(Ordering::Relaxed),
-                self.refused_block_count.load(Ordering::Relaxed),
-                self.silence_counts_of_ended_playbacks.underrun_byte_count,
-                self.silence_counts_of_ended_playbacks
-                    .silence_before_playback_began_byte_count,
-            ),
-        );
     }
 }
 

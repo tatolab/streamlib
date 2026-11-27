@@ -20,8 +20,7 @@ type CameraAndItsCapture<C> = (String, Weak<Mutex<Option<C>>>);
 
 /// The cameras captures of type `C` hold in this process, each by one capture.
 pub struct CamerasHeldByOneCaptureEach<C> {
-    /// Held across a takeover, so two opens of one camera never both find it free.
-    opening: Mutex<()>,
+    /// Held across a whole takeover, so two opens of one camera never both find it free.
     held: Mutex<Vec<CameraAndItsCapture<C>>>,
 }
 
@@ -33,7 +32,6 @@ pub struct CaptureHoldingACamera<C> {
 impl<C> CamerasHeldByOneCaptureEach<C> {
     pub const fn new() -> Self {
         Self {
-            opening: Mutex::new(()),
             held: Mutex::new(Vec::new()),
         }
     }
@@ -45,9 +43,9 @@ impl<C> CamerasHeldByOneCaptureEach<C> {
         camera: &str,
         open: impl FnOnce() -> Result<C, E>,
     ) -> Result<CaptureHoldingACamera<C>, E> {
-        let _opening = locked(&self.opening);
+        let mut held = locked(&self.held);
         let mut taken_over = Vec::new();
-        locked(&self.held).retain(|(held_camera, capture)| match capture.upgrade() {
+        held.retain(|(held_camera, capture)| match capture.upgrade() {
             Some(capture) if held_camera == camera => {
                 taken_over.push(capture);
                 false
@@ -59,7 +57,7 @@ impl<C> CamerasHeldByOneCaptureEach<C> {
             close(&capture);
         }
         let capture = Arc::new(Mutex::new(Some(open()?)));
-        locked(&self.held).push((camera.to_owned(), Arc::downgrade(&capture)));
+        held.push((camera.to_owned(), Arc::downgrade(&capture)));
         Ok(CaptureHoldingACamera { capture })
     }
 }

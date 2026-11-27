@@ -2,16 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """A node written as one function, run as its helper runs it, its one computed value recorded as
-its body declares it so a test can read what it built, or why its build failed."""
+its body declares it so a module's test can read what it built, or why its build failed."""
 
 from __future__ import annotations
 
 import types
 from typing import Any
 
-import pytest
-
-from tatolab.runtime._node_function_running import NodeFunctionRunning
+from ._node_function_running import NodeFunctionRunning
 
 #: Long enough for a device to open, or for the null backend's clock to start.
 SETTLED_WITHIN_SECONDS = 5.0
@@ -26,7 +24,6 @@ class NodeFunctionRunningForATest:
         node_function: Any,
         module: types.ModuleType,
         context: Any,
-        monkeypatch: pytest.MonkeyPatch,
         *,
         values: "dict[str, object]",
         pins: "dict[str, object]",
@@ -39,10 +36,14 @@ class NodeFunctionRunningForATest:
             declared.append(computed_value)
             return computed_value
 
-        monkeypatch.setattr(module, "computed", declared_and_recorded)
         self.context = context
         self.running = NodeFunctionRunning(node_function, values_to_build_with=values, pins=pins)
-        self.running.setup(context)
+        # The body declares only while it runs, in setup, so `computed` is recorded only then.
+        setattr(module, "computed", declared_and_recorded)
+        try:
+            self.running.setup(context)
+        finally:
+            setattr(module, "computed", declare)
         (self._computed_value,) = declared
 
     def _settled_scope(self) -> Any:

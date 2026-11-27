@@ -107,8 +107,10 @@ def SpeakerSink(
 
     The open playback stream is a computed value: setting `device_id` while the
     stream plays opens the new device while the old one keeps playing, then
-    closes the old one; a device that fails to open shows on the node, and the
-    old one keeps playing.
+    closes the old one. Opening the device it already has takes the device over,
+    closing the old stream first. A failed open shows on the node; the old stream
+    keeps playing when the open was of another device, and nothing plays until
+    the next set when it was of the same one.
 
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID.
     Without a `device_id` playback follows the system default output as it

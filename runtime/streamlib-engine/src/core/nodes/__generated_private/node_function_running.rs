@@ -27,7 +27,8 @@ thread_local! {
 /// Declare a value `build` computes from what it reads with `.get()`, in the body of a node
 /// written as one function. `build` runs off the frame thread with the node's limited context,
 /// whose GPU escalates for the work a frame may not do: creating a kernel, opening a device.
-/// Refused outside such a body.
+/// Refused outside such a body, where no scope is being declared either, with the scope's own
+/// refusal.
 #[track_caller]
 pub fn computed<T, E, B>(build: B) -> Computed<T>
 where
@@ -41,15 +42,17 @@ where
     let Some(context_of_the_node) =
         CONTEXT_OF_THE_BODY_RUNNING.with(|running| running.borrow().clone())
     else {
-        panic!(
-            "`computed` declares a value only in the body of a node written as one function, \
-             which `#[node]` on a function runs once at setup: call it there"
-        );
+        return streamlib_scope::computed(|| Err(BUILT_WITH_NO_NODE_CONTEXT));
     };
     streamlib_scope::computed(move || {
         build(&RuntimeContextLimitedAccess::new(&context_of_the_node))
     })
 }
+
+/// Why a value declared in a scope no node's body declares never builds: it has no node's
+/// context to build with.
+const BUILT_WITH_NO_NODE_CONTEXT: &str =
+    "this value was declared outside a node's body, so it has no node's context to build with";
 
 /// The context of the node whose body runs on this thread, for as long as the body runs.
 struct BodyRunningWithTheContextOf;

@@ -24,7 +24,9 @@ use tatolab_module_sdk::module_host_table_abi::{
     ModuleHostTableErrorMessage, ModuleHostTableStatus,
 };
 
-use super::audio_stream_on_a_device::{AudioStreamOnADevice, refusal_of_a_stream_taken_over};
+use super::audio_stream_on_a_device::{
+    AudioStreamOnADevice, refusal_of_a_stream_taken_over, take_the_device_over_from,
+};
 use super::{node_host_of, refuse, refused_while_a_frame_runs};
 
 /// The capture streams one node's native code opened, by handle.
@@ -89,17 +91,12 @@ impl AudioCaptureStreamsOpenedForOneNode {
         device_id: Option<String>,
         requested_stream_format: RequestedAudioStreamFormat,
     ) -> Result<(ModuleHostTableAudioStreamHandle, AudioStreamFormat), String> {
-        let taken_over: Vec<_> = locked(&self.opened_streams)
-            .iter()
-            .flatten()
-            .filter(|opened| opened.capture_stream.is_on(device_id.as_deref()))
-            .cloned()
-            .collect();
-        for opened in taken_over {
-            opened
-                .capture_stream
-                .give_its_device_up(stop_delivering_and_log_a_failure);
-        }
+        take_the_device_over_from(
+            &self.opened_streams,
+            device_id.as_deref(),
+            |opened| &opened.capture_stream,
+            stop_delivering_and_log_a_failure,
+        );
         let audio_device_backend = probe_audio_device_backend();
         let deviceless_pacing_clock = platform_audio_clock_for_one_stream();
         let capture_stream = open_capture_stream_in_requested_format(

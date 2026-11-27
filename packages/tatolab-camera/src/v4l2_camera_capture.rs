@@ -161,8 +161,7 @@ impl V4l2ZeroCopyCameraCapture {
         max_height: u32,
         output_pool_rotation_depth: u32,
     ) -> Result<Self, CameraCaptureRefusal> {
-        let device_path = device_path.to_string();
-        let device = v4l::Device::with_path(&device_path).map_err(|open_failure| {
+        let device = v4l::Device::with_path(device_path).map_err(|open_failure| {
             CameraCaptureRefusal(format!("could not open {device_path}: {open_failure}"))
         })?;
         let card_name = device
@@ -170,7 +169,7 @@ impl V4l2ZeroCopyCameraCapture {
             .map(|capabilities| capabilities.card)
             .unwrap_or_default();
         let format =
-            negotiate_nv12_or_yuyv(&device, &device_path, card_name, max_width, max_height)?;
+            negotiate_nv12_or_yuyv(&device, device_path, card_name, max_width, max_height)?;
         let video_output_port = module_host
             .open_output_port(video_output_port_name)
             .map_err(|refusal| CameraCaptureRefusal(refusal.to_string()))?;
@@ -587,13 +586,16 @@ fn dequeue_a_filled_buffer(device: &v4l::Device) -> std::io::Result<FilledDriver
     })
 }
 
-/// The capture device at `device_path`, or the first one found when none is
-/// named.
+/// The capture device at `device_path`, resolved through its links so one camera
+/// has one path whichever of its names was given, or the first one found when
+/// none is named.
 pub fn the_capture_device_at_or_the_first_found(
     device_path: Option<&str>,
 ) -> Result<String, CameraCaptureRefusal> {
     match device_path {
-        Some(path) => Ok(path.to_string()),
+        Some(path) => Ok(std::fs::canonicalize(path)
+            .map(|resolved| resolved.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string())),
         None => list_v4l2_capture_devices()
             .into_iter()
             .next()

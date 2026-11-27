@@ -16,7 +16,7 @@ import pytest
 
 import tatolab.microphone
 from helper_process_link_wiring import wire_one_link
-from node_function_running_for_a_test import NodeFunctionRunningForATest
+from tatolab.runtime._node_function_running_for_a_test import NodeFunctionRunningForATest
 from tatolab.microphone import AUDIO_OUTPUT_PORT, MicrophoneSource
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
@@ -34,9 +34,8 @@ BLOCKS_READ_PER_TEST = 5
 class MicrophoneWiredToAReader:
     """A `MicrophoneSource`'s `audio` port wired to an input read here."""
 
-    def __init__(self, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, request: pytest.FixtureRequest) -> None:
         self.log_records: "list[str]" = []
-        self.monkeypatch = monkeypatch
         unique = f"mic{os.getpid()}_{request.node.name}"[:60]
         reader_inputs = _engine.open_node_link_data_access_for_helper_process()
         microphone_outputs = _engine.open_node_link_data_access_for_helper_process()
@@ -67,7 +66,6 @@ class MicrophoneWiredToAReader:
             MicrophoneSource,
             tatolab.microphone,
             self.microphone_context,
-            self.monkeypatch,
             values=values,
             pins={"audio": object()},
         )
@@ -97,7 +95,7 @@ def microphone_wired_to_a_reader(
     """`log` reaches a sink only in the interpreter the runtime starts for a
     node, so here every level is recorded instead."""
     del private_iceoryx2_domain_for_this_test_process
-    wired = MicrophoneWiredToAReader(request, monkeypatch)
+    wired = MicrophoneWiredToAReader(request)
     for log_level in ("debug", "info", "warn", "error"):
         monkeypatch.setattr(log, log_level, wired.log_records.append)
     return wired
