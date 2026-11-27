@@ -12,7 +12,7 @@ import re
 from runtime_process_under_test import RuntimeProcessUnderTest
 
 MICROPHONE_SOURCE_RECORD_DROPPED_BLOCKS = re.compile(
-    r"MicrophoneSource: teardown\. .*\bdropped_blocks=(\d+)"
+    r"MicrophoneSource: closed\. .*\bdropped_blocks=(\d+)"
 )
 
 
@@ -21,16 +21,16 @@ def assert_the_microphone_dropped_no_blocks_at_the_device_edge(
 ) -> None:
     """Every `MicrophoneSource` record carrying `dropped_blocks` says zero.
 
-    Its teardown record always carries the field, so a run whose records name
-    no count at all fails here rather than passing on silence.
+    Its record of closing the device always carries the field, so a run whose
+    records name no count at all fails here rather than passing on silence.
     """
     dropped_block_counts = [
         int(match.group(1))
         for match in MICROPHONE_SOURCE_RECORD_DROPPED_BLOCKS.finditer(stopped_tatolabd.stderr_text)
     ]
     assert dropped_block_counts, (
-        f"no MicrophoneSource record carried `dropped_blocks`, not even its teardown "
-        f"record:\n{stopped_tatolabd.recent_stderr()}"
+        f"no MicrophoneSource record carried `dropped_blocks`, not even its record of "
+        f"closing the device:\n{stopped_tatolabd.recent_stderr()}"
     )
     assert set(dropped_block_counts) == {0}, (
         f"the microphone dropped blocks at the device edge, so the run was not keeping up "
