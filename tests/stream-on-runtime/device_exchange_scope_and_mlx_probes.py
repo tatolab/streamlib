@@ -58,8 +58,6 @@ def DeviceTensorScopeDoublesAKernelOutputProbe(
     reached the texture rather than lingering in the staging.
     """
 
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
@@ -96,6 +94,8 @@ def DeviceTensorScopeDoublesAKernelOutputProbe(
                 )
             return observation
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 @node(execution="manual")
 def DeviceTensorScopeDiscardsOnRaiseProbe(
@@ -108,8 +108,6 @@ def DeviceTensorScopeDiscardsOnRaiseProbe(
     frame; the scope discards instead, the exception propagates unsuppressed,
     and the surface — and the kernel that writes it — keep working afterwards.
     """
-
-    report_device_exchange_probe_observation(lambda: probe(ctx))
 
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
@@ -158,6 +156,8 @@ def DeviceTensorScopeDiscardsOnRaiseProbe(
                     torch.from_dlpack(after_redispatch)[3, 5].cpu().tolist()
                 )
             return observation
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
 
 class _PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
@@ -226,8 +226,6 @@ def DeviceTensorScopeTakesEveryAcquiredTextureProbe(
     through an acquire that can no longer produce them.
     """
 
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
         with ctx.gpu_full_access.acquire_texture(
@@ -253,6 +251,8 @@ def DeviceTensorScopeTakesEveryAcquiredTextureProbe(
                 except RuntimeError as refusal:
                     observation[entry] = f"refused: {refusal}"
         return observation
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
 
 # Reads its source texel for texel, so the output is exactly what the engine's
@@ -524,8 +524,6 @@ def TorchAndMlxScopesAlternateInOneHelperProbe(
     harness's wait for the result turns the hang into a failure.
     """
 
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
@@ -561,6 +559,8 @@ def TorchAndMlxScopesAlternateInOneHelperProbe(
             ),
             "pixels_that_landed": pixels_that_landed,
         }
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
 
 TEXTURE_FILL_RGBA = [5, 6, 7, 8]

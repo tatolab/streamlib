@@ -57,8 +57,6 @@ def NumpyViewProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    _report(lambda: _probe(ctx))
-
     def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
@@ -75,14 +73,14 @@ def NumpyViewProbe(
             surface_handle.unlock()
             return observation
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def UnlockedExportProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    _report(lambda: _probe(ctx))
-
     def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
@@ -108,14 +106,14 @@ def UnlockedExportProbe(
                 outcomes["after_unlock"] = str(refusal)
             return outcomes
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def LockModeProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    _report(lambda: _probe(ctx))
-
     def _probe(ctx) -> dict:
         gpu = ctx.gpu_limited_access
         outcomes = {}
@@ -134,6 +132,8 @@ def LockModeProbe(
             surface_handle.unlock()
         return outcomes
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def SharedMemoryProbe(
@@ -141,8 +141,6 @@ def SharedMemoryProbe(
     ctx: RuntimeContextFullAccess,
 ) -> None:
     """Writes through one handle, reads through a second one resolved by id."""
-
-    _report(lambda: _probe(ctx))
 
     def _probe(ctx) -> dict:
         gpu = ctx.gpu_limited_access
@@ -163,14 +161,14 @@ def SharedMemoryProbe(
                 reader_handle.unlock()
                 return observation
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def TensorOutlivesTheSurfaceProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    _report(lambda: _probe(ctx))
-
     def _probe(ctx) -> dict:
         surface_handle = ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
@@ -189,6 +187,8 @@ def TensorOutlivesTheSurfaceProbe(
             "expected_sum": SURFACE_WIDTH * SURFACE_HEIGHT * 4 * 7,
         }
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def PoolCycleProbe(
@@ -196,8 +196,6 @@ def PoolCycleProbe(
     ctx: RuntimeContextFullAccess,
 ) -> None:
     """Holds a tensor, then churns the pool past its depth with fresh writes."""
-
-    _report(lambda: _probe(ctx))
 
     def _probe(ctx) -> dict:
         gpu = ctx.gpu_limited_access
@@ -228,14 +226,14 @@ def PoolCycleProbe(
             "churn_failures": churn_failures,
         }
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def DlpackConsumerProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    _report(lambda: _probe(ctx))
-
     def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
@@ -253,14 +251,14 @@ def DlpackConsumerProbe(
             surface_handle.unlock()
             return observation
 
+    _report(lambda: _probe(ctx))
+
 
 @node(execution="manual")
 def UnsupportedFormatProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    _report(lambda: _probe(ctx))
-
     def _probe(ctx) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT, "nv12"
@@ -273,6 +271,8 @@ def UnsupportedFormatProbe(
                 outcome = str(refusal)
             surface_handle.unlock()
             return {"outcome": outcome}
+
+    _report(lambda: _probe(ctx))
 
 
 @node(execution="reactive")

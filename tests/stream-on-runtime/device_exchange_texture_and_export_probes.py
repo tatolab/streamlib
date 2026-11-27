@@ -39,8 +39,6 @@ def DmaBufExportProbe(
     memory the export named.
     """
 
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
@@ -73,6 +71,8 @@ def DmaBufExportProbe(
                 observation["fd_closes_cleanly"] = os.close(fd) is None
             return observation
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 # A render-attachment usage set that takes the explicit-DRM-modifier DMA-BUF
 # arm (storage included so the same kernel can write both flavours).
@@ -97,8 +97,6 @@ def TextureHandleRoundTripProbe(
     cross-process import — the child rebuilds the engine's tiled image on
     its own device, which is what a token-for-a-texture could never do.
     """
-
-    report_device_exchange_probe_observation(lambda: probe(ctx))
 
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
@@ -254,6 +252,8 @@ def TextureHandleRoundTripProbe(
                 observation["pixel_buffer_export_refusal"] = str(refusal)
         return observation
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 @node(execution="manual")
 def PrivilegedCapabilityProbe(
@@ -261,8 +261,6 @@ def PrivilegedCapabilityProbe(
     ctx: RuntimeContextFullAccess,
 ) -> None:
     """What the privileged capability answers from a helper process."""
-
-    report_device_exchange_probe_observation(lambda: probe(ctx))
 
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
@@ -297,14 +295,14 @@ def PrivilegedCapabilityProbe(
             ]
         return observation
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 @node(execution="manual")
 def PooledTextureExportProbe(
     *,
     ctx: RuntimeContextFullAccess,
 ) -> None:
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         import torch
 
@@ -324,6 +322,8 @@ def PooledTextureExportProbe(
                 texture_handle.unlock()
         return outcomes
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 @node(execution="manual")
 def OpaqueFdExportHandoffProbe(
@@ -340,8 +340,6 @@ def OpaqueFdExportHandoffProbe(
     fails, not this probe. The socket path arrives in
     STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET.
     """
-
-    report_device_exchange_probe_observation(lambda: probe(ctx))
 
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         import socket
@@ -399,6 +397,8 @@ def OpaqueFdExportHandoffProbe(
                 observation["fd_closes_cleanly"] = os.close(export.fd) is None
         return observation
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 @node(execution="manual")
 def OpaqueFdPixelBufferExportHandoffProbe(
@@ -415,8 +415,6 @@ def OpaqueFdPixelBufferExportHandoffProbe(
     the refusal travels instead. The socket path arrives in
     STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET.
     """
-
-    report_device_exchange_probe_observation(lambda: probe(ctx))
 
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         import socket
@@ -479,6 +477,8 @@ def OpaqueFdPixelBufferExportHandoffProbe(
                 os.close(handed_fd) is None for handed_fd in handed_fds
             )
         return observation
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))
 
 
 class _NativeIOSurfaceShim:
@@ -632,8 +632,6 @@ def IOSurfaceExportProbe(
     """A pixel buffer and a texture whose rows pad, each exported as an
     IOSurface port and read back by native code in this same helper."""
 
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         shim = _NativeIOSurfaceShim()
         observation = {}
@@ -652,6 +650,8 @@ def IOSurfaceExportProbe(
             observation["texture"] = _export_iosurface_and_read_it_natively(ctx, shim, texture)
         return observation
 
+    report_device_exchange_probe_observation(lambda: probe(ctx))
+
 
 def _refusal_of(export_call) -> str | None:
     try:
@@ -668,8 +668,6 @@ def RawHandleOffItsPlatformRefusesProbe(
 ) -> None:
     """Every raw-handle flavour exists on both floors; off its own it refuses,
     naming its peer."""
-
-    report_device_exchange_probe_observation(lambda: probe(ctx))
 
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
@@ -689,3 +687,5 @@ def RawHandleOffItsPlatformRefusesProbe(
                     lambda: ctx.gpu_full_access.export_iosurface(pixel_buffer)
                 ),
             }
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))

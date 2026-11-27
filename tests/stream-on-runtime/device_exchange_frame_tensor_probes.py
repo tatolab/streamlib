@@ -405,8 +405,6 @@ def DeviceTensorStridesFollowTheRowPitchProbe(
     row lands where the host view finds it rather than shearing into the next
     row."""
 
-    report_device_exchange_probe_observation(lambda: probe(ctx))
-
     def probe(ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
         with ctx.gpu_limited_access.acquire_pixel_buffer(
@@ -450,3 +448,5 @@ def DeviceTensorStridesFollowTheRowPitchProbe(
                 texture.as_device_tensor(), texture_host_view
             )
         return observation
+
+    report_device_exchange_probe_observation(lambda: probe(ctx))
