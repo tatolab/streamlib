@@ -220,11 +220,50 @@ def test_a_generator_body_is_refused() -> None:
     assert (refused.finding_code, refused.node) == ("node_function_not_a_plain_def", "gain")
 
 
-def test_a_pin_group_is_refused() -> None:
-    def stack(*, layers: PinGroup[Layer]) -> None: ...
+@dataclasses.dataclass(frozen=True)
+class PlacedLayer:
+    picture: InputPin[Texture]
+    opacity: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 1.0
+
+
+def test_a_pin_group_is_declared_as_a_class_declares_it() -> None:
+    """Mental-revert: refuse a `PinGroup` parameter, or stamp no group, and the node function
+    declares no layers to wire."""
+
+    @node(execution="reactive")
+    def stack(*, layers: Annotated[PinGroup[PlacedLayer], Description("Each layer.")]) -> None: ...
+
+    @node(execution="reactive")
+    class StackAsAClass:
+        layers: Annotated[PinGroup[PlacedLayer], Description("Each layer.")]
+
+    assert isinstance(stack, NodeFunction)
+    assert getattr(stack, NODE_DECLARATION_PIN_GROUPS_STAMP) == getattr(
+        StackAsAClass, NODE_DECLARATION_PIN_GROUPS_STAMP
+    )
+    (layers,) = stack.pin_groups
+    assert (layers.attribute, layers.name, layers.slot_class) == ("layers", "layers", PlacedLayer)
+    assert [member.port for member in layers.members] == ["picture", "opacity"]
+
+
+@dataclasses.dataclass(frozen=True)
+class LayerHoldingASetting:
+    picture: InputPin[Texture]
+    blend: Annotated[float, SettingOnly()] = 1.0
+
+
+def test_a_slot_holding_a_setting_is_refused() -> None:
+    def stack(*, layers: PinGroup[LayerHoldingASetting]) -> None: ...
 
     refused = refusal_of(declared_with_keywords(stack))
-    assert (refused.finding_code, refused.pin) == ("pin_group_on_a_node_function", "layers")
+    assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "layers.blend")
+
+
+def test_a_pin_group_given_a_value_is_refused_as_a_class_group_is() -> None:
+    def stack(*, layers: PinGroup[Layer] = ()) -> None: ...  # pyright: ignore[reportArgumentType]
+
+    refused = refusal_of(declared_with_keywords(stack))
+    assert (refused.finding_code, refused.pin) == ("pin_has_a_value", "layers")
 
 
 def test_a_pin_given_a_value_is_refused_as_a_class_pin_is() -> None:

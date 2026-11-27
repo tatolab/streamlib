@@ -120,19 +120,22 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
 @node.meta(description="Reports the pixels of the composite it holds once the sources have settled")
 @node(execution="continuous", interval_ms=10)
 class AlphaOverCompositeProbe:
-    """Holds the newest composite and reports its pixels, or reports that none arrived."""
+    """Holds the newest composite and reports its pixels, or reports that none arrived; with
+    `report_every_seconds` above 0, reports the newest composite again that often after."""
 
     composite_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
+    report_every_seconds: float = 0.0
 
     def __init__(self) -> None:
         self._reported = False
+        self._reported_at_ns: "int | None" = None
         self._started_at_ns: "int | None" = None
         self._first_composite_at_ns: "int | None" = None
         self._composites_received = 0
         self._newest_composite: "Texture | None" = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self._reported:
+        if self._reported and not self._reports_again_now(ctx.time):
             return
         if self._started_at_ns is None:
             self._started_at_ns = ctx.time
@@ -145,7 +148,7 @@ class AlphaOverCompositeProbe:
 
         if self._first_composite_at_ns is None:
             if ctx.time - self._started_at_ns >= FIRST_COMPOSITE_DEADLINE_SECONDS * 1e9:
-                self._report(lambda: {"composites_received": 0})
+                self._report(ctx.time, lambda: {"composites_received": 0})
             return
         if ctx.time - self._first_composite_at_ns < SETTLING_SECONDS_AFTER_THE_FIRST_COMPOSITE * 1e9:
             return
@@ -153,6 +156,7 @@ class AlphaOverCompositeProbe:
         assert newest_composite is not None
         gpu = ctx.gpu_limited_access
         self._report(
+            ctx.time,
             lambda: {
                 "composites_received": self._composites_received,
                 "extent": [newest_composite.width, newest_composite.height],
@@ -160,8 +164,16 @@ class AlphaOverCompositeProbe:
             }
         )
 
-    def _report(self, observe: "Callable[[], dict[str, Any]]") -> None:
+    def _reports_again_now(self, now_ns: int) -> bool:
+        return (
+            self.report_every_seconds > 0
+            and self._reported_at_ns is not None
+            and now_ns - self._reported_at_ns >= self.report_every_seconds * 1e9
+        )
+
+    def _report(self, now_ns: int, observe: "Callable[[], dict[str, Any]]") -> None:
         self._reported = True
+        self._reported_at_ns = now_ns
         try:
             observation = observe()
         except BaseException:  # noqa: BLE001 — re-raised by the asserting test

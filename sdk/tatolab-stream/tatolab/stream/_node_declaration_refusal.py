@@ -44,7 +44,6 @@ type NodeDeclarationFindingCode = Literal[
     "pin_group_slot_holds_no_pin",
     "pin_group_inside_a_slot",
     "pin_group_on_a_function_node",
-    "pin_group_on_a_node_function",
     "node_function_parameter_not_keyword_only",
     "node_function_parameter_not_typed",
     "node_function_parameter_not_an_input",

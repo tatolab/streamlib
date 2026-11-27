@@ -35,6 +35,7 @@ from tatolab.runtime._node_the_wheel_hosts import (
 from tatolab.runtime._parent_process_bridge import ParentProcessBridge
 
 if TYPE_CHECKING:
+    from tatolab.stream._class_node_declaration import ClassNodeMember
     from tatolab.runtime._class_node_fields import ClassNodeFields
 
 
@@ -232,6 +233,7 @@ def construct_hosted_node(
             link_data_access=link_data_access,
             node_run_id=node_run_id,
             stored_input_values=stored_input_values,
+            slot_counts=slot_counts or {},
         )
     members = class_node_members_of(node_class)
     if members is None:
@@ -294,16 +296,38 @@ def _host_a_node_function(
     link_data_access: NodeLinkDataAccess,
     node_run_id: str,
     stored_input_values: "Optional[dict[str, Any]]",
+    slot_counts: "dict[str, int]",
 ) -> HostedNode:
-    """A node written as one function, each value input holding its stored value and each pin
-    bound, its body left for `setup` to run."""
+    """A node written as one function, each value input holding its stored value, each pin
+    bound and each pin group holding the slots `slot_counts` says, its body left for `setup` to
+    run."""
     from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
     from tatolab.runtime._class_node_fields import ClassNodeFields
     from tatolab.runtime._node_function_running import NodeFunctionRunning
 
     inputs = link_input_data_reader_of(full_access_context)
+    outputs = link_output_data_writer_of(full_access_context)
+
+    def bind_pins(members: "tuple[ClassNodeMember, ...]") -> "dict[str, Any]":
+        return bind_the_pins_of_a_class_node(
+            members,
+            link_data_access=link_data_access,
+            inputs=inputs,
+            outputs=outputs,
+            node_id=node_run_id,
+        )
+
+    members_of_each_slot = the_members_of_each_slot_built(node_function.pin_groups, slot_counts)
     fields = ClassNodeFields(
-        node_function.members,
+        (
+            *node_function.members,
+            *(
+                member
+                for slots in members_of_each_slot.values()
+                for slot_members in slots
+                for member in slot_members
+            ),
+        ),
         link_data_access=link_data_access,
         inputs=inputs,
         node_id=node_run_id,
@@ -313,13 +337,9 @@ def _host_a_node_function(
     running = NodeFunctionRunning(
         node_function,
         values_to_build_with=fields.values_to_build_with(),
-        pins=bind_the_pins_of_a_class_node(
-            node_function.members,
-            link_data_access=link_data_access,
-            inputs=inputs,
-            outputs=link_output_data_writer_of(full_access_context),
-            node_id=node_run_id,
-        ),
+        pins=bind_pins(node_function.members),
+        bind_pins=bind_pins,
+        slot_counts=slot_counts,
     )
     return HostedNode(
         running, full_access_context, limited_access_context, fields, a_node_function=True

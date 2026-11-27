@@ -337,3 +337,135 @@ def test_a_node_pacing_itself_answers_its_parent_while_a_build_is_held(stand_in_
         PUBLISHING_BUILDS_LET_GO.set()
     wait_until_the_publishing_probe_did(("closed", 0.5))
     stop_and_tear_down(stand_in_parent, lifecycle_thread)
+
+
+def what_the_stacking_probe_did() -> "list[tuple[str, object]]":
+    from node_function_probes import WHAT_THE_LAYER_STACKING_PROBE_DID
+
+    return list(WHAT_THE_LAYER_STACKING_PROBE_DID)
+
+
+def wait_until_the_stacking_probe_did(
+    done: "tuple[str, object]", *, since: int, timeout_s: float = 5.0
+) -> None:
+    """Wait until the stacking probe did `done` after the first `since` things it did."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if done in what_the_stacking_probe_did()[since:]:
+            return
+        time.sleep(0.01)
+    raise AssertionError(
+        f"the stacking probe never did {done!r}; it did: {what_the_stacking_probe_did()[since:][-5:]}"
+    )
+
+
+def the_wiring_of_a_link_into_a_layer(slot: int, direction: str) -> "dict[str, Any]":
+    """One end of a link into the stacking probe's `layers.<slot>.level`, as the engine's wiring
+    path hands it a helper."""
+    link_id = f"L-layer-{slot}-{os.getpid()}"
+    wiring = the_wiring_of_a_link_into_the_level(link_id, direction)
+    if direction == "input":
+        wiring["name"] = f"layers.{slot}.level"
+    return wiring
+
+
+def a_source_of_levels_into_layer(slot: int) -> Any:
+    """The writer of a source wired into the stacking probe's `layers.<slot>.level`."""
+    source = _engine.open_node_link_data_access_for_helper_process()
+    wire_link_data_access(source, {"outputs": [the_wiring_of_a_link_into_a_layer(slot, "output")]})
+    return link_output_data_writer_of(
+        _engine.open_runtime_context_full_access_for_helper_process(
+            source, "R-helper-test", f"source-of-layer-{slot}"
+        )
+    )
+
+
+def write_a_level(source_outputs: Any, level: float) -> None:
+    samples = array.array("d", [level])
+    source_outputs.write_channels_block(
+        "level_to_the_probe",
+        memoryview(samples).cast("B").cast("d", [1, 1]),
+        start_sample=0,
+        sample_rate=0,
+    )
+
+
+def counts_and_gains_framed(did: "list[tuple[str, object]]") -> "list[object]":
+    """Each `(count, gains)` the frames read, each run of equal frames once, in order."""
+    framed: "list[object]" = []
+    for entry in did:
+        if entry[0] == "frame" and framed[-1:] != [entry[1]]:
+            framed.append(entry[1])
+    return framed
+
+
+def test_a_layer_wired_or_unwired_while_playing_gives_the_node_its_slots_and_rebuilds_nothing(
+    stand_in_parent: Any,
+):
+    """Mental-revert: build the slots once at setup, as a class node's are, and the slot a link
+    wired after setup reaches is never held, so no frame reads two layers or its level; or
+    report no live slots in `ready`, and the runtime rebuilds the node for each one."""
+    from node_function_probes import WHAT_THE_LAYER_STACKING_PROBE_DID
+
+    WHAT_THE_LAYER_STACKING_PROBE_DID.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:LayerStackingProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "ports": {
+                "inputs": [the_wiring_of_a_link_into_a_layer(0, "input")],
+                "input_values": {"layers.0.gain": 2.0, "layers.1.gain": 3.0},
+            },
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready", "takes_its_pin_group_slots_live": True}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
+    wait_until_the_stacking_probe_did(("frame", (1, (2.0,))), since=0)
+
+    second_layer = the_wiring_of_a_link_into_a_layer(1, "input")
+    since = len(what_the_stacking_probe_did())
+    stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": second_layer})
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": second_layer["link_id"]}
+    wait_until_the_stacking_probe_did(("frame", (2, (2.0, 3.0))), since=since)
+    since = len(what_the_stacking_probe_did())
+    # Held until the probe reads the level, so its sender outlives the read.
+    source_of_the_second_layer = a_source_of_levels_into_layer(1)
+    write_a_level(source_of_the_second_layer, 0.75)
+    wait_until_the_stacking_probe_did(("read", (1, 0.75)), since=since)
+
+    since = len(what_the_stacking_probe_did())
+    stand_in_parent.send(
+        {"cmd": "set_input_values", "input_values": {"layers.0.gain": 2.0, "layers.1.gain": 5.0}}
+    )
+    wait_until_the_stacking_probe_did(("frame", (2, (2.0, 5.0))), since=since)
+
+    since = len(what_the_stacking_probe_did())
+    stand_in_parent.send(
+        {
+            "cmd": "unwire_link",
+            "direction": "input",
+            "port": "layers.1.level",
+            "link_id": second_layer["link_id"],
+        }
+    )
+    wait_until_the_stacking_probe_did(("frame", (1, (2.0,))), since=since)
+
+    did = what_the_stacking_probe_did()
+    assert [entry for entry in did if entry[0] in ("body", "counted")] == [
+        ("body", None),
+        ("counted", 1),
+        ("counted", 2),
+        ("counted", 1),
+    ]
+    # Between a slot held or dropped and the count built for it, a frame reads the slots with
+    # the count before.
+    framed = iter(counts_and_gains_framed(did))
+    assert all(
+        seen in framed for seen in [(1, (2.0,)), (2, (2.0, 3.0)), (2, (2.0, 5.0)), (1, (2.0,))]
+    ), counts_and_gains_framed(did)
+    stop_and_tear_down(stand_in_parent, lifecycle_thread)

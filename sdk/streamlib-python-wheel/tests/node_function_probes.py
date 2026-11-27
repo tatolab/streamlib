@@ -4,9 +4,18 @@
 """Nodes written as one function, which the helper-process tests run as a helper runs them."""
 
 import threading
+from dataclasses import dataclass
 from typing import Callable
 
-from tatolab.stream import Input, RuntimeContextFullAccess, RuntimeContextLimitedAccess, computed, node
+from tatolab.stream import (
+    Input,
+    InputPin,
+    PinGroup,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    computed,
+    node,
+)
 
 WHAT_THE_LEVEL_READING_PROBE_DID: "list[tuple[str, object]]" = []
 """Each `("body", None)`, `("built", level)`, `("closed", level)` and `("frame", (level, gain))`
@@ -93,3 +102,48 @@ def PacesItselfAndReturnsANumberProbe(*, level: Input[float] = Input(0.25)) -> N
 def PacesItselfAndReturnsAFunctionProbe(*, level: Input[float] = Input(0.25)) -> None:
     """Paces itself, and returns a per-frame function nothing would call."""
     return lambda frame_ctx: None  # type: ignore[return-value]
+
+
+WHAT_THE_LAYER_STACKING_PROBE_DID: "list[tuple[str, object]]" = []
+"""Each `("body", None)`, `("counted", count)`, `("frame", (count, gains))` and
+`("read", (slot, level))` the layer stacking probe did, in order."""
+
+
+@dataclass(frozen=True)
+class StackedLayer:
+    """One layer of the stacking probe: the level its wire carries, and its gain."""
+
+    level: InputPin[float]
+    gain: float = 1.0
+
+
+class CountOfLayers:
+    """A value built from how many layers the probe holds, which records its build."""
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+        WHAT_THE_LAYER_STACKING_PROBE_DID.append(("counted", count))
+
+
+@node(execution="continuous", interval_ms=5)
+def LayerStackingProbe(
+    *, layers: PinGroup[StackedLayer]
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Builds a count of its layers from how many it holds, so a gain set builds no count, and
+    records each frame the count built, each layer's gain and each level a layer's wire
+    carried."""
+    WHAT_THE_LAYER_STACKING_PROBE_DID.append(("body", None))
+    layer_count = computed(lambda: len(layers.get()))
+    count_of_layers = computed(lambda: CountOfLayers(layer_count.get()))
+
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        held = layers.get()
+        WHAT_THE_LAYER_STACKING_PROBE_DID.append(
+            ("frame", (count_of_layers.get().count, tuple(layer.gain for layer in held)))
+        )
+        for slot, layer in enumerate(held):
+            level = layer.level.read()
+            if level is not None:
+                WHAT_THE_LAYER_STACKING_PROBE_DID.append(("read", (slot, level)))
+
+    return each_frame

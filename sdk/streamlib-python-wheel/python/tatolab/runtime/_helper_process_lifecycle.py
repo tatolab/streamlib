@@ -47,7 +47,12 @@ from tatolab.runtime._not_ready_placeholder_frames import (
     PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE,
     TransparentFramesOnTheImageOutputsOfANodeNotReady,
 )
-from tatolab.runtime._node_hosting import the_slots_its_pin_groups_are_built_with
+from tatolab.runtime._node_function_pin_group_slots import NodeFunctionPinGroupSlotsFollowed
+from tatolab.runtime._node_hosting import (
+    class_node_pin_groups_of,
+    is_a_node_function,
+    the_slots_its_pin_groups_are_built_with,
+)
 from tatolab.runtime._node_the_wheel_hosts import NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
 from tatolab.runtime._node_class_description import load_node_class
@@ -99,6 +104,7 @@ class HelperProcessLifecycle:
         self._scheduling_loop_runs = False
         self._pause_hook_last_called: "Optional[str]" = None
         self._function_node_islands_it_reads: "Optional[FunctionNodeIslandsFedToTheirPorts]" = None
+        self._pin_group_slots_followed: "Optional[NodeFunctionPinGroupSlotsFollowed]" = None
         self._field_wire_values_last_refused: "Optional[str]" = None
         self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
         self._raises_the_parent_holds_by_function_node: "dict[str, str]" = {}
@@ -356,6 +362,11 @@ class HelperProcessLifecycle:
             self._hosted.call_hook_letting_failure_propagate(
                 "setup", self._hosted.full_access_context
             )
+            pin_groups = class_node_pin_groups_of(self._node_class)
+            if pin_groups and is_a_node_function(self._node_class):
+                self._pin_group_slots_followed = NodeFunctionPinGroupSlotsFollowed(
+                    pin_groups, port_wiring, link_data_access=self._link_data_access
+                )
         except KeyboardInterrupt:
             # The ladder interrupted a setup that outran its budget. The parent
             # hears a refusal rather than nothing, and this helper stays up to
@@ -390,6 +401,9 @@ class HelperProcessLifecycle:
             )
         if function_nodes_ran_compiled:
             ready["function_nodes_ran_compiled"] = function_nodes_ran_compiled
+        if self._pin_group_slots_followed is not None:
+            # The parent gives this node no rebuild when its slots change: it follows them here.
+            ready["takes_its_pin_group_slots_live"] = True
         self._bridge.send(ready)
 
     def _run(self, command: "dict[str, Any]") -> None:
@@ -709,6 +723,7 @@ class HelperProcessLifecycle:
             )
         if command.get("direction") == "input" and isinstance(command.get("port"), str):
             self._hand_back_what_a_link_stopped_driving(command["port"])
+        self._follow_a_link_unwired_from_a_pin_group_slot(command.get("link_id"))
 
     def _wire_link(self, command: "dict[str, Any]") -> None:
         direction = command.get("direction")
@@ -731,6 +746,7 @@ class HelperProcessLifecycle:
             )
             self._answer_the_parents_wire_link(link_id, f"unknown link direction {direction!r}")
             return
+        self._follow_a_link_wired_into_a_pin_group_slot(link_id, link.get("name"))
         try:
             wire_link_data_access(self._link_data_access, port_wiring)
         except Exception as wire_failure:
@@ -740,6 +756,7 @@ class HelperProcessLifecycle:
                 direction=direction,
                 error=str(wire_failure),
             )
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
             self._answer_the_parents_wire_link(link_id, str(wire_failure))
             return
         self._answer_the_parents_wire_link(link_id, None)
@@ -753,6 +770,7 @@ class HelperProcessLifecycle:
                 link_id, "this node's setup did not succeed, so no island feeds its inputs"
             )
             return
+        self._follow_a_link_wired_into_a_pin_group_slot(link_id, input_port)
         try:
             self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
         except Exception as feed_failure:
@@ -762,6 +780,7 @@ class HelperProcessLifecycle:
                 input_port=input_port,
                 error=str(feed_failure),
             )
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
             self._answer_the_parents_wire_link(link_id, str(feed_failure))
             return
         self._answer_the_parents_wire_link(link_id, None)
@@ -780,6 +799,7 @@ class HelperProcessLifecycle:
                 error=str(unfeed_failure),
             )
         self._hand_back_what_a_link_stopped_driving(input_port)
+        self._follow_a_link_unwired_from_a_pin_group_slot(command.get("link_id"))
 
     def _set_input_values(self, command: "dict[str, Any]") -> None:
         try:
@@ -802,6 +822,9 @@ class HelperProcessLifecycle:
                     "this node's fields could not take the input values the engine handed it",
                     error=str(field_values_refused),
                 )
+        if self._pin_group_slots_followed is not None:
+            self._pin_group_slots_followed.note_the_input_values(command.get("input_values") or {})
+            self._give_the_node_function_its_pin_group_slots()
         fired = command.get("fired") or []
         if not fired:
             return
@@ -815,6 +838,39 @@ class HelperProcessLifecycle:
                 "this node could not queue the fires the engine handed it",
                 fired=fired,
                 error=str(fire_refused),
+            )
+
+    def _follow_a_link_wired_into_a_pin_group_slot(
+        self, link_id: "Optional[str]", port: "Optional[str]"
+    ) -> None:
+        """Give a node function the slot a link or an island wired into its port `port` reaches,
+        while it plays."""
+        followed = self._pin_group_slots_followed
+        if followed is None or not isinstance(link_id, str) or not isinstance(port, str):
+            return
+        followed.note_a_link_wired(link_id, port)
+        self._give_the_node_function_its_pin_group_slots()
+
+    def _follow_a_link_unwired_from_a_pin_group_slot(self, link_id: "Optional[str]") -> None:
+        """Drop the slots of a node function no link or island reaches any more, once link or
+        island `link_id` is unwired, while it plays."""
+        followed = self._pin_group_slots_followed
+        if followed is None or not isinstance(link_id, str):
+            return
+        followed.note_a_link_unwired(link_id)
+        self._give_the_node_function_its_pin_group_slots()
+
+    def _give_the_node_function_its_pin_group_slots(self) -> None:
+        followed, hosted = self._pin_group_slots_followed, self._hosted
+        if followed is None or hosted is None or hosted.fields is None:
+            return
+        try:
+            followed.give_the_node_its_slots(hosted.instance, hosted.fields)
+        except Exception as slots_refused:
+            log.error(
+                "this node could not hold the slots its pin groups' wiring gives them",
+                slot_counts=followed.slot_counts(),
+                error=str(slots_refused),
             )
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
