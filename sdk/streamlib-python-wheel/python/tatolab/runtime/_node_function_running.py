@@ -5,13 +5,14 @@
 returned each frame.
 
 Each value input is an input of the node's scope, holding its set value or its default, each
-pin is bound before the body runs, and each pin group is an input of the scope holding its slots. The body declares its computed values into the scope, which
-builds them on its worker from then on; a value set or wired after is written to the scope, and
-rebuilds only what read it. A frame runs once every computed value has its first value; a node
-that paces itself returns no per-frame function, and its computed values publish on their own.
-A group's slots change while the node plays: a value set on a slot's field, or a slot held or
-dropped, writes the group's input with the slots it holds now.
-Stopping the node closes the scope, and with it every value a build made.
+pin is bound before the body runs, and each pin group is an input of the scope holding its
+slots. The body declares its computed values into the scope, which builds them on its worker
+from then on; a value set or wired after is written to the scope, and rebuilds only what read
+it. A frame runs once every computed value has its first value; a node that paces itself
+returns no per-frame function, and its computed values publish on their own. A group's slots
+change while the node plays: a value set on a slot's field, or a slot held or dropped, writes
+the group's input with the slots it holds now. Stopping the node closes the scope, and with it
+every value a build made.
 """
 
 from __future__ import annotations
@@ -86,12 +87,11 @@ class NodeFunctionRunning:
         *,
         values_to_build_with: "Mapping[str, Any]",
         pins: "Mapping[str, object]",
-        bind_pins: "Optional[BindPins]" = None,
-        slot_counts: "Mapping[str, int]" = {},
+        bind_pins: "BindPins",
+        slot_counts: "Mapping[str, int]",
     ) -> None:
         """`bind_pins` binds the pins of each slot a pin group holds, and `slot_counts` says how
-        many slots each group holds at setup, by its name; a node function taking no group needs
-        neither."""
+        many slots each group holds at setup, by its name."""
         self._node_function = node_function
         self._declaring: Optional[NodeScopeBeingDeclared] = NodeScopeBeingDeclared()
         self._input_of_each_port: "dict[str, NodeScopeInput]" = {}
@@ -115,11 +115,6 @@ class NodeFunctionRunning:
         self._slots_of_each_group: "dict[str, _SlotsOfAPinGroup]" = {}
         self._input_of_each_group: "dict[str, NodeScopeInput]" = {}
         for pin_group in node_function.pin_groups:
-            if bind_pins is None:
-                raise TypeError(
-                    f"`{node_function.__qualname__}` takes the pin group `{pin_group.name}`, "
-                    f"and was given nothing to bind its slots' pins"
-                )
             slots = _SlotsOfAPinGroup(node_function, pin_group, bind_pins)
             slots.take_values(values_to_build_with)
             slots.hold(slot_counts.get(pin_group.name, 0))
@@ -232,14 +227,24 @@ class NodeFunctionRunning:
                 f"{', '.join(f'`{name}`' for name in undeclared)}; its pin groups are "
                 f"{', '.join(f'`{name}`' for name in self._slots_of_each_group) or 'none'}"
             )
+        count_before_of_each_group = {
+            name: slots.count for name, slots in self._slots_of_each_group.items()
+        }
         reshaped: "set[str]" = set()
-        for name, count in slot_counts.items():
-            slots = self._slots_of_each_group[name]
-            if count == slots.count:
-                continue
-            slots.take_values(values)
-            slots.hold(count)
-            reshaped.add(name)
+        try:
+            for name, count in slot_counts.items():
+                slots = self._slots_of_each_group[name]
+                if count == slots.count:
+                    continue
+                slots.take_values(values)
+                slots.hold(count)
+                slots.slots()
+                reshaped.add(name)
+        except BaseException:
+            # A slot that does not build leaves every group holding the slots it held.
+            for name, count in count_before_of_each_group.items():
+                self._slots_of_each_group[name].count = count
+            raise
         if self._running is None:
             if self._declaring is not None:
                 self._groups_reshaped_before_the_scope_started.update(reshaped)

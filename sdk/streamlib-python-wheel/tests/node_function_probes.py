@@ -147,3 +147,30 @@ def LayerStackingProbe(
                 WHAT_THE_LAYER_STACKING_PROBE_DID.append(("read", (slot, level)))
 
     return each_frame
+
+
+@dataclass(frozen=True)
+class LayerNeedingAWeight:
+    """One layer that refuses to be built with no weight set, so a slot given none does not
+    build."""
+
+    level: InputPin[float]
+    weight: float = -1.0
+
+    def __post_init__(self) -> None:
+        if self.weight < 0:
+            raise ValueError("a layer needs its weight set")
+
+
+@node(execution="continuous", interval_ms=5)
+def LayerNeedingAWeightProbe(
+    *, layers: PinGroup[LayerNeedingAWeight]
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Records each frame the weight of each layer it holds."""
+
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        WHAT_THE_LAYER_STACKING_PROBE_DID.append(
+            ("weights", tuple(layer.weight for layer in layers.get()))
+        )
+
+    return each_frame

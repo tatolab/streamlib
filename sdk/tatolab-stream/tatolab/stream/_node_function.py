@@ -6,9 +6,9 @@
 The function is the node's body. Its parameters are keyword-only: each value input
 `level: Input[float] = Input(0.25)`, each Stream or Trigger input `video: InputPin[Texture]`,
 each output `result: OutputPin[Texture]`, each pin group `layers: PinGroup[Layer]`, and the
-context `ctx: RuntimeContextFullAccess`, found by its type. The body runs once, when the node is set up, declares its computed values
-with `computed(build)`, and returns the function the node calls each frame, or `None` when a
-computed value publishes on its own.
+context `ctx: RuntimeContextFullAccess`, found by its type. The body runs once, when the node
+is set up, declares its computed values with `computed(build)`, and returns the function the
+node calls each frame, or `None` when a computed value publishes on its own.
 
 An input is read with `.get()` only in a build or in the per-frame function. A build's reads are
 what it depends on: a set or a wire of an input rebuilds, off the frame thread, each computed

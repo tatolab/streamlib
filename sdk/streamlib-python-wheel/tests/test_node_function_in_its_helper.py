@@ -167,7 +167,9 @@ def test_a_value_for_no_input_and_a_second_setup_are_refused_by_their_own_kinds(
         NodeFunctionRunning,
     )
 
-    running = NodeFunctionRunning(LevelReadingProbe, values_to_build_with={}, pins={})
+    running = NodeFunctionRunning(
+        LevelReadingProbe, values_to_build_with={}, pins={}, bind_pins=lambda members: {}, slot_counts={}
+    )
     with pytest.raises(NodeFunctionInputNotDeclared, match="declares no value input `volume`"):
         running.write_inputs({"volume": 1.0})
     running.setup(object())
@@ -176,6 +178,27 @@ def test_a_value_for_no_input_and_a_second_setup_are_refused_by_their_own_kinds(
             running.setup(object())
     finally:
         running.teardown(object())
+
+
+def test_slots_that_do_not_build_leave_every_group_holding_the_slots_it_held():
+    """Mental-revert: commit the count before the slots build, and the node says it holds the
+    slot it refused, so a later reshape to that count is skipped as already held."""
+    from node_function_probes import LayerNeedingAWeightProbe
+    from tatolab.runtime._node_function_running import NodeFunctionRunning
+
+    running = NodeFunctionRunning(
+        LayerNeedingAWeightProbe,
+        values_to_build_with={"layers.0.weight": 2.0},
+        pins={},
+        bind_pins=lambda members: {member.port: object() for member in members},
+        slot_counts={"layers": 1},
+    )
+
+    with pytest.raises(ValueError, match="a layer needs its weight set"):
+        running.hold_slot_counts({"layers": 2}, {})
+    assert running.slot_counts() == {"layers": 1}
+    running.hold_slot_counts({"layers": 2}, {"layers.1.weight": 4.0})
+    assert running.slot_counts() == {"layers": 2}
 
 
 def what_the_publishing_probe_did() -> "list[tuple[str, float]]":
@@ -468,4 +491,49 @@ def test_a_layer_wired_or_unwired_while_playing_gives_the_node_its_slots_and_reb
     assert all(
         seen in framed for seen in [(1, (2.0,)), (2, (2.0, 3.0)), (2, (2.0, 5.0)), (1, (2.0,))]
     ), counts_and_gains_framed(did)
+    stop_and_tear_down(stand_in_parent, lifecycle_thread)
+
+
+def test_a_link_into_a_slot_that_does_not_build_is_refused_and_leaves_the_slots_as_they_were(
+    stand_in_parent: Any, log_records_this_process_sends_its_stand_in_parent: Any
+):
+    """Mental-revert: answer the wire before the slot builds, and the parent hears `link_wired`
+    for a slot the node never holds; commit the count before the slot builds, and every later
+    reshape to that count is skipped as already held."""
+    from node_function_probes import WHAT_THE_LAYER_STACKING_PROBE_DID
+
+    WHAT_THE_LAYER_STACKING_PROBE_DID.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:LayerNeedingAWeightProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "ports": {
+                "inputs": [the_wiring_of_a_link_into_a_layer(0, "input")],
+                "input_values": {"layers.0.weight": 2.0},
+            },
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready", "takes_its_pin_group_slots_live": True}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
+    wait_until_the_stacking_probe_did(("weights", (2.0,)), since=0)
+
+    second_layer = the_wiring_of_a_link_into_a_layer(1, "input")
+    stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": second_layer})
+    refused = stand_in_parent.receive()
+    assert refused["rpc"] == "link_wire_failed", refused
+    assert refused["link_id"] == second_layer["link_id"]
+    assert refused["reason"] == "a layer needs its weight set", refused
+
+    since = len(what_the_stacking_probe_did())
+    stand_in_parent.send(
+        {"cmd": "set_input_values", "input_values": {"layers.0.weight": 2.0, "layers.1.weight": 4.0}}
+    )
+    stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": second_layer})
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": second_layer["link_id"]}
+    wait_until_the_stacking_probe_did(("weights", (2.0, 4.0)), since=since)
     stop_and_tear_down(stand_in_parent, lifecycle_thread)

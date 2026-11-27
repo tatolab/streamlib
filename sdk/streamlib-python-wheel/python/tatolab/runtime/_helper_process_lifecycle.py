@@ -746,7 +746,11 @@ class HelperProcessLifecycle:
             )
             self._answer_the_parents_wire_link(link_id, f"unknown link direction {direction!r}")
             return
-        self._follow_a_link_wired_into_a_pin_group_slot(link_id, link.get("name"))
+        slots_refused = self._follow_a_link_wired_into_a_pin_group_slot(link_id, link.get("name"))
+        if slots_refused is not None:
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
+            self._answer_the_parents_wire_link(link_id, slots_refused)
+            return
         try:
             wire_link_data_access(self._link_data_access, port_wiring)
         except Exception as wire_failure:
@@ -770,7 +774,11 @@ class HelperProcessLifecycle:
                 link_id, "this node's setup did not succeed, so no island feeds its inputs"
             )
             return
-        self._follow_a_link_wired_into_a_pin_group_slot(link_id, input_port)
+        slots_refused = self._follow_a_link_wired_into_a_pin_group_slot(link_id, input_port)
+        if slots_refused is not None:
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
+            self._answer_the_parents_wire_link(link_id, slots_refused)
+            return
         try:
             self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
         except Exception as feed_failure:
@@ -842,14 +850,14 @@ class HelperProcessLifecycle:
 
     def _follow_a_link_wired_into_a_pin_group_slot(
         self, link_id: "Optional[str]", port: "Optional[str]"
-    ) -> None:
+    ) -> "Optional[str]":
         """Give a node function the slot a link or an island wired into its port `port` reaches,
-        while it plays."""
+        while it plays; why it could not hold it, or `None`."""
         followed = self._pin_group_slots_followed
         if followed is None or not isinstance(link_id, str) or not isinstance(port, str):
-            return
+            return None
         followed.note_a_link_wired(link_id, port)
-        self._give_the_node_function_its_pin_group_slots()
+        return self._give_the_node_function_its_pin_group_slots()
 
     def _follow_a_link_unwired_from_a_pin_group_slot(self, link_id: "Optional[str]") -> None:
         """Drop the slots of a node function no link or island reaches any more, once link or
@@ -860,10 +868,12 @@ class HelperProcessLifecycle:
         followed.note_a_link_unwired(link_id)
         self._give_the_node_function_its_pin_group_slots()
 
-    def _give_the_node_function_its_pin_group_slots(self) -> None:
+    def _give_the_node_function_its_pin_group_slots(self) -> "Optional[str]":
+        """Give a node function the slots its pin groups' wiring gives them; why it could not,
+        logged, with every group left holding the slots it held, or `None`."""
         followed, hosted = self._pin_group_slots_followed, self._hosted
         if followed is None or hosted is None or hosted.fields is None:
-            return
+            return None
         try:
             followed.give_the_node_its_slots(hosted.instance, hosted.fields)
         except Exception as slots_refused:
@@ -872,6 +882,8 @@ class HelperProcessLifecycle:
                 slot_counts=followed.slot_counts(),
                 error=str(slots_refused),
             )
+            return str(slots_refused)
+        return None
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
         if link_id is None:

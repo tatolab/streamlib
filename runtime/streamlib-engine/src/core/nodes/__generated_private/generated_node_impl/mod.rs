@@ -386,8 +386,7 @@ pub struct OutOfProcessLinkWiringEnvelope {
     /// writes; `None` before any spawn of a far side calling a stateful node.
     function_node_states_its_far_side_writes:
         Mutex<Option<Arc<FunctionNodeStatesCarriedForOneStream>>>,
-    /// Whether its far side, set up last, gives the node the slots its pin groups' wiring
-    /// gives them while it plays, so a change in their count rebuilds nothing.
+    /// Read by `its_far_side_takes_its_pin_group_slots_live`.
     its_far_side_takes_its_pin_group_slots_live: AtomicBool,
 }
 
@@ -768,15 +767,16 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Note whether its far side, just set up, gives the node the slots its pin groups' wiring
-    /// gives them while it plays, from the `takes_its_pin_group_slots_live` its `ready` carries.
+    /// Note the `takes_its_pin_group_slots_live` its far side's `ready` carries.
     pub(crate) fn note_whether_its_far_side_takes_its_pin_group_slots_live(
         &self,
         takes_its_pin_group_slots_live: Option<&JsonValue>,
     ) {
         self.its_far_side_takes_its_pin_group_slots_live.store(
-            takes_its_pin_group_slots_live.and_then(JsonValue::as_bool) == Some(true),
-            Ordering::Release,
+            takes_its_pin_group_slots_live
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            Ordering::Relaxed,
         );
     }
 
@@ -785,7 +785,7 @@ impl OutOfProcessLinkWiringEnvelope {
     /// function does.
     pub(crate) fn its_far_side_takes_its_pin_group_slots_live(&self) -> bool {
         self.its_far_side_takes_its_pin_group_slots_live
-            .load(Ordering::Acquire)
+            .load(Ordering::Relaxed)
     }
 
     pub(crate) fn number_the_function_node_its_far_side_runs_as_a_standalone_node(
