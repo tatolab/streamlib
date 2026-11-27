@@ -21,9 +21,11 @@ from tatolab.stream import (
     OutputPin,
     PinGroup,
     PinTypeChoice,
+    PinTypeFromSetting,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     SettingOnly,
+    Tensor,
     Texture,
     Trigger,
     WireOnly,
@@ -185,14 +187,27 @@ def test_an_input_read_at_setup_is_refused_inside_or_around_its_input(gain: Call
     assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "level")
 
 
-def test_an_input_choosing_a_pin_type_is_refused() -> None:
+def convert(
+    *,
+    content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Texture)),
+    result: OutputPin[Annotated[Texture | Tensor, PinTypeFromSetting("content_type")]],
+) -> None: ...
+
+
+def test_an_input_choosing_a_pin_type_is_live_and_its_output_takes_the_type_it_holds() -> None:
     """Mental-revert: read a `PinTypeChoice` input as a class's field is, and the node function
-    declares a setting whose set rebuilds the node."""
-
-    def convert(*, content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Texture))) -> None: ...
-
-    refused = refusal_of(declared_with_keywords(convert))
-    assert (refused.finding_code, refused.pin) == ("pin_type_choice_on_a_node_function", "content_type")
+    declares a setting read at setup, whose set rebuilds the node; refuse it, and no node
+    function chooses a pin's type."""
+    declared = declared_with_keywords(convert)()
+    (content_type,) = getattr(declared, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    (result,) = getattr(declared, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert content_type["name"] == "content_type"
+    assert content_type["input_mode"] == {"mode": "wire_or_value"}
+    assert content_type["pin_declaration"]["pin_type"]["pin_type"]["type"] == "pin_type_choice"
+    assert result["pin_declaration"]["pin_type"] == {
+        "kind": "set_by_input",
+        "input_name": "content_type",
+    }
 
 
 def test_a_parameter_named_private_is_refused() -> None:

@@ -745,16 +745,11 @@ class _NodeFunctionReading(_ClassNodeReading):
     def _field(
         self, attribute_name: str, annotation: Any, description: Optional[str]
     ) -> tuple[DeclaredPort, Optional[DeclaredPort]]:
+        """A class's field, but an input choosing a pin type is live as every other input of a
+        node function is: a set re-types the pin it chooses and is written to the node's scope."""
         port, published_on = super()._field(attribute_name, annotation, description)
         if _chooses_a_pin_type(port["pin_declaration"]):
-            raise self._refusal(
-                f"`{self._node}`'s input `{attribute_name}` chooses a pin type, which decides the "
-                f"node's pins and so rebuilds it when it changes, and every input of a node "
-                f"function is live. To fix: declare the node as a class under bare `@node` while "
-                f"an input chooses its pin types.",
-                "pin_type_choice_on_a_node_function",
-                pin=attribute_name,
-            )
+            port["input_mode"] = {"mode": "wire_or_value"}
         return port, published_on
 
     def _pin_group(
