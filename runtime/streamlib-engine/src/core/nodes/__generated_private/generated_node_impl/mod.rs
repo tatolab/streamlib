@@ -117,9 +117,18 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// The stateful function node its far side runs as a standalone node,
     /// whose state its board carries; islands call only stateless ones.
     stateful_function_node_its_far_side_runs: Option<StatefulFunctionNodeItsFarSideCalls>,
-    answer_cells_of_links_handed_over_past_the_setup_command:
-        Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
+    /// One answer per link end handed over past the setup command: a newer
+    /// handover of the same end replaces the one before it.
+    answers_owed_for_link_ends_handed_over_past_the_setup_command: Vec<AnswerOwedForOneLinkEnd>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
+}
+
+/// The answer the far side owes for one end of one link handed over past the
+/// setup command.
+struct AnswerOwedForOneLinkEnd {
+    link_id: Option<String>,
+    port_direction: crate::core::PortDirection,
+    answer_cell: Arc<OutOfProcessLinkWireReply>,
 }
 
 impl RecordedLinksAndHowTheNextReachesTheFarSide {
@@ -130,15 +139,27 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         }
     }
 
+    /// Record `link_wiring` as the one wiring of its link's end facing
+    /// `port_direction`, in place of any earlier one.
+    fn record_the_wiring_of_a_link_end(
+        &mut self,
+        port_direction: crate::core::PortDirection,
+        link_wiring: JsonValue,
+    ) {
+        let link_id = link_id_of(&link_wiring);
+        let links = self.links_facing(port_direction);
+        links.retain(|recorded| link_id.is_none() || link_id_of(recorded) != link_id);
+        links.push(link_wiring);
+    }
+
     fn record_a_link_handed_over_past_the_setup_command(
         &mut self,
         port_direction: crate::core::PortDirection,
         link_wiring: JsonValue,
         answer_cell: Arc<OutOfProcessLinkWireReply>,
     ) {
-        self.answer_cells_of_links_handed_over_past_the_setup_command
-            .push((link_id_of(&link_wiring), answer_cell));
-        self.links_facing(port_direction).push(link_wiring);
+        self.keep_the_answer_owed_for(link_id_of(&link_wiring), port_direction, answer_cell);
+        self.record_the_wiring_of_a_link_end(port_direction, link_wiring);
     }
 
     /// Forget every link handed over past the setup command that its far side
@@ -146,13 +167,13 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
     /// `error`; answers the forgotten links' ids.
     fn forget_every_link_its_far_side_never_opened(&mut self) -> Vec<String> {
         let never_opened: Vec<String> = self
-            .answer_cells_of_links_handed_over_past_the_setup_command
+            .answers_owed_for_link_ends_handed_over_past_the_setup_command
             .drain(..)
-            .filter(|(_, answer_cell)| {
-                answer_cell.the_far_sides_answer()
+            .filter(|owed| {
+                owed.answer_cell.the_far_sides_answer()
                     != Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide)
             })
-            .filter_map(|(link_id, _)| link_id)
+            .filter_map(|owed| owed.link_id)
             .collect();
         let never_opened_by_its_far_side = |link_wiring: &JsonValue| {
             link_id_of(link_wiring).is_some_and(|link_id| never_opened.contains(&link_id))
@@ -385,7 +406,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     unlinked_input_values: serde_json::Map::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_node_its_far_side_runs: None,
-                    answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
+                    answers_owed_for_link_ends_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
                 },
@@ -525,7 +546,7 @@ impl OutOfProcessLinkWiringEnvelope {
             .lock();
         match &mut recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::RidesTheSetupCommand => {
-                recorded.links_facing(port_direction).push(link_wiring);
+                recorded.record_the_wiring_of_a_link_end(port_direction, link_wiring);
                 Ok(None)
             }
             HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => {
@@ -600,7 +621,11 @@ impl OutOfProcessLinkWiringEnvelope {
                     &function_node_island,
                     Arc::clone(&answer_cell),
                 )?;
-                recorded.keep_the_answer_owed_for(island_link_id, Arc::clone(&answer_cell));
+                recorded.keep_the_answer_owed_for(
+                    island_link_id,
+                    crate::core::PortDirection::Input,
+                    Arc::clone(&answer_cell),
+                );
                 Ok(Some(answer_cell))
             }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
@@ -992,9 +1017,7 @@ impl OutOfProcessLinkWiringEnvelope {
             .lock();
         recorded.input_links.retain(|link| !carries_link(link));
         recorded.output_links.retain(|link| !carries_link(link));
-        recorded
-            .answer_cells_of_links_handed_over_past_the_setup_command
-            .retain(|(handed_over_link_id, _)| handed_over_link_id.as_deref() != Some(link_id));
+        recorded.forget_the_answer_owed_for(Some(link_id));
         self.loss_counts.forget_link(link_id);
         self.output_frames_kept_by_its_output_links
             .forget_an_unwired_output_link(link_id);
@@ -1123,6 +1146,7 @@ impl OutOfProcessLinkWiringEnvelope {
                 ),
                 Err(handover_failure) => recorded.keep_the_answer_refused_for(
                     link_id_of(&waiting_link.link_wiring),
+                    waiting_link.port_direction,
                     &waiting_link.answer_cell,
                     &handover_failure.to_string(),
                 ),

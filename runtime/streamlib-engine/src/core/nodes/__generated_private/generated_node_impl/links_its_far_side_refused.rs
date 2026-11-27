@@ -7,9 +7,10 @@
 use std::sync::Arc;
 
 use super::{
-    LinkAwaitingHandoverBehindTheSetupCommand, OutOfProcessLinkWiringEnvelope,
-    RecordedLinksAndHowTheNextReachesTheFarSide,
+    AnswerOwedForOneLinkEnd, LinkAwaitingHandoverBehindTheSetupCommand,
+    OutOfProcessLinkWiringEnvelope, RecordedLinksAndHowTheNextReachesTheFarSide,
 };
+use crate::core::PortDirection;
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
 impl OutOfProcessLinkWiringEnvelope {
@@ -19,40 +20,47 @@ impl OutOfProcessLinkWiringEnvelope {
     pub(crate) fn holds_a_link_its_far_side_refused(&self) -> bool {
         self.recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
-            .answer_cells_of_links_handed_over_past_the_setup_command
+            .answers_owed_for_link_ends_handed_over_past_the_setup_command
             .iter()
-            .any(|(_, answer_cell)| answer_cell.the_far_side_refused())
+            .any(|owed| owed.answer_cell.the_far_side_refused())
     }
 }
 
 impl RecordedLinksAndHowTheNextReachesTheFarSide {
-    /// Keep `answer_cell` as the one answer owed for `link_id`.
+    /// Keep `answer_cell` as the one answer owed for `link_id`'s end facing `port_direction`.
     pub(super) fn keep_the_answer_owed_for(
         &mut self,
         link_id: Option<String>,
+        port_direction: PortDirection,
         answer_cell: Arc<OutOfProcessLinkWireReply>,
     ) {
-        self.forget_the_answer_owed_for(link_id.as_deref());
-        self.answer_cells_of_links_handed_over_past_the_setup_command
-            .push((link_id, answer_cell));
+        self.answers_owed_for_link_ends_handed_over_past_the_setup_command
+            .retain(|owed| owed.link_id != link_id || owed.port_direction != port_direction);
+        self.answers_owed_for_link_ends_handed_over_past_the_setup_command
+            .push(AnswerOwedForOneLinkEnd {
+                link_id,
+                port_direction,
+                answer_cell,
+            });
     }
 
-    /// Keep `answer_cell` as the one answer owed for `link_id`, refused for `reason`, so the
-    /// link is wired again.
+    /// Keep `answer_cell` as the one answer owed for `link_id`'s end facing `port_direction`,
+    /// refused for `reason`, so the link is wired again.
     pub(super) fn keep_the_answer_refused_for(
         &mut self,
         link_id: Option<String>,
+        port_direction: PortDirection,
         answer_cell: &Arc<OutOfProcessLinkWireReply>,
         reason: &str,
     ) {
         refuse_because(answer_cell, reason);
-        self.keep_the_answer_owed_for(link_id, Arc::clone(answer_cell));
+        self.keep_the_answer_owed_for(link_id, port_direction, Arc::clone(answer_cell));
     }
 
-    /// Forget the answer owed for `link_id`.
+    /// Forget the answer owed for every end of `link_id`.
     pub(super) fn forget_the_answer_owed_for(&mut self, link_id: Option<&str>) {
-        self.answer_cells_of_links_handed_over_past_the_setup_command
-            .retain(|(handed_over_link_id, _)| handed_over_link_id.as_deref() != link_id);
+        self.answers_owed_for_link_ends_handed_over_past_the_setup_command
+            .retain(|owed| owed.link_id.as_deref() != link_id);
     }
 }
 
