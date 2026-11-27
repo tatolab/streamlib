@@ -100,8 +100,9 @@ pub(crate) fn the_reader_input_port_a_link_into_a_function_node_is_read_at(
 }
 
 /// Whether `node_id` is a function node that runs inside the read of each
-/// node it feeds: every function node, until one is promoted to a process of
-/// its own.
+/// node it feeds: every stateless function node, until one is promoted to a
+/// process of its own. A stateful one never does: it runs in a helper of its
+/// own from the compile that adds it.
 pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     graph: &Graph,
     node_id: &NodeRunId,
@@ -110,6 +111,7 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
         node.node_kind()
             .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
             && !node.has::<FunctionNodePromotedToItsOwnProcessComponent>()
+            && the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
     })
 }
 

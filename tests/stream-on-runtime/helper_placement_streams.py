@@ -33,7 +33,6 @@ from helper_placement_nodes import (
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessIntegerSink,
-    ReportsTheCountItReadAndDiesOnceItReadsPastTwoHundred,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheCountsItReadSink,
     ReportsTheFunctionNodeValuesItReadSink,
@@ -262,15 +261,6 @@ def function_node_run_as_python_that_crashes_into_python_sink(stream_builder: St
 
 
 @graph_generator
-def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuilder) -> None:
-    """A stateful function node counting its calls, read by a Python class that
-    takes its own helper down once, at the count of two hundred."""
-    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
-    sink = stream_builder.add(ReportsTheCountItReadAndDiesOnceItReadsPastTwoHundred, name="sink")
-    stream_builder.connect(counter.output("result"), sink.input("count"))
-
-
-@graph_generator
 def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
     """One stateful function node counting its calls, read by two Python classes."""
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
@@ -284,7 +274,7 @@ def stateful_counter_read_by_one_python_sink_reporting_each_batch(
     stream_builder: StreamBuilder,
 ) -> None:
     """One stateful function node counting its calls, read by one Python class reporting each
-    batch of the counts it read in order; a second reader is wired to it while it plays."""
+    batch of the counts it read in order."""
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
     first_reader = stream_builder.add(
         ReportsEachBatchOfCountsItReadInOrderAsTheFirstReader, name="first_reader"

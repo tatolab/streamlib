@@ -152,7 +152,6 @@ fn a_gate_reading_a_link_from_outside_its_island(
         (0, 0),
         stream_clock_now_ns,
         None,
-        &|_| None,
         HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             how_each_node_carries_its_values: vec![HowAFunctionNodeCarriesValuesBeyondNumbers {
                 inputs_read_from_links_from_outside_the_island: vec![(
@@ -343,7 +342,6 @@ fn a_number_read_off_a_link_from_outside_the_island_keeps_the_newest_control_val
             (0, 0),
             stream_clock_now_ns,
             None,
-            &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
                 how_each_node_carries_its_values: vec![
                     HowAFunctionNodeCarriesValuesBeyondNumbers {
@@ -415,7 +413,6 @@ fn an_add_one_island_reading_a_link_from_outside_its_island(
         (0, 0),
         stream_clock_now_ns,
         None,
-        &|_| None,
         HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             how_each_node_carries_its_values: vec![HowAFunctionNodeCarriesValuesBeyondNumbers {
                 inputs_read_from_links_from_outside_the_island: vec![(
@@ -508,7 +505,6 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
             (0, 0),
             stream_clock_now_ns,
             None,
-            &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
                 how_each_node_carries_its_values: vec![
                     HowAFunctionNodeCarriesValuesBeyondNumbers {
@@ -539,11 +535,6 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
     assert!(
         raises["hand_on"].contains("names none of its message inputs"),
         "{raises:?}"
-    );
-
-    assert_eq!(
-        island.the_state_each_stateful_function_node_last_returned(),
-        vec![(0, vec![0.0])]
     );
 }
 
@@ -593,7 +584,6 @@ fn an_island_dimming_a_colour(
         (0, 0),
         stream_clock_now_ns,
         None,
-        &|_| None,
         HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             how_each_node_carries_its_values: vec![HowAFunctionNodeCarriesValuesBeyondNumbers {
                 inputs_read_from_links_from_outside_the_island,
@@ -759,7 +749,6 @@ fn an_island_doubling_each_level(
         (0, 0),
         stream_clock_now_ns,
         None,
-        &|_| None,
         HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             how_each_node_carries_its_values: vec![HowAFunctionNodeCarriesValuesBeyondNumbers {
                 inputs_read_from_links_from_outside_the_island,

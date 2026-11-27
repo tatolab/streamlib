@@ -9,8 +9,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use super::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds, the_report_of_how_its_helpers_ran_a_function_node,
-    the_state_fields_of_a_function_node,
+    is_a_function_node, runs_inside_the_read_of_each_node_it_feeds,
+    the_report_of_how_its_helpers_ran_a_function_node, the_state_fields_of_a_function_node,
 };
 use super::open_iceoryx2_service_op::close_iceoryx2_service;
 use crate::core::NodeRunId;
@@ -42,10 +42,11 @@ pub(crate) fn place_each_stateful_function_node_in_a_process_of_its_own(
 ) {
     let stateful_function_nodes_added: Vec<NodeRunId> = nodes_to_add
         .iter()
-        .filter(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))
         .filter(|node_id| {
             graph.traversal().v(*node_id).first().is_some_and(|node| {
-                !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
+                is_a_function_node(graph, node_id)
+                    && !node.has::<FunctionNodePromotedToItsOwnProcessComponent>()
+                    && !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
             })
         })
         .cloned()

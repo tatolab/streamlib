@@ -62,7 +62,6 @@ fn an_island_reversing_the_bytes(
             (0, 0),
             Box::new(|| 1),
             None,
-            &|_| None,
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
                 how_each_node_carries_its_values: vec![
                     HowAFunctionNodeCarriesValuesBeyondNumbers {

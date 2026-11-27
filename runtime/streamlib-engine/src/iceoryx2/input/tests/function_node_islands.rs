@@ -23,10 +23,6 @@ impl FunctionNodeIslandEvaluatedAtEachRead for IslandAnsweringOneHalf {
         None
     }
 
-    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
-        Vec::new()
-    }
-
     fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
         &[]
     }
@@ -46,10 +42,6 @@ impl FunctionNodeIslandEvaluatedAtEachRead for IslandRunningOneNodeAsPython {
 
     fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
         Some("tally")
-    }
-
-    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
-        vec![(7, vec![3.0])]
     }
 
     fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
@@ -129,10 +121,6 @@ impl FunctionNodeIslandEvaluatedAtEachRead for GateIslandReadingALinkFromOutside
 
     fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
         None
-    }
-
-    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
-        Vec::new()
     }
 
     fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
@@ -383,17 +371,6 @@ fn an_island_replacing_the_one_feeding_a_port_carries_its_sample_positions_on() 
         mailboxes.the_function_node_run_as_python_by_the_island_feeding("brightness"),
         Some("tally".to_string()),
         "the replacing island answers the port's reads"
-    );
-    assert_eq!(
-        mailboxes.the_state_each_stateful_function_node_of_the_island_feeding_last_returned(
-            "brightness"
-        ),
-        vec![(7, vec![3.0])]
-    );
-    assert!(
-        mailboxes
-            .the_state_each_stateful_function_node_of_the_island_feeding_last_returned("unfed")
-            .is_empty()
     );
 }
 

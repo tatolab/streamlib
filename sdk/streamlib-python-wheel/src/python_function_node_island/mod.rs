@@ -428,8 +428,8 @@ struct FunctionNodeInAnIsland {
     /// any other input with no value the node hands out nothing, uncalled.
     inputs_that_take_none: Vec<usize>,
     output_values: Vec<FunctionNodeValue>,
-    /// Whether each call's new state is written on the helper's board, which
-    /// carries an entry for the node exactly when its state is carried.
+    /// Whether each call's new state is written on the helper's board: only a
+    /// stateful node a helper runs as a standalone node carries its state there.
     writes_its_state_on_the_board: bool,
 }
 
@@ -620,14 +620,6 @@ impl FunctionNodeIslandEvaluation {
             }
             self.where_it_notes_the_raises_of_its_function_nodes
                 .note_that_it_ran_cleanly(&function_node.node_id);
-            if let Some(board_writer) = self.call_breadcrumb_board_writer.as_deref()
-                && function_node.writes_its_state_on_the_board
-            {
-                board_writer.write_the_state_of_a_function_node(
-                    function_node.breadcrumb_number,
-                    function_node.how_it_is_called.state_values(),
-                )?;
-            }
         }
         self.last_evaluated_at_ns = Some(now_ns);
         Ok(())
@@ -705,24 +697,12 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                 "a function node island feeds only a helper process's own data plane",
             )
         })?;
-    let states_the_island_it_replaces_last_returned: HashMap<u32, Vec<f64>> = input_mailboxes
-        .the_state_each_stateful_function_node_of_the_island_feeding_last_returned(input_port)
-        .into_iter()
-        .collect();
     let island =
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
             function_nodes,
             island_output,
             Box::new(helper_stream_clock_now_ns),
             link_data_access.shared_loss_count_board_writer_of_this_helper(),
-            &|breadcrumb_number| {
-                states_the_island_it_replaces_last_returned
-                    .get(&breadcrumb_number)
-                    .cloned()
-                    .or_else(|| {
-                        link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number)
-                    })
-            },
             HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
                 how_each_node_carries_its_values,
                 read_the_newest_message_at: {

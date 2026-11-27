@@ -70,21 +70,6 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
         self.first_function_node_it_runs_as_python.as_deref()
     }
 
-    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
-        self.evaluation
-            .lock()
-            .function_nodes_each_after_what_it_reads
-            .iter()
-            .filter(|function_node| !function_node.how_it_is_called.state_values().is_empty())
-            .map(|function_node| {
-                (
-                    function_node.breadcrumb_number,
-                    function_node.how_it_is_called.state_values().to_vec(),
-                )
-            })
-            .collect()
-    }
-
     fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
         &self.reader_input_ports_its_links_from_outside_it_arrive_at
     }
@@ -127,7 +112,6 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         (island_output_node_index, island_output_index): (usize, usize),
         stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
         call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
-        state_resumed_from: &dyn Fn(u32) -> Option<Vec<f64>>,
         how_it_carries_values_beyond_numbers: HowAFunctionNodeIslandCarriesValuesBeyondNumbers,
         where_it_notes_the_raises_of_its_function_nodes: WhereAnIslandNotesTheRaisesOfItsFunctionNodes,
     ) -> std::result::Result<Self, String> {
@@ -249,24 +233,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                         value_read_last,
                     };
             }
-            let writes_its_state_on_the_board = !initial_state_values.is_empty()
-                && call_breadcrumb_board_writer
-                    .as_deref()
-                    .is_some_and(|board_writer| {
-                        board_writer.carries_a_state_entry_for(breadcrumb_number)
-                    });
-            let state_resumed_from = state_resumed_from(breadcrumb_number)
-                .filter(|resumed| resumed.len() == initial_state_values.len());
-            let resumes_from_the_state_its_stream_carries =
-                state_resumed_from.is_some() && !initial_state_values.is_empty();
             let how_it_is_called = HowAFunctionNodeIsCalled::handed_over_by_the_bootstrap(
                 &node_id,
                 called_through,
                 config_values,
                 config_value_indices_set_by_the_inputs_past_its_own,
                 where_each_input_takes_its_value_read.len(),
-                the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
-                resumes_from_the_state_its_stream_carries,
+                initial_state_values,
+                false,
                 output_count,
                 how_it_carries_its_values,
             )?;
@@ -279,7 +253,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 output_values: (0..output_count)
                     .map(|_| FunctionNodeValue::Number(0.0))
                     .collect(),
-                writes_its_state_on_the_board,
+                writes_its_state_on_the_board: false,
             });
         }
         for function_node in &function_nodes_each_after_what_it_reads {

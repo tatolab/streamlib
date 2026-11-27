@@ -442,37 +442,6 @@ class ReportsEachBatchOfCountsItReadInOrderAsTheSecondReader:
         read_each_count_in_order_and_report_each_batch(self.count, self._counts_read, "second")
 
 
-#: The count at which a sink that read a lower one takes its own helper down.
-COUNT_A_SINK_THAT_READ_A_LOWER_ONE_DIES_AT = 200.0
-
-
-@node(execution="continuous", interval_ms=10)
-class ReportsTheCountItReadAndDiesOnceItReadsPastTwoHundred:
-    """Reports the first count it reads with its own pid, and takes its own
-    helper down at the first count of two hundred or more once it has read a
-    lower one. A helper started in its place reads on past the count its dead
-    one reached, so it never reads a lower one and never dies."""
-
-    count: float | None = None
-
-    def __init__(self) -> None:
-        self._first_count_read: "float | None" = None
-
-    def process(self, ctx) -> None:
-        if self.count is None:
-            return
-        count_read = self.count
-        if self._first_count_read is None:
-            self._first_count_read = count_read
-            report("FIRST_COUNT_READ", {"pid": os.getpid(), "count": count_read})
-        if (
-            self._first_count_read < COUNT_A_SINK_THAT_READ_A_LOWER_ONE_DIES_AT
-            and count_read >= COUNT_A_SINK_THAT_READ_A_LOWER_ONE_DIES_AT
-        ):
-            report("SINK_ABOUT_TO_DIE", {"pid": os.getpid(), "count": count_read})
-            os._exit(1)
-
-
 #: The stream milliseconds between the steps of the stepped LFO stream.
 STEPPED_LFO_STEP_MS = 100
 

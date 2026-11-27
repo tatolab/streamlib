@@ -8,10 +8,11 @@ use crate::core::compiler::compiler_ops::function_node_island::tests::{
     a_class_node_feeding_remap_into_a_helper_reader, a_function_node_type,
     a_graph_resolving_these_function_node_types, a_graph_resolving_three_function_node_types,
     a_helper_reader_before_its_setup, a_helper_reader_before_its_setup_driven_in, add_a_node, link,
-    reader_setup_command_ports,
+    reader_setup_command_ports, the_refusal_of_a_commit,
 };
 use crate::core::compiler::compiler_ops::function_node_island::{
-    HowALinkIsWired, how_a_link_is_wired, wire_a_link_from_a_function_node_island_into_its_reader,
+    HowALinkIsWired, how_a_link_is_wired, the_island_feeding_a_link,
+    wire_a_link_from_a_function_node_island_into_its_reader,
 };
 use crate::core::graph::{FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode};
 use crate::core::test_support::make_in1_a_setting_read_at_setup;
@@ -703,4 +704,73 @@ fn a_node_promoted_out_of_its_reader_shows_how_its_own_helper_runs_it() {
         the_ran_compiled_graph_renders_on(&graph, &remap),
         Some(true)
     );
+}
+
+/// A graph resolving `lfo` and `mix` with no state, and `accumulate`, which
+/// carries one and reads `x`.
+fn a_graph_resolving_a_stateful_function_node_type_with_an_input() -> Graph {
+    let mut accumulate = a_function_node_type("test_ops:accumulate", &["x"], &["result"]);
+    accumulate.function_node_state_fields = vec!["sum".to_string()];
+    a_graph_resolving_these_function_node_types([
+        a_function_node_type("test_ops:lfo", &[], &["result"]),
+        a_function_node_type("test_ops:mix", &["a", "b"], &["result"]),
+        accumulate,
+    ])
+}
+
+/// A loop of function nodes through a stateful node closes through that
+/// node's own helper, as a loop through a class node does: the stateful node
+/// reads `mix` evaluated in its own helper, `mix` reads the stateful node's
+/// last value at a port, and no island holds the loop.
+///
+/// Mental-revert: holding the stateful node inside its readers' islands
+/// refuses the link closing the loop, naming the cycle.
+#[test]
+fn a_loop_through_a_stateful_node_closes_through_its_own_helper() {
+    let mut graph = a_graph_resolving_a_stateful_function_node_type_with_an_input();
+    let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+    let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+    let accumulate = add_a_node(&mut graph, "test_ops:accumulate", JsonValue::Null);
+    let reader = a_helper_reader_before_its_setup(&mut graph);
+    link(&mut graph, (&lfo, "result"), (&mix, "a"));
+    let accumulate_into_mix = link(&mut graph, (&accumulate, "result"), (&mix, "b"));
+    let closing_the_loop = link(&mut graph, (&mix, "result"), (&accumulate, "x"));
+    let into_the_reader = link(&mut graph, (&mix, "result"), (&reader, "in1"));
+    let added = every_node_of(&graph);
+
+    assert_eq!(
+        the_refusal_of_a_commit(
+            &graph,
+            &added,
+            &[],
+            &[
+                accumulate_into_mix.clone(),
+                closing_the_loop.clone(),
+                into_the_reader.clone()
+            ],
+            &[]
+        ),
+        None
+    );
+    place_each_stateful_function_node_in_a_process_of_its_own(&mut graph, &added);
+
+    assert!(is_promoted_with_the_stateful_interval(&graph, &accumulate));
+    assert_eq!(
+        how_a_link_is_wired(&graph, &accumulate_into_mix).unwrap(),
+        HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland
+    );
+    for link_out_of_mix in [&closing_the_loop, &into_the_reader] {
+        let island = the_island_feeding_a_link(&graph, link_out_of_mix).unwrap();
+        let island_nodes: Vec<&str> = island["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|island_node| island_node["node"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            island_nodes,
+            [lfo.as_str(), mix.as_str()],
+            "the island feeding {link_out_of_mix} holds `lfo` and `mix`, never the stateful node"
+        );
+    }
 }

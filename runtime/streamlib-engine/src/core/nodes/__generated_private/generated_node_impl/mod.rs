@@ -110,10 +110,9 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// Each function node its islands call, by the breadcrumb number its far
     /// side writes while calling it.
     function_nodes_by_breadcrumb_number: Vec<FunctionNodeNumberedOnTheBreadcrumb>,
-    /// Each stateful function node its far side calls, whose state its board
-    /// carries.
+    /// The stateful function node its far side runs as a standalone node,
+    /// whose state its board carries; islands call only stateless ones.
     stateful_function_nodes_its_far_side_calls: Vec<StatefulFunctionNodeItsFarSideCalls>,
-    runs_a_function_node_as_a_standalone_node: bool,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -417,7 +416,6 @@ impl OutOfProcessLinkWiringEnvelope {
                     unlinked_input_values: serde_json::Map::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
-                    runs_a_function_node_as_a_standalone_node: false,
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -615,22 +613,6 @@ impl OutOfProcessLinkWiringEnvelope {
                     .unwrap_or(node_id);
                 let breadcrumb_number =
                     recorded.the_breadcrumb_number_of_a_function_node(node_id, node_name);
-                let state_fields: Vec<String> = node
-                    .get("state_fields")
-                    .and_then(|state_fields| serde_json::from_value(state_fields.clone()).ok())
-                    .unwrap_or_default();
-                let stateful_function_node_uuid = node
-                    .get("node_uuid")
-                    .and_then(JsonValue::as_str)
-                    .and_then(|node_uuid| node_uuid.parse::<uuid::Uuid>().ok());
-                match stateful_function_node_uuid {
-                    Some(function_node_uuid) => recorded.note_a_stateful_function_node(
-                        breadcrumb_number,
-                        function_node_uuid,
-                        state_fields,
-                    ),
-                    None => recorded.forget_a_stateful_function_node(breadcrumb_number),
-                }
                 node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
             }
         }
@@ -776,7 +758,6 @@ impl OutOfProcessLinkWiringEnvelope {
         let breadcrumb_number =
             recorded.the_breadcrumb_number_of_a_function_node(function_node_id, function_node_name);
         recorded.note_a_stateful_function_node(breadcrumb_number, function_node_uuid, state_fields);
-        recorded.runs_a_function_node_as_a_standalone_node = true;
         debug_assert_eq!(
             breadcrumb_number,
             crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE
@@ -966,10 +947,8 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Forget the function node island `link_id` carries, and each stateful
-    /// node no island left carries, so no later setup command or board carries
-    /// them and no later spawn takes their state over from the helper that
-    /// evaluates them now; a far side past its setup command is told to stop
+    /// Forget the function node island `link_id` carries, so no later setup
+    /// command carries it; a far side past its setup command is told to stop
     /// evaluating it.
     pub(crate) fn forget_a_function_node_island(&self, link_id: &str) {
         let mut recorded = self
@@ -998,23 +977,6 @@ impl OutOfProcessLinkWiringEnvelope {
                  island; it keeps evaluating it until it restarts"
             );
         }
-        let runs_a_standalone_node = recorded.runs_a_function_node_as_a_standalone_node;
-        let breadcrumb_numbers_still_carried: std::collections::HashSet<u64> = recorded
-            .function_node_islands_feeding_its_input_ports
-            .iter()
-            .filter_map(|island| island.get("nodes").and_then(JsonValue::as_array))
-            .flatten()
-            .filter_map(|node| node.get("breadcrumb_number").and_then(JsonValue::as_u64))
-            .collect();
-        recorded
-            .stateful_function_nodes_its_far_side_calls
-            .retain(|stateful| {
-                (runs_a_standalone_node
-                    && stateful.breadcrumb_number
-                        == crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE)
-                    || breadcrumb_numbers_still_carried
-                        .contains(&u64::from(stateful.breadcrumb_number))
-            });
     }
 
     /// Forget one link, in both directions, on disconnect, and ask a far side
