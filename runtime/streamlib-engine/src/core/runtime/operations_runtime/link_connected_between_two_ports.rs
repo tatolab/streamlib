@@ -802,6 +802,17 @@ fn apply_a_link(
         let (made, channel) = made?;
         if let ALinkConnectedOrSetAside::Connected(link_id) = &made {
             tx.log(PendingOperation::AddLink(link_id.clone()));
+            if a_link_connected == ALinkConnected::OfASavedGraph {
+                // A saved link whose ends a type choice left differing is held unwired by the
+                // compile, as one a set of the choosing input leaves differing.
+                for node_run_id in crate::core::graph::the_nodes_whose_type_choices_reach_the_link(
+                    graph, &from, &to,
+                ) {
+                    tx.log(PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(
+                        node_run_id,
+                    ));
+                }
+            }
             tracing::debug!(
                 link_id = %link_id,
                 channel = channel.as_str(),

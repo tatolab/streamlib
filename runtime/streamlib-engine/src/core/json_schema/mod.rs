@@ -25,6 +25,7 @@ pub(crate) use inputs_and_settings_of_a_node::{
     the_values_held_on_no_input_of,
 };
 pub use streamlib_node_schema::NodeClassImportPath;
+use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticKindOnTheWire;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
     GraphLinkComponentsOnTheWire, GraphLinkOnTheWire, GraphLinkPortRefOnTheWire,
@@ -609,36 +610,83 @@ fn render_the_state_component_as(
     }
 }
 
-/// Why `link` is not wired, as it reports its state `error`: the refusal of the end that
-/// refused it; `None` for a link in any other state.
-pub(crate) fn why_the_link_is_not_wired(link: &crate::core::graph::Link) -> Option<String> {
+/// Why `link` is not wired, as it reports its state `error`: its two ends no longer carry types
+/// that connect, or the end that refused it refused; `None` for a link in any other state.
+pub(crate) fn why_the_link_is_not_wired(
+    link: &crate::core::graph::Link,
+) -> Option<WhyALinkIsNotWired> {
     match RenderedLinkState::of(link) {
-        RenderedLinkState::ErrorBecause(reason) => Some(reason),
-        RenderedLinkState::WithoutAReason(LinkStateOutput::Error) => {
-            Some("its wiring failed, and gave no reason".to_owned())
-        }
+        RenderedLinkState::ErrorBecause(why) => Some(why),
+        RenderedLinkState::WithoutAReason(LinkStateOutput::Error) => Some(
+            WhyALinkIsNotWired::AnEndRefused("its wiring failed, and gave no reason".to_owned()),
+        ),
         RenderedLinkState::WithoutAReason(_) => None,
+    }
+}
+
+/// Why a link is not wired, each failure its own kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WhyALinkIsNotWired {
+    /// Its two ends no longer carry types that connect, since an input choosing the type of one
+    /// of them changed; it carries nothing until they connect again or it is removed.
+    ItsPinTypesDiffer(crate::core::graph::LinkPinTypesDifferComponent),
+    /// An end refused to open its side of it, in that end's own words.
+    AnEndRefused(String),
+}
+
+impl WhyALinkIsNotWired {
+    /// The kind of problem it is.
+    pub(crate) fn kind(&self) -> DiagnosticKindOnTheWire {
+        match self {
+            Self::ItsPinTypesDiffer(_) => DiagnosticKindOnTheWire::LinkPinTypesDiffer,
+            Self::AnEndRefused(_) => DiagnosticKindOnTheWire::LinkNotWired,
+        }
+    }
+
+    /// What fixes it, in words.
+    pub(crate) fn fix(&self) -> &'static str {
+        match self {
+            Self::ItsPinTypesDiffer(_) => {
+                "change the input that chose the type back, or remove the link"
+            }
+            Self::AnEndRefused(_) => "stop the stream and start it again",
+        }
+    }
+}
+
+impl std::fmt::Display for WhyALinkIsNotWired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ItsPinTypesDiffer(differing) => write!(
+                formatter,
+                "its output carries {} and its input reads {}, which do not connect: {}",
+                differing.output_pin_type, differing.input_pin_type, differing.why
+            ),
+            Self::AnEndRefused(reason) => formatter.write_str(reason),
+        }
     }
 }
 
 /// What a link reports as its state, and why where that is `error`.
 enum RenderedLinkState {
     WithoutAReason(LinkStateOutput),
-    ErrorBecause(String),
+    ErrorBecause(WhyALinkIsNotWired),
 }
 
 impl RenderedLinkState {
     /// Read one link's state off whichever cell holds the live answer.
     ///
-    /// Wiring records its outcome on the component; the field is the state the
-    /// link was created in. A link handed to an out-of-process end sits at
-    /// `Pending` there until that end answers — the answer lands on a cell its
-    /// bridge's reader thread fills, which holds no graph lock — so a link still
-    /// carrying those cells reads its state off them instead. Once the
-    /// disconnect path has moved the component past `Pending`, that
-    /// stamp is the answer: a link on its way out is not `wired` because a
-    /// helper once said so.
+    /// A link whose ends no longer carry types that connect is in error for that, whatever its
+    /// wiring last recorded. Wiring records its outcome on the component; the field is the state
+    /// the link was created in. A link handed to an out-of-process end sits at `Pending` there
+    /// until that end answers — the answer lands on a cell its bridge's reader thread fills,
+    /// which holds no graph lock — so a link still carrying those cells reads its state off them
+    /// instead. Once the disconnect path has moved the component past `Pending`, that stamp is
+    /// the answer: a link on its way out is not `wired` because a helper once said so.
     fn of(link: &crate::core::graph::Link) -> Self {
+        if let Some(differing) = link.get::<crate::core::graph::LinkPinTypesDifferComponent>() {
+            return Self::ErrorBecause(WhyALinkIsNotWired::ItsPinTypesDiffer(differing.clone()));
+        }
         let stamped = link
             .get::<crate::core::graph::LinkStateComponent>()
             .map(|state| state.0)
@@ -658,7 +706,7 @@ impl RenderedLinkState {
                 Self::WithoutAReason(LinkStateOutput::Wired)
             }
             crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => {
-                Self::ErrorBecause(reason)
+                Self::ErrorBecause(WhyALinkIsNotWired::AnEndRefused(reason))
             }
         }
     }
@@ -667,7 +715,7 @@ impl RenderedLinkState {
     fn into_state_and_its_reason(self) -> (LinkStateOutput, Option<String>) {
         match self {
             Self::WithoutAReason(state) => (state, None),
-            Self::ErrorBecause(reason) => (LinkStateOutput::Error, Some(reason)),
+            Self::ErrorBecause(why) => (LinkStateOutput::Error, Some(why.to_string())),
         }
     }
 }

@@ -5,7 +5,7 @@
     "version": "4",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 4,
-    "x-contract-revision": 2
+    "x-contract-revision": 3
   },
   "methods": [
     {
@@ -8581,6 +8581,11 @@
             "type": "string",
             "const": "link_not_wired",
             "description": "A link the running graph holds that could not be wired, so its reader reads nothing\nfrom it: the words say why, in the words of the end that refused it."
+          },
+          {
+            "type": "string",
+            "const": "link_pin_types_differ",
+            "description": "A link whose two ends no longer carry types that connect, since an input choosing one\nend's type changed: it carries nothing until the input is changed back or the link is\nremoved. The words name both pin types."
           },
           {
             "type": "string",

@@ -4,8 +4,8 @@
 //! `connect` judges a port whose type is found another way than stated exactly by the type its
 //! graph resolves: one of several by the best of them, any type as taking every typed output,
 //! the type linked into an input by that link, and the type a setting chooses by that choice,
-//! which a wired link that would not fit refuses, through every output following an input on
-//! downstream.
+//! which marks a wired link that would not fit as differing rather than refusing the choice,
+//! through every output following an input on downstream.
 
 use std::sync::Arc;
 
@@ -20,8 +20,8 @@ use crate::core::descriptors::{
     PortDescriptor, SettingReadTime,
 };
 use crate::core::graph::{
-    InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
-    refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
+    GraphEdgeWithComponents, InputLinkPortRef, LinkPinTypesDifferComponent, LinkUniqueId,
+    NodeRunId, OutputLinkPortRef,
 };
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, Result};
@@ -32,6 +32,8 @@ const AUDIO_SOURCE: &str = "FoundAnotherWayAudioSource";
 const FLOAT_SINK: &str = "FoundAnotherWayFloatSink";
 const STRING_SINK: &str = "FoundAnotherWayStringSink";
 const ANY_SINK: &str = "FoundAnotherWayAnySink";
+/// A node whose input `value` states no pin type.
+const UNTYPED_SINK: &str = "FoundAnotherWayUntypedSink";
 const STRING_OR_BOOLEAN_SINK: &str = "FoundAnotherWayStringOrBooleanSink";
 const PASS_ON: &str = "FoundAnotherWayPassOn";
 const CHOSEN_SOURCE: &str = "FoundAnotherWayChosenSource";
@@ -138,6 +140,14 @@ fn register_the_fixture_node_types() {
             sink(FLOAT_SINK, is(float())),
             sink(STRING_SINK, is(PinType::String {})),
             sink(ANY_SINK, DeclaredPinType::Any),
+            a_node_type(
+                UNTYPED_SINK,
+                vec![PortDescriptor {
+                    pin_declaration: None,
+                    ..a_port("value", is(PinType::String {}))
+                }],
+                Vec::new(),
+            ),
             sink(
                 STRING_OR_BOOLEAN_SINK,
                 DeclaredPinType::OneOf {
@@ -439,9 +449,13 @@ fn an_output_whose_type_a_setting_chooses_links_by_that_choice_and_graph_serves_
     );
 }
 
-/// Set the setting `kind` of `chosen` to `pin_type` in `compiler`'s graph and answer how the
-/// wired links of the node take the choice.
-fn choose_and_judge(compiler: &Compiler, chosen: &NodeRunId, pin_type: PinType) -> Result<()> {
+/// Set the setting `kind` of `chosen` to `pin_type` in `compiler`'s graph and answer each link
+/// the choice reaches whose ends then differ, as it is marked.
+fn choose_and_judge(
+    compiler: &Compiler,
+    chosen: &NodeRunId,
+    pin_type: PinType,
+) -> Vec<LinkPinTypesDifferComponent> {
     compiler.scope(|graph, _tx| {
         graph
             .traversal_mut()
@@ -450,7 +464,15 @@ fn choose_and_judge(compiler: &Compiler, chosen: &NodeRunId, pin_type: PinType) 
             .expect("the node is held")
             .input_values
             .insert("kind".to_owned(), json!(pin_type));
-        refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(graph, chosen, "kind")
+        let judged_again = graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(
+            std::slice::from_ref(chosen),
+        );
+        graph.mark_each_link_judged_again(&judged_again);
+        judged_again
+            .differing
+            .into_iter()
+            .map(|(_, differing)| differing)
+            .collect()
     })
 }
 
@@ -478,22 +500,30 @@ fn the_type_served_on_the_output_of(compiler: &Compiler, node: &NodeRunId) -> Op
         .map(|pin| pin.pin_type.clone())
 }
 
+/// A choice a wired link does not take marks the link as differing, naming both pin types, and
+/// choosing back what it takes takes the mark off.
+///
+/// Mental-revert: judging the choice only as a link is made leaves the wired link carrying a
+/// type its input does not read, unmarked.
 #[test]
-fn a_setting_choosing_a_type_a_wired_link_does_not_take_is_refused_naming_the_link() {
+fn a_setting_choosing_a_type_a_wired_link_does_not_take_marks_the_link_naming_both_types() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
     let string_sink = a_node_of(&compiler, STRING_SINK);
     connect(&compiler, &chosen, &string_sink).expect("the setting chose a String");
 
-    let refused = choose_and_judge(&compiler, &chosen, PinType::Audio {});
+    let differing = choose_and_judge(&compiler, &chosen, PinType::Audio {});
 
-    let words = refused
-        .expect_err("Audio does not connect to the String input wired")
-        .to_string();
+    assert_eq!(differing.len(), 1, "{differing:?}");
     assert!(
-        words.contains("setting `kind`") && words.contains("Audio"),
-        "{words}"
+        differing[0].output_pin_type.contains("Audio")
+            && differing[0].input_pin_type.contains("String"),
+        "{differing:?}"
+    );
+    assert!(
+        choose_and_judge(&compiler, &chosen, PinType::String {}).is_empty(),
+        "a String fits again"
     );
 }
 
@@ -513,13 +543,13 @@ fn a_bundle_of_floats(member_names: &[&str]) -> PinType {
     }
 }
 
-/// A new choice keeps a wire whose member it still holds as that member's type, and refuses one
-/// whose member it no longer holds, naming the wire.
+/// A new choice keeps a wire whose member it still holds as that member's type, and marks one
+/// whose member it no longer holds as differing, naming the member.
 ///
 /// Mental-revert: a check reading only links between two typed ends passes over the wire at a
-/// member the bundle no longer holds, and the choice is taken with the wire left dangling.
+/// member the bundle no longer holds, and the wire is left dangling, unmarked.
 #[test]
-fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire() {
+fn a_setting_choosing_a_bundle_without_a_wired_member_marks_the_wire() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(
@@ -536,25 +566,22 @@ fn a_setting_choosing_a_bundle_without_a_wired_member_is_refused_naming_the_wire
     )
     .expect("the bundle chosen holds a Float `pan`");
 
-    choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["pan", "width"]))
-        .expect("the bundle still holds `pan`");
-    let refused = choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["level"]));
-
-    let words = refused
-        .expect_err("the bundle holds no `pan` for the wire to start at")
-        .to_string();
     assert!(
-        words.contains("setting `kind`") && words.contains("pan"),
-        "{words}"
+        choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["pan", "width"])).is_empty(),
+        "the bundle still holds `pan`"
     );
+    let differing = choose_and_judge(&compiler, &chosen, a_bundle_of_floats(&["level"]));
+
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    let words = &differing[0].why;
+    assert!(words.contains("pan"), "{words}");
     assert!(
         !words.contains(&chosen.to_string()) && !words.contains(&float_sink.to_string()),
         "the wire is named by its nodes' names, not their run ids: {words}"
     );
-    assert_eq!(
-        words.matches("To fix:").count(),
-        1,
-        "one fix is named: {words}"
+    assert!(
+        !words.contains("To fix:"),
+        "the fix is named where the link is reported: {words}"
     );
 }
 
@@ -633,7 +660,7 @@ fn a_link_into_the_first_of_a_chain_of_pass_ons_is_refused_when_the_last_ones_li
 }
 
 #[test]
-fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_is_refused_naming_that_link() {
+fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_marks_that_link() {
     register_the_fixture_node_types();
     let compiler = Arc::new(Compiler::new());
     let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
@@ -642,17 +669,22 @@ fn a_setting_choosing_a_type_a_link_past_a_pass_on_does_not_take_is_refused_nami
     connect(&compiler, &chosen, &pass_on).expect("an Any input takes a String");
     connect(&compiler, &pass_on, &string_sink).expect("a String passed on fits");
 
-    let words = choose_and_judge(&compiler, &chosen, PinType::Audio {})
-        .expect_err("Audio passed on would reach the String input wired past the pass-on")
-        .to_string();
+    let differing = choose_and_judge(&compiler, &chosen, PinType::Audio {});
 
-    assert!(
-        words.contains("setting `kind`")
-            && words.contains("takes the type linked into `value`")
-            && words.contains("Audio"),
-        "{words}"
+    assert_eq!(
+        differing.len(),
+        1,
+        "Audio passed on reaches the String input wired past the pass-on: {differing:?}"
     );
-    choose_and_judge(&compiler, &chosen, PinType::String {}).expect("a String still fits");
+    assert!(
+        differing[0].output_pin_type.contains("Audio")
+            && differing[0].input_pin_type.contains("String"),
+        "{differing:?}"
+    );
+    assert!(
+        choose_and_judge(&compiler, &chosen, PinType::String {}).is_empty(),
+        "a String still fits"
+    );
 }
 
 #[test]
@@ -832,4 +864,135 @@ fn a_value_set_on_an_input_a_setting_types_as_a_bundle_is_handed_to_its_node() {
         handed.get("value"),
         Some(&json!({"level": 0.5, "label": "set"}))
     );
+}
+
+/// Judging a choice again changes nothing in the graph until the compile marks what it found, so
+/// a batch refused before it begins changing what runs leaves no link marked.
+///
+/// Mental-revert: a judge marking as it judges leaves a refused batch's link held as differing
+/// while it still carries what it did.
+#[test]
+fn judging_a_choice_again_marks_no_link_until_the_marks_are_made() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    let link = connect(&compiler, &chosen, &string_sink).expect("the setting chose a String");
+
+    let marked = compiler.scope(|graph, _tx| {
+        graph
+            .traversal_mut()
+            .v(&chosen)
+            .first_mut()
+            .expect("the node is held")
+            .input_values
+            .insert("kind".to_owned(), json!(PinType::Audio {}));
+        let judged_again = graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(
+            std::slice::from_ref(&chosen),
+        );
+        assert_eq!(judged_again.differing.len(), 1, "{judged_again:?}");
+        graph.the_pin_types_of_the_link_differ(&link)
+    });
+
+    assert!(!marked, "judging alone marks nothing");
+}
+
+/// A link past a pass-on that a choice upstream left differing connects again once the link
+/// feeding the pass-on is taken off, judged again as a marked link whatever node changed.
+///
+/// Mental-revert: judging only the links a changed node's choices reach leaves the link held
+/// unwired once the chooser no longer reaches it.
+#[test]
+fn a_marked_link_past_a_pass_on_connects_again_once_the_link_feeding_the_pass_on_is_taken_off() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let pass_on = a_node_of(&compiler, PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    let into_the_pass_on = connect(&compiler, &chosen, &pass_on).expect("an Any input takes it");
+    let past_the_pass_on =
+        connect(&compiler, &pass_on, &string_sink).expect("a String passed on fits");
+    assert_eq!(
+        choose_and_judge(&compiler, &chosen, PinType::Audio {}).len(),
+        1
+    );
+
+    let judged_again = compiler.scope(|graph, _tx| {
+        graph
+            .traversal_mut()
+            .e(&into_the_pass_on)
+            .first_mut()
+            .expect("the link is held")
+            .insert(crate::core::graph::PendingDeletionComponent);
+        graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(&[])
+    });
+
+    assert_eq!(judged_again.connecting_again, vec![past_the_pass_on]);
+}
+
+/// A saved graph's link past a pass-on, whose ends a choice upstream left differing, is kept for
+/// the compile to hold unwired rather than refusing the graph it was saved in; made now, the
+/// same link is refused.
+///
+/// Mental-revert: keeping only a saved link a choice of one of its own ends types refuses the
+/// whole saved graph.
+#[test]
+fn a_saved_link_past_a_pass_on_a_choice_upstream_left_differing_is_kept() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::Audio {}));
+    let pass_on = a_node_of(&compiler, PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    connect(&compiler, &chosen, &pass_on).expect("an Any input takes Audio");
+
+    compiler.scope(|graph, _tx| {
+        let from = OutputLinkPortRef::new(pass_on.clone(), PASSED_ON);
+        let to = InputLinkPortRef::new(string_sink.clone(), "value");
+        crate::core::graph::refuse_a_link_its_pin_types_refuse(
+            graph,
+            &from,
+            &to,
+            crate::core::graph::ALinkConnected::MadeNow,
+        )
+        .expect_err("Audio passed on does not connect to a String input");
+        assert_eq!(
+            crate::core::graph::refuse_a_link_its_pin_types_refuse(
+                graph,
+                &from,
+                &to,
+                crate::core::graph::ALinkConnected::OfASavedGraph,
+            )
+            .expect("a saved link a choice left differing is kept"),
+            None
+        );
+        assert_eq!(
+            crate::core::graph::the_nodes_whose_type_choices_reach_the_link(graph, &from, &to),
+            vec![chosen.clone()]
+        );
+    });
+}
+
+/// A choice leaving a named type at an output whose link enters an input stating no type marks
+/// the link, which no named type's bytes reach; choosing a type the input takes again connects it.
+///
+/// Mental-revert: judging only the links whose two ends are typed leaves the link wired, the
+/// input reading bytes of a named type it cannot read.
+#[test]
+fn a_named_type_chosen_into_an_input_stating_no_type_marks_the_link() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let untyped_sink = a_node_of(&compiler, UNTYPED_SINK);
+    let link = connect(&compiler, &chosen, &untyped_sink).expect("an untyped input takes a String");
+
+    let differing = choose_and_judge(&compiler, &chosen, a_note());
+
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    assert!(differing[0].why.contains("named type"), "{differing:?}");
+    assert!(compiler.scope(|graph, _tx| graph.the_pin_types_of_the_link_differ(&link)));
+
+    let differing = choose_and_judge(&compiler, &chosen, PinType::String {});
+
+    assert!(differing.is_empty(), "{differing:?}");
+    assert!(!compiler.scope(|graph, _tx| graph.the_pin_types_of_the_link_differ(&link)));
 }

@@ -3,7 +3,8 @@
 
 //! A node of a conversion whose output follows a setting carries the type it gives under the
 //! settings it holds into every judgement of a link: one past a node whose output follows its
-//! input, a wired link past the input it feeds, and a setting changed while it is wired.
+//! input, a wired link past the input it feeds, and a setting changed while it is wired, which
+//! marks a wired link it no longer fits as differing rather than being refused.
 
 use serde_json::{Map, json};
 
@@ -11,10 +12,7 @@ use super::*;
 use crate::core::descriptors::{
     DeclaredPinType, PinConversionOutputPick, PinConversionOutputPicked,
 };
-use crate::core::graph::{
-    refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit,
-    refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse,
-};
+use crate::core::graph::{Graph, GraphEdgeWithComponents, LinkPinTypesDifferComponent};
 
 const RASTER_SOURCE: &str = "VerdictCheckRasterSource";
 const RASTER_TO_TEXTURE: &str = "VerdictCheckRasterToTexture";
@@ -219,15 +217,44 @@ fn a_convert_node_feeding_a_wired_on_input_is_judged_by_the_type_it_holds() {
     }
 }
 
-/// A config update of the convert node's `format` is refused, naming the link, when a wired
-/// link out of it, or past the input that link feeds, does not take the format it would then
-/// write; one that keeps a format each link takes is taken.
+/// Set the convert node's `format` to `format` in `graph` and answer the words of each link
+/// judged again as differing, the links of the convert node's type choices reach.
+fn set_the_format_and_judge(
+    graph: &mut Graph,
+    convert_node: &NodeRunId,
+    format: &str,
+) -> Vec<String> {
+    graph
+        .traversal_mut()
+        .v(convert_node)
+        .first_mut()
+        .expect("the node is held")
+        .input_values
+        .insert("format".to_owned(), json!(format));
+    let judged_again = graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(
+        std::slice::from_ref(convert_node),
+    );
+    graph.mark_each_link_judged_again(&judged_again);
+    judged_again
+        .differing
+        .into_iter()
+        .map(|(_, differing)| {
+            format!(
+                "{} / {}: {}",
+                differing.output_pin_type, differing.input_pin_type, differing.why
+            )
+        })
+        .collect()
+}
+
+/// A `format` set on the convert node that a wired link out of it, or past the input that link
+/// feeds, does not take marks that link as differing, naming the type it would then carry; one
+/// each link takes again takes the mark off. The change itself is never refused.
 ///
-/// Mental-revert: checking a config update only by the kinds of message of the links out of
-/// the node takes a `format` its wired link refuses, since its output states one Texture whatever it
-/// holds.
+/// Mental-revert: judging only the outputs a setting types by their declaration marks nothing,
+/// since the convert node's output declares one Texture whatever it holds.
 #[test]
-fn a_config_update_choosing_a_format_a_wired_link_refuses_is_refused() {
+fn a_format_a_wired_link_does_not_take_marks_the_link_differing_until_it_takes_it_again() {
     for through_a_following_node in [false, true] {
         let fixture = HeldSettingsFixture::with_the_convert_node_holding(Value::Null);
         if through_a_following_node {
@@ -247,67 +274,37 @@ fn a_config_update_choosing_a_format_a_wired_link_refuses_is_refused() {
         }
 
         fixture.compiler.scope(|graph, _tx| {
-            let refused = refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
-                graph,
-                &fixture.convert_node,
-                json!({ "format": "bgra8_unorm" })
-                    .as_object()
-                    .expect("an object of input values"),
-            )
-            .expect_err("the wired input takes only rgba8_unorm");
-            let words = refused.to_string();
-            assert!(words.contains("bgra8_unorm"), "{words}");
-            assert!(words.contains("config update for"), "{words}");
-            refuse_input_values_a_wired_link_out_of_a_convert_node_would_refuse(
-                graph,
-                &fixture.convert_node,
-                json!({ "format": "rgba8_unorm" })
-                    .as_object()
-                    .expect("an object of input values"),
-            )
-            .expect("rgba8_unorm is what the input takes");
+            let differing = set_the_format_and_judge(graph, &fixture.convert_node, "bgra8_unorm");
+            assert_eq!(
+                differing.len(),
+                1,
+                "{through_a_following_node}: {differing:?}"
+            );
+            assert!(differing[0].contains("bgra8_unorm"), "{differing:?}");
+            assert_eq!(
+                graph
+                    .traversal()
+                    .e(())
+                    .iter()
+                    .filter(|link| link.has::<LinkPinTypesDifferComponent>())
+                    .count(),
+                1,
+                "{through_a_following_node}: the link the format no longer fits is marked"
+            );
+
+            let differing = set_the_format_and_judge(graph, &fixture.convert_node, "rgba8_unorm");
+            assert!(
+                differing.is_empty(),
+                "rgba8_unorm is what the input takes: {differing:?}"
+            );
+            assert!(
+                graph
+                    .traversal()
+                    .e(())
+                    .iter()
+                    .all(|link| !link.has::<LinkPinTypesDifferComponent>()),
+                "the mark is taken off once the link fits again"
+            );
         });
     }
-}
-
-/// A `format` set on the convert node as an input value is refused, as a config update is,
-/// when its wired link does not take the format it would then write.
-///
-/// Mental-revert: checking only the outputs a setting types by their declaration takes the
-/// value, since the convert node's output declares one Texture.
-#[test]
-fn a_format_set_as_an_input_value_a_wired_link_refuses_is_refused() {
-    let fixture = HeldSettingsFixture::with_the_convert_node_holding(Value::Null);
-    fixture
-        .connect(
-            (&fixture.convert_node, "image"),
-            (&fixture.rgba_sink, "video"),
-        )
-        .expect("rgba8_unorm is what the input takes");
-
-    fixture.compiler.scope(|graph, _tx| {
-        let set_format = |graph: &mut crate::core::graph::Graph, format: &str| {
-            graph
-                .traversal_mut()
-                .v(&fixture.convert_node)
-                .first_mut()
-                .expect("the node is held")
-                .input_values
-                .insert("format".to_owned(), json!(format));
-        };
-        set_format(graph, "bgra8_unorm");
-        refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
-            graph,
-            &fixture.convert_node,
-            "format",
-        )
-        .expect_err("the wired input takes only rgba8_unorm");
-        set_format(graph, "rgba8_unorm");
-        refuse_a_type_choice_a_wired_link_of_the_node_does_not_fit(
-            graph,
-            &fixture.convert_node,
-            "format",
-        )
-        .expect("rgba8_unorm is what the input takes");
-    });
 }

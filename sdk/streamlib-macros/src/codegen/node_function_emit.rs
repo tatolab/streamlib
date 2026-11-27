@@ -25,7 +25,8 @@ use super::node_settings_emit::NodeSettingsEmitted;
 use super::port_marker_module::generate_port_marker_module;
 use super::{NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema};
 use crate::grammar::{
-    ParsedNodeAttr, ParsedValueInput, PortDirection, declared_description_str_expression,
+    ParsedNodeAttr, ParsedPort, ParsedValueInput, PinTypeChosenBy, PortDirection,
+    declared_description_str_expression,
 };
 
 /// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase,
@@ -46,19 +47,29 @@ pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> syn::Resul
     Ok(Ident::new(&node_name.to_string(), function_ident.span()))
 }
 
-/// The refusal of a value input declared on a struct, which only a node written as one function
-/// declares; `None` when the struct declares none.
+/// The refusal of a value input declared on a struct, or of a port typed by one, which only a
+/// node written as one function declares; `None` when the struct declares neither.
 pub(crate) fn refusal_of_a_value_input_on_a_struct(parsed: &ParsedNodeAttr) -> Option<syn::Error> {
-    parsed.value_inputs.first().map(|value_input| {
+    let refusal = |named: &Ident| {
         syn::Error::new(
-            value_input.declared_ident.span(),
+            named.span(),
             format!(
-                "value input `{}` is an input of a node written as one function: put \
-                 `#[node(...)]` on the node's function",
-                value_input.declared_ident
+                "value input `{named}` is an input of a node written as one function: put \
+                 `#[node(...)]` on the node's function"
             ),
         )
-    })
+    };
+    if let Some(value_input) = parsed.value_inputs.first() {
+        return Some(refusal(&value_input.declared_ident));
+    }
+    parsed
+        .inputs
+        .iter()
+        .chain(&parsed.outputs)
+        .find_map(|port| match &port.pin_type_chosen_by {
+            Some(PinTypeChosenBy::ValueInput { named, .. }) => Some(refusal(named)),
+            _ => None,
+        })
 }
 
 pub(crate) fn generate_from_a_node_function(
@@ -480,20 +491,8 @@ fn refuse_a_form_the_function_does_not_take(
              continuous(…)`; `execution = manual` is not yet written as one function",
         ));
     }
-    if let Some(port) = parsed
-        .inputs
-        .iter()
-        .chain(&parsed.outputs)
-        .find(|port| port.pin_type_from_setting.is_some())
-    {
-        return Err(syn::Error::new(
-            port.declared_marker_ident.span(),
-            format!(
-                "port `{}` of a node written as one function states its own `pin_type = …`; a \
-                 node function has no settings for `from_setting(…)` to name",
-                port.declared_marker_ident
-            ),
-        ));
+    for port in parsed.inputs.iter().chain(&parsed.outputs) {
+        refuse_a_pin_type_no_value_input_chooses(port, &parsed.value_inputs)?;
     }
     if !item.sig.generics.params.is_empty() || item.sig.generics.where_clause.is_some() {
         return Err(syn::Error::new(
@@ -562,6 +561,66 @@ fn read_the_node_function(
         parameters,
         returned,
     })
+}
+
+/// Refuse `port` of a node written as one function when it takes its pin type from anything but
+/// one of its `value_inputs` holding a pin type: a node function has no settings for
+/// `from_setting(…)` to name, and the input `from_input(…)` names holds the type chosen.
+fn refuse_a_pin_type_no_value_input_chooses(
+    port: &ParsedPort,
+    value_inputs: &[ParsedValueInput],
+) -> syn::Result<()> {
+    let port_ident = &port.declared_marker_ident;
+    match &port.pin_type_chosen_by {
+        None => Ok(()),
+        Some(PinTypeChosenBy::Setting(setting_name)) => Err(syn::Error::new(
+            port_ident.span(),
+            format!(
+                "port `{port_ident}` of a node written as one function states `pin_type = \
+                 from_setting(\"{setting_name}\")`; a node function has no settings: name the \
+                 value input choosing its type, `pin_type = from_input(<value input>)`"
+            ),
+        )),
+        Some(PinTypeChosenBy::ValueInput { named, cast_name }) => {
+            let Some(value_input) = value_inputs
+                .iter()
+                .find(|value_input| &value_input.cast_name == cast_name)
+            else {
+                return Err(syn::Error::new(
+                    named.span(),
+                    format!(
+                        "port `{port_ident}` takes its pin type `from_input({named})`, and the \
+                         node declares no value input `{named}`: declare it, `input(\"{named}\", \
+                         value = Option<PinType>, default = None)`"
+                    ),
+                ));
+            };
+            if holds_a_pin_type(&value_input.value_type) {
+                return Ok(());
+            }
+            Err(syn::Error::new(
+                value_input.value_type.span(),
+                format!(
+                    "value input `{named}` chooses the pin type of port `{port_ident}`, so it \
+                     holds the choice of one: `value = Option<PinType>`"
+                ),
+            ))
+        }
+    }
+}
+
+/// Whether `ty` names an optional pin type, the choice of a type a value input holds.
+fn holds_a_pin_type(ty: &Type) -> bool {
+    let Some(segment) = last_path_segment(ty).filter(|segment| segment.ident == "Option") else {
+        return false;
+    };
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    matches!(
+        arguments.args.first(),
+        Some(GenericArgument::Type(held)) if last_path_segment(held).is_some_and(|held| held.ident == "PinType")
+    )
 }
 
 /// The last segment of the path `ty` names, with its arguments; `None` for any other type.

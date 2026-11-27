@@ -142,3 +142,39 @@ fn a_failed_reader_with_a_link_not_wired_stays_failed() {
         ]
     );
 }
+
+/// A link whose two ends no longer carry types that connect is reported as its own kind, which
+/// the link is fixed to recover from, naming both pin types.
+///
+/// Mental-revert: reporting it as a link not wired names restarting the stream as the recovery,
+/// which wires it again into the input that does not read its type.
+#[test]
+fn a_reader_whose_link_carries_a_type_its_input_does_not_read_reads_the_pin_types_differing() {
+    let (mut graph, reader, link) = a_source_linked_into_a_running_reader();
+    graph
+        .traversal_mut()
+        .e(&link)
+        .first_mut()
+        .expect("the link is held")
+        .insert_component_without_rendering_it(crate::core::graph::LinkPinTypesDifferComponent {
+            output_pin_type: "Audio".to_owned(),
+            input_pin_type: "String".to_owned(),
+            why: "Audio does not connect to String".to_owned(),
+        });
+
+    let (health, diagnostics) = the_health_and_diagnostics_of_the_reader(&graph, &reader);
+
+    assert_eq!(health, NodeHealthOnTheWire::NotReady);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.kind, DiagnosticKindOnTheWire::LinkPinTypesDiffer);
+    assert_eq!(
+        diagnostic.recovery,
+        streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticRecoveryOnTheWire::FixTheLink
+    );
+    assert!(
+        diagnostic.words.contains("carries Audio") && diagnostic.words.contains("reads String"),
+        "{}",
+        diagnostic.words
+    );
+}
