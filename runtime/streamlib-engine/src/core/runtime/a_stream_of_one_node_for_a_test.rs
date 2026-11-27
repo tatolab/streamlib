@@ -22,15 +22,15 @@ use crate::core::runtime::{LoadedStreamInThisRuntime, Runner};
 const WAITED_ON_WITHIN: Duration = Duration::from_secs(10);
 
 /// A stream holding one node.
-pub(super) struct AStreamOfOneNode {
+pub struct AStreamOfOneNode {
     _runner: Arc<Runner>,
-    pub(super) stream: Arc<LoadedStreamInThisRuntime>,
-    pub(super) node: Uuid,
-    pub(super) node_run_id: NodeRunId,
+    pub stream: Arc<LoadedStreamInThisRuntime>,
+    pub node: Uuid,
+    pub node_run_id: NodeRunId,
 }
 
 /// A stream holding one node of `node_type`, holding `input_values`, not started.
-pub(super) fn a_stream_of_one_node(
+pub fn a_stream_of_one_node(
     project_directory: &std::path::Path,
     node_type: NodeClassImportPath,
     input_values: Value,
@@ -54,15 +54,27 @@ pub(super) fn a_stream_of_one_node(
     }
 }
 
+/// A stream holding one node of `node_type`, holding `input_values`, started and running.
+pub fn a_playing_stream_of_one_node(
+    project_directory: &std::path::Path,
+    node_type: NodeClassImportPath,
+    input_values: Value,
+) -> AStreamOfOneNode {
+    let played = a_stream_of_one_node(project_directory, node_type, input_values);
+    start(&played.stream);
+    played
+}
+
 /// Start `stream` and wait until every node runs.
-pub(super) fn start(stream: &Arc<LoadedStreamInThisRuntime>) {
+pub fn start(stream: &Arc<LoadedStreamInThisRuntime>) {
     stream.start().expect("the stream starts");
     stream
         .wait_until_every_node_is_running(Duration::from_secs(30))
         .expect("every node runs");
 }
 
-pub(super) fn on_the_tests_own_runtime<T>(operation: impl std::future::Future<Output = T>) -> T {
+/// `operation` run to its end on a current-thread runtime of the test's own.
+pub fn on_the_tests_own_runtime<T>(operation: impl std::future::Future<Output = T>) -> T {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -71,12 +83,7 @@ pub(super) fn on_the_tests_own_runtime<T>(operation: impl std::future::Future<Ou
 }
 
 /// Set input `input` of `node` to `value` while `stream` plays.
-pub(super) fn set_the_input(
-    stream: &LoadedStreamInThisRuntime,
-    node: Uuid,
-    input: &str,
-    value: Value,
-) {
+pub fn set_the_input(stream: &LoadedStreamInThisRuntime, node: Uuid, input: &str, value: Value) {
     on_the_tests_own_runtime(stream.apply_a_stream_graph_operation_live(
         StreamGraphOperation::SetNodeInputValue {
             node,
@@ -90,7 +97,7 @@ pub(super) fn set_the_input(
 }
 
 /// What `read` reads once `settled` holds of it, or when the wait runs out.
-pub(super) fn once_it_holds<T>(read: impl Fn() -> T, settled: impl Fn(&T) -> bool) -> T {
+pub fn once_it_holds<T>(read: impl Fn() -> T, settled: impl Fn(&T) -> bool) -> T {
     let deadline = Instant::now() + WAITED_ON_WITHIN;
     loop {
         let read = read();

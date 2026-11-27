@@ -112,7 +112,9 @@ pub(super) fn node_counting_its_builds(
             .map_err(|already_held| Error::Configuration(already_held.to_string()))?,
     };
     Ok(move |ctx: &RuntimeContextLimitedAccess<'_>| {
-        let _held = &held;
+        // Named so the closure owns `held`: its drop, when the node's frame function goes, is
+        // what counts the teardown.
+        let _held_until_the_frames_end = &held;
         if let Some(message) = inputs.read_raw(THE_COUNTING_NODES_LEVEL)? {
             let level = unpack_pin_value(
                 &PinType::Float { exact_size: None },

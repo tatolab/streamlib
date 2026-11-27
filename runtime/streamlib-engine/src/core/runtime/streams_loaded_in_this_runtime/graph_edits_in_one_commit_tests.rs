@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::graph::{GraphNodeWithComponents, NodeInstanceComponent};
+use crate::core::context::RuntimeContextLimitedAccess;
+use crate::core::error::Result;
 use crate::core::nodes::NODE_REGISTRY;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
@@ -38,8 +40,7 @@ use crate::core::test_support::{
     input("audio", delivery_profile = "ordered", pin_type = Audio),
 )]
 pub(crate) fn plain_audio_consumer_of_a_graph_edit_test()
--> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
-{
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     |_ctx| Ok(())
 }
 

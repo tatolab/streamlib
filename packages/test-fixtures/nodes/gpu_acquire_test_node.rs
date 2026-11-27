@@ -40,7 +40,12 @@ pub fn gpu_acquire_test(
     let gpu = ctx.gpu_limited_access().clone();
     computed(move || {
         let outcome = acquire_a_pixel_buffer_and_write_its_plane(&gpu, *width.get(), *height.get())
-            .map(|(w, h, ptr)| format!("\n{w}x{h}\nsentinel_addr=0x{:x}", ptr as usize));
+            .map(|(w, h, ptr)| {
+                vec![
+                    format!("{w}x{h}"),
+                    format!("sentinel_addr=0x{:x}", ptr as usize),
+                ]
+            });
         the_result_written_to_its_file("GpuAcquireTest", &output_path.get(), &outcome)
     });
 }

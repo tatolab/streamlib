@@ -7,17 +7,14 @@
 //! stopping its stream, drops every value it built.
 
 use std::path::Path;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serial_test::serial;
-use streamlib::sdk::descriptors::NodeClassImportPath;
-use streamlib::sdk::graph::NodeRunId;
-use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
-use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
-use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeOperations};
-use streamlib::sdk::serde_json::{Value, json};
-use streamlib_project_repository::StreamGraphOperation;
+use streamlib::sdk::nodes::NODE_REGISTRY;
+use streamlib::sdk::runtime::a_stream_of_one_node_for_a_test::{
+    AStreamOfOneNode, a_playing_stream_of_one_node, once_it_holds, set_the_input,
+};
+use streamlib::sdk::serde_json::json;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticRecoveryOnTheWire,
 };
@@ -26,88 +23,14 @@ use streamlib_test_fixtures::panicking_lifecycle_node::{
     PanickingLifecycle, forget_the_levels_the_frames_of_the_panicking_node_read,
     levels_the_frames_of_the_panicking_node_read,
 };
-use uuid::Uuid;
 
-/// The longest a test waits for what it waits on.
-const WAITED_ON_WITHIN: Duration = Duration::from_secs(10);
-
-/// A playing stream holding one node.
-struct AStreamOfOneNode {
-    _runner: Arc<Runner>,
-    stream: Arc<LoadedStreamInThisRuntime>,
-    node: Uuid,
-    node_run_id: NodeRunId,
-}
-
-/// A stream holding one node of `node_type`, holding `input_values`, started and running.
-fn a_playing_stream_of_one_node(
-    project_directory: &Path,
-    node_type: NodeClassImportPath,
-    input_values: Value,
-) -> AStreamOfOneNode {
-    let runner = Runner::new().expect("Runner::new");
-    let stream = runner
-        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
-            project_directory,
-            "main",
-        ))
-        .expect("an empty stream loads");
-    let node = Uuid::new_v4();
-    let node_run_id = stream
-        .add_node(NodeSpec::new(node_type, input_values).with_node_uuid(node))
-        .expect("the node is added");
-    stream.start().expect("the stream starts");
-    stream
-        .wait_until_every_node_is_running(Duration::from_secs(30))
-        .expect("the node runs");
-    AStreamOfOneNode {
-        _runner: runner,
-        stream,
-        node,
-        node_run_id,
-    }
-}
-
-/// Set input `input` of `node` to `value` while `stream` plays.
-fn set_the_input(stream: &LoadedStreamInThisRuntime, node: Uuid, input: &str, value: Value) {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a current-thread runtime")
-        .block_on(stream.apply_a_stream_graph_operation_live(
-            StreamGraphOperation::SetNodeInputValue {
-                node,
-                input: input.to_owned(),
-                member: None,
-                from: None,
-                to: Some(value),
-            },
-        ))
-        .expect("an input is set while the stream plays");
-}
-
-/// What `read` reads once `settled` holds of it, or when the wait runs out.
-fn once_it_holds<T>(read: impl Fn() -> T, settled: impl Fn(&T) -> bool) -> T {
-    let deadline = Instant::now() + WAITED_ON_WITHIN;
-    loop {
-        let read = read();
-        if settled(&read) || Instant::now() >= deadline {
-            return read;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-fn the_type_of_the_panicking_node() -> NodeClassImportPath {
+/// Both fixtures, registered once for every test of this file.
+fn the_fixtures_registered() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| NODE_REGISTRY.register::<PanickingLifecycle::Node>());
-    PanickingLifecycle::Node::node_class_import_path()
-}
-
-fn the_type_of_the_lifecycle_probe() -> NodeClassImportPath {
-    static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| NODE_REGISTRY.register::<LifecycleProbe::Node>());
-    LifecycleProbe::Node::node_class_import_path()
+    REGISTERED.call_once(|| {
+        NODE_REGISTRY.register::<PanickingLifecycle::Node>();
+        NODE_REGISTRY.register::<LifecycleProbe::Node>();
+    });
 }
 
 /// The last level the frames of the panicking node read.
@@ -132,11 +55,12 @@ fn a_panicked_build(diagnostics: &[DiagnosticOnTheWire]) -> Option<&DiagnosticOn
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
 fn a_panic_in_a_build_is_reported_and_the_frames_run_on_the_previous_value() {
+    the_fixtures_registered();
     forget_the_levels_the_frames_of_the_panicking_node_read();
     let project_directory = tempfile::tempdir().unwrap();
     let played = a_playing_stream_of_one_node(
         project_directory.path(),
-        the_type_of_the_panicking_node(),
+        PanickingLifecycle::Node::node_class_import_path(),
         json!({ "level": 1 }),
     );
     once_it_holds(the_last_level_read, |level| *level == Some(1));
@@ -217,9 +141,10 @@ fn the_builds_and_drops(lines: &[String]) -> Vec<&str> {
 /// A playing stream of one lifecycle probe appending to `probe_file` up to 3 frames, once it has
 /// appended them.
 fn a_playing_lifecycle_probe(project_directory: &Path, probe_file: &Path) -> AStreamOfOneNode {
+    the_fixtures_registered();
     let played = a_playing_stream_of_one_node(
         project_directory,
-        the_type_of_the_lifecycle_probe(),
+        LifecycleProbe::Node::node_class_import_path(),
         json!({ "max_iterations": 3, "output_path": probe_file.to_str().unwrap() }),
     );
     let lines = once_it_holds(
@@ -262,7 +187,7 @@ fn removing_the_probe_drops_every_value_it_built() {
         .stream
         .remove_node(&played.node_run_id)
         .expect("the node is removed while the stream plays");
-    let lines = once_it_holds(
+    once_it_holds(
         || the_lines_appended_to(&probe_file),
         |lines| lines.iter().any(|line| line == "DROPPED:5"),
     );
@@ -271,7 +196,7 @@ fn removing_the_probe_drops_every_value_it_built() {
     assert_eq!(
         the_builds_and_drops(&after),
         ["BUILT:3", "BUILT:5", "DROPPED:3", "DROPPED:5"],
-        "removing the node drops every value it built, and builds nothing after: {lines:?}"
+        "removing the node drops every value it built, and builds nothing after: {after:?}"
     );
 }
 

@@ -13,8 +13,8 @@ pub mod a_node_written_as_one_function_for_a_test;
 mod a_node_written_as_one_function_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub mod a_project_on_disk_for_a_test;
-#[cfg(test)]
-mod a_stream_of_one_node_for_a_test;
+#[cfg(any(test, feature = "test-support"))]
+pub mod a_stream_of_one_node_for_a_test;
 pub(crate) mod address_chunk;
 #[cfg(any(test, feature = "test-support"))]
 pub mod builds_held_for_a_test;

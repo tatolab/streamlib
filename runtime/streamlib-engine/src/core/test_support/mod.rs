@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, Once};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
+use crate::core::context::RuntimeContextLimitedAccess;
+use crate::core::error::Result;
 use crate::core::nodes::NODE_REGISTRY;
 
 mod a_setting_read_at_setup_for_a_test;
@@ -65,8 +67,7 @@ pub(crate) fn mock_ordered_input_only_node() {}
     input("in2", delivery_profile = "newest", pin_type = String, flow = Stream),
 )]
 pub(crate) fn mock_reactive_input_only_node()
--> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
-{
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     |_ctx| Ok(())
 }
 
@@ -88,8 +89,7 @@ pub(crate) fn mock_reactive_input_only_node()
     ),
 )]
 pub(crate) fn mock_windowed_audio_consumer_node()
--> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
-{
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     |_ctx| Ok(())
 }
 
@@ -99,8 +99,7 @@ pub(crate) fn mock_windowed_audio_consumer_node()
     input("frames", delivery_profile = "ordered", borrow_quota = 5, pin_type = Texture),
 )]
 pub(crate) fn mock_borrowing_consumer_node()
--> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
-{
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     |_ctx| Ok(())
 }
 
@@ -110,9 +109,7 @@ pub(crate) fn mock_borrowing_consumer_node()
     input("gain", delivery_profile = "newest", pin_type = Float),
     output("frames", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub(crate) fn mock_pin_typed_node()
--> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
-{
+pub(crate) fn mock_pin_typed_node() -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     |_ctx| Ok(())
 }
 
@@ -124,8 +121,7 @@ pub(crate) fn mock_pin_typed_node()
     input("audio", delivery_profile = "ordered", audio_window = match_device, pin_type = Audio),
 )]
 pub(crate) fn mock_device_matched_audio_consumer_node()
--> impl FnMut(&crate::core::context::RuntimeContextLimitedAccess<'_>) -> crate::core::error::Result<()>
-{
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     |_ctx| Ok(())
 }
 

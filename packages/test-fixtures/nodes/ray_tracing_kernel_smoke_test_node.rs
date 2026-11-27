@@ -45,7 +45,7 @@ pub fn ray_tracing_kernel_smoke_test(
     ctx: &RuntimeContextFullAccess<'_>,
 ) {
     // The kernel is built and run once, in the body, with FullAccess.
-    let outcome = run_ray_tracing_kernel_smoke(ctx).map(|()| String::new());
+    let outcome = run_ray_tracing_kernel_smoke(ctx).map(|()| Vec::new());
     computed(move || {
         the_result_written_to_its_file("RayTracingKernelSmokeTest", &output_path.get(), &outcome)
     });

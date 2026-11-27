@@ -65,19 +65,15 @@ fn escalate_from_threads_at_once(
     gpu: &GpuContextLimitedAccess,
     thread_count: usize,
     hold_ms: u64,
-) -> Result<String> {
-    // Clone the LimitedAccess handle once; each spawned thread
-    // gets its own clone (the Clone impl bumps the inner Arc
-    // refcount).
-    let limited_template = gpu.clone();
-
+) -> Result<Vec<String>> {
     let in_closure = Arc::new(AtomicBool::new(false));
     let overlap_count = Arc::new(AtomicUsize::new(0));
     let completed_count = Arc::new(AtomicUsize::new(0));
 
     let handles: Vec<_> = (0..thread_count)
         .map(|_| {
-            let limited = limited_template.clone();
+            // Each spawned thread holds its own clone; the clone bumps the inner Arc's count.
+            let limited = gpu.clone();
             let in_closure = Arc::clone(&in_closure);
             let overlap_count = Arc::clone(&overlap_count);
             let completed_count = Arc::clone(&completed_count);
@@ -115,8 +111,6 @@ fn escalate_from_threads_at_once(
         }
     }
 
-    drop(limited_template);
-
     match first_error {
         Some(msg) => Err(Error::Runtime(msg)),
         None => {
@@ -127,7 +121,10 @@ fn escalate_from_threads_at_once(
                     "completed {completed}/{thread_count} threads"
                 )))
             } else {
-                Ok(format!("\n{thread_count}\noverlaps={overlaps}"))
+                Ok(vec![
+                    thread_count.to_string(),
+                    format!("overlaps={overlaps}"),
+                ])
             }
         }
     }

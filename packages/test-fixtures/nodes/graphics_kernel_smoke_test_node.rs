@@ -44,7 +44,7 @@ const SMOKE_SURFACE_SIZE: u32 = 64;
 )]
 pub fn graphics_kernel_smoke_test(output_path: Input<String>, ctx: &RuntimeContextFullAccess<'_>) {
     // The kernel is built and run once, in the body, with FullAccess.
-    let outcome = run_graphics_kernel_smoke(ctx).map(|()| String::new());
+    let outcome = run_graphics_kernel_smoke(ctx).map(|()| Vec::new());
     computed(move || {
         the_result_written_to_its_file("GraphicsKernelSmokeTest", &output_path.get(), &outcome)
     });

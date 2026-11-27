@@ -18,18 +18,13 @@ crate-type = ["rlib"]
 # Engine substrate — runtime context and node traits.
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82" }
 
-
 [dev-dependencies]
 # A stream the lifecycle tests run a fixture in, on the engine's test project.
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82", features = ["test-support"] }
-# The live set the lifecycle tests make while a stream plays.
-streamlib-project-repository = { path = "../../runtime/streamlib-project-repository", version = "0.68.82", default-features = false, features = ["store"] }
 # The diagnostic a failed build reports.
 streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.68.82" }
-tokio = { workspace = true, features = ["rt"] }
 tempfile.workspace = true
 serial_test = "3.2"
-uuid = { version = "1.11", features = ["v4"] }
 
 [features]
 # Tier 2: the lifecycle tests start a stream, which creates the engine's GPU context.

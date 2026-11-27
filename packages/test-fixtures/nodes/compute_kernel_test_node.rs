@@ -87,7 +87,7 @@ pub fn compute_kernel_test(
     computed(move || {
         let element_count = *element_count.get();
         let outcome = run_compute_kernel_round_trip(&gpu, element_count)
-            .map(|()| format!("\n{element_count}"));
+            .map(|()| vec![element_count.to_string()]);
         the_result_written_to_its_file("ComputeKernelTest", &output_path.get(), &outcome)
     });
 }

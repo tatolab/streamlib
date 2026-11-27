@@ -5825,12 +5825,9 @@ version = "0.68.82"
 dependencies = [
  "serial_test",
  "streamlib",
- "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "streamlib-slang-shader-compiler",
  "tempfile",
- "tokio",
- "uuid",
 ]
 
 [[package]]
