@@ -17,7 +17,6 @@ pub mod lifecycle_probe_node;
 pub mod panicking_lifecycle_node;
 #[path = "../nodes/ray_tracing_kernel_smoke_test_node.rs"]
 pub mod ray_tracing_kernel_smoke_test_node;
-#[path = "../nodes/result_written_to_its_file.rs"]
 pub mod result_written_to_its_file;
 #[path = "../nodes/test_configured_node.rs"]
 pub mod test_configured_node;
