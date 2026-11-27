@@ -505,7 +505,7 @@ fn a_setup_command_that_could_not_be_sent_refuses_the_links_waiting_behind_it() 
 
     envelope
         .send_the_setup_command_then_hand_every_later_link_over(
-            |_| {
+            |_| -> crate::core::error::Result<()> {
                 Err(crate::core::error::Error::Runtime(
                     "socket closed".to_string(),
                 ))

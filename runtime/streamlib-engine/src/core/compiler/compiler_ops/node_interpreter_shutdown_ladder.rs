@@ -70,6 +70,9 @@ pub(crate) enum LifecycleReplyAwaited {
     SliceElapsed,
     /// The channel the reply would arrive on has closed.
     NoReplyCanArrive,
+    /// The helper answered another command than the one awaited, which the
+    /// waiter has already logged by name.
+    AnsweredOutOfStep,
 }
 
 /// How a cooperative rung ended.
@@ -78,6 +81,7 @@ enum CooperativeRungEnded {
     ReplyArrived,
     BudgetSpent,
     NoReplyCanArrive,
+    AnsweredOutOfStep,
     ChildAlreadyExited,
     ShutdownForced,
 }
@@ -167,6 +171,13 @@ impl HelperProcessShutdownLadder {
                     self.node_display_name,
                 );
             }
+            CooperativeRungEnded::AnsweredOutOfStep => {
+                self.signal_the_child_itself(libc::SIGINT);
+                tracing::warn!(
+                    "[{}] its helper process answered out of step with its stop; interrupting it",
+                    self.node_display_name,
+                );
+            }
         }
 
         match self.walk_one_cooperative_rung(
@@ -183,6 +194,10 @@ impl HelperProcessShutdownLadder {
             ),
             CooperativeRungEnded::NoReplyCanArrive => tracing::warn!(
                 "[{}] its helper process can no longer answer its teardown",
+                self.node_display_name,
+            ),
+            CooperativeRungEnded::AnsweredOutOfStep => tracing::warn!(
+                "[{}] its helper process answered out of step with its teardown",
                 self.node_display_name,
             ),
         }
@@ -222,6 +237,9 @@ impl HelperProcessShutdownLadder {
                 LifecycleReplyAwaited::Arrived => return CooperativeRungEnded::ReplyArrived,
                 LifecycleReplyAwaited::NoReplyCanArrive => {
                     return CooperativeRungEnded::NoReplyCanArrive;
+                }
+                LifecycleReplyAwaited::AnsweredOutOfStep => {
+                    return CooperativeRungEnded::AnsweredOutOfStep;
                 }
                 LifecycleReplyAwaited::SliceElapsed => {}
             }

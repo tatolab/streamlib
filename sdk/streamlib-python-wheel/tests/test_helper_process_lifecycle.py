@@ -972,3 +972,24 @@ def test_links_handed_to_a_helper_running_no_function_node_pool_are_refused_nami
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
+
+
+def test_a_command_with_no_id_is_logged_and_left_unanswered(stand_in_parent):
+    """An answer the parent cannot match to a command is never sent, so the
+    parent's wait ends on its own deadline rather than on a reply naming no
+    command."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "on_pause", "command_id": None, "capability": "limited"})
+    assert stand_in_parent.receive_answering_each_escalate(timeout_seconds=0.5) is None
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive_answering_each_escalate()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()

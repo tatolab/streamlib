@@ -54,7 +54,7 @@ from tatolab.runtime._node_hosting import (
     is_a_node_function,
     the_slots_its_pin_groups_are_built_with,
 )
-from tatolab.runtime._node_the_wheel_hosts import NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG
+from tatolab.runtime._node_the_wheel_hosts import the_settings_a_node_the_wheel_builds_takes
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
 from tatolab.runtime._node_class_description import load_node_class
 from tatolab.runtime._hosted_node import (
@@ -326,7 +326,7 @@ class HelperProcessLifecycle:
     def _setup(self, command: "dict[str, Any]") -> None:
         try:
             input_values = command.get("input_values") or {}
-            configuration = _the_settings_a_node_the_wheel_builds_takes(self._node_class, input_values)
+            configuration = the_settings_a_node_the_wheel_builds_takes(self._node_class, input_values)
             if self._node_class is FunctionNodePool:
                 self._runs_the_function_node_pool = True
                 self._node_class = the_node_class_the_function_node_pool_runs_as(
@@ -459,12 +459,14 @@ class HelperProcessLifecycle:
     def _answer_the_parent(
         self, command: "Optional[dict[str, Any]]", reply: "dict[str, Any]"
     ) -> None:
-        """Send `reply` to the parent as the answer to `command`, echoing the
-        id the parent matches it to. `None` is a command the parent never sent:
-        the shutdown this helper runs itself once the parent is gone."""
-        if command is not None and "command_id" in command:
-            reply = {**reply, "command_id": command["command_id"]}
-        self._bridge.send(reply)
+        """Send `reply` as the answer to `command`, echoing the id the parent
+        matches it to. `None`, the shutdown run once the parent is gone, has
+        nobody to answer."""
+        command_id = None if command is None else command.get("command_id")
+        if command_id is not None:
+            self._bridge.send({**reply, "command_id": command_id})
+        elif command is not None:
+            log.error(f"the parent sent `{command.get('cmd')}` with no id, so it goes unanswered")
 
     def _run(self, command: "dict[str, Any]") -> None:
         if self._hosted is None:
@@ -995,14 +997,3 @@ def _the_number_each_input_value_reads(input_values: "Optional[dict[str, Any]]")
         if isinstance(value, (bool, int, float))
     }
 
-
-def _the_settings_a_node_the_wheel_builds_takes(
-    node_class: Any, input_values: "dict[str, Any]"
-) -> "Optional[dict[str, Any]]":
-    """The settings a node the wheel builds from them, a function node run as a node of its own,
-    takes of `input_values`: each naming none of its input ports. `None` for an author's node,
-    which takes each value as the input of its name."""
-    if not getattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, False):
-        return None
-    input_ports = {port["name"] for port in getattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, [])}
-    return {name: value for name, value in input_values.items() if name not in input_ports}

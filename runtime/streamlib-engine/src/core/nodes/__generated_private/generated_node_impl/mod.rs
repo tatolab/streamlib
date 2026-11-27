@@ -1060,16 +1060,17 @@ impl OutOfProcessLinkWiringEnvelope {
 
     /// Send the far side its setup command carrying every link recorded before
     /// its setup began, hand over the links waiting behind it, and hand every
-    /// later link over through `later_link_delivery`.
+    /// later link over through `later_link_delivery`, handing back what the
+    /// send returned.
     ///
     /// `send_the_setup_command_carrying_these_ports` runs under the envelope's
     /// lock, so it must not call back into this envelope. A command that could
     /// not be sent refuses every waiting and later link.
-    pub fn send_the_setup_command_then_hand_every_later_link_over(
+    pub fn send_the_setup_command_then_hand_every_later_link_over<Sent>(
         &self,
-        send_the_setup_command_carrying_these_ports: impl FnOnce(JsonValue) -> Result<()>,
+        send_the_setup_command_carrying_these_ports: impl FnOnce(JsonValue) -> Result<Sent>,
         later_link_delivery: impl OutOfProcessFarSideLinkDelivery + 'static,
-    ) -> Result<()> {
+    ) -> Result<Sent> {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
@@ -1095,15 +1096,18 @@ impl OutOfProcessLinkWiringEnvelope {
             | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Vec::new(),
         };
 
-        if let Err(send_failure) =
-            send_the_setup_command_carrying_these_ports(recorded.as_setup_command_ports())
-        {
-            let reason = format!("the far side's setup command could not be sent: {send_failure}");
-            refuse_every_link_waiting_behind_the_setup_command(waiting, &reason);
-            recorded.how_a_link_reaches_the_far_side =
-                HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason);
-            return Err(send_failure);
-        }
+        let sent =
+            match send_the_setup_command_carrying_these_ports(recorded.as_setup_command_ports()) {
+                Ok(sent) => sent,
+                Err(send_failure) => {
+                    let reason =
+                        format!("the far side's setup command could not be sent: {send_failure}");
+                    refuse_every_link_waiting_behind_the_setup_command(waiting, &reason);
+                    recorded.how_a_link_reaches_the_far_side =
+                        HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason);
+                    return Err(send_failure);
+                }
+            };
 
         for waiting_link in waiting {
             let handed_over = later_link_delivery.hand_over_a_link_wired_after_setup(
@@ -1126,7 +1130,7 @@ impl OutOfProcessLinkWiringEnvelope {
         }
         recorded.how_a_link_reaches_the_far_side =
             HowALinkReachesTheFarSide::HandedOverTo(Box::new(later_link_delivery));
-        Ok(())
+        Ok(sent)
     }
 
     /// Refuse every link recorded from now on with `reason`, and every link the

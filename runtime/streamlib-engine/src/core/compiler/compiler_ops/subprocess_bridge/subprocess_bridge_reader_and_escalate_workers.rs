@@ -166,11 +166,17 @@ fn reader_loop(
                 );
                 continue;
             }
-            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommandOrNoLink => {
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommand => {
                 tracing::warn!(
-                    "[{}] its helper process answered a wire naming no command or no link, so \
-                     it settles no link",
-                    node_run_id
+                    "[{node_run_id}] its helper process answered a wire naming no command, so it \
+                     settles no link"
+                );
+                continue;
+            }
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoLink => {
+                tracing::warn!(
+                    "[{node_run_id}] its helper process answered a wire naming no link, so it \
+                     settles no link"
                 );
                 continue;
             }
@@ -458,13 +464,13 @@ fn log_an_answer_that_settled_no_link_wire_attempt(
                  '{link_id}', which no link is waiting on; dropped"
             );
         }
-        OutOfProcessLinkWireAnswerNoted::DroppedForNamingAnotherLink {
+        OutOfProcessLinkWireAnswerNoted::RefusedItsAttemptForNamingAnotherLink {
             link_id_the_command_wired,
         } => {
             tracing::warn!(
                 "[{node_run_id}] its helper process answered command {command_id}, which wired \
-                 link '{link_id_the_command_wired}', for link '{link_id}'; dropped, so the \
-                 link stays unanswered"
+                 link '{link_id_the_command_wired}', for link '{link_id}'; that attempt is \
+                 refused"
             );
         }
     }

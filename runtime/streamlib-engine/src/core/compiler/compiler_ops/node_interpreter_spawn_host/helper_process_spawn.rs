@@ -11,8 +11,9 @@ use crate::core::child_process_lifetime::{
     give_the_child_no_descriptor_beyond_stdio,
 };
 use crate::core::compiler::compiler_ops::subprocess_bridge::{
-    EscalateTransport, LifecycleCommandAwaitingItsReply, LifecycleCommandSent,
-    LifecycleReplyNotReceived, SubprocessBridge, spawn_fd_line_reader,
+    EscalateTransport, LifecycleCommandAnsweredByAReply, LifecycleCommandFields,
+    LifecycleCommandSent, LifecycleReplyNotReceived, SubprocessBridge, lifecycle_command_fields,
+    spawn_fd_line_reader,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
@@ -48,7 +49,7 @@ impl NodeInterpreterSpawnHost {
         ports: serde_json::Value,
         loss_count_board: serde_json::Value,
         stream_clock_named_to_the_helper: serde_json::Value,
-    ) -> serde_json::Value {
+    ) -> LifecycleCommandFields {
         // The helper's writer keeps the last message of each, as a native node's does.
         let output_ports_keeping_their_last_message: Vec<&str> = self
             .descriptor
@@ -57,16 +58,22 @@ impl NodeInterpreterSpawnHost {
             .filter(|output_port| output_port.flows_as_a_value())
             .map(|output_port| output_port.name.as_str())
             .collect();
-        serde_json::json!({
-            "capability": "full",
-            "input_values": self.node_input_values,
-            "node_run_id": self.node_run_id,
-            "ports": ports,
-            "loss_count_board": loss_count_board,
-            "output_ports_keeping_their_last_message": output_ports_keeping_their_last_message,
-            "function_node_evaluated_at_setup": self.its_function_node_is_evaluated_at_setup,
-            "stream_clock": stream_clock_named_to_the_helper,
-        })
+        lifecycle_command_fields([
+            ("capability", serde_json::json!("full")),
+            ("input_values", serde_json::json!(self.node_input_values)),
+            ("node_run_id", serde_json::json!(self.node_run_id)),
+            ("ports", ports),
+            ("loss_count_board", loss_count_board),
+            (
+                "output_ports_keeping_their_last_message",
+                serde_json::json!(output_ports_keeping_their_last_message),
+            ),
+            (
+                "function_node_evaluated_at_setup",
+                serde_json::json!(self.its_function_node_is_evaluated_at_setup),
+            ),
+            ("stream_clock", stream_clock_named_to_the_helper),
+        ])
     }
 
     /// Build the command that becomes the child.
@@ -440,33 +447,25 @@ impl NodeInterpreterSpawnHost {
 
         // Through the envelope, so the links it carries go out with this
         // command and every link held behind it is handed over after.
-        let mut setup_sent = None;
-        let setup_command_sent = self
+        let setup_sent = self
             .link_wiring
             .send_the_setup_command_then_hand_every_later_link_over(
                 |ports| {
-                    setup_sent = Some(bridge.send_a_lifecycle_command_awaiting_its_reply(
-                        LifecycleCommandAwaitingItsReply::Setup,
+                    bridge.send_a_lifecycle_command_awaiting_its_reply(
+                        LifecycleCommandAnsweredByAReply::Setup,
                         self.the_setup_command_to_its_helper(
                             ports,
                             loss_count_board,
                             stream_clock_named_to_the_helper,
                         ),
-                    )?);
-                    Ok(())
+                    )
                 },
                 bridge.link_delivery_to_this_subprocess(&self.node_display_name),
             );
         self.bridge = Some(bridge);
-        let setup_sent = match (setup_command_sent, setup_sent) {
-            (Ok(()), Some(setup_sent)) => setup_sent,
-            (Ok(()), None) => {
-                return Err(Error::Runtime(format!(
-                    "[{}] its wiring envelope never sent its helper process the setup command",
-                    self.node_display_name
-                )));
-            }
-            (Err(setup_command_send_failure), _) => {
+        let setup_sent = match setup_sent {
+            Ok(setup_sent) => setup_sent,
+            Err(setup_command_send_failure) => {
                 // The child's end is already closed: it refused its own start
                 // before reading anything.
                 tracing::debug!(

@@ -5,7 +5,7 @@ use crate::core::compiler::compiler_ops::node_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
 };
 use crate::core::compiler::compiler_ops::subprocess_bridge::{
-    HelperProcessShutdownCommand, refusal_of_a_link_into_a_helper_process_that_failed,
+    ShutdownCommandsSent, refusal_of_a_link_into_a_helper_process_that_failed,
 };
 use crate::core::nodes::{
     FunctionNodeCallUnderWayInTheFarSide, FunctionNodeThatOverranItsFarSidesFrameInterval,
@@ -52,31 +52,20 @@ impl NodeInterpreterSpawnHost {
         if self.bridge.is_none() {
             return;
         }
-        // Whatever was still waiting on a reply was given up on by its waiter:
-        // a `setup` cut short by shutdown answers after `stop` is on the wire.
-        if let Some(bridge) = &self.bridge {
-            bridge.abandon_the_reply_to_every_lifecycle_command_still_owed_one();
-        }
         // Warned once rather than per command: a helper that did not take the
         // first will not take the second either, and one unusable child owes
         // one line, which is the posture `exchange_with_child` already keeps.
-        for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
-            let lifecycle_command = command.lifecycle_command();
-            match self.send_to_child_a_command_awaiting_its_reply(
-                lifecycle_command,
-                serde_json::json!({"capability": "full"}),
-            ) {
-                Ok(sent) => self.shutdown_commands_sent.push(sent),
-                Err(unreachable_helper) => {
-                    tracing::warn!(
-                        "[{}] its helper process did not take the {} command, so neither it \
-                         nor anything after it was asked for: {unreachable_helper}",
-                        self.node_display_name,
-                        lifecycle_command.command_tag(),
-                    );
-                    return;
-                }
-            }
+        let mut shutdown_commands_sent = ShutdownCommandsSent::default();
+        let sent = self.sending_to_child(|bridge| {
+            bridge.send_the_shutdown_commands(&mut shutdown_commands_sent)
+        });
+        self.shutdown_commands_sent = shutdown_commands_sent;
+        if let Err(unreachable_helper) = sent {
+            tracing::warn!(
+                "[{}] its helper process did not take its shutdown commands: \
+                 {unreachable_helper}",
+                self.node_display_name,
+            );
         }
     }
 

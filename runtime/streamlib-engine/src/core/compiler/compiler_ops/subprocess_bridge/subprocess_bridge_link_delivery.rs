@@ -60,7 +60,7 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
         self.parent_side
             .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
                 "cmd": "wire_link",
-                OUT_OF_PROCESS_COMMAND_ID_FIELD: command_id.0,
+                OUT_OF_PROCESS_COMMAND_ID_FIELD: command_id,
                 "direction": port_direction.as_wire_str(),
                 "link": link_wiring,
             }))
@@ -129,7 +129,7 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
         self.parent_side
             .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
                 "cmd": "feed_island",
-                OUT_OF_PROCESS_COMMAND_ID_FIELD: command_id.0,
+                OUT_OF_PROCESS_COMMAND_ID_FIELD: command_id,
                 "island": function_node_island,
             }))
     }

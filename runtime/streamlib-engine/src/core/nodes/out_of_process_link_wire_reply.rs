@@ -8,8 +8,8 @@
 //! not wait for that answer: it returns with the link pending, and
 //! these cells are what `graph` reads afterwards.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -70,8 +70,16 @@ impl OutOfProcessLinkWireReply {
 ///
 /// Minted per bridge, so it names one command to one far side and never
 /// repeats for the life of that bridge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct OutOfProcessCommandId(pub(crate) u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub(crate) struct OutOfProcessCommandId(u64);
+
+impl OutOfProcessCommandId {
+    /// The id a frame carries as its `command_id`.
+    pub(crate) fn from_the_wire(command_id: u64) -> Self {
+        Self(command_id)
+    }
+}
 
 impl std::fmt::Display for OutOfProcessCommandId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,9 +98,9 @@ pub(crate) enum OutOfProcessLinkWireAnswerNoted {
     /// It answers a command this far side was never sent, or one already
     /// answered.
     DroppedAsTheAnswerToNoCommandAwaited,
-    /// It names a link other than the one its command wired; it settles
-    /// nothing.
-    DroppedForNamingAnotherLink {
+    /// It names a link other than the one its command wired, so that
+    /// attempt was refused rather than left pending.
+    RefusedItsAttemptForNamingAnotherLink {
         /// The link the command it answers wired.
         link_id_the_command_wired: String,
     },
@@ -111,17 +119,17 @@ struct LinkWireAttemptsOfOneFarSide {
     awaiting_by_command_id: HashMap<OutOfProcessCommandId, LinkWireAttemptAwaitingItsAnswer>,
     /// The attempt each link end is waiting on, which a newer one replaces.
     latest_command_id_by_link_end: HashMap<(String, PortDirection), OutOfProcessCommandId>,
-    /// Each attempt cancelled before its answer arrived, by the link it wired,
-    /// held until that answer arrives so it is dropped by name. The far side
-    /// answers every command it is sent, so each entry leaves with its answer.
-    link_id_by_cancelled_command_id: HashMap<OutOfProcessCommandId, String>,
+    /// Each attempt cancelled before its answer arrived, held until that
+    /// answer arrives so it is dropped by name. The far side answers every
+    /// command it is sent, so each entry leaves with its answer.
+    cancelled_command_ids_still_owed_an_answer: HashSet<OutOfProcessCommandId>,
 }
 
 impl LinkWireAttemptsOfOneFarSide {
-    fn cancel(&mut self, command_id: OutOfProcessCommandId) {
-        if let Some(cancelled) = self.awaiting_by_command_id.remove(&command_id) {
-            self.link_id_by_cancelled_command_id
-                .insert(command_id, cancelled.link_id);
+    fn cancel_the_attempt_awaiting(&mut self, command_id: OutOfProcessCommandId) {
+        if self.awaiting_by_command_id.remove(&command_id).is_some() {
+            self.cancelled_command_ids_still_owed_an_answer
+                .insert(command_id);
         }
     }
 }
@@ -154,7 +162,7 @@ impl LinksAwaitingTheirOutOfProcessWireReply {
             .latest_command_id_by_link_end
             .insert((link_id.clone(), port_direction), command_id)
         {
-            attempts.cancel(superseded);
+            attempts.cancel_the_attempt_awaiting(superseded);
         }
         attempts.awaiting_by_command_id.insert(
             command_id,
@@ -175,12 +183,11 @@ impl LinksAwaitingTheirOutOfProcessWireReply {
         link_id: &str,
         outcome: OutOfProcessLinkWireOutcome,
     ) -> OutOfProcessLinkWireAnswerNoted {
-        let reply = {
+        let answered = {
             let mut attempts = self.attempts.lock();
             if attempts
-                .link_id_by_cancelled_command_id
+                .cancelled_command_ids_still_owed_an_answer
                 .remove(&command_id)
-                .is_some()
             {
                 return OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToACancelledAttempt;
             }
@@ -188,18 +195,23 @@ impl LinksAwaitingTheirOutOfProcessWireReply {
             else {
                 return OutOfProcessLinkWireAnswerNoted::DroppedAsTheAnswerToNoCommandAwaited;
             };
-            if awaiting.get().link_id != link_id {
-                return OutOfProcessLinkWireAnswerNoted::DroppedForNamingAnotherLink {
-                    link_id_the_command_wired: awaiting.get().link_id.clone(),
-                };
-            }
             let answered = awaiting.remove();
             attempts
                 .latest_command_id_by_link_end
-                .remove(&(answered.link_id, answered.port_direction));
-            answered.reply
+                .remove(&(answered.link_id.clone(), answered.port_direction));
+            answered
         };
-        reply.note_the_far_sides_answer(outcome);
+        if answered.link_id != link_id {
+            answered.reply.note_the_far_sides_answer(
+                OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                    reason: format!("its far side answered for link '{link_id}' instead"),
+                },
+            );
+            return OutOfProcessLinkWireAnswerNoted::RefusedItsAttemptForNamingAnotherLink {
+                link_id_the_command_wired: answered.link_id,
+            };
+        }
+        answered.reply.note_the_far_sides_answer(outcome);
         OutOfProcessLinkWireAnswerNoted::SettledItsAttempt
     }
 
@@ -208,17 +220,20 @@ impl LinksAwaitingTheirOutOfProcessWireReply {
     /// settle. Every end of it goes, since the whole link is being taken down.
     pub(crate) fn cancel_every_attempt_to_wire_link(&self, link_id: &str) {
         let mut attempts = self.attempts.lock();
-        let ends_of_the_link: Vec<(String, PortDirection)> = attempts
-            .latest_command_id_by_link_end
-            .keys()
-            .filter(|(end_link_id, _)| end_link_id == link_id)
-            .cloned()
-            .collect();
-        for end in ends_of_the_link {
-            if let Some(cancelled) = attempts.latest_command_id_by_link_end.remove(&end) {
-                attempts.cancel(cancelled);
+        let LinkWireAttemptsOfOneFarSide {
+            awaiting_by_command_id,
+            latest_command_id_by_link_end,
+            cancelled_command_ids_still_owed_an_answer,
+        } = &mut *attempts;
+        latest_command_id_by_link_end.retain(|(end_link_id, _), command_id| {
+            if end_link_id != link_id {
+                return true;
             }
-        }
+            if awaiting_by_command_id.remove(command_id).is_some() {
+                cancelled_command_ids_still_owed_an_answer.insert(*command_id);
+            }
+            false
+        });
     }
 
     /// Refuse every attempt still waiting, because the far side is gone, and
@@ -228,7 +243,7 @@ impl LinksAwaitingTheirOutOfProcessWireReply {
         let refused: Vec<Arc<OutOfProcessLinkWireReply>> = {
             let mut attempts = self.attempts.lock();
             attempts.latest_command_id_by_link_end.clear();
-            attempts.link_id_by_cancelled_command_id.clear();
+            attempts.cancelled_command_ids_still_owed_an_answer.clear();
             attempts
                 .awaiting_by_command_id
                 .drain()
@@ -255,7 +270,7 @@ mod tests {
     }
 
     fn command(id: u64) -> OutOfProcessCommandId {
-        OutOfProcessCommandId(id)
+        OutOfProcessCommandId::from_the_wire(id)
     }
 
     /// A board waiting on `link_id`'s input end under `command_id`, and that
@@ -477,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_naming_another_link_than_its_command_wired_settles_nothing() {
+    fn an_answer_naming_another_link_than_its_command_wired_refuses_that_attempt() {
         let awaiting = LinksAwaitingTheirOutOfProcessWireReply::default();
         let reply = awaiting_an_input_end(&awaiting, 1, "L-wired");
 
@@ -487,11 +502,15 @@ mod tests {
                 "L-other",
                 OutOfProcessLinkWireOutcome::OpenedByTheFarSide
             ),
-            OutOfProcessLinkWireAnswerNoted::DroppedForNamingAnotherLink {
+            OutOfProcessLinkWireAnswerNoted::RefusedItsAttemptForNamingAnotherLink {
                 link_id_the_command_wired: "L-wired".to_string()
             }
         );
-        assert_eq!(reply.the_far_sides_answer(), None);
+        assert_eq!(
+            reply.the_far_sides_answer(),
+            Some(refusal("its far side answered for link 'L-other' instead")),
+            "an attempt answered out of step never stays pending"
+        );
     }
 
     #[test]

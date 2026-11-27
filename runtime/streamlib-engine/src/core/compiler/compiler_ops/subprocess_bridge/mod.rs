@@ -1,13 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-mod lifecycle_replies_matched_to_their_commands;
+mod lifecycle_commands_to_one_subprocess;
 mod subprocess_bridge_link_delivery;
 mod subprocess_bridge_reader_and_escalate_workers;
 
-use lifecycle_replies_matched_to_their_commands::LifecycleRepliesMatchedToTheirCommands;
-pub(crate) use lifecycle_replies_matched_to_their_commands::{
-    LifecycleCommandAwaitingItsReply, LifecycleCommandSent, LifecycleReplyNotReceived,
+use lifecycle_commands_to_one_subprocess::LifecycleCommandsToOneSubprocess;
+pub(crate) use lifecycle_commands_to_one_subprocess::{
+    LifecycleCommandAnsweredByAReply, LifecycleCommandFields, LifecycleCommandSent,
+    LifecycleReplyNotReceived, ShutdownCommandsSent, lifecycle_command_fields,
 };
 pub use subprocess_bridge_link_delivery::SubprocessBridgeLinkDelivery;
 
@@ -165,10 +166,10 @@ impl HelperProcessShutdownCommand {
         [Self::Stop, Self::Teardown];
 
     /// The lifecycle command it is sent as.
-    pub(crate) fn lifecycle_command(self) -> LifecycleCommandAwaitingItsReply {
+    pub(crate) fn lifecycle_command(self) -> LifecycleCommandAnsweredByAReply {
         match self {
-            Self::Stop => LifecycleCommandAwaitingItsReply::Stop,
-            Self::Teardown => LifecycleCommandAwaitingItsReply::Teardown,
+            Self::Stop => LifecycleCommandAnsweredByAReply::Stop,
+            Self::Teardown => LifecycleCommandAnsweredByAReply::Teardown,
         }
     }
 }
@@ -184,7 +185,7 @@ pub(super) fn out_of_process_command_id_of(
     frame
         .get(OUT_OF_PROCESS_COMMAND_ID_FIELD)
         .and_then(|command_id| command_id.as_u64())
-        .map(OutOfProcessCommandId)
+        .map(OutOfProcessCommandId::from_the_wire)
 }
 
 /// The rpc tag a subprocess answers a late `wire_link` with once it has opened
@@ -235,9 +236,10 @@ enum IncomingSubprocessFrame {
         link_id: String,
         outcome: OutOfProcessLinkWireOutcome,
     },
-    /// A link's answer that names no command or no link, so it answers no
-    /// attempt.
-    LinkWireAnswerNamingNoCommandOrNoLink,
+    /// A link's answer that names no command, so it answers no attempt.
+    LinkWireAnswerNamingNoCommand,
+    /// A link's answer that names no link, so it answers no attempt.
+    LinkWireAnswerNamingNoLink,
     /// The answer to a lifecycle command, forwarded to the main thread.
     LifecycleReply,
 }
@@ -277,7 +279,8 @@ fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSub
             link_id: link_id.to_string(),
             outcome,
         },
-        _ => IncomingSubprocessFrame::LinkWireAnswerNamingNoCommandOrNoLink,
+        (None, _) => IncomingSubprocessFrame::LinkWireAnswerNamingNoCommand,
+        (Some(_), None) => IncomingSubprocessFrame::LinkWireAnswerNamingNoLink,
     }
 }
 
@@ -330,7 +333,7 @@ impl ParentSideOfOneSubprocessBridgeSharedByItsThreads {
     }
 
     fn mint_an_out_of_process_command_id(&self) -> OutOfProcessCommandId {
-        OutOfProcessCommandId(
+        OutOfProcessCommandId::from_the_wire(
             self.next_out_of_process_command_id
                 .fetch_add(1, Ordering::Relaxed),
         )
@@ -375,7 +378,7 @@ impl ParentSideOfOneSubprocessBridgeSharedByItsThreads {
 /// kernel build worker leave once the reader has.
 pub struct SubprocessBridge {
     parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
-    lifecycle_replies: LifecycleRepliesMatchedToTheirCommands,
+    lifecycle_commands: LifecycleCommandsToOneSubprocess,
     registry: Arc<EscalateHandleRegistry>,
     /// Held for teardown: the drop path evicts what the registry's acquires
     /// entered into the parent's texture cache, which needs the same
@@ -476,8 +479,11 @@ impl SubprocessBridge {
             };
 
         Ok(Self {
+            lifecycle_commands: LifecycleCommandsToOneSubprocess::over(
+                Arc::clone(&parent_side),
+                lifecycle_rx,
+            ),
             parent_side,
-            lifecycle_replies: LifecycleRepliesMatchedToTheirCommands::arriving_on(lifecycle_rx),
             registry,
             sandbox,
             shared_native_service_leases,
@@ -492,30 +498,19 @@ impl SubprocessBridge {
     /// Write a lifecycle command the subprocess answers nothing to, such as
     /// `run`. Link wiring goes through [`SubprocessBridgeLinkDelivery`] instead.
     pub fn send_a_command_answered_by_nothing(&self, msg: &serde_json::Value) -> Result<()> {
-        self.write_a_lifecycle_command(msg)
+        self.lifecycle_commands
+            .send_a_command_answered_by_nothing(msg)
     }
 
-    /// Write `command` with the fields of `frame`, stamped with the id its reply
-    /// is matched to.
+    /// Write `command` carrying `fields`, stamped with the id its reply is
+    /// matched to.
     pub(crate) fn send_a_lifecycle_command_awaiting_its_reply(
         &self,
-        command: LifecycleCommandAwaitingItsReply,
-        mut frame: serde_json::Value,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
     ) -> Result<LifecycleCommandSent> {
-        let sent = LifecycleCommandSent {
-            command,
-            command_id: self.parent_side.mint_an_out_of_process_command_id(),
-        };
-        frame["cmd"] = serde_json::json!(command.command_tag());
-        frame[OUT_OF_PROCESS_COMMAND_ID_FIELD] = serde_json::json!(sent.command_id.0);
-        // Owed before the write: the subprocess can answer the moment the
-        // frame lands.
-        self.lifecycle_replies.owe_a_reply_to(sent);
-        if let Err(not_sent) = self.write_a_lifecycle_command(&frame) {
-            self.lifecycle_replies.owe_no_reply_to(sent);
-            return Err(not_sent);
-        }
-        Ok(sent)
+        self.lifecycle_commands
+            .send_a_lifecycle_command_awaiting_its_reply(command, fields)
     }
 
     /// Wait up to `timeout` for the reply carrying `awaited`'s id.
@@ -524,31 +519,34 @@ impl SubprocessBridge {
         awaited: LifecycleCommandSent,
         timeout: Duration,
     ) -> std::result::Result<serde_json::Value, LifecycleReplyNotReceived> {
-        self.lifecycle_replies
-            .await_the_reply_to(awaited, timeout, &self.parent_side.node_run_id)
+        self.lifecycle_commands.await_the_reply_to(awaited, timeout)
     }
 
     /// Stop waiting on the reply to `sent`, so one that arrives later is
     /// dropped rather than read as the answer to another command.
     pub(crate) fn abandon_the_reply_to(&self, sent: LifecycleCommandSent) {
-        self.lifecycle_replies.abandon_the_reply_to(sent);
+        self.lifecycle_commands.abandon_the_reply_to(sent);
     }
 
-    /// Stop waiting on the reply to every lifecycle command still owed one.
-    pub(crate) fn abandon_the_reply_to_every_lifecycle_command_still_owed_one(&self) {
-        self.lifecycle_replies
-            .abandon_the_reply_to_every_command_still_owed_one();
+    /// Send `stop` then `teardown`, after abandoning every reply still owed.
+    pub(crate) fn send_the_shutdown_commands(
+        &self,
+        shutdown_commands_sent: &mut ShutdownCommandsSent,
+    ) -> Result<()> {
+        self.lifecycle_commands
+            .send_the_shutdown_commands(shutdown_commands_sent)
     }
 
-    fn write_a_lifecycle_command(&self, msg: &serde_json::Value) -> Result<()> {
-        if self.parent_side.the_subprocess_was_given_up_on() {
-            return Err(Error::Runtime(format!(
-                "[{}] bridge marked dead, cannot send",
-                self.parent_side.node_run_id
-            )));
-        }
-        self.parent_side
-            .write_frame_or_give_up_on_the_subprocess(msg)
+    /// Wait up to `slice` for the reply to `command`; waiting on `teardown`
+    /// abandons the reply to `stop`.
+    pub(crate) fn await_the_reply_to_a_shutdown_command(
+        &self,
+        shutdown_commands_sent: &ShutdownCommandsSent,
+        command: HelperProcessShutdownCommand,
+        slice: Duration,
+    ) -> std::result::Result<serde_json::Value, LifecycleReplyNotReceived> {
+        self.lifecycle_commands
+            .await_the_reply_to_a_shutdown_command(shutdown_commands_sent, command, slice)
     }
 
     /// Mark the bridge dead; subsequent sends return immediately, and every

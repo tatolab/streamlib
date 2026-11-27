@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use crate::core::compiler::compiler_ops::function_node_pool::FUNCTION_NODE_POOL_NODE_TYPE;
 use crate::core::compiler::compiler_ops::subprocess_bridge::{
-    LifecycleCommandAwaitingItsReply, LifecycleCommandSent, SubprocessBridge,
+    LifecycleCommandAnsweredByAReply, LifecycleCommandFields, LifecycleCommandSent,
+    SubprocessBridge,
 };
 use crate::core::error::{Error, Result};
 
@@ -20,49 +21,50 @@ impl NodeInterpreterSpawnHost {
         &mut self,
         message: &serde_json::Value,
     ) -> Result<()> {
-        let bridge = self.bridge_to_send_to()?;
-        let sent = bridge.send_a_command_answered_by_nothing(message);
-        if sent.is_err() {
-            self.give_up_on_the_helper_process();
-        }
-        sent
+        self.sending_to_child(|bridge| bridge.send_a_command_answered_by_nothing(message))
     }
 
-    /// Send the helper `command` with the fields of `frame`, stamped with the
-    /// id its reply is matched to.
+    /// Send the helper `command` carrying `fields`, stamped with the id its
+    /// reply is matched to.
     pub(super) fn send_to_child_a_command_awaiting_its_reply(
         &mut self,
-        command: LifecycleCommandAwaitingItsReply,
-        frame: serde_json::Value,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
     ) -> Result<LifecycleCommandSent> {
-        let bridge = self.bridge_to_send_to()?;
-        let sent = bridge.send_a_lifecycle_command_awaiting_its_reply(command, frame);
-        if sent.is_err() {
-            self.give_up_on_the_helper_process();
-        }
-        sent
+        self.sending_to_child(|bridge| {
+            bridge.send_a_lifecycle_command_awaiting_its_reply(command, fields)
+        })
     }
 
-    fn bridge_to_send_to(&self) -> Result<&SubprocessBridge> {
-        self.bridge.as_ref().ok_or_else(|| {
+    /// Send through `send`, giving up on the helper when it could not be sent.
+    pub(super) fn sending_to_child<Sent>(
+        &mut self,
+        send: impl FnOnce(&SubprocessBridge) -> Result<Sent>,
+    ) -> Result<Sent> {
+        let bridge = self.bridge.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
                 "[{}] there is no helper process to send to",
                 self.node_display_name
             ))
-        })
+        })?;
+        let sent = send(bridge);
+        if sent.is_err() {
+            self.give_up_on_the_helper_process();
+        }
+        sent
     }
 
     /// Send `command` and wait for the reply carrying its id, giving up on the
     /// helper when that reply does not come.
     pub(super) fn exchange_with_child(
         &mut self,
-        command: LifecycleCommandAwaitingItsReply,
-        frame: serde_json::Value,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
     ) -> Option<serde_json::Value> {
         if self.child_is_gone {
             return None;
         }
-        let sent = match self.send_to_child_a_command_awaiting_its_reply(command, frame) {
+        let sent = match self.send_to_child_a_command_awaiting_its_reply(command, fields) {
             Ok(sent) => sent,
             Err(send_failure) => {
                 tracing::warn!(
@@ -78,7 +80,7 @@ impl NodeInterpreterSpawnHost {
             Ok(reply) => Some(reply),
             Err(no_reply) => {
                 bridge.abandon_the_reply_to(sent);
-                tracing::warn!("[{}] {no_reply}; giving up on it", self.node_display_name,);
+                tracing::warn!("[{}] {no_reply}; giving up on it", self.node_display_name);
                 self.give_up_on_the_helper_process();
                 None
             }
@@ -88,10 +90,10 @@ impl NodeInterpreterSpawnHost {
     /// Send `command`, wait for its reply, and warn if the helper refused it.
     pub(super) fn exchange_with_child_expecting_ok(
         &mut self,
-        command: LifecycleCommandAwaitingItsReply,
-        frame: serde_json::Value,
+        command: LifecycleCommandAnsweredByAReply,
+        fields: LifecycleCommandFields,
     ) {
-        let Some(reply) = self.exchange_with_child(command, frame) else {
+        let Some(reply) = self.exchange_with_child(command, fields) else {
             return;
         };
         if lifecycle_reply_tag(&reply) != Some("ok") {

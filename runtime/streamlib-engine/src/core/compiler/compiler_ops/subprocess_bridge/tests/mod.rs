@@ -74,7 +74,7 @@ mod incoming_frame_routing {
                 "link_id": "L-late",
             })),
             IncomingSubprocessFrame::LinkWireAnswer {
-                command_id: OutOfProcessCommandId(4),
+                command_id: OutOfProcessCommandId::from_the_wire(4),
                 link_id: "L-late".to_string(),
                 outcome: OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
             },
@@ -93,7 +93,7 @@ mod incoming_frame_routing {
                 "reason": "ExceedsMaxSupportedSubscribers",
             })),
             IncomingSubprocessFrame::LinkWireAnswer {
-                command_id: OutOfProcessCommandId(5),
+                command_id: OutOfProcessCommandId::from_the_wire(5),
                 link_id: "L-late".to_string(),
                 outcome: OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
                     reason: "ExceedsMaxSupportedSubscribers".to_string(),
@@ -128,7 +128,7 @@ mod incoming_frame_routing {
                 "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
                 "command_id": 7,
             })),
-            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommandOrNoLink
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoLink
         );
     }
 
@@ -139,12 +139,12 @@ mod incoming_frame_routing {
                 "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
                 "link_id": "L-late",
             })),
-            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommandOrNoLink
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoCommand
         );
     }
 }
 
-mod lifecycle_replies_matched_to_their_commands;
+mod lifecycle_commands_to_one_subprocess;
 mod reader_and_escalate_workers;
 
 /// Links handed to a subprocess after its setup command, over a real
@@ -285,7 +285,7 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
             wire_link,
             serde_json::json!({
                 "cmd": "wire_link",
-                "command_id": command_id.0,
+                "command_id": command_id,
                 "direction": "input",
                 "link": late_input_link(),
             })
@@ -519,8 +519,8 @@ fn log_frame_does_not_leak_to_lifecycle_channel() {
     // `process_bridge_message` and the lifecycle channel stays empty.
     let setup_sent = bridge
         .send_a_lifecycle_command_awaiting_its_reply(
-            LifecycleCommandAwaitingItsReply::Setup,
-            serde_json::json!({}),
+            LifecycleCommandAnsweredByAReply::Setup,
+            LifecycleCommandFields::new(),
         )
         .expect("the setup command goes out");
     match bridge.await_the_reply_to(setup_sent, Duration::from_millis(250)) {
@@ -561,11 +561,11 @@ fn lifecycle_frame_still_routes_to_lifecycle_channel() {
 
     let setup_sent = bridge
         .send_a_lifecycle_command_awaiting_its_reply(
-            LifecycleCommandAwaitingItsReply::Setup,
-            serde_json::json!({}),
+            LifecycleCommandAnsweredByAReply::Setup,
+            LifecycleCommandFields::new(),
         )
         .expect("the setup command goes out");
-    let ready = serde_json::json!({"rpc": "ready", "command_id": setup_sent.command_id.0});
+    let ready = serde_json::json!({"rpc": "ready", "command_id": setup_sent.command_id});
     let mut child_writer = BufWriter::new(child_end);
     write_frame(&mut child_writer, &ready).expect("write ready frame");
     drop(child_writer);
