@@ -96,7 +96,7 @@ pub fn tensor_to_texture(
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
     // One build reads both, so a frame never pairs a new attribute with the format it replaced.
     let attribute_and_format =
-        computed(move || Ok::<_, Error>((attribute.get(), image_format_named(&format.get())?)));
+        computed(move |_ctx| Ok::<_, Error>((attribute.get(), image_format_named(&format.get())?)));
     let node_run_id_of_this_node = ctx
         .node_run_id()
         .unwrap_or_else(|| "TensorToTexture".to_string());
