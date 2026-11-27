@@ -541,6 +541,21 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Whether the far side refused a link handed over to it past its setup
+    /// command that the envelope still records, so the link is wired again.
+    pub(crate) fn holds_a_link_its_far_side_refused(&self) -> bool {
+        self.recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .answer_cells_of_links_handed_over_past_the_setup_command
+            .iter()
+            .any(|(_, answer_cell)| {
+                matches!(
+                    answer_cell.the_far_sides_answer(),
+                    Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { .. })
+                )
+            })
+    }
+
     /// Record one link, in the direction its port faces, and get it to the far
     /// side however it reaches it now.
     ///

@@ -660,6 +660,40 @@ fn an_edit_not_live_is_spelled_as_the_wire_carries_it_and_recovered_by_a_restart
     );
 }
 
+/// A link not wired is recovered on the link, never by a restart of the playback: the runtime
+/// wires it again by itself, and a reconnect tries again at once.
+///
+/// Mental-revert: mapping it to a restart of the playback asks the person to stop a stream the
+/// link recovers in by itself.
+#[test]
+fn a_link_not_wired_is_spelled_as_the_wire_carries_it_and_recovered_on_the_link() {
+    let diagnostic = DiagnosticOnTheWire::of(
+        DiagnosticKindOnTheWire::LinkNotWired,
+        DiagnosticPlaceOnTheWire::Link {
+            from_node: "Camera".to_owned(),
+            from_port: "video".to_owned(),
+            to_node: "Blur".to_owned(),
+            to_port: "video".to_owned(),
+        },
+        "its input `video` reads nothing: the link into it is not wired".to_owned(),
+    );
+    assert_eq!(
+        serde_json::to_value(&diagnostic).unwrap(),
+        serde_json::json!({
+            "kind": "link_not_wired",
+            "place": {
+                "on": "link",
+                "from_node": "Camera",
+                "from_port": "video",
+                "to_node": "Blur",
+                "to_port": "video",
+            },
+            "words": "its input `video` reads nothing: the link into it is not wired",
+            "recovery": "fix_the_link",
+        })
+    );
+}
+
 #[test]
 fn each_computed_value_kind_is_spelled_as_the_wire_carries_it_with_its_own_recovery() {
     let spelled = [

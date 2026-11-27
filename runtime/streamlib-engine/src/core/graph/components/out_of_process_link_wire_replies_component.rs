@@ -52,6 +52,14 @@ impl OutOfProcessLinkWireRepliesComponent {
             OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet
         }
     }
+
+    /// Whether an end refused the link, so it is wired again rather than waited on.
+    pub fn an_end_refused(&self) -> bool {
+        matches!(
+            self.what_its_out_of_process_ends_have_answered(),
+            OutOfProcessLinkWireProgress::AnEndRefused { .. }
+        )
+    }
 }
 
 #[cfg(test)]

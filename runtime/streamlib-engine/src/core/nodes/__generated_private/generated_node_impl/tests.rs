@@ -899,3 +899,48 @@ fn each_function_node_rides_the_setup_command_with_one_breadcrumb_number() {
         ]
     );
 }
+
+/// An envelope holds a link its far side refused while it records it, and none once the link
+/// is forgotten to be wired again; a link opened or still awaited is no refusal.
+///
+/// Mental-revert: reading every answered link as refused retries a link the far side opened.
+#[test]
+fn an_envelope_holds_a_refused_link_until_it_forgets_it_and_no_other_counts() {
+    let envelope =
+        OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+    envelope
+        .send_the_setup_command_then_hand_every_later_link_over(
+            |_| Ok(()),
+            RecordingOutOfProcessFarSideLinkDelivery::default(),
+        )
+        .expect("the setup command goes out");
+    let answer_of = |link_id: &str| {
+        envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                link_wiring_entry(link_id, "in1"),
+            )
+            .expect("a far side that is not gone takes the link")
+            .expect("a link past the setup command waits on the far side's answer")
+    };
+    let opened = answer_of("L-opened");
+    let _awaited = answer_of("L-awaited");
+    opened.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+    assert!(!envelope.holds_a_link_its_far_side_refused());
+
+    answer_of("L-refused").note_the_far_sides_answer(
+        OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+            reason: "could not wire input port \"in1\"".to_string(),
+        },
+    );
+    assert!(envelope.holds_a_link_its_far_side_refused());
+
+    envelope
+        .forget_a_link_and_tell_a_far_side_past_its_setup_command(
+            PortDirection::Input,
+            "in1",
+            "L-refused",
+        )
+        .expect("the far side is told");
+    assert!(!envelope.holds_a_link_its_far_side_refused());
+}

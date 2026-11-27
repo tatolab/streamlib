@@ -442,6 +442,18 @@ pub trait RuntimeOperations: Send + Sync {
         reason: &str,
     ) -> Result<()>;
 
+    /// Ask that each link into or out of `node_run_id` that an end out of process refused to
+    /// open be wired again, as a reconnect of it would be, now that the node's far side may open
+    /// it: after its helper process started again in place of one that died, or while a far
+    /// side that refused one keeps running.
+    ///
+    /// A request that never blocks: the graph-change listener compiles it. A node none of whose
+    /// links an end refused asks for nothing.
+    fn request_each_link_of_a_node_an_end_refused_be_wired_again(
+        &self,
+        node_run_id: &NodeRunId,
+    ) -> Result<()>;
+
     // =========================================================================
     // Introspection
     // =========================================================================

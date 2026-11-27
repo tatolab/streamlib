@@ -63,6 +63,7 @@ use nodes_set_up_after_the_sources_of_their_wired_settings::{
 };
 
 mod commit_of_the_logged_operations;
+mod links_an_end_refused_wired_again;
 mod links_whose_pin_types_differ;
 mod nodes_set_up_after_the_sources_of_their_wired_settings;
 mod transaction_held_for_one_commit;
@@ -320,6 +321,11 @@ impl Compiler {
         result.began_changing_what_runs = true;
 
         links_whose_pin_types_differ::hold_each_link_unwired(&mut graph_arc.write(), &plan)?;
+        links_an_end_refused_wired_again::unwire_each_link_an_end_refused_keeping_it(
+            &mut graph_arc.write(),
+            &mut plan,
+            &nodes_restarted.links,
+        )?;
 
         let abandoned_in_this_compile: Vec<NodeDisplayNameAndId> = if !plan
             .links_to_remove
@@ -820,6 +826,8 @@ fn the_plan_these_operations_make(
                 let exists = link.is_some();
                 let already_wired_or_awaiting_an_answer =
                     link.is_some_and(this_link_is_already_wired_or_awaiting_its_helpers_answer);
+                let refused_by_a_far_side =
+                    link.is_some_and(crate::core::graph::an_end_refused_the_link);
                 let pending_deletion = link
                     .map(|l| l.has::<PendingDeletionComponent>())
                     .unwrap_or(false);
@@ -829,6 +837,11 @@ fn the_plan_these_operations_make(
                     tracing::debug!("AddLink({}): pending deletion, skipping add", id);
                 } else if links_queued_in_this_batch.contains(&id) {
                     tracing::debug!("AddLink({}): already queued in this batch, skipping", id);
+                } else if refused_by_a_far_side {
+                    tracing::info!("AddLink({}): an end refused it, so it is wired again", id);
+                    links_queued_in_this_batch.insert(id.clone());
+                    plan.links_to_wire_again.push(id.clone());
+                    plan.links_to_add.push(id);
                 } else if exists && !already_wired_or_awaiting_an_answer {
                     links_queued_in_this_batch.insert(id.clone());
                     plan.links_to_add.push(id);
@@ -966,6 +979,9 @@ fn this_link_is_already_wired_or_awaiting_its_helpers_answer(link: &Link) -> boo
 
 #[cfg(test)]
 mod already_wired_tests;
+
+#[cfg(test)]
+mod links_an_end_refused_wired_again_tests;
 
 #[cfg(test)]
 mod abandoned_shader_node_restart_tests;
