@@ -48,6 +48,12 @@ pub(crate) const ESCALATE_RESPONSE_RPC: &str = "escalate_response";
 /// than queueing it behind GPU work.
 pub(crate) const ESCALATE_OP_ANSWERED_BY_NOTHING: &str = "log";
 
+/// The `op` tag of the one escalate request that builds a kernel on a helper's
+/// limited capability, [`EscalateRequest::RegisterComputeKernel`] — the bridge
+/// answers it on a worker of its own, so a frame's dispatch never waits out a
+/// shader compile and pipeline build queued ahead of it.
+pub(crate) const ESCALATE_OP_BUILDING_A_KERNEL: &str = "register_compute_kernel";
+
 /// Extract `request_id` from a request/response-shaped op. Returns `None`
 /// for fire-and-forget ops ([`EscalateRequest::Log`]), which carry no
 /// correlation token because the host never writes a reply.

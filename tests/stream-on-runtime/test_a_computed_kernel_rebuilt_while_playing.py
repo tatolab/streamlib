@@ -4,8 +4,9 @@
 """A Python node's compute kernel built in a computed value that reads its `width` input is built
 again for each of a hundred widths set while its stream plays, on the limited GPU capability:
 frames dispatch each new kernel in the process the node set up in, every kernel replaced is closed
-and handed back to the engine, a kernel created in the scope's body keeps dispatching, and the
-stream stays healthy.
+and handed back to the engine, a kernel created in the scope's body keeps dispatching, a frame
+whose dispatches overlap a build takes no longer than one with no build in flight, and the stream
+stays healthy.
 """
 
 from __future__ import annotations
@@ -33,6 +34,11 @@ GRAPH_HOLDING_THE_PROBE = {
     "links": [],
 }
 
+#: How many frames must overlap a build for their timing to be a measure: each build compiles a
+#: shader for several milliseconds while the probe dispatches every 10, so a hundred builds overlap
+#: far more frames than this.
+FRAMES_OVERLAPPING_A_BUILD_THE_MEASURE_NEEDS = 10
+
 #: What the helper logs when the parent did not take a release it was handed.
 A_RELEASE_THE_PARENT_DID_NOT_TAKE = "the parent did not take a release from this helper"
 
@@ -43,7 +49,9 @@ def test_a_computed_kernel_is_rebuilt_for_each_width_set_while_playing_and_each_
 ):
     """Mental-revert: kernel creation left on the full capability fails the build with an
     AttributeError and no frame ever dispatches; a replaced kernel nothing closes reports no
-    `KERNEL_CLOSED`; a set that rebuilds the node reports a second `PROBE_SETUP`."""
+    `KERNEL_CLOSED`; a set that rebuilds the node reports a second `PROBE_SETUP`; a build answered
+    on the same worker as the frames' dispatches makes each frame it overlaps wait out the shader
+    compile, about 15 ms on an RTX 3090 against 2–3 ms for the slowest frame with no build."""
     project = write_a_hand_written_graph_project(
         tmp_path / "project", GRAPH_HOLDING_THE_PROBE
     )
@@ -106,7 +114,14 @@ def test_a_computed_kernel_is_rebuilt_for_each_width_set_while_playing_and_each_
     ]
     assert listed["state"] == "running", listed
     assert listed["condition"]["health"] == "healthy", listed
-    print(
-        f"frame dispatch seconds after the kernel for {last_width}:",
-        tatolabd.marker_payloads("DISPATCH_SECONDS")[-1],
+    dispatch_seconds = tatolabd.marker_payloads("DISPATCH_SECONDS")[-1]
+    print(f"frame dispatch seconds after the kernel for {last_width}:", dispatch_seconds)
+    while_a_build_ran = dispatch_seconds["while_a_build_ran"]
+    while_no_build_ran = dispatch_seconds["while_no_build_ran"]
+    assert while_a_build_ran["frames"] >= FRAMES_OVERLAPPING_A_BUILD_THE_MEASURE_NEEDS, (
+        f"too few frames overlapped a build to measure them: {dispatch_seconds}"
+    )
+    assert while_a_build_ran["median"] <= while_no_build_ran["max"], (
+        "a frame whose dispatches overlap a kernel build takes longer than any frame with no "
+        f"build in flight: {dispatch_seconds}"
     )

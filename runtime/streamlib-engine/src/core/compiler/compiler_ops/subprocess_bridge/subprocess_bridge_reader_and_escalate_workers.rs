@@ -13,7 +13,9 @@ use crate::core::error::{Error, Result};
 use crate::core::logging::carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe;
 use crate::core::nodes::LinksAwaitingTheirOutOfProcessWireReply;
 
-use crate::core::compiler::compiler_ops::subprocess_escalate::refusal_of_an_escalate_request;
+use crate::core::compiler::compiler_ops::subprocess_escalate::{
+    ESCALATE_REQUEST_RPC, refusal_of_an_escalate_request,
+};
 
 use super::{
     ESCALATE_REQUESTS_QUEUED_PER_HELPER, EscalateRequestDispatch, IncomingSubprocessFrame,
@@ -21,16 +23,24 @@ use super::{
     read_frame, write_frame,
 };
 
-/// The two threads one bridge runs.
+/// The three threads one bridge runs.
 pub(super) struct SubprocessBridgeThreads {
     pub(super) frame_demultiplexing_reader_thread: JoinHandle<()>,
     pub(super) escalate_worker_thread: JoinHandle<()>,
+    pub(super) kernel_build_worker_thread: JoinHandle<()>,
 }
 
-/// Spawn the escalate worker, then the reader that feeds it.
+/// The two queues the reader feeds, one per worker.
+struct EscalateWorkerQueues {
+    escalate_requests_tx: mpsc::SyncSender<serde_json::Value>,
+    kernel_builds_tx: mpsc::SyncSender<serde_json::Value>,
+}
+
+/// Spawn the escalate worker and the kernel build worker, then the reader that
+/// feeds them.
 ///
-/// The reader owns the only sender of the worker's queue, so the worker leaves
-/// once the reader has and every queued request is taken off.
+/// The reader owns the only sender of each worker's queue, so each worker
+/// leaves once the reader has and every request queued for it is taken off.
 pub(super) fn spawn_the_reader_and_the_escalate_worker(
     reader: BufReader<UnixStream>,
     parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
@@ -38,6 +48,8 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
 ) -> Result<SubprocessBridgeThreads> {
     let (escalate_requests_tx, escalate_requests_rx) =
+        mpsc::sync_channel(ESCALATE_REQUESTS_QUEUED_PER_HELPER);
+    let (kernel_builds_tx, kernel_builds_rx) =
         mpsc::sync_channel(ESCALATE_REQUESTS_QUEUED_PER_HELPER);
     let node_run_id = parent_side.node_run_id.clone();
 
@@ -56,6 +68,26 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
             ))
         })?;
 
+    let build_worker_parent_side = Arc::clone(&parent_side);
+    let build_worker_dispatch = Arc::clone(&escalate_request_dispatch);
+    let kernel_build_worker_thread = thread::Builder::new()
+        .name(bridge_kernel_build_worker_thread_name(&node_run_id))
+        .spawn(
+            carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
+                kernel_build_worker_loop(
+                    kernel_builds_rx,
+                    &build_worker_parent_side,
+                    &build_worker_dispatch,
+                );
+            }),
+        )
+        .map_err(|spawn_failure| {
+            Error::Runtime(format!(
+                "[{node_run_id}] could not start its bridge's kernel build worker: \
+                 {spawn_failure}"
+            ))
+        })?;
+
     let frame_demultiplexing_reader_thread = thread::Builder::new()
         .name(bridge_reader_thread_name(&node_run_id))
         .spawn(
@@ -64,7 +96,10 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
                     reader,
                     &parent_side,
                     &escalate_request_dispatch,
-                    escalate_requests_tx,
+                    EscalateWorkerQueues {
+                        escalate_requests_tx,
+                        kernel_builds_tx,
+                    },
                     lifecycle_tx,
                 );
             }),
@@ -78,6 +113,7 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
     Ok(SubprocessBridgeThreads {
         frame_demultiplexing_reader_thread,
         escalate_worker_thread,
+        kernel_build_worker_thread,
     })
 }
 
@@ -87,7 +123,7 @@ fn reader_loop(
     mut reader: BufReader<UnixStream>,
     parent_side: &ParentSideOfOneSubprocessBridgeSharedByItsThreads,
     escalate_request_dispatch: &EscalateRequestDispatch,
-    escalate_requests_tx: mpsc::SyncSender<serde_json::Value>,
+    worker_queues: EscalateWorkerQueues,
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
 ) {
     let node_run_id = &parent_side.node_run_id;
@@ -149,39 +185,24 @@ fn reader_loop(
                 continue;
             }
             IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer => {
-                match escalate_requests_tx.try_send(msg) {
-                    Ok(()) => {}
-                    // Refused rather than waited for: a reader blocked on a full
-                    // queue would hold this helper's log records and lifecycle
-                    // replies behind its GPU work again.
-                    Err(mpsc::TrySendError::Full(refused_request)) => {
-                        let refusal = refusal_of_an_escalate_request(
-                            &refused_request,
-                            format!(
-                                "the app process already holds \
-                                 {ESCALATE_REQUESTS_QUEUED_PER_HELPER} escalate requests from \
-                                 this helper process that it has not answered, so this one was \
-                                 refused rather than queued"
-                            ),
-                        );
-                        if parent_side
-                            .write_frame_or_give_up_on_the_subprocess(&refusal)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    // The worker leaves before this sender is dropped only by
-                    // panicking, and a helper whose requests nothing can answer
-                    // is given up on.
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
-                        tracing::warn!(
-                            "[{}] its bridge's escalate worker is gone, so no escalate request \
-                             it sends can be answered; giving up on the helper process",
-                            node_run_id
-                        );
-                        break;
-                    }
+                if !queue_for_its_worker(
+                    &worker_queues.escalate_requests_tx,
+                    msg,
+                    parent_side,
+                    "escalate worker",
+                ) {
+                    break;
+                }
+                continue;
+            }
+            IncomingSubprocessFrame::EscalateRequestBuildingAKernel => {
+                if !queue_for_its_worker(
+                    &worker_queues.kernel_builds_tx,
+                    msg,
+                    parent_side,
+                    "kernel build worker",
+                ) {
+                    break;
                 }
                 continue;
             }
@@ -203,10 +224,50 @@ fn reader_loop(
     parent_side.give_up_on_the_subprocess("stopped answering");
 }
 
+/// Queue `request` for the worker `worker` names, refusing it with an answer
+/// when that worker's queue is full; `false` once the helper is given up on.
+fn queue_for_its_worker(
+    worker_queue_tx: &mpsc::SyncSender<serde_json::Value>,
+    request: serde_json::Value,
+    parent_side: &ParentSideOfOneSubprocessBridgeSharedByItsThreads,
+    worker: &str,
+) -> bool {
+    match worker_queue_tx.try_send(request) {
+        Ok(()) => true,
+        // Refused rather than waited for: a reader blocked on a full queue
+        // would hold this helper's log records and lifecycle replies behind its
+        // GPU work again.
+        Err(mpsc::TrySendError::Full(refused_request)) => {
+            let refusal = refusal_of_an_escalate_request(
+                &refused_request,
+                format!(
+                    "the app process already holds {ESCALATE_REQUESTS_QUEUED_PER_HELPER} \
+                     requests from this helper process for its {worker} that it has not \
+                     answered, so this one was refused rather than queued"
+                ),
+            );
+            parent_side
+                .write_frame_or_give_up_on_the_subprocess(&refusal)
+                .is_ok()
+        }
+        // A worker leaves before this sender is dropped only by panicking, and a
+        // helper whose requests nothing can answer is given up on.
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            tracing::warn!(
+                "[{}] its bridge's {} is gone, so no request queued for it can be answered; \
+                 giving up on the helper process",
+                parent_side.node_run_id,
+                worker
+            );
+            false
+        }
+    }
+}
+
 /// Escalate worker loop: dispatch each queued request in the order the helper
 /// sent it and write its answer, one at a time — a release never overtakes the
-/// acquire it releases, and the helper holds the escalate gate for at most one
-/// op.
+/// acquire it releases. Kernel builds are the one op answered elsewhere, on the
+/// kernel build worker, so a frame's dispatch never waits out a compile.
 ///
 /// A request still queued once the subprocess was given up on is passed over:
 /// teardown's drain has released or will release what the helper held, and an
@@ -232,6 +293,82 @@ fn escalate_worker_loop(
             );
         }
     }
+}
+
+/// Kernel build worker loop: build each queued kernel in the order the helper
+/// asked for it and write its answer, one at a time, beside the escalate
+/// worker.
+///
+/// Nothing the helper sends can depend on a build it has no answer for — each
+/// calling thread waits on its answer, and a kernel's id and its release come
+/// only from that answer — so a build overtaking, or overtaken by, an escalate
+/// request queued around it changes nothing the helper can observe.
+///
+/// A build that finishes once the helper was given up on releases the kernel it
+/// registered rather than answering: teardown's drain may already have run, and
+/// the registration would otherwise outlive the helper. The release goes
+/// through the helper's handle registry, so one the drain already took is not
+/// released twice.
+fn kernel_build_worker_loop(
+    kernel_builds_rx: Receiver<serde_json::Value>,
+    parent_side: &ParentSideOfOneSubprocessBridgeSharedByItsThreads,
+    escalate_request_dispatch: &EscalateRequestDispatch,
+) {
+    for build in kernel_builds_rx {
+        if parent_side.the_subprocess_was_given_up_on() {
+            continue;
+        }
+        let Some(answer) = escalate_request_dispatch(&build) else {
+            continue;
+        };
+        if parent_side.the_subprocess_was_given_up_on() {
+            release_the_kernel_an_unanswered_build_registered(
+                &answer,
+                parent_side,
+                escalate_request_dispatch,
+            );
+            continue;
+        }
+        if let Err(write_failure) = parent_side.write_frame_or_give_up_on_the_subprocess(&answer) {
+            tracing::warn!(
+                "[{}] bridge failed to write a kernel build's answer: {}",
+                parent_side.node_run_id,
+                write_failure
+            );
+        }
+    }
+}
+
+/// Release the kernel a build's `answer` names, if it registered one, through
+/// the same dispatch the helper's own `release_handle` takes.
+fn release_the_kernel_an_unanswered_build_registered(
+    answer: &serde_json::Value,
+    parent_side: &ParentSideOfOneSubprocessBridgeSharedByItsThreads,
+    escalate_request_dispatch: &EscalateRequestDispatch,
+) {
+    if answer.get("result").and_then(|result| result.as_str()) != Some("ok") {
+        return;
+    }
+    let Some(kernel_id) = answer.get("handle_id").and_then(|id| id.as_str()) else {
+        return;
+    };
+    let request_id = answer
+        .get("request_id")
+        .and_then(|request_id| request_id.as_str())
+        .unwrap_or_default();
+    let released = escalate_request_dispatch(&serde_json::json!({
+        "rpc": ESCALATE_REQUEST_RPC,
+        "op": "release_handle",
+        "request_id": format!("{request_id}:released-unanswered"),
+        "handle_id": kernel_id,
+    }));
+    tracing::debug!(
+        "[{}] a kernel build finished after its helper process was given up on, so the \
+         kernel {} it registered was released rather than answered: {:?}",
+        parent_side.node_run_id,
+        kernel_id,
+        released
+    );
 }
 
 /// Start the worker that answers the helper's native code over its own socket.
@@ -294,7 +431,8 @@ fn native_escalate_worker_loop(
             return;
         }
         let answer = match classify_an_incoming_subprocess_frame(&request) {
-            IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer => {
+            IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer
+            | IncomingSubprocessFrame::EscalateRequestBuildingAKernel => {
                 escalate_request_dispatch(&request)
             }
             _ => Some(refusal_of_an_escalate_request(
@@ -357,6 +495,13 @@ fn bridge_reader_thread_name(node_run_id: &str) -> String {
 fn bridge_escalate_worker_thread_name(node_run_id: &str) -> String {
     format!(
         "br-esc-{}",
+        node_run_id_shortened_for_a_thread_name(node_run_id)
+    )
+}
+
+fn bridge_kernel_build_worker_thread_name(node_run_id: &str) -> String {
+    format!(
+        "br-bld-{}",
         node_run_id_shortened_for_a_thread_name(node_run_id)
     )
 }

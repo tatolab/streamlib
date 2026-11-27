@@ -3,8 +3,8 @@
 
 use super::handle_lifecycle::EscalateHandleRegistry;
 use super::{
-    ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_REQUEST_RPC, envelope_response, parse_op_for_tests,
-    request_id, try_parse_escalate_request, *,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_OP_BUILDING_A_KERNEL, ESCALATE_REQUEST_RPC,
+    envelope_response, parse_op_for_tests, request_id, try_parse_escalate_request, *,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -146,6 +146,27 @@ fn log_frame_parses_as_escalate_request_log_variant() {
         Err(e) => panic!("log frame must decode: {}", e.message),
     };
     assert!(matches!(parsed, EscalateRequest::Log(_)));
+}
+
+/// The `op` tag the bridge answers on its kernel build worker decodes as
+/// [`EscalateRequest::RegisterComputeKernel`]. Fail-without-fix: rename the
+/// variant's serde tag alone and every build queues ahead of the frames'
+/// dispatches again, unnoticed.
+#[test]
+fn the_op_built_on_the_kernel_build_worker_parses_as_a_compute_kernel_registration() {
+    let build_frame = serde_json::json!({
+        "rpc": ESCALATE_REQUEST_RPC,
+        "op": ESCALATE_OP_BUILDING_A_KERNEL,
+        "request_id": "r-build",
+        "source": "[numthreads(1, 1, 1)] void main() {}",
+        "bindings": [],
+        "push_constant_size": 0,
+    });
+    let parsed = match try_parse_escalate_request(&build_frame).expect("escalate-shaped") {
+        Ok(op) => op,
+        Err(e) => panic!("a kernel build frame must decode: {}", e.message),
+    };
+    assert!(matches!(parsed, EscalateRequest::RegisterComputeKernel(_)));
 }
 
 #[test]
