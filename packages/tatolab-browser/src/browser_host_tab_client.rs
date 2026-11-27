@@ -313,7 +313,7 @@ impl BrowserHostTabOfOneNode {
         let painted_iosurface_receiver = paints_into_painted_textures
             .then(checked_in_painted_iosurface_receiver)
             .transpose()
-            .map_err(BrowserPageRefused::TabProtocolBroken)?;
+            .map_err(BrowserPageRefused::NodeSetUpNothingToOpenItOn)?;
         let tab_request = BrowserHostTabRequest {
             paint_into_shared_textures: paints_into_painted_textures,
             #[cfg(target_os = "macos")]
@@ -331,9 +331,7 @@ impl BrowserHostTabOfOneNode {
                 &[],
             )
             .map_err(|failure| {
-                BrowserPageRefused::BrowserHostUnreachable(format!(
-                    "the tab was not asked for: {failure}"
-                ))
+                BrowserPageRefused::of_the_tab_protocol(failure, "the tab was not asked for")
             })?;
         let frame_slots = match reader.receive::<TabProtocolMessageFromBrowserHost>() {
             Ok(TabProtocolMessageFromBrowserHost::TabOpened {
@@ -377,9 +375,10 @@ impl BrowserHostTabOfOneNode {
                 )));
             }
             Err(failure) => {
-                return Err(BrowserPageRefused::BrowserHostUnreachable(format!(
-                    "the browser host did not answer the open: {failure}"
-                )));
+                return Err(BrowserPageRefused::of_the_tab_protocol(
+                    failure,
+                    "the browser host did not answer the open",
+                ));
             }
         };
         socket_whose_read_timeout_ends_once_open
@@ -1107,15 +1106,33 @@ pub enum BrowserPageRefused {
     /// The browser host answered outside the tab protocol, or the frame slots it handed over
     /// could not be taken.
     TabProtocolBroken(String),
+    /// What the node sets up on its own side to open a page on, a socket or a port the host
+    /// hands painted surfaces over, could not be set up; the host was not at fault.
+    NodeSetUpNothingToOpenItOn(String),
     /// A thread the page needs could not start.
     ThreadNotStarted(String),
 }
 
 impl BrowserPageRefused {
     fn of_the_socket(failure: std::io::Error) -> Self {
-        BrowserPageRefused::BrowserHostUnreachable(format!(
-            "the browser host's socket could not be set up: {failure}"
+        BrowserPageRefused::NodeSetUpNothingToOpenItOn(format!(
+            "the socket to the browser host could not be set up: {failure}"
         ))
+    }
+
+    /// A tab protocol message that did not cross: one that could not be encoded or decoded, or
+    /// came without its descriptor, broke the protocol; any other failure left the host
+    /// unreachable.
+    fn of_the_tab_protocol(failure: TabProtocolSocketFailure, what_failed: &str) -> Self {
+        let why = format!("{what_failed}: {failure}");
+        match failure {
+            TabProtocolSocketFailure::Encoding(_) | TabProtocolSocketFailure::MissingDescriptor => {
+                BrowserPageRefused::TabProtocolBroken(why)
+            }
+            TabProtocolSocketFailure::Ended | TabProtocolSocketFailure::Io(_) => {
+                BrowserPageRefused::BrowserHostUnreachable(why)
+            }
+        }
     }
 }
 
@@ -1128,6 +1145,7 @@ impl std::fmt::Display for BrowserPageRefused {
             | BrowserPageRefused::BrowserHostUnreachable(why)
             | BrowserPageRefused::PageRefusedByTheBrowserHost(why)
             | BrowserPageRefused::TabProtocolBroken(why)
+            | BrowserPageRefused::NodeSetUpNothingToOpenItOn(why)
             | BrowserPageRefused::ThreadNotStarted(why) => f.write_str(why),
         }
     }
@@ -1596,6 +1614,33 @@ mod tests {
             audio_sample_rate: 48_000,
             output_pool_rotation_depth: 4,
         }
+    }
+
+    #[test]
+    fn a_message_that_did_not_cross_is_refused_by_why() {
+        assert!(matches!(
+            BrowserPageRefused::of_the_tab_protocol(
+                TabProtocolSocketFailure::Encoding("too large".into()),
+                "the browser host did not answer the open",
+            ),
+            BrowserPageRefused::TabProtocolBroken(_)
+        ));
+        assert!(matches!(
+            BrowserPageRefused::of_the_tab_protocol(
+                TabProtocolSocketFailure::MissingDescriptor,
+                "the browser host did not answer the open",
+            ),
+            BrowserPageRefused::TabProtocolBroken(_)
+        ));
+        assert_eq!(
+            BrowserPageRefused::of_the_tab_protocol(
+                TabProtocolSocketFailure::Ended,
+                "the browser host did not answer the open",
+            ),
+            BrowserPageRefused::BrowserHostUnreachable(
+                "the browser host did not answer the open: the connection ended".into()
+            )
+        );
     }
 
     #[test]

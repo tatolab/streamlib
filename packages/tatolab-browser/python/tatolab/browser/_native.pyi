@@ -9,6 +9,7 @@ __all__ = [
     "BrowserHostNotLeased",
     "BrowserHostUnreachable",
     "BrowserPageNotOpened",
+    "BrowserPageNodeSetUpNothingToOpenItOn",
     "BrowserPageNotRenderable",
     "BrowserPagePortRefused",
     "BrowserPageRefusedByTheBrowserHost",
@@ -37,6 +38,9 @@ class BrowserPageRefusedByTheBrowserHost(BrowserPageNotOpened):
 
 class BrowserTabProtocolBroken(BrowserPageNotOpened):
     """The browser host answered outside the tab protocol, or its frame slots could not be taken."""
+
+class BrowserPageNodeSetUpNothingToOpenItOn(BrowserPageNotOpened):
+    """What the node sets up on its own side to open a page on could not be set up."""
 
 class BrowserPageThreadNotStarted(BrowserPageNotOpened):
     """A thread the page needs could not start."""

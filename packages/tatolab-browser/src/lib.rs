@@ -35,49 +35,55 @@ use crate::browser_host_tab_client::{
 };
 
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserPageNotOpened,
     PyRuntimeError,
     "A page could not be opened; each reason is its own subclass."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserPageNotRenderable,
     BrowserPageNotOpened,
     "The url, size, frame rate, sample rate or pool depth is one CEF cannot render with."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserPagePortRefused,
     BrowserPageNotOpened,
     "A port the node lent could not be opened."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserHostNotLeased,
     BrowserPageNotOpened,
     "The runtime did not lease the machine's browser host."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserHostUnreachable,
     BrowserPageNotOpened,
     "The browser host did not accept the connection, or did not answer the open."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserPageRefusedByTheBrowserHost,
     BrowserPageNotOpened,
     "The browser host refused to open the page."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
     BrowserTabProtocolBroken,
     BrowserPageNotOpened,
     "The browser host answered outside the tab protocol, or its frame slots could not be taken."
 );
 create_exception!(
-    _native,
+    tatolab.browser._native,
+    BrowserPageNodeSetUpNothingToOpenItOn,
+    BrowserPageNotOpened,
+    "What the node sets up on its own side to open a page on could not be set up."
+);
+create_exception!(
+    tatolab.browser._native,
     BrowserPageThreadNotStarted,
     BrowserPageNotOpened,
     "A thread the page needs could not start."
@@ -95,6 +101,9 @@ impl From<BrowserPageRefused> for PyErr {
                 BrowserPageRefusedByTheBrowserHost::new_err(why)
             }
             BrowserPageRefused::TabProtocolBroken(_) => BrowserTabProtocolBroken::new_err(why),
+            BrowserPageRefused::NodeSetUpNothingToOpenItOn(_) => {
+                BrowserPageNodeSetUpNothingToOpenItOn::new_err(why)
+            }
             BrowserPageRefused::ThreadNotStarted(_) => BrowserPageThreadNotStarted::new_err(why),
         }
     }
