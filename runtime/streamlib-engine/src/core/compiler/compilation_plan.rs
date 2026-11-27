@@ -19,6 +19,9 @@ pub(super) struct CompilationPlan {
     pub(super) nodes_to_rebuild: Vec<NodeRunId>,
     /// Each node whose type choices are judged again against the links they reach, once.
     pub(super) nodes_whose_type_choices_are_judged_again: Vec<NodeRunId>,
+    /// What judging again the links those type choices reach found, marked on the graph only
+    /// once the compile begins changing what runs.
+    pub(super) links_judged_again: crate::core::graph::LinksATypeChoiceJudgedAgain,
     /// Each wired link whose two ends no longer carry types that connect, to unwire and keep in
     /// the graph, carrying nothing.
     pub(super) links_to_hold_unwired: Vec<LinkUniqueId>,
@@ -46,6 +49,7 @@ impl CompilationPlan {
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
             && self.links_to_hold_unwired.is_empty()
+            && self.links_judged_again.differing.is_empty()
             && self.function_node_promotions.is_empty()
     }
 

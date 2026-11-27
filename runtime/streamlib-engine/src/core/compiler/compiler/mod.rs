@@ -232,7 +232,7 @@ impl Compiler {
             plan.drop_link_adds_into_removed_nodes(&graph);
         }
         links_whose_pin_types_differ::judge_the_links_each_type_choice_reaches(
-            &mut graph_arc.write(),
+            &graph_arc.read(),
             &mut plan,
         );
         refuse_an_edit_an_island_cannot_take(
@@ -242,11 +242,20 @@ impl Compiler {
             &plan.links_to_add,
             &plan.links_to_remove,
         )?;
-        let links_changed = [
+        // A link held unwired for its pin types is no link a restart wires again.
+        let links_changed: Vec<LinkUniqueId> = [
             plan.links_to_add.as_slice(),
             plan.links_to_remove.as_slice(),
         ]
-        .concat();
+        .concat()
+        .into_iter()
+        .chain(
+            plan.links_judged_again
+                .differing
+                .iter()
+                .map(|(link_id, _)| link_id.clone()),
+        )
+        .collect();
         let nodes_restarted = {
             let graph = graph_arc.read();
             the_running_shader_nodes_a_live_edit_restarts(
@@ -304,10 +313,7 @@ impl Compiler {
             .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
         result.began_changing_what_runs = true;
 
-        links_whose_pin_types_differ::hold_each_link_unwired(
-            &mut graph_arc.write(),
-            &plan.links_to_hold_unwired,
-        )?;
+        links_whose_pin_types_differ::hold_each_link_unwired(&mut graph_arc.write(), &plan)?;
 
         let abandoned_in_this_compile: Vec<NodeDisplayNameAndId> = if !plan
             .links_to_remove

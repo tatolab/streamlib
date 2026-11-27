@@ -454,19 +454,14 @@ fn choose_and_judge(
             .expect("the node is held")
             .input_values
             .insert("kind".to_owned(), json!(pin_type));
-        let judged_again = graph.judge_again_each_link_the_type_choices_of_the_node_reach(chosen);
+        let judged_again = graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(
+            std::slice::from_ref(chosen),
+        );
+        graph.mark_each_link_judged_again(&judged_again);
         judged_again
             .differing
-            .iter()
-            .map(|link_id| {
-                graph
-                    .traversal()
-                    .e(link_id)
-                    .first()
-                    .and_then(|link| link.get::<LinkPinTypesDifferComponent>())
-                    .expect("a link judged differing is marked")
-                    .clone()
-            })
+            .into_iter()
+            .map(|(_, differing)| differing)
             .collect()
     })
 }
@@ -859,4 +854,110 @@ fn a_value_set_on_an_input_a_setting_types_as_a_bundle_is_handed_to_its_node() {
         handed.get("value"),
         Some(&json!({"level": 0.5, "label": "set"}))
     );
+}
+
+/// Judging a choice again changes nothing in the graph until the compile marks what it found, so
+/// a batch refused before it begins changing what runs leaves no link marked.
+///
+/// Mental-revert: a judge marking as it judges leaves a refused batch's link held as differing
+/// while it still carries what it did.
+#[test]
+fn judging_a_choice_again_marks_no_link_until_the_marks_are_made() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    let link = connect(&compiler, &chosen, &string_sink).expect("the setting chose a String");
+
+    let marked = compiler.scope(|graph, _tx| {
+        graph
+            .traversal_mut()
+            .v(&chosen)
+            .first_mut()
+            .expect("the node is held")
+            .input_values
+            .insert("kind".to_owned(), json!(PinType::Audio {}));
+        let judged_again = graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(
+            std::slice::from_ref(&chosen),
+        );
+        assert_eq!(judged_again.differing.len(), 1, "{judged_again:?}");
+        graph.the_pin_types_of_the_link_differ(&link)
+    });
+
+    assert!(!marked, "judging alone marks nothing");
+}
+
+/// A link past a pass-on that a choice upstream left differing connects again once the link
+/// feeding the pass-on is taken off, judged again as a marked link whatever node changed.
+///
+/// Mental-revert: judging only the links a changed node's choices reach leaves the link held
+/// unwired once the chooser no longer reaches it.
+#[test]
+fn a_marked_link_past_a_pass_on_connects_again_once_the_link_feeding_the_pass_on_is_taken_off() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let pass_on = a_node_of(&compiler, PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    let into_the_pass_on = connect(&compiler, &chosen, &pass_on).expect("an Any input takes it");
+    let past_the_pass_on =
+        connect(&compiler, &pass_on, &string_sink).expect("a String passed on fits");
+    assert_eq!(
+        choose_and_judge(&compiler, &chosen, PinType::Audio {}).len(),
+        1
+    );
+
+    let judged_again = compiler.scope(|graph, _tx| {
+        graph
+            .traversal_mut()
+            .e(&into_the_pass_on)
+            .first_mut()
+            .expect("the link is held")
+            .insert(crate::core::graph::PendingDeletionComponent);
+        graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(&[])
+    });
+
+    assert_eq!(judged_again.connecting_again, vec![past_the_pass_on]);
+}
+
+/// A saved graph's link past a pass-on, whose ends a choice upstream left differing, is kept for
+/// the compile to hold unwired rather than refusing the graph it was saved in; made now, the
+/// same link is refused.
+///
+/// Mental-revert: keeping only a saved link a choice of one of its own ends types refuses the
+/// whole saved graph.
+#[test]
+fn a_saved_link_past_a_pass_on_a_choice_upstream_left_differing_is_kept() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::Audio {}));
+    let pass_on = a_node_of(&compiler, PASS_ON);
+    let string_sink = a_node_of(&compiler, STRING_SINK);
+    connect(&compiler, &chosen, &pass_on).expect("an Any input takes Audio");
+
+    compiler.scope(|graph, _tx| {
+        let from = OutputLinkPortRef::new(pass_on.clone(), PASSED_ON);
+        let to = InputLinkPortRef::new(string_sink.clone(), "value");
+        crate::core::graph::refuse_a_link_its_pin_types_refuse(
+            graph,
+            &from,
+            &to,
+            crate::core::graph::ALinkConnected::MadeNow,
+        )
+        .expect_err("Audio passed on does not connect to a String input");
+        assert_eq!(
+            crate::core::graph::refuse_a_link_its_pin_types_refuse(
+                graph,
+                &from,
+                &to,
+                crate::core::graph::ALinkConnected::OfASavedGraph,
+            )
+            .expect("a saved link a choice left differing is kept"),
+            None
+        );
+        assert_eq!(
+            crate::core::graph::the_nodes_whose_type_choices_reach_the_link(graph, &from, &to),
+            vec![chosen.clone()]
+        );
+    });
 }

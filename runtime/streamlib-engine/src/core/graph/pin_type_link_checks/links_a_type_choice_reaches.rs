@@ -4,89 +4,95 @@
 //! The links a node's type choices reach, judged again once one of its inputs changed: each link
 //! at a port whose type an input of the node chooses, at an output taking the type of such an
 //! input, or at an output a conversion gives the type of by the node's settings, and on
-//! downstream past each output taking the type of an input such a link feeds. A link whose two
-//! ends no longer connect is marked as differing, and carries nothing until they connect again;
-//! the change of the input is never refused for it.
+//! downstream past each output taking the type of an input such a link feeds, and each link
+//! already marked, which an edit upstream may have made connect. A link whose two ends no
+//! longer connect is marked as differing, and carries nothing until they connect again; the
+//! change of the input is never refused for it.
 
 use std::collections::HashSet;
 
 use super::super::bundle_member_link_ends::refuse_a_member_its_port_does_not_hold;
 use super::super::pin_type_resolution::{
     PinTypeInItsGraph, the_conversion_whose_output_follows_a_setting,
+    the_input_an_output_takes_the_type_of,
 };
 use super::super::{
     Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, Link, LinkPinTypesDifferComponent,
-    LinkUniqueId, NodeRunId, OutputLinkPortRef, PendingDeletionComponent, PortInfo,
+    LinkState, LinkStateComponent, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    PendingDeletionComponent, PortInfo,
 };
 use super::wired_links_past_an_input::the_wired_links_out_of;
 use super::{the_ends_a_link_is_judged_by, the_refusal_without_its_fix, the_typed_ends_of};
 use crate::core::descriptors::{DeclaredPinType, PinConversion};
 
-/// What judging again the links a node's type choices reach found: each link whose ends differ
-/// now, whose channel is to be closed while it is open, and each that differed and connects
-/// again, to be wired again.
+/// What judging links again found, changing nothing yet: each link whose ends differ now, with
+/// how, and each marked as differing that connects again.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct LinksATypeChoiceJudgedAgain {
-    pub(crate) differing: Vec<LinkUniqueId>,
+    pub(crate) differing: Vec<(LinkUniqueId, LinkPinTypesDifferComponent)>,
     pub(crate) connecting_again: Vec<LinkUniqueId>,
 }
 
 impl Graph {
-    /// Judge again each link the type choices of the node `node_run_id` reach by the types its
-    /// two ends carry now: mark each whose ends no longer connect as differing, naming both pin
-    /// types, and take the mark off each that connects again. Answers each marked and each
-    /// unmarked; nothing for a node this graph does not hold, or one no input of which chooses
-    /// a type.
-    pub(crate) fn judge_again_each_link_the_type_choices_of_the_node_reach(
-        &mut self,
-        node_run_id: &NodeRunId,
+    /// Judge again by the types their two ends carry now each link the type choices of each of
+    /// `nodes` reach, and each link marked as differing, which an edit upstream of it may have
+    /// made connect: each whose ends no longer connect, naming both pin types, and each marked
+    /// that connects again. Changes nothing; [`Self::mark_each_link_judged_again`] marks them.
+    pub(crate) fn judge_again_each_link_the_type_choices_of_the_nodes_reach(
+        &self,
+        nodes: &[NodeRunId],
     ) -> LinksATypeChoiceJudgedAgain {
-        let judged: Vec<OneLinkJudgedAgain> = {
-            let Some(node) = self.traversal().v(node_run_id).first() else {
-                return LinksATypeChoiceJudgedAgain::default();
-            };
-            let conversions = self.node_types_this_stream_resolves().pin_conversions();
-            the_links_the_type_choices_of_a_node_reach(self, node)
-                .into_iter()
-                .map(|link| OneLinkJudgedAgain {
-                    link_id: link.id.clone(),
-                    differing_now: how_the_ends_of_a_link_differ_now(
-                        self,
-                        link.source(),
-                        link.to_port(),
-                        &conversions,
-                    ),
-                    differed_before: link.has::<LinkPinTypesDifferComponent>(),
-                })
-                .collect()
-        };
+        let conversions = self.node_types_this_stream_resolves().pin_conversions();
+        let mut links: Vec<&Link> = Vec::new();
+        let mut links_judged: HashSet<&LinkUniqueId> = HashSet::new();
+        let marked = self.traversal().e(()).iter().filter(|link| {
+            link.has::<LinkPinTypesDifferComponent>() && !link.has::<PendingDeletionComponent>()
+        });
+        let reached = nodes
+            .iter()
+            .filter_map(|node_run_id| self.traversal().v(node_run_id).first())
+            .flat_map(|node| the_links_the_type_choices_of_a_node_reach(self, node));
+        for link in marked.chain(reached) {
+            if links_judged.insert(&link.id) {
+                links.push(link);
+            }
+        }
         let mut judged_again = LinksATypeChoiceJudgedAgain::default();
-        for one in judged {
-            let Some(link) = self.traversal_mut().e(&one.link_id).first_mut() else {
-                continue;
-            };
-            match one.differing_now {
-                Some(differing) => {
-                    link.insert_component_without_rendering_it(differing);
-                    judged_again.differing.push(one.link_id);
-                }
-                None if one.differed_before => {
-                    link.remove::<LinkPinTypesDifferComponent>();
-                    judged_again.connecting_again.push(one.link_id);
+        for link in links {
+            match how_the_ends_of_a_link_differ_now(
+                self,
+                link.source(),
+                link.to_port(),
+                &conversions,
+            ) {
+                Some(differing) => judged_again.differing.push((link.id.clone(), differing)),
+                None if link.has::<LinkPinTypesDifferComponent>() => {
+                    judged_again.connecting_again.push(link.id.clone());
                 }
                 None => {}
             }
         }
         judged_again
     }
-}
 
-/// One link judged again: how its ends differ now, `None` when they connect, and whether it
-/// was marked as differing before.
-struct OneLinkJudgedAgain {
-    link_id: LinkUniqueId,
-    differing_now: Option<LinkPinTypesDifferComponent>,
-    differed_before: bool,
+    /// Mark each link `judged_again` finds differing, and take the mark off each it finds
+    /// connecting again, holding that one pending, to be wired.
+    pub(crate) fn mark_each_link_judged_again(
+        &mut self,
+        judged_again: &LinksATypeChoiceJudgedAgain,
+    ) {
+        for (link_id, differing) in &judged_again.differing {
+            if let Some(link) = self.traversal_mut().e(link_id).first_mut() {
+                link.insert_component_without_rendering_it(differing.clone());
+            }
+        }
+        for link_id in &judged_again.connecting_again {
+            if let Some(link) = self.traversal_mut().e(link_id).first_mut() {
+                link.remove::<LinkPinTypesDifferComponent>();
+                link.insert(LinkStateComponent(LinkState::Pending));
+            }
+        }
+    }
 }
 
 /// Whether `node` has a port whose type one of its inputs chooses, or an output taking the type
@@ -186,35 +192,77 @@ fn the_links_the_type_choices_of_a_node_reach<'graph>(
 }
 
 /// Whether a link from `from` to `to` of a saved graph, refused as it is, is one whose ends
-/// differ only since a type choice of a node at one of its ends changed: kept, so the compile
-/// holds it unwired as it holds a link the change left differing, rather than refusing the
-/// graph it was saved in.
+/// differ since a type choice reaching it changed: kept, so the compile holds it unwired as it
+/// holds a link the change left differing, rather than refusing the graph it was saved in.
 pub(crate) fn a_saved_link_differs_by_a_type_choice(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
 ) -> bool {
-    let typed_by_a_choice = |node_run_id: &NodeRunId, port_name: &str, typed_input: bool| {
-        graph
-            .traversal()
-            .v(node_run_id)
-            .first()
-            .is_some_and(|node| {
-                let typed = the_ports_a_type_choice_of_the_node_types(graph, node);
-                if typed_input {
-                    typed.inputs.contains(&port_name)
-                } else {
-                    typed.outputs.iter().any(|output| output.name == port_name)
-                }
-            })
-    };
-    if !typed_by_a_choice(from.node_run_id(), from.port_name(), false)
-        && !typed_by_a_choice(to.node_run_id(), to.port_name(), true)
-    {
+    if the_nodes_whose_type_choices_reach_the_link(graph, from, to).is_empty() {
         return false;
     }
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     how_the_ends_of_a_link_differ_now(graph, from, to, &conversions).is_some()
+}
+
+/// Each node whose type choices reach a link from `from` to `to`: the node of `to` when one of
+/// its type choices types that input, and the node of `from` when one types that output, or,
+/// for an output taking the type of an input, each node whose choice types an output linked
+/// into that input, followed upstream.
+pub(crate) fn the_nodes_whose_type_choices_reach_the_link(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Vec<NodeRunId> {
+    let mut choosing: Vec<NodeRunId> = graph
+        .traversal()
+        .v(to.node_run_id())
+        .first()
+        .filter(|to_node| {
+            the_ports_a_type_choice_of_the_node_types(graph, to_node)
+                .inputs
+                .contains(&to.port_name())
+        })
+        .map(|to_node| to_node.id.clone())
+        .into_iter()
+        .collect();
+    let mut outputs_to_follow = vec![(from.node_run_id().clone(), from.port_name().to_owned())];
+    let mut outputs_followed: HashSet<(NodeRunId, String)> = HashSet::new();
+    while let Some((node_run_id, output_name)) = outputs_to_follow.pop() {
+        if !outputs_followed.insert((node_run_id.clone(), output_name.clone())) {
+            continue;
+        }
+        let Some(node) = graph.traversal().v(&node_run_id).first() else {
+            continue;
+        };
+        let typed = the_ports_a_type_choice_of_the_node_types(graph, node);
+        if typed
+            .outputs
+            .iter()
+            .any(|output| output.name == output_name)
+        {
+            if !choosing.contains(&node.id) {
+                choosing.push(node.id.clone());
+            }
+            continue;
+        }
+        let Some(followed_input) = node
+            .output_port(&output_name)
+            .and_then(the_input_an_output_takes_the_type_of)
+        else {
+            continue;
+        };
+        for link_in in graph.traversal().v(&node.id).in_e().iter().filter(|link| {
+            link.to_port().port_name() == followed_input && !link.has::<PendingDeletionComponent>()
+        }) {
+            outputs_to_follow.push((
+                link_in.source().node_run_id().clone(),
+                link_in.source().port_name().to_owned(),
+            ));
+        }
+    }
+    choosing
 }
 
 /// How the two ends of a link from `from` to `to` differ in `graph` now, naming the type each

@@ -30,7 +30,10 @@ mod wired_links_past_an_input;
 use bundle_frames_into_an_untyped_input::refuse_bundle_frames_into_an_untyped_input;
 pub(crate) use bundle_frames_into_an_untyped_input::the_bundle_frame_type_an_output_may_carry;
 use links_a_type_choice_reaches::a_saved_link_differs_by_a_type_choice;
-pub(crate) use links_a_type_choice_reaches::a_type_choice_of_the_node_types_a_port;
+pub(crate) use links_a_type_choice_reaches::the_nodes_whose_type_choices_reach_the_link;
+pub(crate) use links_a_type_choice_reaches::{
+    LinksATypeChoiceJudgedAgain, a_type_choice_of_the_node_types_a_port,
+};
 use named_type_at_an_untyped_end::refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other;
 use wired_links_past_an_input::the_first_wired_link_past_an_input_refused;
 
@@ -373,7 +376,12 @@ pub(crate) fn refuse_a_link_its_pin_types_refuse(
     a_link_connected: ALinkConnected,
 ) -> Result<Option<PinLinkVerdict>> {
     let judged = refuse_a_link_its_pin_types_refuse_as_it_is(graph, from, to, a_link_connected);
-    if judged.is_err()
+    let refused_by_its_types_alone = match &judged {
+        Err(Error::PinLinkRefused(_)) => true,
+        Err(_) => refuse_a_member_its_port_does_not_hold(graph, from, to).is_err(),
+        Ok(_) => false,
+    };
+    if refused_by_its_types_alone
         && a_link_connected == ALinkConnected::OfASavedGraph
         && a_saved_link_differs_by_a_type_choice(graph, from, to)
     {

@@ -231,19 +231,14 @@ fn set_the_format_and_judge(
         .expect("the node is held")
         .input_values
         .insert("format".to_owned(), json!(format));
-    let judged_again = graph.judge_again_each_link_the_type_choices_of_the_node_reach(convert_node);
+    let judged_again = graph.judge_again_each_link_the_type_choices_of_the_nodes_reach(
+        std::slice::from_ref(convert_node),
+    );
+    graph.mark_each_link_judged_again(&judged_again);
     judged_again
         .differing
-        .iter()
-        .map(|link_id| {
-            let link = graph
-                .traversal()
-                .e(link_id)
-                .first()
-                .expect("the link is held");
-            let differing = link
-                .get::<LinkPinTypesDifferComponent>()
-                .expect("a link judged differing is marked");
+        .into_iter()
+        .map(|(_, differing)| {
             format!(
                 "{} / {}: {}",
                 differing.output_pin_type, differing.input_pin_type, differing.why

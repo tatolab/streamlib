@@ -805,22 +805,12 @@ fn apply_a_link(
             if a_link_connected == ALinkConnected::OfASavedGraph {
                 // A saved link whose ends a type choice left differing is held unwired by the
                 // compile, as one a set of the choosing input leaves differing.
-                for node_run_id in [from.node_run_id(), to.node_run_id()] {
-                    let chooses_a_type =
-                        graph
-                            .traversal()
-                            .v(node_run_id)
-                            .first()
-                            .is_some_and(|node| {
-                                crate::core::graph::a_type_choice_of_the_node_types_a_port(
-                                    graph, node,
-                                )
-                            });
-                    if chooses_a_type {
-                        tx.log(PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(
-                            node_run_id.clone(),
-                        ));
-                    }
+                for node_run_id in crate::core::graph::the_nodes_whose_type_choices_reach_the_link(
+                    graph, &from, &to,
+                ) {
+                    tx.log(PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(
+                        node_run_id,
+                    ));
                 }
             }
             tracing::debug!(
