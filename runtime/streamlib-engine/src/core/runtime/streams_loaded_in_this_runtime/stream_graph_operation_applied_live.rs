@@ -4,9 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use streamlib_project_repository::{
-    STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
-    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphOperation,
-    is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
+    STREAM_FRAGMENT_NODE_TYPE, StreamDocumentsAnEditStaged, StreamGraphDocument,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    StreamGraphOperation, is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
 };
 
 use uuid::Uuid;
@@ -271,6 +271,7 @@ impl LoadedStreamInThisRuntime {
             graph_as_drawn,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
             KeptNodesLeftToRebuild::HandedTheirValuesLive,
+            &StreamDocumentsAnEditStaged::default(),
         )
         .await
     }
@@ -313,6 +314,7 @@ impl LoadedStreamInThisRuntime {
                 graph_document.to_value(),
                 LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
                 KeptNodesLeftToRebuild::RebuiltByTheCaller,
+                &StreamDocumentsAnEditStaged::default(),
             )
             .await
         {
@@ -321,6 +323,7 @@ impl LoadedStreamInThisRuntime {
                     graph_as_drawn,
                     LinksAReconcileMakes::EachAsASavedGraphsLink,
                     KeptNodesLeftToRebuild::RebuiltByTheCaller,
+                    &StreamDocumentsAnEditStaged::default(),
                 )
                 .await
             {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
-use streamlib_project_repository::StreamGraphOperation;
+use streamlib_project_repository::{StreamDocumentsAnEditStaged, StreamGraphOperation};
 
 use tokio::sync::OwnedMutexGuard;
 
@@ -21,6 +21,9 @@ use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
+use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
+    KeptNodesLeftToRebuild, LinksAReconcileMakes,
+};
 use crate::core::runtime::operations::{
     GraphEditBatch, GraphEditBatchRefused, HowFarARefusedBatchWasTakenBack,
 };
@@ -591,11 +594,44 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
         &self,
         graph_operation: StreamGraphOperation,
     ) -> BoxFuture<'_, Result<StreamGraphOperation>> {
-        let edit = THE_GRAPH_EDITS_THIS_TASK_HOLDS.scope(
-            Arc::clone(&self.held),
+        self.within_the_batch(
             self.stream
                 .apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
-        );
+        )
+    }
+
+    fn reconcile_the_live_graph_to_the_document_an_edit_staged<'batch>(
+        &'batch self,
+        graph_document: serde_json::Value,
+        stream_documents_an_edit_staged: &'batch StreamDocumentsAnEditStaged,
+    ) -> BoxFuture<'batch, Result<()>> {
+        self.within_the_batch(async move {
+            self.stream
+                .reconcile_the_live_graph_to_the_graph_document(
+                    graph_document,
+                    LinksAReconcileMakes::EachAsASavedGraphsLink,
+                    KeptNodesLeftToRebuild::HandedTheirValuesLive,
+                    stream_documents_an_edit_staged,
+                )
+                .await
+        })
+    }
+
+    fn close(mut self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused> {
+        self.open = false;
+        self.stream
+            .close_the_graph_edits_held_for_one_commit_from_synchronous_code(&self.held)
+    }
+}
+
+impl GraphEditBatchOfALoadedStream {
+    /// Run `edit` as one of this batch's graph edits, in this stream's log route; refused when a
+    /// forced stop took the batch's edits back.
+    fn within_the_batch<'batch, Answer: 'batch>(
+        &'batch self,
+        edit: impl std::future::Future<Output = Result<Answer>> + Send + 'batch,
+    ) -> BoxFuture<'batch, Result<Answer>> {
+        let edit = THE_GRAPH_EDITS_THIS_TASK_HOLDS.scope(Arc::clone(&self.held), edit);
         self.stream.in_this_streams_log_route(async move {
             // Looked at as the edit runs, not as it is asked for: a stop that took the edits
             // back meanwhile leaves none to join.
@@ -611,12 +647,6 @@ impl GraphEditBatch for GraphEditBatchOfALoadedStream {
             }
             edit.await
         })
-    }
-
-    fn close(mut self: Box<Self>) -> std::result::Result<(), GraphEditBatchRefused> {
-        self.open = false;
-        self.stream
-            .close_the_graph_edits_held_for_one_commit_from_synchronous_code(&self.held)
     }
 }
 

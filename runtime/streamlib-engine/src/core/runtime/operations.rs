@@ -122,6 +122,17 @@ pub trait GraphEditBatch: Send {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
+    /// Bring the stream's live graph to `graph_document`, its graph document as an edit has
+    /// staged it, inside the batch, as a load of that document would make it: each stream
+    /// fragment placing a stream `stream_documents_an_edit_staged` holds places it as staged, and
+    /// any other as its document is on disk. Refused, the batch left to be taken back, as the
+    /// reconcile refuses.
+    fn reconcile_the_live_graph_to_the_document_an_edit_staged<'batch>(
+        &'batch self,
+        graph_document: serde_json::Value,
+        stream_documents_an_edit_staged: &'batch streamlib_project_repository::StreamDocumentsAnEditStaged,
+    ) -> BoxFuture<'batch, Result<()>>;
+
     /// Close the batch: refused, and taken back, when the graph it leaves holds a reader that
     /// runs reactively fed only by function node islands, or when its one commit is refused;
     /// otherwise compiled in one commit, and each event of what stands announced. A refusal

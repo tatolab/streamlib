@@ -94,7 +94,8 @@ fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTree
 /// `graph_document`, a stream of the project at `project_directory`, with each stream fragment
 /// it holds, `{"stream": {"asset", "from"?}}`, given the graph of the stream it names as its
 /// `fragment`: read from this project, or from the import `from` names, as its document is on
-/// disk now, and resolved in turn. Each node and group the fragment places takes the UUID
+/// disk now, or as an edit staged it when `stream_documents_an_edit_staged` holds it, and
+/// resolved in turn. Each node and group the fragment places takes the UUID
 /// UUIDv5(fragment node's UUID, its own UUID), each asset reference into an import names
 /// that import with `from`, and each node type an import's own node code defines is led by the
 /// import's folder, `imports/<folder>/<module>:<qualname>`, so it is imported from there. Refused, naming each stream, when a stream holds itself, directly
@@ -107,10 +108,12 @@ fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTree
 pub fn graph_document_as_its_project_reads_it(
     project_directory: &Path,
     graph_document: &Value,
+    stream_documents_an_edit_staged: &StreamDocumentsAnEditStaged,
 ) -> Result<Value, String> {
     let mut read = graph_document_with_each_stream_fragment_reference_resolved(
         project_directory,
         graph_document,
+        stream_documents_an_edit_staged,
     )?;
     if let Some(node_values) = read.get_mut("nodes").and_then(Value::as_array_mut) {
         each_view_placed_by_its_folder_placed_by_its_type(project_directory, node_values);
@@ -175,6 +178,7 @@ fn each_part_before_the_colon_of_a_node_type_at_every_level(
 fn graph_document_with_each_stream_fragment_reference_resolved(
     project_directory: &Path,
     graph_document: &Value,
+    staged: &StreamDocumentsAnEditStaged,
 ) -> Result<Value, String> {
     if !graph_document_holds_a_stream_fragment(graph_document) {
         return Ok(graph_document.clone());
@@ -200,6 +204,7 @@ fn graph_document_with_each_stream_fragment_reference_resolved(
         project,
         root_project: project,
         root_project_directory: project_directory.to_path_buf(),
+        staged,
     };
     if let Value::Object(level) = &mut resolved {
         resolve_each_stream_fragment_of_the_level(&context, level, &mut streams_being_resolved)?;
@@ -222,6 +227,7 @@ pub fn the_fragment_a_stream_fragment_places(
         project,
         root_project: project,
         root_project_directory: project_directory.to_path_buf(),
+        staged: &StreamDocumentsAnEditStaged::default(),
     };
     the_fragment_held_stream_places(&context, fragment_node, held_stream, &mut Vec::new())
 }
@@ -283,11 +289,113 @@ pub fn graph_document_holds_a_stream_fragment(level: &Value) -> bool {
         })
 }
 
-struct ProjectHoldingTheReferences {
+/// The graph document of each stream an edit has staged and not yet written, by the project
+/// holding it and its stream asset, beside the stream's name: a stream fragment placing one of
+/// them places it as staged, not as its document is on disk.
+#[derive(Clone, Debug, Default)]
+pub struct StreamDocumentsAnEditStaged {
+    each_by_project_and_stream_asset: BTreeMap<(Uuid, Uuid), StreamDocumentAnEditStaged>,
+}
+
+#[derive(Clone, Debug)]
+struct StreamDocumentAnEditStaged {
+    document: Value,
+    stream_name: String,
+}
+
+impl StreamDocumentsAnEditStaged {
+    /// Hold `document`, the graph document of the stream `stream_name`, the stream asset
+    /// `stream_asset` of the project `project`, as the edit staged it.
+    pub fn stage(
+        &mut self,
+        project: Uuid,
+        stream_asset: Uuid,
+        stream_name: String,
+        document: Value,
+    ) {
+        self.each_by_project_and_stream_asset.insert(
+            (project, stream_asset),
+            StreamDocumentAnEditStaged {
+                document: stream_document_in_the_current_shape(document),
+                stream_name,
+            },
+        );
+    }
+
+    /// Whether the edit staged the stream asset `stream_asset` of the project `project`.
+    pub fn holds(&self, project: Uuid, stream_asset: Uuid) -> bool {
+        self.each_by_project_and_stream_asset
+            .contains_key(&(project, stream_asset))
+    }
+
+    /// The graph document of the stream asset `stream_asset` of the project `project` as the edit
+    /// staged it, when it did.
+    pub fn the_document_staged(&self, project: Uuid, stream_asset: Uuid) -> Option<&Value> {
+        self.each_by_project_and_stream_asset
+            .get(&(project, stream_asset))
+            .map(|staged| &staged.document)
+    }
+
+    /// The graph document and name of the stream asset `stream_asset` of the project `project`,
+    /// when the edit staged it.
+    fn the_stream_staged(&self, project: Uuid, stream_asset: Uuid) -> Option<(Value, String)> {
+        self.each_by_project_and_stream_asset
+            .get(&(project, stream_asset))
+            .map(|staged| (staged.document.clone(), staged.stream_name.clone()))
+    }
+}
+
+/// The project and stream asset of each stream `live_graph`, the live graph of a loaded stream
+/// of the project `project`, places at any depth, each fragment it places holding the streams
+/// that one places: a stream fragment naming `from` places a stream of that import.
+pub fn the_streams_a_live_graph_places(
+    live_graph: &Value,
+    project: Uuid,
+) -> BTreeSet<(Uuid, Uuid)> {
+    let mut placed = BTreeSet::new();
+    each_stream_the_live_level_places(live_graph, project, &mut placed);
+    placed
+}
+
+fn each_stream_the_live_level_places(
+    level: &Value,
+    project: Uuid,
+    placed: &mut BTreeSet<(Uuid, Uuid)>,
+) {
+    for node in level
+        .get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if node.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE) {
+            let held_stream = &node[NODE_INPUT_VALUES_KEY][STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY];
+            let held_project = match held_stream.get("from").and_then(Value::as_str) {
+                Some(from) => Uuid::parse_str(from).ok(),
+                None => Some(project),
+            };
+            if let (Some(held_project), Some(stream_asset)) = (
+                held_project,
+                held_stream
+                    .get("asset")
+                    .and_then(Value::as_str)
+                    .and_then(|asset| Uuid::parse_str(asset).ok()),
+            ) {
+                placed.insert((held_project, stream_asset));
+            }
+        }
+        if let Some(fragment) = node.get("fragment") {
+            each_stream_the_live_level_places(fragment, project, placed);
+        }
+    }
+}
+
+struct ProjectHoldingTheReferences<'staged> {
     project_directory: PathBuf,
     project: Uuid,
     root_project: Uuid,
     root_project_directory: PathBuf,
+    staged: &'staged StreamDocumentsAnEditStaged,
 }
 
 struct HeldStreamBeingResolved {
@@ -297,7 +405,7 @@ struct HeldStreamBeingResolved {
 }
 
 fn resolve_each_stream_fragment_of_the_level(
-    context: &ProjectHoldingTheReferences,
+    context: &ProjectHoldingTheReferences<'_>,
     level: &mut Map<String, Value>,
     streams_being_resolved: &mut Vec<HeldStreamBeingResolved>,
 ) -> Result<(), String> {
@@ -371,7 +479,7 @@ fn each_link_onto_a_placed_stream_named_by_the_port_its_fragment_declares(
 }
 
 fn the_fragment_held_stream_places(
-    context: &ProjectHoldingTheReferences,
+    context: &ProjectHoldingTheReferences<'_>,
     fragment_node: Uuid,
     held_stream: &Value,
     streams_being_resolved: &mut Vec<HeldStreamBeingResolved>,
@@ -402,6 +510,7 @@ fn the_fragment_held_stream_places(
             project: context.project,
             root_project: context.root_project,
             root_project_directory: context.root_project_directory.clone(),
+            staged: context.staged,
         },
         Some(from) => ProjectHoldingTheReferences {
             project_directory: the_folder_of_an_import(&context.project_directory, from)
@@ -409,13 +518,20 @@ fn the_fragment_held_stream_places(
             project: from,
             root_project: context.root_project,
             root_project_directory: context.root_project_directory.clone(),
+            staged: context.staged,
         },
     };
-    let (held_document, stream_name) = read_the_held_stream(
-        &held_context.project_directory,
-        held_context.project,
-        stream_asset,
-    )?;
+    let (held_document, stream_name) = match context
+        .staged
+        .the_stream_staged(held_context.project, stream_asset)
+    {
+        Some(staged) => staged,
+        None => read_the_held_stream(
+            &held_context.project_directory,
+            held_context.project,
+            stream_asset,
+        )?,
+    };
     let named_as = format!("`{stream_name}` ({stream_asset})");
     if streams_being_resolved
         .iter()
@@ -465,7 +581,7 @@ fn the_fragment_held_stream_places(
     Ok(fragment)
 }
 
-impl ProjectHoldingTheReferences {
+impl ProjectHoldingTheReferences<'_> {
     /// The folder of the import holding the references, relative to the root project, as a
     /// node type names it; `None` for the root project itself.
     fn import_folder_relative_to_the_root_project(&self) -> Option<String> {

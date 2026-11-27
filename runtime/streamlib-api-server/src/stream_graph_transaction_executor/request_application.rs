@@ -4,6 +4,7 @@
 use super::live_application_and_reversal::{
     close_the_graph_edits_of_each_stream, take_back_the_graph_edits_of_each_stream,
 };
+use super::placements_reconciled_in_the_batch::PlacementsReconciledInTheirBatches;
 use super::*;
 use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
@@ -72,11 +73,38 @@ impl StreamGraphTransactionExecutor<'_> {
         };
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut former_port_names_moved: Vec<ProjectOperation> = Vec::new();
+        // A committed transaction also holds a batch open on each loaded stream an edit of the
+        // project's streams reaches through a placement, so each is brought to what it places
+        // within the transaction, and refuses it whole.
+        let mut placements_not_named: BTreeMap<String, LoadedStreamHoldingAStreamFragment> =
+            match &project_repository_held {
+                Some(project_repository) => self
+                    .the_loaded_streams_holding_a_stream_fragment_an_edit_reaches(
+                        project_repository.project_directory(),
+                    )
+                    .into_iter()
+                    .filter(|placement| !stream_ids_in_order.contains(&placement.stream_id))
+                    .map(|placement| (placement.stream_id.clone(), placement))
+                    .collect(),
+                None => BTreeMap::new(),
+            };
+        let mut placements: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         // Every batch opens before any edit is applied, in the order of the stream ids, so two
         // transactions editing the same streams never each wait on a batch the other holds.
         let mut stream_ids_a_batch_opens_on = stream_ids_in_order.clone();
+        stream_ids_a_batch_opens_on.extend(placements_not_named.keys().cloned());
         stream_ids_a_batch_opens_on.sort();
         for stream_id in &stream_ids_a_batch_opens_on {
+            if let Some(placement) = placements_not_named.remove(stream_id) {
+                placements.insert(
+                    stream_id.clone(),
+                    self.a_placement_with_its_batch_open(
+                        placement,
+                        project_repository_held.as_deref(),
+                    )?,
+                );
+                continue;
+            }
             let stream_operations = match &streams_to_edit {
                 Some(streams_to_edit) => streams_to_edit.runtime_operations_of(stream_id),
                 None => self
@@ -133,6 +161,9 @@ impl StreamGraphTransactionExecutor<'_> {
             )?,
             None => BTreeMap::new(),
         };
+        // Joined once the named streams' placed streams are staged, so a placement of a stream
+        // no stream the transaction names places is never staged as one a request reaches.
+        streams.extend(placements);
 
         let mut staged = WhatTheTransactionHasStaged {
             streams,
@@ -174,7 +205,11 @@ impl StreamGraphTransactionExecutor<'_> {
                 Ok(applied) => applied,
                 Err(refusal) => {
                     take_back_the_graph_edits_of_each_stream(&mut staged.streams);
-                    self.reverse_what_was_applied_live(&staged.streams, applied_live);
+                    self.put_back_what_the_refused_transaction_ran(
+                        &staged.streams,
+                        applied_live,
+                        PlacementsReconciledInTheirBatches::default(),
+                    );
                     return Err(GraphTransactionRefusal::of_the_operation(
                         request_index,
                         what_the_request_names,
@@ -202,15 +237,45 @@ impl StreamGraphTransactionExecutor<'_> {
             }
         }
 
+        let mut placements_reconciled = PlacementsReconciledInTheirBatches::default();
+        if let Some(project_repository) = staged.project_repository
+            && let Err(refusal) = self.reconcile_each_placement_in_its_batch(
+                &staged.streams,
+                &stream_ids_in_order,
+                &staged.staged_graph_of_each_stream_not_running,
+                project_repository,
+                &mut placements_reconciled,
+            )
+        {
+            take_back_the_graph_edits_of_each_stream(&mut staged.streams);
+            self.put_back_what_the_refused_transaction_ran(
+                &staged.streams,
+                applied_live,
+                placements_reconciled,
+            );
+            return Err(refusal);
+        }
+        // A placement brought to its document in its batch has taken each edit of it the
+        // documents would have handed it once they hold it.
+        made_live_once_the_documents_hold_them
+            .retain(|(stream_id, _)| !placements_reconciled.holds(stream_id));
         if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut staged.streams) {
-            self.reverse_what_was_applied_live(&staged.streams, applied_live);
+            self.put_back_what_the_refused_transaction_ran(
+                &staged.streams,
+                applied_live,
+                placements_reconciled,
+            );
             return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
         }
         let mut nodes_rebuilt: Vec<GraphTransactionRebuiltNode> = Vec::new();
         if let Err(refusal) = self
             .rebuild_each_node_a_setting_read_at_setup_changed(&staged.streams, &mut nodes_rebuilt)
         {
-            self.reverse_what_was_applied_live(&staged.streams, applied_live);
+            self.put_back_what_the_refused_transaction_ran(
+                &staged.streams,
+                applied_live,
+                placements_reconciled,
+            );
             return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
         }
         let WhatTheTransactionHasStaged {
@@ -252,7 +317,11 @@ impl StreamGraphTransactionExecutor<'_> {
                         )
                     }
                     Err(refusal) => {
-                        self.reverse_what_was_applied_live(&streams, applied_live);
+                        self.put_back_what_the_refused_transaction_ran(
+                            &streams,
+                            applied_live,
+                            placements_reconciled,
+                        );
                         return Err(refusal.into());
                     }
                 }
@@ -282,6 +351,26 @@ impl StreamGraphTransactionExecutor<'_> {
                 saved_values_retyped,
             },
         ))
+    }
+
+    /// `placement`, a loaded stream an edit of the project's streams can reach through a
+    /// placement, with a batch of graph edits opened on it, its graph staged as it stands.
+    fn a_placement_with_its_batch_open(
+        &self,
+        placement: LoadedStreamHoldingAStreamFragment,
+        project_repository: Option<&ProjectRepository>,
+    ) -> Result<StreamATransactionEdits, GraphTransactionRefusal> {
+        let staged_graph = self.the_graph_document_of_a_loaded_stream_as_it_stands(
+            project_repository,
+            &placement.stream_location,
+            placement.stream_operations.as_ref(),
+        )?;
+        StreamATransactionEdits::new(
+            placement.stream_operations,
+            placement.stream_location,
+            staged_graph,
+        )
+        .map_err(GraphTransactionRefusal::of_the_whole_transaction)
     }
 
     /// Whether the level `request`, an action on the loaded stream `stream_id`, edits holds, as

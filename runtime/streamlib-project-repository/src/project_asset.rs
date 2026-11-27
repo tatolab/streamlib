@@ -143,6 +143,15 @@ impl ProjectRelativeAssetPath {
         self.0.rsplit('/').next().unwrap_or(&self.0)
     }
 
+    /// The name of the stream a graph document at this path holds: its file name without
+    /// `.graph.json`.
+    pub fn stream_name(&self) -> &str {
+        let file_name = self.file_name();
+        file_name
+            .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
+            .unwrap_or(file_name)
+    }
+
     /// The directory part, empty at the project's root.
     pub fn directory(&self) -> &str {
         self.0
