@@ -114,7 +114,10 @@ def test_a_computed_kernel_is_rebuilt_for_each_width_set_while_playing_and_each_
     ]
     assert listed["state"] == "running", listed
     assert listed["condition"]["health"] == "healthy", listed
-    dispatch_seconds = tatolabd.marker_payloads("DISPATCH_SECONDS")[-1]
+    # One summary for the saved width and one for each width set after it.
+    dispatch_seconds = tatolabd.await_marker(
+        "DISPATCH_SECONDS", occurrence=len(WIDTHS_SET_WHILE_PLAYING) + 1
+    )
     print(
         f"frame dispatch seconds after the kernel for {last_width}:", dispatch_seconds
     )

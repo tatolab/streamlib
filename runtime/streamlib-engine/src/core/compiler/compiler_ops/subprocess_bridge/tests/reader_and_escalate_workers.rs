@@ -24,6 +24,10 @@ struct BridgeThreadsDrivenFromTheHelperEnd {
 impl BridgeThreadsDrivenFromTheHelperEnd {
     fn dispatching_through(escalate_request_dispatch: EscalateRequestDispatch) -> Self {
         let (parent_end, helper_end) = UnixStream::pair().expect("socketpair");
+        // A missing answer fails the read rather than hanging the test.
+        helper_end
+            .set_read_timeout(Some(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME))
+            .expect("a read timeout on the helper end");
         let parent_read_half = parent_end.try_clone().expect("clone the parent end");
         let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
         let parent_side = Arc::new(
@@ -248,11 +252,6 @@ fn a_request_past_the_helpers_queue_bound_is_refused_rather_than_stalling_the_re
     ));
     bridge.send_from_the_helper(&serde_json::json!({"rpc": "ready"}));
 
-    bridge
-        .helper_end_reader
-        .get_ref()
-        .set_read_timeout(Some(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME))
-        .expect("a read timeout on the helper end");
     let refusal = read_frame(&mut bridge.helper_end_reader)
         .expect("the request past the bound is answered while the held op runs");
     assert_eq!(refusal["request_id"], "r-past-the-bound");
@@ -354,11 +353,6 @@ fn a_kernel_build_never_delays_a_dispatch_sent_behind_it() {
         "r-frame",
     ));
 
-    bridge
-        .helper_end_reader
-        .get_ref()
-        .set_read_timeout(Some(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME))
-        .expect("a read timeout on the helper end");
     assert_eq!(
         bridge.request_id_of_the_next_answer_the_helper_reads(),
         "r-frame",
