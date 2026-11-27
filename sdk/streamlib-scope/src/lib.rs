@@ -308,6 +308,7 @@ impl ScopeSlots {
                 declared: *declared,
                 has_a_value: slot.value.is_some(),
                 last_build: last_build.clone(),
+                building_again: self.is_left_to_build(index),
             }),
         }
     }
@@ -684,6 +685,7 @@ impl Scope {
             return;
         }
         let superseded = self.shared.hand_over(changed);
+        self.shared.report_the_builds(&slots);
         drop(slots);
         if let Some(worker) = &self.worker {
             worker.thread().unpark();
@@ -814,14 +816,14 @@ impl ScopeAcrossThreads {
         released
     }
 
-    /// Report how the builds of the computed value in slot `index` stand, as `slots` hold them.
-    fn report_the_builds_of(&self, index: usize, slots: &ScopeSlots) {
-        let Some(builds) = slots.builds_of(index) else {
-            return;
-        };
+    /// Report how the builds of each computed value stand, as `slots` hold them: a write or a
+    /// landed build can leave any of them to build again.
+    fn report_the_builds(&self, slots: &ScopeSlots) {
         let mut reported = lock(&self.builds_reported);
-        if let Some((_, held)) = reported.of_each.iter_mut().find(|(slot, _)| *slot == index) {
-            *held = builds;
+        for (index, held) in &mut reported.of_each {
+            if let Some(builds) = slots.builds_of(*index) {
+                *held = builds;
+            }
         }
     }
 
@@ -882,7 +884,7 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         let superseded = slots
             .record_build(next.index, read_at, &built)
             .map(|value| shared.hand_over(std::iter::once((next.index, value))));
-        shared.report_the_builds_of(next.index, &slots);
+        shared.report_the_builds(&slots);
         drop(slots);
         // An equal, superseded or thrown-away value is released only after the lock, in case its
         // Drop is slow.

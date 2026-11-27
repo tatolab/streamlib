@@ -84,6 +84,9 @@ pub struct BuildsOfAComputedValue {
     pub has_a_value: bool,
     /// How its latest build went.
     pub last_build: LastBuild,
+    /// Whether it is left to build again: it has no first value, or an input it read changed
+    /// since its latest build.
+    pub building_again: bool,
 }
 
 /// A reader of how the builds of each computed value of a scope stand. It holds the report

@@ -78,7 +78,7 @@ fn a_failed_first_build_shows_the_node_raising_with_its_error_and_the_recovery()
     assert!(
         failed
             .words
-            .ends_with("failed: a gain below zero, -2; the node runs no frame until it has one"),
+            .ends_with("failed: a gain below zero, -2; the node runs no frame until every computed value has one"),
         "{failed:?}"
     );
 
@@ -170,9 +170,9 @@ fn a_pending_first_build_shows_the_node_not_ready_and_a_closed_scope_shows_nothi
         DiagnosticRecoveryOnTheWire::WaitForTheNode
     );
     assert!(
-        pending
-            .words
-            .ends_with("is building its first value; the node runs no frame until it has one"),
+        pending.words.ends_with(
+            "is building its first value; the node runs no frame until every computed value has one"
+        ),
         "{pending:?}"
     );
 
@@ -180,6 +180,81 @@ fn a_pending_first_build_shows_the_node_not_ready_and_a_closed_scope_shows_nothi
     let_go.1.notify_all();
     drop(scope);
     drop(view);
+    assert_eq!(
+        state.the_health_of_the_node(&place),
+        (NodeHealthOnTheWire::Healthy, Vec::new())
+    );
+}
+
+/// A gate builds wait on until it opens; it opens when dropped, so a failing test never leaves
+/// the worker blocked while the scope joins it.
+struct Gate(Arc<(Mutex<bool>, Condvar)>);
+
+impl Gate {
+    fn shut() -> Self {
+        Self(Arc::new((Mutex::new(false), Condvar::new())))
+    }
+
+    /// Wait until the gate `gate` holds opens.
+    fn wait_on(gate: &(Mutex<bool>, Condvar)) {
+        let (open, opened) = gate;
+        let mut open = open.lock();
+        while !*open {
+            opened.wait(&mut open);
+        }
+    }
+
+    fn open(&self) {
+        *self.0.0.lock() = true;
+        self.0.1.notify_all();
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        self.open();
+    }
+}
+
+/// Mental-revert: a report that changed only as a build lands would keep telling the user to
+/// change an input they already changed, for as long as the new build runs.
+#[test]
+fn a_failed_first_build_building_again_from_a_new_input_shows_as_building() {
+    let place = DiagnosticPlaceOnTheWire::Stream;
+    let state = ObservableNodeState::new(NodeState::Running);
+    let gate = Gate::shut();
+    let held = Arc::clone(&gate.0);
+    let mut declaring = streamlib_scope::ScopeBeingDeclared::new();
+    let gain = declaring.input(-1_i32);
+    declaring.declare(|| {
+        streamlib_scope::computed(move || {
+            let gain = *gain.get();
+            if gain < 0 {
+                return Err(format!("a gain below zero, {gain}"));
+            }
+            Gate::wait_on(&held);
+            Ok(gain)
+        })
+    });
+    let (scope, _view) = declaring.start().expect("the scope starts");
+    state.read_the_builds_of_its_computed_values_from(scope.builds());
+    assert!(scope.wait_until_settled(SETTLED_WITHIN));
+    assert_eq!(
+        the_one_diagnostic_of(&state, &place).1.kind,
+        DiagnosticKindOnTheWire::ComputedValueBuildFailed
+    );
+
+    scope.write(|writes| writes.write(gain, 4));
+
+    let (health, building) = the_one_diagnostic_of(&state, &place);
+    assert_eq!(health, NodeHealthOnTheWire::NotReady);
+    assert_eq!(
+        building.kind,
+        DiagnosticKindOnTheWire::ComputedValueNotYetBuilt,
+        "{building:?}"
+    );
+    gate.open();
+    assert!(scope.wait_until_settled(SETTLED_WITHIN));
     assert_eq!(
         state.the_health_of_the_node(&place),
         (NodeHealthOnTheWire::Healthy, Vec::new())

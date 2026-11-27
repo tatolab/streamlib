@@ -13,7 +13,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use streamlib_scope::BuildsOfAScope;
 
 use super::GraphRenders;
-use super::computed_value_build_diagnostics::the_diagnostic_of_the_builds_of;
+use super::computed_value_build_diagnostics::the_diagnostics_of_the_builds_of;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
 use crate::core::graph::NodeRunId;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
@@ -161,13 +161,20 @@ impl ObservableNodeState {
                 .unwrap_or_else(|| "it failed, and gave no reason".to_owned());
             return (NodeHealthOnTheWire::Failed, vec![diagnostic(kind, words)]);
         }
-        let builds = self.builds_of_its_computed_values.lock().clone();
-        let (builds_failed, builds_pending): (Vec<_>, Vec<_>) = builds
-            .map(|builds| builds.of_each_computed_value())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(the_diagnostic_of_the_builds_of)
-            .partition(|(health, _)| *health == NodeHealthOnTheWire::Raising);
+        // Read only while the node may report itself not ready, as its own report is: a node
+        // stopping keeps its scope until its teardown, and reports neither.
+        let builds = self
+            .builds_of_its_computed_values
+            .lock()
+            .clone()
+            .filter(|_| self.current().holds_a_not_ready_report());
+        let (builds_failed, builds_pending): (Vec<_>, Vec<_>) = the_diagnostics_of_the_builds_of(
+            &builds
+                .map(|builds| builds.of_each_computed_value())
+                .unwrap_or_default(),
+        )
+        .into_iter()
+        .partition(|(health, _)| *health == NodeHealthOnTheWire::Raising);
         let [builds_failed, builds_pending] = [builds_failed, builds_pending].map(|builds| {
             builds
                 .into_iter()

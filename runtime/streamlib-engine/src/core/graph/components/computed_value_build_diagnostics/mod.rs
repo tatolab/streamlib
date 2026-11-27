@@ -9,45 +9,46 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 use streamlib_scope::{BuildFailure, BuildsOfAComputedValue, LastBuild};
 
-/// The health a computed value whose builds leave something to report gives its node, and the
-/// diagnostic kind and words: not ready with no first value yet, raising with a latest build
-/// that failed; `None` while its latest build landed.
-pub(super) fn the_diagnostic_of_the_builds_of(
-    builds: &BuildsOfAComputedValue,
-) -> Option<(NodeHealthOnTheWire, (DiagnosticKindOnTheWire, String))> {
-    let declared = builds.declared;
-    let meanwhile = if builds.has_a_value {
+/// The health each computed value of `builds`, a node's, whose builds leave something to report
+/// gives its node, and the diagnostic kind and words: not ready while it has no first value and
+/// none of its builds failed, raising while its latest build failed and no build runs again.
+/// A value whose build waits on another's first value reports nothing, since that one reports.
+pub(super) fn the_diagnostics_of_the_builds_of(
+    builds: &[BuildsOfAComputedValue],
+) -> Vec<(NodeHealthOnTheWire, (DiagnosticKindOnTheWire, String))> {
+    let meanwhile = if builds.iter().all(|builds| builds.has_a_value) {
         "the node runs on its previous value"
     } else {
-        "the node runs no frame until it has one"
+        "the node runs no frame until every computed value has one"
     };
-    let LastBuild::Failed { why, .. } = &builds.last_build else {
-        return (!builds.has_a_value).then(|| {
-            (
-                NodeHealthOnTheWire::NotReady,
-                (
-                    DiagnosticKindOnTheWire::ComputedValueNotYetBuilt,
-                    format!(
-                        "its computed value {declared} is building its first value; {meanwhile}"
-                    ),
-                ),
-            )
-        });
-    };
-    if *why == BuildFailure::ReadAComputedValueNotYetBuilt {
-        return Some((
+    builds
+        .iter()
+        .filter_map(|builds| the_diagnostic_of_the_builds_of(builds, meanwhile))
+        .collect()
+}
+
+fn the_diagnostic_of_the_builds_of(
+    builds: &BuildsOfAComputedValue,
+    meanwhile: &str,
+) -> Option<(NodeHealthOnTheWire, (DiagnosticKindOnTheWire, String))> {
+    let declared = builds.declared;
+    let building_its_first_value = || {
+        (
             NodeHealthOnTheWire::NotReady,
             (
                 DiagnosticKindOnTheWire::ComputedValueNotYetBuilt,
-                format!(
-                    "its computed value {declared} waits on another computed value's first \
-                     value; {meanwhile}"
-                ),
+                format!("its computed value {declared} is building its first value; {meanwhile}"),
             ),
-        ));
+        )
+    };
+    let LastBuild::Failed { why, .. } = &builds.last_build else {
+        return (!builds.has_a_value).then(building_its_first_value);
+    };
+    if builds.building_again {
+        return (!builds.has_a_value).then(building_its_first_value);
     }
     let failed = match why {
-        BuildFailure::ReadAComputedValueNotYetBuilt => unreachable!("reported as not yet built"),
+        BuildFailure::ReadAComputedValueNotYetBuilt => return None,
         BuildFailure::Returned(error) => (
             DiagnosticKindOnTheWire::ComputedValueBuildFailed,
             format!("the build of its computed value {declared} failed: {error}; {meanwhile}"),
