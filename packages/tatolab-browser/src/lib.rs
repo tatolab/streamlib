@@ -339,6 +339,10 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python.get_type::<BrowserTabProtocolBroken>(),
     )?;
     module.add(
+        "BrowserPageNodeSetUpNothingToOpenItOn",
+        python.get_type::<BrowserPageNodeSetUpNothingToOpenItOn>(),
+    )?;
+    module.add(
         "BrowserPageThreadNotStarted",
         python.get_type::<BrowserPageThreadNotStarted>(),
     )?;
