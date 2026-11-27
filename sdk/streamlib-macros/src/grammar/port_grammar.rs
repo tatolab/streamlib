@@ -18,6 +18,7 @@ use super::pin_type_chosen_by_an_input::{
     PinTypeChosenBy, parse_from_setting, parse_the_input_choosing_a_pin_type,
     pin_typed_by_the_input_choosing_it,
 };
+use super::string_literal_list::{parse_string_literal_list, parse_string_literals};
 use super::value_input_grammar::{
     note_the_first_port_key, reject_a_choice_on_a_port, reject_a_value_input_key_on_an_output,
     value_input_chosen_from, value_input_type_and_default,
@@ -611,14 +612,6 @@ fn parse_pin_type(pin_type_ident: &Ident, port_name: &str) -> syn::Result<PinTyp
         })
 }
 
-/// Parse `["a", "b"]`, a list of string literals.
-fn parse_string_literal_list(content: ParseStream<'_>, key: &str) -> syn::Result<Vec<String>> {
-    Ok(parse_string_literals(content, key)?
-        .iter()
-        .map(LitStr::value)
-        .collect())
-}
-
 /// Parse `from_setting("name")`, when that is what follows, into the setting the fact is read
 /// from.
 fn parse_the_setting_a_fact_is_read_from(content: ParseStream<'_>) -> syn::Result<Option<String>> {
@@ -985,27 +978,4 @@ fn reject_delivery_profile_on_output(
         ));
     }
     Ok(())
-}
-
-/// Parse `["a", "b"]`, a list of string literals, keeping each literal and its span.
-fn parse_string_literals(content: ParseStream<'_>, key: &str) -> syn::Result<Vec<LitStr>> {
-    let list: syn::ExprArray = content.parse().map_err(|_| {
-        syn::Error::new(
-            content.span(),
-            format!("`{key}` takes a list of string literals, `[\"a\", \"b\"]`"),
-        )
-    })?;
-    list.elems
-        .iter()
-        .map(|element| match element {
-            syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(literal),
-                ..
-            }) => Ok(literal.clone()),
-            other => Err(syn::Error::new_spanned(
-                other,
-                format!("`{key}` takes a list of string literals"),
-            )),
-        })
-        .collect()
 }

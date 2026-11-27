@@ -12,6 +12,7 @@ use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized}
 
 mod pin_type_chosen_by_an_input;
 mod port_grammar;
+mod string_literal_list;
 mod value_input_grammar;
 
 pub(crate) use pin_type_chosen_by_an_input::PinTypeChosenBy;

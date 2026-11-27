@@ -6,6 +6,7 @@ use super::*;
 mod node_attribute_and_node_meta_tests;
 mod pin_type_grammar_tests;
 mod port_grammar_tests;
+mod value_input_grammar_tests;
 
 fn ident(name: &str) -> Ident {
     Ident::new(name, proc_macro2::Span::call_site())
