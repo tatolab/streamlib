@@ -39,6 +39,7 @@ use tatolab_module_sdk::{
     ModuleHostTablePayloadDescriptor,
 };
 
+use crate::browser_page_refused::BrowserPageRefused;
 use crate::page_audio_blocks::{PageAudioStreamTimeline, samples_of_little_endian_f32_bytes};
 use crate::page_audio_silence_watch::PageAudioSilenceWatch;
 use crate::page_data_messages::{
@@ -188,7 +189,7 @@ pub struct BrowserPageCounters {
 
 impl BrowserPageCounters {
     /// Count one audio input block that reached the page, and whether it held sound.
-    fn count_an_input_audio_block_delivered(&self, carries_sound: bool) {
+    pub(crate) fn count_an_input_audio_block_delivered(&self, carries_sound: bool) {
         self.page_input_audio_blocks_delivered
             .fetch_add(1, Ordering::Relaxed);
         if carries_sound {
@@ -285,20 +286,25 @@ impl BrowserHostTabOfOneNode {
     }
 
     /// Connect to the host, open the tab, and map its frame slots.
-    fn open_the_tab_in_the_browser_host(&self) -> Result<OpenBrowserHostTabConnection, String> {
+    fn open_the_tab_in_the_browser_host(
+        &self,
+    ) -> Result<OpenBrowserHostTabConnection, BrowserPageRefused> {
         let endpoint = self.lease.endpoint_socket_path();
         let socket = UnixStream::connect(endpoint).map_err(|failure| {
-            format!(
+            BrowserPageRefused::BrowserHostUnreachable(format!(
                 "the browser host at {} did not accept: {failure}",
                 endpoint.display()
-            )
+            ))
         })?;
         socket
             .set_read_timeout(Some(BROWSER_HOST_TAB_OPEN_TIMEOUT))
-            .map_err(|failure| failure.to_string())?;
-        let socket_whose_read_timeout_ends_once_open =
-            socket.try_clone().map_err(|failure| failure.to_string())?;
-        let writing_half = socket.try_clone().map_err(|failure| failure.to_string())?;
+            .map_err(BrowserPageRefused::of_the_socket)?;
+        let socket_whose_read_timeout_ends_once_open = socket
+            .try_clone()
+            .map_err(BrowserPageRefused::of_the_socket)?;
+        let writing_half = socket
+            .try_clone()
+            .map_err(BrowserPageRefused::of_the_socket)?;
         let mut reader = TabProtocolMessageReader::over(socket);
         let mut writer = TabProtocolMessageWriter::over(writing_half)
             .sending_within(SEND_TO_THE_BROWSER_HOST_BUDGET);
@@ -307,7 +313,8 @@ impl BrowserHostTabOfOneNode {
         #[cfg(target_os = "macos")]
         let painted_iosurface_receiver = paints_into_painted_textures
             .then(checked_in_painted_iosurface_receiver)
-            .transpose()?;
+            .transpose()
+            .map_err(BrowserPageRefused::NodeSetUpNothingToOpenItOn)?;
         let tab_request = BrowserHostTabRequest {
             paint_into_shared_textures: paints_into_painted_textures,
             #[cfg(target_os = "macos")]
@@ -324,14 +331,18 @@ impl BrowserHostTabOfOneNode {
                 },
                 &[],
             )
-            .map_err(|failure| format!("the tab was not asked for: {failure}"))?;
+            .map_err(|failure| {
+                BrowserPageRefused::of_the_tab_protocol(failure, "the tab was not asked for")
+            })?;
         let frame_slots = match reader.receive::<TabProtocolMessageFromBrowserHost>() {
             Ok(TabProtocolMessageFromBrowserHost::TabOpened {
                 tab_protocol_version,
                 browser_host_process_id,
             }) => {
                 let shared_memory = reader.take_attached_descriptor().map_err(|failure| {
-                    format!("the tab's frame slots did not arrive: {failure}")
+                    BrowserPageRefused::TabProtocolBroken(format!(
+                        "the tab's frame slots did not arrive: {failure}"
+                    ))
                 })?;
                 let frame_slots = BrowserHostTabFrameSlots::map_handed_over(
                     shared_memory,
@@ -339,7 +350,11 @@ impl BrowserHostTabOfOneNode {
                     self.tab_request.width,
                     self.tab_request.height,
                 )
-                .map_err(|failure| format!("the tab's frame slots were not mapped: {failure}"))?;
+                .map_err(|failure| {
+                    BrowserPageRefused::TabProtocolBroken(format!(
+                        "the tab's frame slots were not mapped: {failure}"
+                    ))
+                })?;
                 self.log(
                     ModuleHostLogLevel::Info,
                     &format!(
@@ -351,22 +366,25 @@ impl BrowserHostTabOfOneNode {
                 frame_slots
             }
             Ok(TabProtocolMessageFromBrowserHost::TabRefused { reason }) => {
-                return Err(format!("the browser host refused the page: {reason}"));
+                return Err(BrowserPageRefused::PageRefusedByTheBrowserHost(format!(
+                    "the browser host refused the page: {reason}"
+                )));
             }
             Ok(other) => {
-                return Err(format!(
+                return Err(BrowserPageRefused::TabProtocolBroken(format!(
                     "the browser host answered the open with {other:?}, not tab_opened"
-                ));
+                )));
             }
             Err(failure) => {
-                return Err(format!(
-                    "the browser host did not answer the open: {failure}"
+                return Err(BrowserPageRefused::of_the_tab_protocol(
+                    failure,
+                    "the browser host did not answer the open",
                 ));
             }
         };
         socket_whose_read_timeout_ends_once_open
             .set_read_timeout(None)
-            .map_err(|failure| failure.to_string())?;
+            .map_err(BrowserPageRefused::of_the_socket)?;
         *self.writer() = Some(writer);
         Ok(OpenBrowserHostTabConnection {
             reader,
@@ -972,7 +990,7 @@ impl BrowserHostTabOfOneNode {
                 Ok(ModuleHostSharedNativeServiceState::Running) => {
                     match self.open_the_tab_in_the_browser_host() {
                         Ok(connection) => return Some(connection),
-                        Err(refusal) => last_refusal = refusal,
+                        Err(refusal) => last_refusal = refusal.to_string(),
                     }
                     let refused_since =
                         *refused_by_a_running_browser_host_since.get_or_insert_with(Instant::now);
@@ -1064,7 +1082,7 @@ fn checked_in_painted_iosurface_receiver()
     Ok((service_name, receiver))
 }
 
-fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
+pub(crate) fn module_log_level_of(level: BrowserHostTabLogLevel) -> ModuleHostLogLevel {
     match level {
         BrowserHostTabLogLevel::Error => ModuleHostLogLevel::Error,
         BrowserHostTabLogLevel::Warn => ModuleHostLogLevel::Warn,
@@ -1083,12 +1101,19 @@ pub struct BrowserPageRendering {
 impl BrowserPageRendering {
     /// Lease the machine's browser host, open `config.url` as a tab in it, and
     /// start publishing what it paints and delivering `data` to it.
-    pub fn open(config: BrowserPageConfig, ports: BrowserPagePorts) -> Result<Self, String> {
-        refuse_a_config_cef_cannot_render(&config)?;
+    pub fn open(
+        config: BrowserPageConfig,
+        ports: BrowserPagePorts,
+    ) -> Result<Self, BrowserPageRefused> {
+        refuse_a_config_cef_cannot_render(&config).map_err(BrowserPageRefused::NotRenderable)?;
         let lease = ports
             .module_host
             .lease_shared_native_service(BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME)
-            .map_err(|refusal| format!("the browser host was not leased: {refusal}"))?;
+            .map_err(|refusal| {
+                BrowserPageRefused::BrowserHostNotLeased(format!(
+                    "the browser host was not leased: {refusal}"
+                ))
+            })?;
         let tab_request = BrowserHostTabRequest {
             tenant_stream_id: lease.tenant_stream_id().to_string(),
             url: config.url.clone(),
@@ -1106,7 +1131,9 @@ impl BrowserPageRendering {
                 .map(|page_input_port| page_input_port.track.clone())
                 .collect(),
         };
-        tab_request.refuse_what_cef_cannot_render()?;
+        tab_request
+            .refuse_what_cef_cannot_render()
+            .map_err(BrowserPageRefused::NotRenderable)?;
         let tab = Arc::new(BrowserHostTabOfOneNode {
             config,
             tab_request,
@@ -1132,7 +1159,9 @@ impl BrowserPageRendering {
             })
             .map_err(|failure| {
                 tab.end_the_connection();
-                format!("the tab's connection thread did not start: {failure}")
+                BrowserPageRefused::ThreadNotStarted(format!(
+                    "the tab's connection thread did not start: {failure}"
+                ))
             })?;
         let data_input_thread = std::thread::Builder::new()
             .name("tatolab-browser-inputs".to_string())
@@ -1157,7 +1186,9 @@ impl BrowserPageRendering {
             Ok(data_input_thread) => rendering.data_input_thread = Some(data_input_thread),
             Err(failure) => {
                 rendering.close();
-                return Err(format!("the inputs thread did not start: {failure}"));
+                return Err(BrowserPageRefused::ThreadNotStarted(format!(
+                    "the inputs thread did not start: {failure}"
+                )));
             }
         }
         Ok(rendering)
@@ -1505,103 +1536,6 @@ fn count_a_data_message_that_did_not_reach_the_page(tab: &BrowserHostTabOfOneNod
         tab.log(
             ModuleHostLogLevel::Warn,
             &format!("a data message did not reach the page: {refusal}"),
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config() -> BrowserPageConfig {
-        BrowserPageConfig {
-            url: "https://example.com".to_string(),
-            width: 1920,
-            height: 1080,
-            frame_rate: 60,
-            transparent_background: true,
-            audio_sample_rate: 48_000,
-            output_pool_rotation_depth: 4,
-        }
-    }
-
-    #[test]
-    fn a_config_cef_can_render_passes() {
-        refuse_a_config_cef_cannot_render(&config()).expect("1080p60 renders");
-    }
-
-    #[test]
-    fn what_cef_cannot_render_is_refused_by_name() {
-        for (broken, named) in [
-            (
-                BrowserPageConfig {
-                    url: " ".into(),
-                    ..config()
-                },
-                "needs a url",
-            ),
-            (
-                BrowserPageConfig {
-                    width: 0,
-                    ..config()
-                },
-                "0x1080",
-            ),
-            (
-                BrowserPageConfig {
-                    frame_rate: 120,
-                    ..config()
-                },
-                "not 120",
-            ),
-            (
-                BrowserPageConfig {
-                    audio_sample_rate: 4_000,
-                    ..config()
-                },
-                "not 4000",
-            ),
-            (
-                BrowserPageConfig {
-                    output_pool_rotation_depth: 0,
-                    ..config()
-                },
-                "at least 1",
-            ),
-        ] {
-            let refusal = refuse_a_config_cef_cannot_render(&broken).expect_err(named);
-            assert!(refusal.contains(named), "{refusal}");
-        }
-    }
-
-    #[test]
-    fn an_input_audio_block_with_sound_is_counted_as_delivered_and_as_sounding() {
-        let counters = BrowserPageCounters::default();
-        counters.count_an_input_audio_block_delivered(false);
-        counters.count_an_input_audio_block_delivered(true);
-        counters.count_an_input_audio_block_delivered(false);
-        let delivered = &counters.page_input_audio_blocks_delivered;
-        let with_sound = &counters.page_input_audio_blocks_with_sound_delivered;
-        assert_eq!(delivered.load(Ordering::Relaxed), 3);
-        assert_eq!(with_sound.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn every_host_log_level_keeps_its_loudness() {
-        assert_eq!(
-            [
-                BrowserHostTabLogLevel::Error,
-                BrowserHostTabLogLevel::Warn,
-                BrowserHostTabLogLevel::Info,
-                BrowserHostTabLogLevel::Debug,
-            ]
-            .map(module_log_level_of),
-            [
-                ModuleHostLogLevel::Error,
-                ModuleHostLogLevel::Warn,
-                ModuleHostLogLevel::Info,
-                ModuleHostLogLevel::Debug,
-            ]
         );
     }
 }

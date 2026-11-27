@@ -12,6 +12,14 @@ WHAT_THE_TABS_DID: "list[tuple[str, str, int, int, tuple[str, ...]]]" = []
 URL_THE_HOST_REFUSES = "https://refused.example/"
 
 
+class BrowserPageNotOpened(RuntimeError):
+    """Stands in for `_native.BrowserPageNotOpened`."""
+
+
+class BrowserPageRefusedByTheBrowserHost(BrowserPageNotOpened):
+    """Stands in for `_native.BrowserPageRefusedByTheBrowserHost`."""
+
+
 class PageRecordingItsOpenAndClose:
     """Stands in for `_native.BrowserPageRendering`: refuses `URL_THE_HOST_REFUSES`, as the
     browser host refuses a tab it cannot open."""
@@ -39,7 +47,7 @@ class PageRecordingItsOpenAndClose:
         output_pool_rotation_depth: int,
     ) -> None:
         if url == URL_THE_HOST_REFUSES:
-            raise RuntimeError(f"the browser host did not open {url}")
+            raise BrowserPageRefusedByTheBrowserHost(f"the browser host refused the page: {url}")
         self.opened = (url, width, height, (*video_input_ports, *audio_input_ports))
         WHAT_THE_TABS_DID.append(("opened", *self.opened))
 
