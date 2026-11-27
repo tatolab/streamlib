@@ -662,8 +662,14 @@ fn negotiate_nv12_or_yuyv(
         requested_format.fourcc = fourcc;
         requested_format.width = width;
         requested_format.height = height;
-        let Ok(negotiated) = device.set_format(&requested_format) else {
-            continue;
+        let negotiated = match device.set_format(&requested_format) {
+            Ok(negotiated) => negotiated,
+            Err(busy) if busy.kind() == std::io::ErrorKind::ResourceBusy => {
+                return Err(CameraCaptureRefusal(format!(
+                    "{device_path} is busy: another process is capturing from it ({busy})"
+                )));
+            }
+            Err(_) => continue,
         };
         if negotiated.fourcc != fourcc {
             continue;
