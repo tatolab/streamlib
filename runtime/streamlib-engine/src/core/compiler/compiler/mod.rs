@@ -242,20 +242,26 @@ impl Compiler {
             &plan.links_to_add,
             &plan.links_to_remove,
         )?;
-        // A link held unwired for its pin types is no link a restart wires again.
-        let links_changed: Vec<LinkUniqueId> = [
-            plan.links_to_add.as_slice(),
-            plan.links_to_remove.as_slice(),
-        ]
-        .concat()
-        .into_iter()
-        .chain(
-            plan.links_judged_again
-                .differing
-                .iter()
-                .map(|(link_id, _)| link_id.clone()),
-        )
-        .collect();
+        // A link this commit starts holding unwired for its pin types is no link a restart
+        // wires again; one already held so changes nothing here, so restarts nothing again.
+        let links_changed: Vec<LinkUniqueId> = {
+            let graph = graph_arc.read();
+            [
+                plan.links_to_add.as_slice(),
+                plan.links_to_remove.as_slice(),
+            ]
+            .concat()
+            .into_iter()
+            .chain(
+                plan.links_judged_again
+                    .differing
+                    .iter()
+                    .map(|(link_id, _)| link_id)
+                    .filter(|link_id| !graph.the_pin_types_of_the_link_differ(link_id))
+                    .cloned(),
+            )
+            .collect()
+        };
         let nodes_restarted = {
             let graph = graph_arc.read();
             the_running_shader_nodes_a_live_edit_restarts(

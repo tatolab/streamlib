@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The walk downstream of an input: each wired link an output following that input feeds, on
+//! The walk downstream of an input: each link an output following that input feeds, on
 //! past each input such a link feeds, judged by what arrives at the input.
 
 use std::collections::HashSet;
@@ -31,7 +31,7 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
     let mut inputs_to_pass = vec![(node, input_name.to_owned(), carried.clone())];
     while let Some((node, input_name, carried)) = inputs_to_pass.pop() {
         for following_output in node.the_outputs_following_the_input(&input_name) {
-            for link_out in the_wired_links_out_of(graph, node, &following_output.name) {
+            for link_out in the_links_drawn_out_of(graph, node, &following_output.name) {
                 let Some(downstream_node) = graph
                     .traversal()
                     .v(link_out.to_port().node_run_id())
@@ -145,7 +145,7 @@ pub(super) fn the_first_wired_link_past_an_input_refused(
 /// Each link drawn out of output `output_name` of `node` in `graph`, none being taken off: one
 /// held unwired, its ends differing since a type choice changed, among them, so a change back
 /// finds it to wire it again.
-pub(super) fn the_wired_links_out_of<'graph>(
+pub(super) fn the_links_drawn_out_of<'graph>(
     graph: &'graph Graph,
     node: &GraphNode,
     output_name: &'graph str,

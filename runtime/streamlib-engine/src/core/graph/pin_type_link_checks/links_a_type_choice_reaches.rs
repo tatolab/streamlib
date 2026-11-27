@@ -21,7 +21,7 @@ use super::super::{
     LinkState, LinkStateComponent, LinkUniqueId, NodeRunId, OutputLinkPortRef,
     PendingDeletionComponent, PortInfo,
 };
-use super::wired_links_past_an_input::the_wired_links_out_of;
+use super::wired_links_past_an_input::the_links_drawn_out_of;
 use super::{the_ends_a_link_is_judged_by, the_refusal_without_its_fix, the_typed_ends_of};
 use crate::core::descriptors::{DeclaredPinType, PinConversion};
 
@@ -170,7 +170,7 @@ fn the_links_the_type_choices_of_a_node_reach<'graph>(
         if !outputs_followed.insert((&node.id, output_name)) {
             continue;
         }
-        for link_out in the_wired_links_out_of(graph, node, output_name) {
+        for link_out in the_links_drawn_out_of(graph, node, output_name) {
             if links_reached.insert(&link_out.id) {
                 reached.push(link_out);
             }
