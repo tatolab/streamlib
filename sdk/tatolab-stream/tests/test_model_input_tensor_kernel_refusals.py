@@ -19,7 +19,6 @@ import numpy
 import pytest
 
 from tatolab.stream import (
-    GpuContextFullAccess,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
     ModelInputTensorGeometry,
@@ -36,7 +35,7 @@ class ComputeKernelStandIn:
         self.dispatches.append(dispatch)
 
 
-class GpuFullAccessStandIn:
+class KernelCreatingGpuStandIn:
     """Records the kernel the preset asks for and answers a stand-in."""
 
     def __init__(self) -> None:
@@ -100,19 +99,19 @@ def with_a_model_extent_unless_padding(parameters: "dict[str, Any]") -> "dict[st
     return {"width": 640, "height": 640, **parameters}
 
 
-def compiled(**parameters: Any) -> "tuple[ModelInputTensorKernel, GpuFullAccessStandIn]":
-    gpu = GpuFullAccessStandIn()
+def compiled(**parameters: Any) -> "tuple[ModelInputTensorKernel, KernelCreatingGpuStandIn]":
+    gpu = KernelCreatingGpuStandIn()
     kernel = ModelInputTensorKernel.compile(
-        cast(GpuContextFullAccess, gpu), **with_a_model_extent_unless_padding(parameters)
+        cast(GpuContextLimitedAccess, gpu), **with_a_model_extent_unless_padding(parameters)
     )
     return kernel, gpu
 
 
 def refusal_of_compile(**parameters: Any) -> str:
-    gpu = GpuFullAccessStandIn()
+    gpu = KernelCreatingGpuStandIn()
     with pytest.raises(ValueError) as refusal:
         ModelInputTensorKernel.compile(
-            cast(GpuContextFullAccess, gpu), **with_a_model_extent_unless_padding(parameters)
+            cast(GpuContextLimitedAccess, gpu), **with_a_model_extent_unless_padding(parameters)
         )
     assert gpu.kernel_requests == [], "a refusal must fire before the engine is asked"
     return str(refusal.value)

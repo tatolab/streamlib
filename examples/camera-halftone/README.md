@@ -70,12 +70,12 @@ names stand in for them here.
 
 ## A kernel is an object
 
-Built once in `setup()`, where the capability is Full, and dispatched per frame
-in `process()`. No handle string, fence, timeline or slot number ever reaches
+Built once in `setup()`, on the limited capability every node holds, and
+dispatched per frame in `process()`. No handle string, fence, timeline or slot number ever reaches
 Python — the object is the handle:
 
 ```python
-self.halftone_kernel = ctx.gpu_full_access.create_compute_kernel(
+self.halftone_kernel = ctx.gpu_limited_access.create_compute_kernel(
     source=HALFTONE_COMPUTE_SLANG,
     push_constant_size=HALFTONE_DIAL_SIZE,
     bindings={"camera_frame": "sampled_texture", "halftone_frame": "storage_image"},

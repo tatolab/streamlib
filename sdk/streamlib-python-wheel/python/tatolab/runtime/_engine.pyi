@@ -30,6 +30,7 @@ from tatolab.stream import _node_function as _stream_node_function
 __all__ = [
     "MODULE_HOST_TABLE_ABI_MAJOR",
     "MODULE_HOST_TABLE_ABI_MINOR",
+    "ComputeKernelReleased",
     "FunctionNodeEvaluatedAsAStandaloneNode",
     "LastBuildOfANodeScopeComputedValue",
     "NodeScopeBeingDeclared",
@@ -102,6 +103,9 @@ class FunctionNodeEvaluatedAsAStandaloneNode:
         input_values: list[float | dict[str, Any] | bytes | _stream_protocols.UnreadMessage | None],
     ) -> list[float | dict[str, Any] | bytes | _stream_protocols.UnreadMessage | None]:
         """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict`, the `bytes` of a named type, the `UnreadMessage` it hands on, or `None` for one that hands out nothing."""
+
+class ComputeKernelReleased(RuntimeError):
+    """The compute kernel was released: its `close()` ran, so it dispatches nothing."""
 
 class NodeScopeReadOutsideABuildOrAFrame(RuntimeError):
     """`.get()` reads only in a computed value's build or in the per-frame function."""

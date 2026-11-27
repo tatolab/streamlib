@@ -405,6 +405,17 @@ impl RuntimeContext {
         }
     }
 
+    /// Show how the builds of the computed values of the node's body stand in its health, read
+    /// from `builds` whenever its health is.
+    pub(crate) fn report_the_builds_of_the_computed_values_from(
+        &self,
+        builds: streamlib_scope::BuildsOfAScope,
+    ) {
+        if let Some(node_state) = &self.node_state {
+            node_state.read_the_builds_of_its_computed_values_from(builds);
+        }
+    }
+
     pub(crate) fn with_node_uuid(&self, node_uuid: uuid::Uuid) -> Self {
         Self {
             node_uuid: Some(node_uuid),

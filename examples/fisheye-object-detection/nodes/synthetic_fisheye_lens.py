@@ -133,7 +133,7 @@ class SyntheticFisheyeLens:
             STORAGE_AND_SAMPLED_TEXTURE_USAGE,
             depth=FISHEYE_FRAME_RING_DEPTH,
         )
-        self.fisheye_warp_kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.fisheye_warp_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=FISHEYE_WARP_SLANG,
             push_constant_size=LENS_COEFFICIENT_PUSH_CONSTANT_SIZE,
             bindings={

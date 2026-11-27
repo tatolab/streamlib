@@ -14,7 +14,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::panic::{AssertUnwindSafe, Location, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, TryLockError};
 
@@ -33,8 +33,13 @@ mod sync {
 
 use sync::{Mutex, MutexGuard, Thread};
 
+mod builds_of_computed_values;
 mod read_refusal;
 
+use builds_of_computed_values::BuildsReported;
+pub use builds_of_computed_values::{
+    BuildFailure, BuildsOfAComputedValue, BuildsOfAScope, ComputedValueDeclared, LastBuild,
+};
 use read_refusal::{ReadOfAComputedValueNotYetBuilt, Refusal, refuse, refuse_the_read};
 pub use read_refusal::{ReadRefused, fail_this_build_on_a_computed_value_not_yet_built};
 
@@ -205,7 +210,9 @@ fn declare_slot(scope_id: ScopeId, slots: &mut Vec<Slot>, slot: Slot) -> SlotOf 
 }
 
 /// Declare a value `build` computes from what it reads with `.get()`, into the scope being
-/// declared on this thread. Refused outside [`ScopeBeingDeclared::declare`].
+/// declared on this thread, named in its node's diagnostics by the type it holds and where it is
+/// declared. Refused outside [`ScopeBeingDeclared::declare`].
+#[track_caller]
 pub fn computed<T, E, B>(build: B) -> Computed<T>
 where
     T: PartialEq + Send + Sync + 'static,
@@ -222,6 +229,10 @@ where
             build,
             read_at: Vec::new(),
             last_build: LastBuild::NotYetBuilt,
+            declared: ComputedValueDeclared {
+                holding: std::any::type_name::<T>(),
+                at: Location::caller(),
+            },
         },
         value: None,
         changed_at: 0,
@@ -238,56 +249,6 @@ where
     })
 }
 
-/// Why the last build of a computed value failed. The previous value keeps serving.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BuildFailure {
-    /// The build returned this error.
-    Returned(String),
-    /// The build read a computed value that has no value yet; it builds again once that value
-    /// is built.
-    ReadAComputedValueNotYetBuilt,
-    /// The build panicked with this message.
-    Panicked(String),
-    /// Comparing the built value with the one it would replace panicked with this message; the
-    /// previous value keeps serving.
-    ComparisonPanicked(String),
-}
-
-impl fmt::Display for BuildFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BuildFailure::Returned(why) => f.write_str(why),
-            BuildFailure::ReadAComputedValueNotYetBuilt => {
-                f.write_str("it reads a computed value that is not built yet")
-            }
-            BuildFailure::Panicked(message) => write!(f, "it panicked: {message}"),
-            BuildFailure::ComparisonPanicked(message) => {
-                write!(
-                    f,
-                    "comparing its value with the previous one panicked: {message}"
-                )
-            }
-        }
-    }
-}
-
-/// How the last build of a computed value went, for a node's diagnostics.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LastBuild {
-    NotYetBuilt,
-    Built { builds: u64 },
-    Failed { builds: u64, why: BuildFailure },
-}
-
-impl LastBuild {
-    fn builds(&self) -> u64 {
-        match self {
-            LastBuild::NotYetBuilt => 0,
-            LastBuild::Built { builds } | LastBuild::Failed { builds, .. } => *builds,
-        }
-    }
-}
-
 /// A slot a build read, and the revision it had changed at when the build started.
 struct Read {
     slot: usize,
@@ -300,6 +261,7 @@ enum SlotRole {
         build: BuildOfAnyValue,
         read_at: Vec<Read>,
         last_build: LastBuild,
+        declared: ComputedValueDeclared,
     },
 }
 
@@ -315,6 +277,8 @@ struct ScopeSlots {
     slots: Vec<Slot>,
     /// Set by the writer as the scope closes; the worker starts no build once it sees it.
     closing: bool,
+    /// How many reports of the builds were taken, so an older one never replaces a newer one.
+    reports_taken: u64,
 }
 
 /// A build to run off the lock: the slot it builds and the slots' values and revisions as it
@@ -327,8 +291,39 @@ struct NextBuild {
 }
 
 impl ScopeSlots {
+    /// How the builds of the computed value in slot `index` stand; `None` for an input.
+    fn builds_of(&self, index: usize) -> Option<BuildsOfAComputedValue> {
+        let slot = &self.slots[index];
+        match &slot.role {
+            SlotRole::Input => None,
+            SlotRole::Computed {
+                last_build,
+                declared,
+                ..
+            } => Some(BuildsOfAComputedValue {
+                declared: *declared,
+                has_a_value: slot.value.is_some(),
+                last_build: last_build.clone(),
+                building_again: self.is_left_to_build(index),
+            }),
+        }
+    }
+
     fn values(&self) -> Vec<Option<AnyValue>> {
         self.slots.iter().map(|slot| slot.value.clone()).collect()
+    }
+
+    /// A report of how the builds of each computed value stand, to publish once the lock is let
+    /// go: a write or a landed build can leave any of them to build again.
+    fn take_a_report_of_the_builds(&mut self) -> BuildsReported {
+        self.reports_taken += 1;
+        BuildsReported {
+            taken: self.reports_taken,
+            closed: false,
+            of_each: (0..self.slots.len())
+                .filter_map(|index| self.builds_of(index))
+                .collect(),
+        }
     }
 
     fn any_changed_since(&self, read_at: &[Read]) -> bool {
@@ -484,6 +479,8 @@ struct ScopeAcrossThreads {
     scope_id: ScopeId,
     slots: Mutex<ScopeSlots>,
     hand_over: Mutex<Vec<HandOver>>,
+    /// Never held with another of the scope's locks.
+    builds_reported: Arc<Mutex<BuildsReported>>,
 }
 
 const NO_LOCK_HELD_ACROSS_A_PANIC: &str = "a value's PartialEq panicked while the scope was locked";
@@ -578,17 +575,20 @@ impl ScopeBeingDeclared {
             .slots
             .iter()
             .any(|slot| matches!(slot.role, SlotRole::Computed { .. }));
-        let slots = ScopeSlots {
+        let mut slots = ScopeSlots {
             revision: 0,
             slots: self.slots,
             closing: false,
+            reports_taken: 0,
         };
         let initial = slots.values();
         let slot_count = initial.len();
+        let builds_reported = slots.take_a_report_of_the_builds();
         let shared = Arc::new(ScopeAcrossThreads {
             scope_id: self.scope_id,
             slots: Mutex::new(slots),
             hand_over: Mutex::new((0..slot_count).map(|_| HandOver::Empty).collect()),
+            builds_reported: Arc::new(Mutex::new(builds_reported)),
         });
         let worker = if builds_anything {
             let shared = Arc::clone(&shared);
@@ -690,12 +690,22 @@ impl Scope {
             return;
         }
         let superseded = self.shared.hand_over(changed);
+        let report = slots.take_a_report_of_the_builds();
         drop(slots);
+        self.shared.publish(report);
         if let Some(worker) = &self.worker {
             worker.thread().unpark();
         }
         drop(superseded);
         drop(written);
+    }
+
+    /// A reader of how the builds of each computed value stand, for the node's diagnostics.
+    #[must_use]
+    pub fn builds(&self) -> BuildsOfAScope {
+        BuildsOfAScope {
+            reported: Arc::clone(&self.shared.builds_reported),
+        }
     }
 
     /// How the last build of `computed` went.
@@ -708,13 +718,18 @@ impl Scope {
         }
     }
 
-    /// Wait up to `timeout` until no computed value is left to build, for tests; whether it
-    /// settled.
+    /// Wait up to `timeout` until no computed value is left to build and the builds' newest
+    /// report is published, for tests; whether it settled.
     #[must_use]
     pub fn wait_until_settled(&self, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if lock_if_free(&self.shared.slots).is_some_and(|slots| slots.is_settled()) {
+            let settled_at_report = lock_if_free(&self.shared.slots)
+                .filter(|slots| slots.is_settled())
+                .map(|slots| slots.reports_taken);
+            if settled_at_report
+                .is_some_and(|taken| lock(&self.shared.builds_reported).taken >= taken)
+            {
                 return true;
             }
             if std::time::Instant::now() >= deadline {
@@ -736,6 +751,11 @@ impl Drop for Scope {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .closing = true;
+        self.shared
+            .builds_reported
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closed = true;
         if let Some(worker) = self.worker.take() {
             worker.thread().unpark();
             let _ = worker.join();
@@ -807,6 +827,15 @@ impl ScopeAcrossThreads {
         released
     }
 
+    /// Publish `report` for the node's diagnostics, unless a report taken after it already is.
+    fn publish(&self, report: BuildsReported) {
+        let mut reported = lock(&self.builds_reported);
+        if report.taken > reported.taken {
+            reported.taken = report.taken;
+            reported.of_each = report.of_each;
+        }
+    }
+
     /// Drop the values the frame view replaced, outside the lock.
     fn release_replaced(&self) {
         let mut hand_over = lock(&self.hand_over);
@@ -864,7 +893,9 @@ fn build_until_closed(shared: &ScopeAcrossThreads) {
         let superseded = slots
             .record_build(next.index, read_at, &built)
             .map(|value| shared.hand_over(std::iter::once((next.index, value))));
+        let report = slots.take_a_report_of_the_builds();
         drop(slots);
+        shared.publish(report);
         // An equal, superseded or thrown-away value is released only after the lock, in case its
         // Drop is slow.
         drop(superseded);

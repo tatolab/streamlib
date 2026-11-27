@@ -104,7 +104,7 @@ class HalftoneLensEffect:
     ]
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.halftone_lens_kernel = ctx.gpu_full_access.create_compute_kernel(
+        self.halftone_lens_kernel = ctx.gpu_limited_access.create_compute_kernel(
             source=HALFTONE_LENS_SLANG,
             push_constant_size=HALFTONE_LENS_DIALS.size,
             bindings={

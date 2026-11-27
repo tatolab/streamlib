@@ -134,7 +134,7 @@ class ShaderEffect:
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
         try:
-            self.look_kernel = ctx.gpu_full_access.create_compute_kernel(
+            self.look_kernel = ctx.gpu_limited_access.create_compute_kernel(
                 source=look_kernel_slang(self.effect_slang),
                 push_constant_size=0,
                 bindings={

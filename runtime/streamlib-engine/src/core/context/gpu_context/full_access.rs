@@ -590,8 +590,14 @@ impl GpuContextFullAccess {
         )
     }
 
+    /// Runs the host's [`GpuContext::release_compute_kernel`].
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn release_compute_kernel(&self, kernel_id: &str) -> bool {
+        self.host_inner().release_compute_kernel(kernel_id)
+    }
+
     /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
-    /// returned.
+    /// returned, while a registration still holds it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compute_kernel_by_id(
         &self,

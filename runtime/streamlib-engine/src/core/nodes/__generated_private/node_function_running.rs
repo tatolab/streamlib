@@ -6,7 +6,7 @@
 
 use streamlib_scope::{FrameView, Scope, ScopeBeingDeclared, Writes};
 
-use crate::core::context::RuntimeContextLimitedAccess;
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::{Error, Result};
 
 /// How long a frame waits when a computed value has no first value yet.
@@ -28,10 +28,12 @@ pub struct NodeFunctionRunning {
 
 impl NodeFunctionRunning {
     /// Run `body`, the node `node`'s body, once, with every computed value it declares declared
-    /// into `declaring`, then start the scope: refused with the body's own error, or when the
-    /// thread its computed values build on does not start.
+    /// into `declaring`, then start the scope, its computed values' builds shown in the health
+    /// `ctx`'s node reports: refused with the body's own error, or when the thread its computed
+    /// values build on does not start.
     pub fn run_the_body_once(
         node: &str,
+        ctx: &RuntimeContextFullAccess<'_>,
         mut declaring: ScopeBeingDeclared,
         body: impl FnOnce() -> Result<PerFrameFunction>,
     ) -> Result<Self> {
@@ -43,6 +45,8 @@ impl NodeFunctionRunning {
                     node: node.to_owned(),
                     why,
                 })?;
+        ctx.host_base()
+            .report_the_builds_of_the_computed_values_from(scope.builds());
         Ok(Self {
             per_frame,
             view,

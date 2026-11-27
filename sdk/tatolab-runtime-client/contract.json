@@ -5,7 +5,7 @@
     "version": "4",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 4,
-    "x-contract-revision": 1
+    "x-contract-revision": 2
   },
   "methods": [
     {
@@ -538,7 +538,7 @@
     {
       "name": "list_streams",
       "summary": "List every stream the runtime holds, by stream id, with its location and state.",
-      "description": "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (its code, its venv, its load or its start failed, and held stopped from its document when that reads, its graph there to read and edit, until a play or a `reload_project` retries it; implicated in the runtime's last two crashes in a row, and held at a start from its document with none of its node code read until a `reload_project` of its project tries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks. Its `condition` answers its load, playback and health apart, whatever `state` says: `load` (`not_loaded`, `loading`, `loaded` — its graph held to read and edit, failed or not — or `unloading`), `playback` (`stopped`, `starting`, `playing`, `paused` or `stopping`), `health` (`healthy`, `degraded` while a node of it fails, raises or is not ready, or its graph document holds an edit its running graph did not take — kind `edit_not_live`, taken when its playback stops — whatever its playback, or `failed` until a recovery is made), and `diagnostics`, each problem behind its health: its `kind`, its `place` (`{\"on\": \"stream\"}`, a node by `node_id` and `node_name`, or a link by `from_node`, `from_port`, `to_node` and `to_port`), the runtime's `words` and the `recovery` that applies: `retry_the_load` (a `reload_project` of its project, or a `start_playback` while its graph is loaded), `fix_the_code`, `fix_the_dependencies`, `fix_the_link`, `restart_the_playback`, `remove_the_stream` (a `remove_project` of the project directory its record names) or `wait_for_the_node`. A kind or value this client does not know reads as the set's fallback: `other` for a kind, `not_loaded`, `stopped`, `failed` and `retry_the_load` for the rest.",
+      "description": "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (its code, its venv, its load or its start failed, and held stopped from its document when that reads, its graph there to read and edit, until a play or a `reload_project` retries it; implicated in the runtime's last two crashes in a row, and held at a start from its document with none of its node code read until a `reload_project` of its project tries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks. Its `condition` answers its load, playback and health apart, whatever `state` says: `load` (`not_loaded`, `loading`, `loaded` — its graph held to read and edit, failed or not — or `unloading`), `playback` (`stopped`, `starting`, `playing`, `paused` or `stopping`), `health` (`healthy`, `degraded` while a node of it fails, raises or is not ready, or its graph document holds an edit its running graph did not take — kind `edit_not_live`, taken when its playback stops — whatever its playback, or `failed` until a recovery is made), and `diagnostics`, each problem behind its health: its `kind`, its `place` (`{\"on\": \"stream\"}`, a node by `node_id` and `node_name`, or a link by `from_node`, `from_port`, `to_node` and `to_port`), the runtime's `words` and the `recovery` that applies: `retry_the_load` (a `reload_project` of its project, or a `start_playback` while its graph is loaded), `fix_the_code`, `fix_the_dependencies`, `fix_the_link`, `restart_the_playback`, `remove_the_stream` (a `remove_project` of the project directory its record names), `wait_for_the_node` or `change_an_input_the_build_read` (set or wire a new value on an input a failed build of a node's computed value read). A kind or value this client does not know reads as the set's fallback: `other` for a kind, `not_loaded`, `stopped`, `failed` and `retry_the_load` for the rest.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -8584,6 +8584,26 @@
           },
           {
             "type": "string",
+            "const": "computed_value_not_yet_built",
+            "description": "A computed value of a node written as one function has no first value yet: its first\nbuild runs, or runs again from a new input after it failed. The node runs no frame until\nevery computed value has one."
+          },
+          {
+            "type": "string",
+            "const": "computed_value_build_failed",
+            "description": "The latest build of a computed value returned an error: the words name the value and the\nerror, and say whether the node runs no frame, the build being its first, or runs on its\nprevious value. It builds again once an input it read changes."
+          },
+          {
+            "type": "string",
+            "const": "computed_value_build_panicked",
+            "description": "The latest build of a computed value panicked: the words name the value and the panic,\nand say whether the node runs no frame or runs on its previous value."
+          },
+          {
+            "type": "string",
+            "const": "computed_value_comparison_panicked",
+            "description": "A computed value built, and comparing it with the value it would replace panicked in the\nvalue's `PartialEq`, so the node runs on its previous value, or no frame without one."
+          },
+          {
+            "type": "string",
             "const": "other",
             "description": "A problem of a kind this client does not know; the runtime never sends it. Its `words`\nsay what it is, and its `recovery` what recovers from it."
           }
@@ -8696,6 +8716,11 @@
             "type": "string",
             "const": "wait_for_the_node",
             "description": "Nothing: the node reports itself ready once it is."
+          },
+          {
+            "type": "string",
+            "const": "change_an_input_the_build_read",
+            "description": "Set or wire a new value on an input the failed build read, or fix the code the words\nname; the build runs again from the new value."
           },
           {
             "type": "string",
@@ -10992,7 +11017,7 @@
           {
             "type": "string",
             "const": "raising",
-            "description": "It runs, and its `process()` or function body keeps raising."
+            "description": "It runs, and its `process()` or function body keeps raising, or the latest build of one of\nits computed values failed."
           },
           {
             "type": "string",

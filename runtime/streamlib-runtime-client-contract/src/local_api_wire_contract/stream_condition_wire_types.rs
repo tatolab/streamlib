@@ -105,7 +105,8 @@ pub enum NodeHealthOnTheWire {
     Healthy,
     /// It runs, and says it is not ready yet.
     NotReady,
-    /// It runs, and its `process()` or function body keeps raising.
+    /// It runs, and its `process()` or function body keeps raising, or the latest build of one of
+    /// its computed values failed.
     Raising,
     /// It failed, or runs nothing.
     // `#[serde(other)]` holds only on the last variant, so a new value goes above this one.
@@ -179,6 +180,20 @@ pub enum DiagnosticKindOnTheWire {
     /// A link the running graph holds that could not be wired, so its reader reads nothing
     /// from it: the words say why, in the words of the end that refused it.
     LinkNotWired,
+    /// A computed value of a node written as one function has no first value yet: its first
+    /// build runs, or runs again from a new input after it failed. The node runs no frame until
+    /// every computed value has one.
+    ComputedValueNotYetBuilt,
+    /// The latest build of a computed value returned an error: the words name the value and the
+    /// error, and say whether the node runs no frame, the build being its first, or runs on its
+    /// previous value. It builds again once an input it read changes.
+    ComputedValueBuildFailed,
+    /// The latest build of a computed value panicked: the words name the value and the panic,
+    /// and say whether the node runs no frame or runs on its previous value.
+    ComputedValueBuildPanicked,
+    /// A computed value built, and comparing it with the value it would replace panicked in the
+    /// value's `PartialEq`, so the node runs on its previous value, or no frame without one.
+    ComputedValueComparisonPanicked,
     /// A problem of a kind this client does not know; the runtime never sends it. Its `words`
     /// say what it is, and its `recovery` what recovers from it.
     // `#[serde(other)]` holds only on the last variant, so a new kind goes above this one.
@@ -191,9 +206,11 @@ impl DiagnosticKindOnTheWire {
     pub const fn recovery(self) -> DiagnosticRecoveryOnTheWire {
         match self {
             Self::ProjectVenvNotMade => DiagnosticRecoveryOnTheWire::FixTheDependencies,
-            Self::LoadRefused | Self::NodeTypeNotDescribed | Self::NodeRaising => {
-                DiagnosticRecoveryOnTheWire::FixTheCode
-            }
+            Self::LoadRefused
+            | Self::NodeTypeNotDescribed
+            | Self::NodeRaising
+            | Self::ComputedValueBuildPanicked
+            | Self::ComputedValueComparisonPanicked => DiagnosticRecoveryOnTheWire::FixTheCode,
             Self::StartRefused | Self::NodeFailed | Self::EditNotLive | Self::LinkNotWired => {
                 DiagnosticRecoveryOnTheWire::RestartThePlayback
             }
@@ -202,7 +219,12 @@ impl DiagnosticKindOnTheWire {
                 DiagnosticRecoveryOnTheWire::RetryTheLoad
             }
             Self::RecordedByAnEarlierRuntime => DiagnosticRecoveryOnTheWire::RemoveTheStream,
-            Self::NodeNotReady => DiagnosticRecoveryOnTheWire::WaitForTheNode,
+            Self::NodeNotReady | Self::ComputedValueNotYetBuilt => {
+                DiagnosticRecoveryOnTheWire::WaitForTheNode
+            }
+            Self::ComputedValueBuildFailed => {
+                DiagnosticRecoveryOnTheWire::ChangeAnInputTheBuildRead
+            }
         }
     }
 }
@@ -228,6 +250,9 @@ pub enum DiagnosticRecoveryOnTheWire {
     RemoveTheStream,
     /// Nothing: the node reports itself ready once it is.
     WaitForTheNode,
+    /// Set or wire a new value on an input the failed build read, or fix the code the words
+    /// name; the build runs again from the new value.
+    ChangeAnInputTheBuildRead,
     /// Load the stream again with `reload_project` of its project; a stream whose graph is
     /// loaded is retried by `start_playback` too.
     // `#[serde(other)]` holds only on the last variant, so a new recovery goes above this one.

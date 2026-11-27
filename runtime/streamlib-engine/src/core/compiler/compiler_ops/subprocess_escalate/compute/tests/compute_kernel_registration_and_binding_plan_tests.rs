@@ -78,6 +78,7 @@ fn a_compute_register_op_carrying_another_stage_is_refused() {
     };
     let message = refusal_message(handle_register_compute_kernel(
         &sandbox,
+        &EscalateHandleRegistry::default(),
         "rid-slang".to_string(),
         register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "vertex"),
     ));
@@ -96,6 +97,7 @@ fn a_stage_that_is_not_a_stage_at_all_is_refused_naming_the_ones_that_are() {
     };
     let message = refusal_message(handle_register_compute_kernel(
         &sandbox,
+        &EscalateHandleRegistry::default(),
         "rid-slang".to_string(),
         register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "commpute"),
     ));
@@ -115,6 +117,7 @@ fn a_slang_source_registers_a_kernel_and_reports_its_binding_names() {
     };
     let response = handle_register_compute_kernel(
         &sandbox,
+        &EscalateHandleRegistry::default(),
         "rid-slang".to_string(),
         register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "compute"),
     );
@@ -148,6 +151,7 @@ fn registering_the_same_slang_twice_compiles_it_once() {
     for _ in 0..2 {
         let response = handle_register_compute_kernel(
             &sandbox,
+            &EscalateHandleRegistry::default(),
             "rid-slang".to_string(),
             register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "compute"),
         );
@@ -381,6 +385,7 @@ fn register_with_invalid_spv_hex_is_refused_without_escalating() {
     };
     let response = handle_register_compute_kernel(
         &sandbox,
+        &EscalateHandleRegistry::default(),
         "rid-1".to_string(),
         EscalateRequestRegisterComputeKernel {
             entry_point: "".to_string(),
@@ -498,6 +503,7 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
 
     let response = handle_register_compute_kernel(
         &sandbox,
+        &EscalateHandleRegistry::default(),
         "reg-wrong".to_string(),
         EscalateRequestRegisterComputeKernel {
             entry_point: "".to_string(),

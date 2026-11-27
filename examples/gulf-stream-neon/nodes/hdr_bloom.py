@@ -202,8 +202,8 @@ class HdrBloomPyramid:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu = ctx.gpu_full_access
-        self.down = gpu.create_compute_kernel(source=DOWNSAMPLE_SLANG, push_constant_size=DOWN_DIALS.size)
-        self.up = gpu.create_compute_kernel(source=UPSAMPLE_SLANG, push_constant_size=UP_DIALS.size)
+        self.down = ctx.gpu_limited_access.create_compute_kernel(source=DOWNSAMPLE_SLANG, push_constant_size=DOWN_DIALS.size)
+        self.up = ctx.gpu_limited_access.create_compute_kernel(source=UPSAMPLE_SLANG, push_constant_size=UP_DIALS.size)
         self.bloom_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
         self.streak_ring = NodeOutputTextureRing(HDR_LAYER_FORMAT, LAYER_USAGE)
         self.extent: tuple[int, int] | None = None

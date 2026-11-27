@@ -504,6 +504,8 @@ impl ShaderNodeNativeEvaluator {
                     member_names.join(", ")
                 ))
             })?;
+        // Its registration is never released, so the island's kernel is held
+        // for the context's life.
         let (_, compiled) = gpu.create_or_reuse_compute_kernel(
             &spirv,
             kernel.push_constant_byte_len() as u32,

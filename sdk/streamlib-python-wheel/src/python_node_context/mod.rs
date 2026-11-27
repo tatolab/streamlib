@@ -4,6 +4,8 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod computed_kernel_tests;
 mod format_vocabulary;
 mod gpu_context;
 mod gpu_surface_check_out_lease;
@@ -33,8 +35,8 @@ pub(crate) use gpu_surface_handle::PythonGpuSurfaceHandle;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use kernels::ReflectedKernelBinding;
 pub(crate) use kernels::{
-    PythonAccelerationStructureHandle, PythonComputeKernel, PythonGraphicsKernel,
-    PythonKernelDispatchBatch, PythonRayTracingKernel,
+    ComputeKernelReleased, PythonAccelerationStructureHandle, PythonComputeKernel,
+    PythonGraphicsKernel, PythonKernelDispatchBatch, PythonRayTracingKernel,
 };
 pub(crate) use link_data_access::{
     PythonLinkInputDataReader, PythonLinkOutputDataWriter, read_the_bundle_frame_at_an_input_port,
