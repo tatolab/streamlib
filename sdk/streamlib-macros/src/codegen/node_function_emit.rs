@@ -697,6 +697,12 @@ fn nothing_returned_by_a_node_pacing_itself(
             in_a_result: false,
         });
     };
+    if matches!(&**returned, Type::Tuple(unit) if unit.elems.is_empty()) {
+        return Ok(WhatTheBodyReturns {
+            a_per_frame_function: false,
+            in_a_result: false,
+        });
+    }
     let returned_span = returned.span();
     match the_ok_type_of_a_result(returned) {
         Some(Type::Tuple(unit)) if unit.elems.is_empty() => Ok(WhatTheBodyReturns {

@@ -169,6 +169,20 @@ fn a_node_pacing_itself_returns_nothing_and_has_nothing_to_start_or_stop() {
 }
 
 #[test]
+fn a_node_pacing_itself_written_returning_unit_returns_nothing() {
+    let rendered = expanded(
+        a_gain_on_its_own_clock(),
+        quote! {
+            fn a_node(gain: Input<f32>) -> () {}
+        },
+    );
+    assert!(
+        rendered.contains("||{super::a_node(handles.gain);Ok(::std::option::Option::None)}"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn a_node_pacing_itself_whose_body_can_fail_hands_its_error_on() {
     let rendered = expanded(
         a_gain_on_its_own_clock(),

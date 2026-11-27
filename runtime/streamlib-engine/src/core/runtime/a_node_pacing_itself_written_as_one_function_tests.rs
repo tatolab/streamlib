@@ -128,12 +128,16 @@ fn a_set_never_waits_on_a_build_of_a_node_pacing_itself() {
     );
 
     drop(builds_held);
-    let after = what_the_node_did_once_it_holds(|did| did.gains_closed == [1]);
+    let after = what_the_node_did_once_it_holds(|did| did.gains_closed == [7, 1]);
     assert_eq!(
         after.gains_opened,
-        [1, 9],
-        "the build that read 7 is thrown away and 9 built: {after:?}"
+        [1, 7, 9],
+        "the held build of 7 runs to its end, then 9 is built: {after:?}"
     );
-    assert_eq!(after.gains_closed, [1], "{after:?}");
+    assert_eq!(
+        after.gains_closed,
+        [7, 1],
+        "the value built from 7 is thrown away unused, and 1 is closed once 9 replaces it: {after:?}"
+    );
     assert_eq!(after.bodies_run, 1, "{after:?}");
 }

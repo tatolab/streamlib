@@ -84,6 +84,12 @@ def LevelPublishingProbe(*, level: Input[float] = Input(0.25)) -> None:
 
 
 @node(execution="manual")
+def PacesItselfAndReturnsANumberProbe(*, level: Input[float] = Input(0.25)) -> None:
+    """Paces itself, and returns a number nothing would use."""
+    return 4.0  # type: ignore[return-value]
+
+
+@node(execution="manual")
 def PacesItselfAndReturnsAFunctionProbe(*, level: Input[float] = Input(0.25)) -> None:
     """Paces itself, and returns a per-frame function nothing would call."""
     return lambda frame_ctx: None  # type: ignore[return-value]

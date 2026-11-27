@@ -9,8 +9,7 @@ pin is bound before the body runs. The body declares its computed values into th
 builds them on its worker from then on; a value set or wired after is written to the scope, and
 rebuilds only what read it. A frame runs once every computed value has its first value; a node
 that paces itself returns no per-frame function, and its computed values publish on their own.
-Stopping
-the node closes the scope, and with it every value a build made.
+Stopping the node closes the scope, and with it every value a build made.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ __all__ = [
     "NodeFunctionBodyRanAgain",
     "NodeFunctionBodyReturnedNoPerFrameFunction",
     "NodeFunctionInputNotDeclared",
-    "NodeFunctionPacingItselfReturnedAPerFrameFunction",
+    "NodeFunctionPacingItselfReturnedAValue",
     "NodeFunctionRunning",
     "NodeFunctionValueInputHasNoValue",
 ]
@@ -54,9 +53,9 @@ class NodeFunctionBodyReturnedNoPerFrameFunction(TypeError):
     """A node function's body returned something that is neither a function nor `None`."""
 
 
-class NodeFunctionPacingItselfReturnedAPerFrameFunction(TypeError):
-    """The body of a node function that paces itself (`execution="manual"`) returned a function,
-    which nothing would call: such a node runs no frame."""
+class NodeFunctionPacingItselfReturnedAValue(TypeError):
+    """The body of a node function that paces itself (`execution="manual"`) returned something
+    other than `None`, which nothing would use: such a node runs no frame."""
 
 
 class NodeFunctionValueInputHasNoValue(ValueError):
@@ -113,18 +112,18 @@ class NodeFunctionRunning:
             arguments[context_parameter] = ctx
         body = self._node_function.__wrapped__
         returned = declaring.declare(lambda: body(**arguments))
+        if returned is not None and self._paces_itself():
+            raise NodeFunctionPacingItselfReturnedAValue(
+                f"`{self._node_function.__qualname__}` paces itself (`execution=\"manual\"`) and "
+                f"its body returned {returned!r}, which nothing would use: a node that paces "
+                f"itself runs no frame, and its computed values publish on their own. To fix: "
+                f"return `None`."
+            )
         if returned is not None and not callable(returned):
             raise NodeFunctionBodyReturnedNoPerFrameFunction(
                 f"`{self._node_function.__qualname__}`'s body returned {returned!r}, and a node "
                 f"function's body returns the function the node calls each frame, or `None` "
                 f"when a computed value publishes on its own"
-            )
-        if returned is not None and self._paces_itself():
-            raise NodeFunctionPacingItselfReturnedAPerFrameFunction(
-                f"`{self._node_function.__qualname__}` paces itself (`execution=\"manual\"`) and "
-                f"its body returned {returned!r}, which would never be called: a node that paces "
-                f"itself runs no frame, and its computed values publish on their own. To fix: "
-                f"return `None`."
             )
         self._per_frame = returned
         self._declaring = None

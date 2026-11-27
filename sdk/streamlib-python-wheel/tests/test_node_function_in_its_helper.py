@@ -117,7 +117,11 @@ def test_stopping_the_node_closes_every_value_its_builds_made(stand_in_parent: A
         ("ReturnsANumberProbe", "NodeFunctionBodyReturnedNoPerFrameFunction"),
         (
             "PacesItselfAndReturnsAFunctionProbe",
-            "NodeFunctionPacingItselfReturnedAPerFrameFunction",
+            "NodeFunctionPacingItselfReturnedAValue",
+        ),
+        (
+            "PacesItselfAndReturnsANumberProbe",
+            "NodeFunctionPacingItselfReturnedAValue",
         ),
     ],
 )
