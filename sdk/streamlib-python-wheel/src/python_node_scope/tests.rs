@@ -242,6 +242,27 @@ scope.close()
 }
 
 #[test]
+fn get_in_the_body_raises_its_own_kind_naming_where_to_read_it() {
+    run_against_the_node_scope(
+        r#"
+declared = NodeScopeBeingDeclared()
+taps = declared.input(3)
+refusals = []
+def body():
+    try:
+        taps.get()
+    except NodeScopeReadInTheBody as refused:
+        refusals.append(str(refused))
+declared.declare(body)
+assert refusals == [
+    "`.get()` can't read in the node's body, which runs once and would never see the value "
+    "change; read it in a `computed` build or in the per-frame function"
+], refusals
+"#,
+    );
+}
+
+#[test]
 fn get_outside_a_build_or_a_frame_raises_its_own_kind() {
     run_against_the_node_scope(
         r#"
@@ -252,7 +273,7 @@ try:
 except NodeScopeReadOutsideABuildOrAFrame as refused:
     assert "reads only in a build or a frame" in str(refused), str(refused)
 else:
-    raise AssertionError("a get in the body read a value")
+    raise AssertionError("a get outside a build or a frame read a value")
 
 others_taps = NodeScopeBeingDeclared().input(3)
 scope = declared.start()

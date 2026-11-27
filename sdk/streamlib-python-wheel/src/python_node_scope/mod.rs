@@ -5,6 +5,7 @@
 //! runs on the scope's worker thread, attached to the interpreter only while the build function
 //! runs, and a value a build replaces is closed there, off the frame thread.
 
+mod calls_refused_in_a_frame;
 mod python_value_in_a_node_scope;
 #[cfg(test)]
 mod tests;
@@ -24,6 +25,7 @@ use streamlib_scope::{
 };
 
 use crate::python_attached_from_any_thread::attached_from_any_thread;
+pub(crate) use calls_refused_in_a_frame::{raised_while_a_frame_runs, worded_while_a_frame_runs};
 use python_value_in_a_node_scope::PythonValueInANodeScope;
 
 create_exception!(
@@ -31,6 +33,12 @@ create_exception!(
     NodeScopeReadOutsideABuildOrAFrame,
     PyRuntimeError,
     "`.get()` reads only in a computed value's build or in the per-frame function."
+);
+create_exception!(
+    tatolab.runtime._engine,
+    NodeScopeReadInTheBody,
+    PyRuntimeError,
+    "`.get()` can't read in the node's body, which runs once; read it in a computed value's build or in the per-frame function."
 );
 create_exception!(
     tatolab.runtime._engine,
@@ -55,6 +63,7 @@ fn raise_the_read_refusal(refused: ReadRefused) -> PyErr {
     let why = refused.to_string();
     match refused {
         ReadRefused::OutsideABuildOrAFrame => NodeScopeReadOutsideABuildOrAFrame::new_err(why),
+        ReadRefused::InTheBody => NodeScopeReadInTheBody::new_err(why),
         ReadRefused::HandleOfAnotherScope => NodeScopeHandleOfAnotherScope::new_err(why),
         ReadRefused::ComputedValueNotYetBuilt => NodeScopeComputedValueNotYetBuilt::new_err(why),
     }
@@ -566,6 +575,10 @@ pub(crate) fn add_the_node_scope_to(module: &Bound<'_, PyModule>) -> PyResult<()
         python.get_type::<NodeScopeReadOutsideABuildOrAFrame>(),
     )?;
     module.add(
+        "NodeScopeReadInTheBody",
+        python.get_type::<NodeScopeReadInTheBody>(),
+    )?;
+    module.add(
         "NodeScopeHandleOfAnotherScope",
         python.get_type::<NodeScopeHandleOfAnotherScope>(),
     )?;
@@ -577,5 +590,5 @@ pub(crate) fn add_the_node_scope_to(module: &Bound<'_, PyModule>) -> PyResult<()
         "NodeScopeComputedOutsideADeclaration",
         python.get_type::<NodeScopeComputedOutsideADeclaration>(),
     )?;
-    Ok(())
+    calls_refused_in_a_frame::add_the_calls_refused_in_a_frame_to(module)
 }

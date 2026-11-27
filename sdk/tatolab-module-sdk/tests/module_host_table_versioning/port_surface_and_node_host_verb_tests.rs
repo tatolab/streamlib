@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn the_surface_verbs_carry_their_requests_and_a_surface_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let imported = module_host
@@ -82,7 +82,7 @@ fn the_surface_verbs_carry_their_requests_and_a_surface_is_released_once_when_it
 #[test]
 fn an_import_of_more_planes_than_the_table_carries_is_refused_before_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -104,7 +104,7 @@ fn an_import_of_more_planes_than_the_table_carries_is_refused_before_the_host() 
 #[test]
 fn a_host_memory_write_carries_its_geometry_and_refuses_a_buffer_short_of_it() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_texture = module_host
         .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
@@ -158,7 +158,7 @@ fn a_host_memory_write_carries_its_geometry_and_refuses_a_buffer_short_of_it() {
 #[test]
 fn a_host_memory_read_fills_the_modules_memory_and_refuses_memory_short_of_it() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let upstream_frame = module_host
         .lend_surface_a_message_names("camera#3")
@@ -206,7 +206,7 @@ fn a_host_memory_read_fills_the_modules_memory_and_refuses_memory_short_of_it() 
 #[test]
 fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host.open_output_port("never lent").unwrap_err();
@@ -229,7 +229,7 @@ fn a_refused_verb_carries_the_hosts_message_and_the_verb_it_refused() {
 #[test]
 fn a_message_reads_its_descriptor_and_lends_its_pooled_frame_and_a_described_write_carries_one() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let input_port = module_host.open_input_port("lent").unwrap();
     let message = input_port.read().unwrap().expect("one message waits");
@@ -268,7 +268,7 @@ fn a_message_reads_its_descriptor_and_lends_its_pooled_frame_and_a_described_wri
 #[test]
 fn a_given_up_groups_declaration_reaches_the_host_and_a_refusal_carries_its_message() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_port = module_host.open_output_port("lent").unwrap();
 
@@ -292,7 +292,7 @@ fn a_given_up_groups_declaration_reaches_the_host_and_a_refusal_carries_its_mess
 #[test]
 fn a_pool_textures_slot_is_read_and_any_other_surfaces_is_refused() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let output_texture = module_host
         .acquire_texture_from_node_output_pool(&ModuleHostNodeOutputTextureRequest {
@@ -323,7 +323,7 @@ fn a_pool_textures_slot_is_read_and_any_other_surfaces_is_refused() {
 #[test]
 fn a_read_message_is_handed_back_to_the_host_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let input_port = module_host.open_input_port("lent").unwrap();
 
@@ -342,7 +342,7 @@ fn a_read_message_is_handed_back_to_the_host_when_it_drops() {
 #[test]
 fn the_clock_stop_flag_wait_log_and_capabilities_reach_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     assert_eq!(module_host.monotonic_now_ns(), 1_000);
@@ -371,7 +371,7 @@ fn the_clock_stop_flag_wait_log_and_capabilities_reach_the_host() {
 #[test]
 fn the_modules_own_tracing_records_reach_the_hosts_log_with_their_fields() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     tatolab_module_sdk::module_host_tracing::forward_this_modules_tracing_records_to(&module_host);
@@ -390,12 +390,12 @@ fn the_modules_own_tracing_records_reach_the_hosts_log_with_their_fields() {
 }
 
 /// A runtime lending 1.0 has no audio or surface verbs, so a module built
-/// against 1.12 never reads past the end of its table.
+/// against 1.13 never reads past the end of its table.
 
 #[test]
 fn an_iosurface_import_carries_its_surface_and_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
     let stand_in_iosurface = std::ptr::without_provenance::<c_void>(0x1000);
 
@@ -422,7 +422,7 @@ fn an_iosurface_import_carries_its_surface_and_is_released_once_when_it_drops() 
 #[test]
 fn an_iosurface_import_of_a_null_surface_is_refused_before_the_host() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -443,7 +443,7 @@ fn an_iosurface_import_of_a_null_surface_is_refused_before_the_host() {
 #[test]
 fn a_surface_a_message_names_is_lent_by_its_id_and_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let lent = module_host
@@ -469,7 +469,7 @@ fn a_surface_a_message_names_is_lent_by_its_id_and_released_once_when_it_drops()
 #[test]
 fn a_lease_names_its_endpoint_and_tenant_reports_its_state_and_is_released_once_when_it_drops() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let lease = module_host
@@ -511,7 +511,7 @@ fn a_lease_names_its_endpoint_and_tenant_reports_its_state_and_is_released_once_
 #[test]
 fn a_lease_the_host_refuses_carries_its_message_and_releases_nothing() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     let refusal = module_host
@@ -533,7 +533,7 @@ fn a_lease_the_host_refuses_carries_its_message_and_releases_nothing() {
 #[test]
 fn a_node_fails_itself_with_the_reason_it_gives() {
     let node_host = stood_up_node_host();
-    let table = v1_12_table_over(node_host);
+    let table = v1_13_table_over(node_host);
     let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
 
     module_host
@@ -543,5 +543,69 @@ fn a_node_fails_itself_with_the_reason_it_gives() {
     assert_eq!(
         *node_host.node_failure_reasons.lock().unwrap(),
         ["the page's renderer ended 6 times in 60s"]
+    );
+}
+
+#[test]
+fn a_call_too_slow_for_a_frame_is_asked_about_by_what_it_does_and_its_name() {
+    let node_host = stood_up_node_host();
+    let table = v1_13_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+
+    module_host
+        .refuse_while_a_frame_runs(ModuleHostCallTooSlowForAFrame::CreatesAKernel, "compile")
+        .unwrap();
+    module_host
+        .refuse_while_a_frame_runs(ModuleHostCallTooSlowForAFrame::StartsASession, "connect")
+        .unwrap();
+    let refusal = module_host
+        .refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+            "V4l2ZeroCopyCameraCapture",
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        *node_host.calls_asked_about_in_a_frame.lock().unwrap(),
+        vec![
+            (
+                MODULE_HOST_TABLE_CALL_CREATES_A_KERNEL,
+                "compile".to_string()
+            ),
+            (
+                MODULE_HOST_TABLE_CALL_STARTS_A_SESSION,
+                "connect".to_string()
+            ),
+            (
+                MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE,
+                "V4l2ZeroCopyCameraCapture".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        refusal,
+        ModuleHostError::CallRefusedInAFrame {
+            does: ModuleHostCallTooSlowForAFrame::OpensADevice,
+            refusal: "device_opened_in_a_frame: `V4l2ZeroCopyCameraCapture`".to_string()
+        }
+    );
+}
+
+#[test]
+fn a_refusal_not_led_by_the_calls_code_stays_the_verbs_own() {
+    let node_host = stood_up_node_host();
+    let table = v1_13_table_over(node_host);
+    let module_host = unsafe { ModuleHost::from_module_host_table_pointer(&table) }.unwrap();
+
+    let refusal = module_host
+        .refuse_while_a_frame_runs(ModuleHostCallTooSlowForAFrame::StartsASession, "gone")
+        .unwrap_err();
+
+    assert_eq!(
+        refusal,
+        ModuleHostError::VerbRefused {
+            verb: "call_refused_while_a_frame_runs",
+            refusal: "the node host is gone".to_string()
+        }
     );
 }

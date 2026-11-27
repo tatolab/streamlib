@@ -31,7 +31,7 @@ pub const MODULE_HOST_TABLE_ABI_MAJOR: u32 = 1;
 
 /// The table minor this SDK was built against; a runtime lending an older
 /// minor is refused, a newer one accepted.
-pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 12;
+pub const MODULE_HOST_TABLE_ABI_MINOR: u32 = 13;
 
 /// The name of the capsule a node's context hands its Python half the table in.
 pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.module_host_table";
@@ -94,6 +94,13 @@ pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_PUBLISHED: u32 = 0;
 pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_NO_CONSUMER_IS_WATCHING: u32 = 1;
 /// A frame dropped because every buffer is still with the consumer.
 pub const MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER: u32 = 2;
+
+/// A call refused while a frame runs because it creates a kernel. Minor 13.
+pub const MODULE_HOST_TABLE_CALL_CREATES_A_KERNEL: u32 = 0;
+/// A call refused while a frame runs because it opens a device. Minor 13.
+pub const MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE: u32 = 1;
+/// A call refused while a frame runs because it starts a session. Minor 13.
+pub const MODULE_HOST_TABLE_CALL_STARTS_A_SESSION: u32 = 2;
 
 /// Bytes in a payload descriptor's body. Minor 11.
 pub const MODULE_HOST_TABLE_PAYLOAD_DESCRIPTOR_BODY_BYTES: usize = 60;
@@ -803,6 +810,17 @@ pub struct ModuleHostTable {
             given_up_group_count: u64,
             error_message: *mut ModuleHostTableErrorMessage,
         ) -> ModuleHostTableStatus,
+    /// Minor 13: refuse `call`, a call of the module's own too slow to run
+    /// every frame, which does what `call_does` names (a
+    /// `MODULE_HOST_TABLE_CALL_*`), while a frame of the node's runs on this
+    /// thread, in the words the host refuses its own such calls with. OK in
+    /// the node's body, in a build, and anywhere else.
+    pub call_refused_while_a_frame_runs: unsafe extern "C" fn(
+        node_host: *mut c_void,
+        call_does: u32,
+        call: ModuleHostTableUtf8,
+        error_message: *mut ModuleHostTableErrorMessage,
+    ) -> ModuleHostTableStatus,
 }
 
 impl ModuleHostTablePayloadDescriptor {

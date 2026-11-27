@@ -340,6 +340,11 @@ pub enum Error {
         why: String,
     },
 
+    /// A node's per-frame function made a call too slow to run every frame: it creates a kernel,
+    /// opens a device or starts a session. The words show the call wrapped in a computed value.
+    #[error(transparent)]
+    CallRefusedInAFrame(#[from] streamlib_scope::CallRefusedInAFrame),
+
     /// A node written as one function could not start the thread its computed values build on.
     #[error("`{node}` could not start the thread its computed values build on: {why}")]
     ComputedValueBuildThreadNotStarted { node: String, why: std::io::Error },

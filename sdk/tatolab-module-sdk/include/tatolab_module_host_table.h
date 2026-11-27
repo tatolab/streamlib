@@ -48,7 +48,7 @@ extern "C" {
  * The table minor this SDK was built against; a runtime lending an older
  * minor is refused, a newer one accepted.
  */
-#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(12)
+#define MODULE_HOST_TABLE_ABI_MINOR UINT32_C(13)
 
 /**
  * The name of the capsule a node's context hands its Python half the table in.
@@ -157,6 +157,21 @@ typedef ModuleHostTableStatus (*ModuleHostTableFunctionNodeEvaluateEntry)(const 
  * A frame dropped because every buffer is still with the consumer.
  */
 #define MODULE_HOST_TABLE_VIRTUAL_CAMERA_FRAME_EVERY_BUFFER_IS_HELD_BY_THE_CONSUMER UINT32_C(2)
+
+/**
+ * A call refused while a frame runs because it creates a kernel. Minor 13.
+ */
+#define MODULE_HOST_TABLE_CALL_CREATES_A_KERNEL UINT32_C(0)
+
+/**
+ * A call refused while a frame runs because it opens a device. Minor 13.
+ */
+#define MODULE_HOST_TABLE_CALL_OPENS_A_DEVICE UINT32_C(1)
+
+/**
+ * A call refused while a frame runs because it starts a session. Minor 13.
+ */
+#define MODULE_HOST_TABLE_CALL_STARTS_A_SESSION UINT32_C(2)
 
 /**
  * Bytes in a payload descriptor's body. Minor 11.
@@ -874,6 +889,14 @@ typedef struct ModuleHostTable {
      * read when that write reaches them.
      */
     ModuleHostTableStatus (*output_port_declare_groups_given_up_before_the_next_write)(void *node_host, ModuleHostTablePortHandle port, uint64_t given_up_group_count, ModuleHostTableErrorMessage *error_message);
+    /**
+     * Minor 13: refuse `call`, a call of the module's own too slow to run
+     * every frame, which does what `call_does` names (a
+     * `MODULE_HOST_TABLE_CALL_*`), while a frame of the node's runs on this
+     * thread, in the words the host refuses its own such calls with. OK in
+     * the node's body, in a build, and anywhere else.
+     */
+    ModuleHostTableStatus (*call_refused_while_a_frame_runs)(void *node_host, uint32_t call_does, ModuleHostTableUtf8 call, ModuleHostTableErrorMessage *error_message);
 } ModuleHostTable;
 
 #ifdef __cplusplus

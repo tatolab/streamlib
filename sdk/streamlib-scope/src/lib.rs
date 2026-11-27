@@ -34,12 +34,14 @@ mod sync {
 use sync::{Mutex, MutexGuard, Thread};
 
 mod builds_of_computed_values;
+mod call_refused_in_a_frame;
 mod read_refusal;
 
 use builds_of_computed_values::BuildsReported;
 pub use builds_of_computed_values::{
     BuildFailure, BuildsOfAComputedValue, BuildsOfAScope, ComputedValueDeclared, LastBuild,
 };
+pub use call_refused_in_a_frame::{CallRefusedInAFrame, CallTooSlowForAFrame};
 use read_refusal::{ReadOfAComputedValueNotYetBuilt, Refusal, refuse, refuse_the_read};
 pub use read_refusal::{ReadRefused, fail_this_build_on_a_computed_value_not_yet_built};
 
@@ -145,6 +147,9 @@ fn replace_declaring(declaring: Option<Declaring>) -> Option<Declaring> {
 
 fn read_slot(slot: SlotOf) -> Result<Option<AnyValue>, ReadRefused> {
     READING.with(|reading| match &mut *reading.borrow_mut() {
+        None if DECLARING.with(|declaring| declaring.borrow().is_some()) => {
+            Err(ReadRefused::InTheBody)
+        }
         None => Err(ReadRefused::OutsideABuildOrAFrame),
         Some(Reading::Build {
             scope_id,

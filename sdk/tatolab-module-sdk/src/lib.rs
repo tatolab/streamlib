@@ -23,6 +23,7 @@ mod function_node_python_declaration;
 pub mod module_host;
 pub mod module_host_audio_capture;
 pub mod module_host_audio_playback;
+pub mod module_host_call_refused_in_a_frame;
 pub mod module_host_payload_descriptor;
 #[cfg(feature = "pyo3")]
 mod module_host_python_capsule;
@@ -49,6 +50,7 @@ pub use module_host_audio_playback::{
     ModuleHostAudioPlaybackStream, ModuleHostAudioPlaybackStreamLiveness,
     ModuleHostAudioPlaybackStreamRequest,
 };
+pub use module_host_call_refused_in_a_frame::ModuleHostCallTooSlowForAFrame;
 pub use module_host_payload_descriptor::{
     MODULE_HOST_H273_UNSPECIFIED, ModuleHostChannelsBlock, ModuleHostChannelsBlockSampleType,
     ModuleHostImageFrame, ModuleHostImageFrameH273Colour, ModuleHostPayloadDescriptorRefusal,

@@ -8,6 +8,7 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
+use streamlib_scope::CallTooSlowForAFrame;
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK, ModuleHostTableBytes,
     ModuleHostTableErrorMessage, ModuleHostTableStatus, ModuleHostTableUtf8,
@@ -15,7 +16,7 @@ use tatolab_module_sdk::module_host_table_abi::{
 };
 
 use super::audio_capture_streams::locked;
-use super::{node_host_of, refuse};
+use super::{node_host_of, refuse, refused_while_a_frame_runs};
 
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::linux_pipewire_camera::{
@@ -168,6 +169,16 @@ pub(super) unsafe extern "C" fn virtual_camera_stream_open(
     opened_camera: *mut ModuleHostTableVirtualCameraStreamHandle,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
+    // SAFETY: the SDK hands an error message live for the call, or null.
+    if let Some(refused) = unsafe {
+        refused_while_a_frame_runs(
+            error_message,
+            CallTooSlowForAFrame::OpensADevice,
+            "open_virtual_camera_stream",
+        )
+    } {
+        return refused;
+    }
     let node_host = unsafe { node_host_of(node_host) };
     // SAFETY: the SDK hands a slot live for the call, or null.
     let Some(opened_camera) = (unsafe { opened_camera.as_mut() }) else {

@@ -23,6 +23,10 @@ fn try_get_answers_why_it_read_no_value_instead_of_panicking() {
         taps.try_get().unwrap_err(),
         ReadRefused::OutsideABuildOrAFrame
     );
+    assert_eq!(
+        declared.declare(|| taps.try_get().unwrap_err()),
+        ReadRefused::InTheBody
+    );
     let (_scope, mut view) = declared.start().unwrap();
     assert_eq!(
         view.run_frame(|| others_taps.try_get().unwrap_err()),

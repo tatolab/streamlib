@@ -24,7 +24,7 @@ pub mod v4l2_colour_description;
 
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
-use tatolab_module_sdk::ModuleHost;
+use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
 
 #[cfg(target_os = "macos")]
 use crate::avfoundation_camera_capture::AvFoundationZeroCopyCameraCapture;
@@ -61,6 +61,10 @@ impl PythonV4l2ZeroCopyCameraCapture {
         output_pool_rotation_depth: u32,
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+            "V4l2ZeroCopyCameraCapture",
+        )?;
         let capture = python
             .detach(|| {
                 V4l2ZeroCopyCameraCapture::open(
@@ -174,6 +178,10 @@ impl PythonAvFoundationZeroCopyCameraCapture {
         output_pool_rotation_depth: u32,
     ) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::OpensADevice,
+            "AvFoundationZeroCopyCameraCapture",
+        )?;
         let capture = python
             .detach(|| {
                 AvFoundationZeroCopyCameraCapture::open(

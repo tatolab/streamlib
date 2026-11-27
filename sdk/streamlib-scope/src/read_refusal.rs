@@ -14,6 +14,8 @@ use crate::BuildFailure;
 pub enum ReadRefused {
     /// The read ran outside a build or a frame.
     OutsideABuildOrAFrame,
+    /// The read ran in the node's body, which runs once and would never see the value change.
+    InTheBody,
     /// The handle belongs to another scope than the build or frame running on this thread.
     HandleOfAnotherScope,
     /// A build read a computed value that has no value yet; the read is recorded, so
@@ -28,6 +30,7 @@ impl ReadRefused {
     pub(crate) fn refusal(self) -> Option<Refusal> {
         match self {
             ReadRefused::OutsideABuildOrAFrame => Some(Refusal::GetOutsideABuildOrAFrame),
+            ReadRefused::InTheBody => Some(Refusal::GetInTheBody),
             ReadRefused::HandleOfAnotherScope => Some(Refusal::HandleOfAnotherScope),
             ReadRefused::ComputedValueNotYetBuilt => None,
         }
@@ -55,6 +58,7 @@ pub fn fail_this_build_on_a_computed_value_not_yet_built() -> ! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
     GetOutsideABuildOrAFrame,
+    GetInTheBody,
     ComputedOutsideADeclaration,
     HandleOfAnotherScope,
 }
@@ -65,6 +69,10 @@ impl fmt::Display for Refusal {
             Refusal::GetOutsideABuildOrAFrame => {
                 "`.get()` reads only in a build or a frame; read the value in a `computed` build \
                  or in the per-frame function"
+            }
+            Refusal::GetInTheBody => {
+                "`.get()` can't read in the node's body, which runs once and would never see the \
+                 value change; read it in a `computed` build or in the per-frame function"
             }
             Refusal::ComputedOutsideADeclaration => {
                 "`computed` declares only while a scope is being declared, in the node's body"

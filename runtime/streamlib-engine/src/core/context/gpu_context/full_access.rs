@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use streamlib_scope::CallTooSlowForAFrame;
 
 pub struct GpuContextFullAccess {
     pub(crate) handle: *const std::ffi::c_void,
@@ -466,6 +468,7 @@ impl GpuContextFullAccess {
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
     ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
+        CallTooSlowForAFrame::CreatesAKernel.refused_while_a_frame_runs("create_compute_kernel")?;
         self.host_inner().create_compute_kernel(descriptor)
     }
 
@@ -495,6 +498,8 @@ impl GpuContextFullAccess {
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
     ) -> Result<crate::vulkan::rhi::VulkanGraphicsKernel> {
+        CallTooSlowForAFrame::CreatesAKernel
+            .refused_while_a_frame_runs("create_graphics_kernel")?;
         self.host_inner().create_graphics_kernel(descriptor)
     }
 
@@ -506,6 +511,8 @@ impl GpuContextFullAccess {
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
     ) -> Result<crate::vulkan::rhi::VulkanRayTracingKernel> {
+        CallTooSlowForAFrame::CreatesAKernel
+            .refused_while_a_frame_runs("create_ray_tracing_kernel")?;
         self.host_inner().create_ray_tracing_kernel(descriptor)
     }
 
@@ -582,6 +589,8 @@ impl GpuContextFullAccess {
         declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
         entry_point: &str,
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
+        CallTooSlowForAFrame::CreatesAKernel
+            .refused_while_a_frame_runs("create_or_reuse_compute_kernel")?;
         self.host_inner().create_or_reuse_compute_kernel(
             spv,
             push_constant_size,
@@ -627,6 +636,8 @@ impl GpuContextFullAccess {
         descriptor_sets_in_flight: u32,
         declared_bindings: &[crate::core::rhi::GraphicsBindingDeclaration],
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanGraphicsKernel>)> {
+        CallTooSlowForAFrame::CreatesAKernel
+            .refused_while_a_frame_runs("create_or_reuse_graphics_kernel")?;
         self.host_inner().create_or_reuse_graphics_kernel(
             label,
             stages,
@@ -658,6 +669,8 @@ impl GpuContextFullAccess {
         max_recursion_depth: u32,
         declared_bindings: &[crate::core::rhi::RayTracingBindingDeclaration],
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>)> {
+        CallTooSlowForAFrame::CreatesAKernel
+            .refused_while_a_frame_runs("create_or_reuse_ray_tracing_kernel")?;
         self.host_inner().create_or_reuse_ray_tracing_kernel(
             label,
             stages,

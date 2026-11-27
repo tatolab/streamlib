@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use streamlib_scope::CallTooSlowForAFrame;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
@@ -26,6 +27,7 @@ use crate::python_node_context::{
     escalate_scope_cannot_cross_the_process_boundary_error,
     gpu_unreachable_from_a_helper_process_error,
 };
+use crate::python_node_scope::raised_while_a_frame_runs;
 
 use super::{
     acquire_storage_buffer_through_the_helper_process_exchange,
@@ -259,6 +261,10 @@ impl PythonGpuContextLimitedAccess {
         bindings: Option<&Bound<'_, PyDict>>,
         entry_point: &str,
     ) -> PyResult<PythonComputeKernel> {
+        raised_while_a_frame_runs(
+            CallTooSlowForAFrame::CreatesAKernel,
+            "create_compute_kernel",
+        )?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let declared = declared_compute_bindings_to_wire(python, bindings)?;
