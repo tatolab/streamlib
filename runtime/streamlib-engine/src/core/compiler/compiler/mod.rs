@@ -378,13 +378,14 @@ impl Compiler {
         let function_nodes_run_inside_their_readers =
             the_function_nodes_among(&graph_arc.read(), &plan.nodes_to_add);
         let shader_nodes_placed = {
-            // A node whose place changes is among the nodes to add already, restarted.
-            let mut shader_nodes_to_place = plan.nodes_to_add.clone();
-            for node_id in shader_node_islands_placed_anew.the_running_nodes_placed_anew() {
-                if !shader_nodes_to_place.contains(&node_id) {
-                    shader_nodes_to_place.push(node_id);
-                }
-            }
+            // A node whose place changes is among the nodes to add already, restarted, unless
+            // its old thread was abandoned, which leaves it unbuilt and unplaced.
+            let shader_nodes_to_place = [
+                plan.nodes_to_add.as_slice(),
+                &shader_node_islands_placed_anew.hosts_handed_their_island_anew,
+                &shader_node_islands_placed_anew.fused_nodes_placed_anew,
+            ]
+            .concat();
             place_each_shader_node_island_on_its_host(
                 &mut graph_arc.write(),
                 &shader_nodes_to_place,
@@ -552,10 +553,12 @@ fn stop_each_node_restarted(
     if nodes_restarted.is_empty() {
         return Ok(Vec::new());
     }
-    tracing::info!(
-        "Restarting {} running node(s) a live edit rebuilds",
-        nodes_restarted.nodes.len()
-    );
+    if !nodes_restarted.nodes.is_empty() {
+        tracing::info!(
+            "Restarting {} running node(s) a live edit rebuilds",
+            nodes_restarted.nodes.len()
+        );
+    }
     unwire_each_link_of_the_nodes_restarted(&mut graph_arc.write(), nodes_restarted)?;
     stop_node_threads_signalling_every_thread_before_joining_any(
         graph_arc,

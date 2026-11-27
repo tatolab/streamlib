@@ -162,6 +162,8 @@ impl ShaderNodeNativeEvaluator {
             .collect();
         self.newest_image_frame_by_input_port
             .retain(|input_port, _| image_input_ports_read.contains(input_port));
+        // Pools are kept by member index, which the new island numbers afresh.
+        self.stored_pixel_buffer_pool_by_member.clear();
         self.fused_group = Some(fused_group);
         self.refusal_last_logged = None;
     }
