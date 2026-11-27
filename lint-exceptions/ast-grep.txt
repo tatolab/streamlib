@@ -18,7 +18,6 @@
 1 no-inline-test-module packages/tatolab-browser/host/src/page_data_scripts_awaiting_the_loaded_document.rs
 1 no-inline-test-module packages/tatolab-browser/host/src/tenant_profile_directory.rs
 1 no-inline-test-module packages/tatolab-browser/page-bridge/src/lib.rs
-1 no-inline-test-module packages/tatolab-browser/src/browser_host_tab_client.rs
 1 no-inline-test-module packages/tatolab-browser/src/page_audio_blocks.rs
 1 no-inline-test-module packages/tatolab-browser/src/page_data_messages.rs
 1 no-inline-test-module packages/tatolab-browser/src/page_input_messages.rs

@@ -7691,6 +7691,11 @@
           },
           {
             "type": "string",
+            "const": "shader_node_fused_group_not_built",
+            "description": "A fused group of shader nodes cannot be built into the one island a node evaluates: a\nlive edit leaving it was refused whole, and a group already running goes on running as it\nwas; `refused_node` names the node that would evaluate it, and the runtime's words say\nwhy it does not build."
+          },
+          {
+            "type": "string",
             "const": "refused",
             "description": "The request was understood and not done; changing it can help. The runtime's words say\nwhat to change."
           }

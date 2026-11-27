@@ -1,28 +1,111 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::time::Duration;
-
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::create_exception;
+use pyo3::exceptions::{PyRuntimeError, PyTimeoutError};
 use pyo3::prelude::*;
+use streamlib_owned_device_video_codec_nodes::video_coding_sessions::VideoCodingSessionNotOpened;
 use streamlib_owned_device_video_codec_nodes::video_decoder_settings::VideoDecoderSettings;
 use streamlib_owned_device_video_codec_nodes::video_encoder_settings::VideoEncoderSettings;
-use streamlib_owned_device_video_codec_nodes::{VideoCodecNodeIdentity, VideoCodecNodeThread};
+use streamlib_owned_device_video_codec_nodes::{
+    VideoCodecNodeIdentity, VideoCodecNodeSession, VideoCodecNodeThread,
+};
 use tatolab_module_sdk::{ModuleHost, ModuleHostCallTooSlowForAFrame};
 
+create_exception!(
+    _native,
+    VideoCodingSessionRefused,
+    PyRuntimeError,
+    "The codec refused a session: its settings, the device, or the video codec host. The \
+     sessions already open keep coding."
+);
+create_exception!(
+    _native,
+    VideoCodingSessionRefusedForNow,
+    VideoCodingSessionRefused,
+    "The GPU lacked something another of its clients may free, such as a video session; a \
+     later try may open the session. The sessions already open keep coding."
+);
+create_exception!(
+    _native,
+    VideoCodingThreadNotStarted,
+    PyRuntimeError,
+    "The coding thread did not start: a port it is lent was refused, or the thread itself."
+);
+create_exception!(
+    _native,
+    VideoCodingThreadEnded,
+    PyRuntimeError,
+    "The coding thread has ended, so no session opens on it."
+);
+create_exception!(
+    _native,
+    VideoCodingSessionUnanswered,
+    PyTimeoutError,
+    "The coding thread did not open a session in time; it closes the session if it opens after."
+);
+
+fn raised(not_opened: VideoCodingSessionNotOpened) -> PyErr {
+    let words = not_opened.to_string();
+    match not_opened {
+        VideoCodingSessionNotOpened::Refused(_) => VideoCodingSessionRefused::new_err(words),
+        VideoCodingSessionNotOpened::RefusedForNow(_) => {
+            VideoCodingSessionRefusedForNow::new_err(words)
+        }
+        VideoCodingSessionNotOpened::CodingThreadEnded { .. } => {
+            VideoCodingThreadEnded::new_err(words)
+        }
+        VideoCodingSessionNotOpened::Unanswered { .. } => {
+            VideoCodingSessionUnanswered::new_err(words)
+        }
+    }
+}
+
 /// `H264Encoder`'s encoding thread, started over the module host table its
-/// node lent `video` and `encoded_video` through.
-#[pyclass]
+/// node lent `video` and `encoded_video` through, and encoding with the newest
+/// session opened on it.
+#[pyclass(frozen)]
 struct H264EncoderThread {
-    encoding_thread: VideoCodecNodeThread,
+    module_host: ModuleHost,
+    /// Taken only by `Drop`, which lets the thread go with the GIL released.
+    encoding_thread: Option<VideoCodecNodeThread<VideoEncoderSettings>>,
+}
+
+impl Drop for H264EncoderThread {
+    /// Letting the thread go waits for it to end, which other Python threads must not wait
+    /// out.
+    fn drop(&mut self) {
+        if let Some(thread) = self.encoding_thread.take() {
+            Python::attach(|python| python.detach(|| drop(thread)));
+        }
+    }
 }
 
 #[pymethods]
 impl H264EncoderThread {
-    /// Start encoding the frames `video` receives onto `encoded_video`.
+    /// Start reading `video` and writing `encoded_video`; frames are drained
+    /// until a session opens.
     #[new]
+    fn start(module_host_table: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
+        module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "H264EncoderThread",
+        )?;
+        let encoding_thread = VideoCodecNodeThread::start_encoder(
+            VideoCodecNodeIdentity::H264_ENCODER,
+            module_host.clone(),
+        )
+        .map_err(VideoCodingThreadNotStarted::new_err)?;
+        Ok(Self {
+            module_host,
+            encoding_thread: Some(encoding_thread),
+        })
+    }
+
+    /// Open a session of these settings beside the ones open, and encode
+    /// every frame with it from then on.
     #[pyo3(signature = (
-        module_host_table,
         *,
         width=None,
         height=None,
@@ -32,15 +115,20 @@ impl H264EncoderThread {
         effort_level=None,
     ))]
     #[allow(clippy::too_many_arguments)]
-    fn start(
-        module_host_table: &Bound<'_, PyAny>,
+    fn open_session(
+        &self,
+        python: Python<'_>,
         width: Option<u32>,
         height: Option<u32>,
         fps: Option<u32>,
         bitrate_bps: Option<u32>,
         keyframe_interval_seconds: Option<u32>,
         effort_level: Option<u32>,
-    ) -> PyResult<Self> {
+    ) -> PyResult<H264EncodeSession> {
+        self.module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "H264EncoderThread.open_session",
+        )?;
         let settings = VideoEncoderSettings {
             width,
             height,
@@ -49,45 +137,60 @@ impl H264EncoderThread {
             keyframe_interval_seconds,
             effort_level,
         };
-        let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
-        module_host.refuse_while_a_frame_runs(
-            ModuleHostCallTooSlowForAFrame::StartsASession,
-            "H264EncoderThread",
-        )?;
-        let encoding_thread = VideoCodecNodeThread::start_encoder(
-            VideoCodecNodeIdentity::H264_ENCODER,
-            module_host,
-            settings,
-        )
-        .map_err(PyRuntimeError::new_err)?;
-        Ok(Self { encoding_thread })
+        let session = python
+            .detach(|| {
+                self.encoding_thread
+                    .as_ref()
+                    .ok_or(VideoCodingSessionNotOpened::CodingThreadEnded {
+                        node_type_name: "H264EncoderThread",
+                    })?
+                    .open_session(settings)
+            })
+            .map_err(raised)?;
+        Ok(H264EncodeSession { session })
     }
+}
 
-    /// Ask the thread to stop and wait up to `timeout_seconds` for it: `True`
-    /// when it ended.
-    fn stop_and_join(&self, python: Python<'_>, timeout_seconds: f64) -> bool {
-        let timeout = Duration::try_from_secs_f64(timeout_seconds).unwrap_or(Duration::ZERO);
-        python.detach(|| self.encoding_thread.stop_and_join(timeout))
+/// A session open on an `H264EncoderThread`, closed by `close()` or when let go.
+#[pyclass(frozen)]
+struct H264EncodeSession {
+    session: VideoCodecNodeSession<VideoEncoderSettings>,
+}
+
+#[pymethods]
+impl H264EncodeSession {
+    /// Close the session: the thread drops it before its next frame.
+    fn close(&self) {
+        self.session.close();
     }
 }
 
 /// `H264Decoder`'s decoding thread, started over the module host table its
-/// node lent `encoded_video` and `video` through.
-#[pyclass]
+/// node lent `encoded_video` and `video` through, and moving to the newest
+/// session opened on it at a group start.
+#[pyclass(frozen)]
 struct H264DecoderThread {
-    decoding_thread: VideoCodecNodeThread,
+    module_host: ModuleHost,
+    /// Taken only by `Drop`, which lets the thread go with the GIL released.
+    decoding_thread: Option<VideoCodecNodeThread<VideoDecoderSettings>>,
+}
+
+impl Drop for H264DecoderThread {
+    /// Letting the thread go waits for it to end, which other Python threads must not wait
+    /// out.
+    fn drop(&mut self) {
+        if let Some(thread) = self.decoding_thread.take() {
+            Python::attach(|python| python.detach(|| drop(thread)));
+        }
+    }
 }
 
 #[pymethods]
 impl H264DecoderThread {
-    /// Start decoding the access units `encoded_video` receives onto `video`.
+    /// Start reading `encoded_video` and writing `video`; access units are
+    /// drained until a session opens.
     #[new]
-    #[pyo3(signature = (module_host_table, *, max_width=None, max_height=None))]
-    fn start(
-        module_host_table: &Bound<'_, PyAny>,
-        max_width: Option<u32>,
-        max_height: Option<u32>,
-    ) -> PyResult<Self> {
+    fn start(module_host_table: &Bound<'_, PyAny>) -> PyResult<Self> {
         let module_host = ModuleHost::from_python_module_host_table_capsule(module_host_table)?;
         module_host.refuse_while_a_frame_runs(
             ModuleHostCallTooSlowForAFrame::StartsASession,
@@ -95,27 +198,86 @@ impl H264DecoderThread {
         )?;
         let decoding_thread = VideoCodecNodeThread::start_decoder(
             VideoCodecNodeIdentity::H264_DECODER,
-            module_host,
-            VideoDecoderSettings {
-                max_width,
-                max_height,
-            },
+            module_host.clone(),
         )
-        .map_err(PyRuntimeError::new_err)?;
-        Ok(Self { decoding_thread })
+        .map_err(VideoCodingThreadNotStarted::new_err)?;
+        Ok(Self {
+            module_host,
+            decoding_thread: Some(decoding_thread),
+        })
     }
 
-    /// Ask the thread to stop and wait up to `timeout_seconds` for it: `True`
-    /// when it ended.
-    fn stop_and_join(&self, python: Python<'_>, timeout_seconds: f64) -> bool {
-        let timeout = Duration::try_from_secs_f64(timeout_seconds).unwrap_or(Duration::ZERO);
-        python.detach(|| self.decoding_thread.stop_and_join(timeout))
+    /// Open a session of these settings beside the ones open; the thread
+    /// moves to it at the next group start.
+    #[pyo3(signature = (*, max_width=None, max_height=None))]
+    fn open_session(
+        &self,
+        python: Python<'_>,
+        max_width: Option<u32>,
+        max_height: Option<u32>,
+    ) -> PyResult<H264DecodeSession> {
+        self.module_host.refuse_while_a_frame_runs(
+            ModuleHostCallTooSlowForAFrame::StartsASession,
+            "H264DecoderThread.open_session",
+        )?;
+        let settings = VideoDecoderSettings {
+            max_width,
+            max_height,
+        };
+        let session = python
+            .detach(|| {
+                self.decoding_thread
+                    .as_ref()
+                    .ok_or(VideoCodingSessionNotOpened::CodingThreadEnded {
+                        node_type_name: "H264DecoderThread",
+                    })?
+                    .open_session(settings)
+            })
+            .map_err(raised)?;
+        Ok(H264DecodeSession { session })
+    }
+}
+
+/// A session open on an `H264DecoderThread`, closed by `close()` or when let go.
+#[pyclass(frozen)]
+struct H264DecodeSession {
+    session: VideoCodecNodeSession<VideoDecoderSettings>,
+}
+
+#[pymethods]
+impl H264DecodeSession {
+    /// Close the session: the thread drops it before its next media frame.
+    fn close(&self) {
+        self.session.close();
     }
 }
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<H264EncoderThread>()?;
+    module.add_class::<H264EncodeSession>()?;
     module.add_class::<H264DecoderThread>()?;
+    module.add_class::<H264DecodeSession>()?;
+    let python = module.py();
+    module.add(
+        "VideoCodingSessionRefused",
+        python.get_type::<VideoCodingSessionRefused>(),
+    )?;
+    module.add(
+        "VideoCodingSessionRefusedForNow",
+        python.get_type::<VideoCodingSessionRefusedForNow>(),
+    )?;
+    module.add(
+        "VideoCodingThreadNotStarted",
+        python.get_type::<VideoCodingThreadNotStarted>(),
+    )?;
+    module.add(
+        "VideoCodingThreadEnded",
+        python.get_type::<VideoCodingThreadEnded>(),
+    )?;
+    module.add(
+        "VideoCodingSessionUnanswered",
+        python.get_type::<VideoCodingSessionUnanswered>(),
+    )?;
     Ok(())
 }

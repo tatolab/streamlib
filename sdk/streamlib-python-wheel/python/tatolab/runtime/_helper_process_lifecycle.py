@@ -20,6 +20,7 @@ from tatolab.stream._node_declaration import (
 )
 
 from tatolab.runtime._engine import (
+    BuildsOfANodeScopeComputedValue,
     not_ready_report_on_runtime_context,
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
@@ -47,7 +48,12 @@ from tatolab.runtime._not_ready_placeholder_frames import (
     PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE,
     TransparentFramesOnTheImageOutputsOfANodeNotReady,
 )
-from tatolab.runtime._node_hosting import the_slots_its_pin_groups_are_built_with
+from tatolab.runtime._node_function_pin_group_slots import NodeFunctionPinGroupSlotsFollowed
+from tatolab.runtime._node_hosting import (
+    class_node_pin_groups_of,
+    is_a_node_function,
+    the_slots_its_pin_groups_are_built_with,
+)
 from tatolab.runtime._node_the_wheel_hosts import NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
 from tatolab.runtime._node_class_description import load_node_class
@@ -71,6 +77,26 @@ if sys.platform == "darwin":
 # release still queued then is never taken; bounded well inside the shutdown
 # ladder's five-second teardown budget.
 RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS = 1.0
+
+
+def computed_value_builds_on_the_escalate_wire(
+    builds: BuildsOfANodeScopeComputedValue,
+) -> "dict[str, Any]":
+    """How the builds of one computed value stand, as `set_computed_value_builds`
+    carries them: its latest build's failure by its own kind, `None` while none
+    failed."""
+    last_build = builds.last_build
+    latest_build_failed: "Optional[dict[str, Any]]" = None
+    if last_build.state == "failed":
+        latest_build_failed = {"kind": last_build.failure}
+        if last_build.failure != "read_a_computed_value_not_yet_built":
+            latest_build_failed["why"] = last_build.why
+    return {
+        "declared": builds.declared,
+        "has_a_value": builds.has_a_value,
+        "building_again": builds.building_again,
+        "latest_build_failed": latest_build_failed,
+    }
 
 
 class HelperProcessLifecycle:
@@ -99,6 +125,7 @@ class HelperProcessLifecycle:
         self._scheduling_loop_runs = False
         self._pause_hook_last_called: "Optional[str]" = None
         self._function_node_islands_it_reads: "Optional[FunctionNodeIslandsFedToTheirPorts]" = None
+        self._pin_group_slots_followed: "Optional[NodeFunctionPinGroupSlotsFollowed]" = None
         self._field_wire_values_last_refused: "Optional[str]" = None
         self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
         self._raises_the_parent_holds_by_function_node: "dict[str, str]" = {}
@@ -106,6 +133,7 @@ class HelperProcessLifecycle:
         self._the_parent_holds_the_last_not_ready_report = True
         self._transparent_frames_while_not_ready: "Optional[TransparentFramesOnTheImageOutputsOfANodeNotReady]" = None
         self._not_ready_warnings_already_logged: "set[str]" = set()
+        self._computed_value_builds_the_parent_last_took: "Optional[list[dict[str, Any]]]" = []
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -135,7 +163,8 @@ class HelperProcessLifecycle:
         on a steady beat: each tick tells the parent whether the node is ready,
         since a node's own thread may report either; and while it is not paused
         takes the values a node function's wires gave since the last, as a
-        frame of any other node does, and, while it is not ready, sends a
+        frame of any other node does, telling the parent when a function node
+        that read called starts or stops raising, and, while it is not ready, sends a
         transparent frame on each of its Image outputs."""
         tick_seconds = 1.0 / PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE
         while self._a_manual_node_runs():
@@ -146,6 +175,7 @@ class HelperProcessLifecycle:
             self._tell_the_parent_whether_the_node_is_ready()
             if not self._paused:
                 self._take_the_new_values_at_a_tick()
+                self._tell_the_parent_when_a_function_node_starts_or_stops_raising()
                 self._send_transparent_frames_while_the_node_is_not_ready()
             select.select([self._bridge.lifecycle_command_arrival_fd()], [], [], tick_seconds)
         return self._bridge.next_lifecycle_command()
@@ -163,10 +193,12 @@ class HelperProcessLifecycle:
 
     def _tell_the_parent_whether_the_node_is_ready(self) -> None:
         """Send the parent why the node is not ready when that changes, and
-        `None` once it is ready again. After a report the parent refused or did
-        not answer, what it holds is unknown, so the next call sends it again."""
+        `None` once it is ready again, then how the builds of a node function's
+        computed values stand. After a report the parent refused or did not
+        answer, what it holds is unknown, so the next call sends it again."""
         if self._hosted is None:
             return
+        self._tell_the_parent_how_the_computed_value_builds_stand()
         not_ready_report = not_ready_report_on_runtime_context(self._hosted.full_access_context)
         not_ready_because = None if not_ready_report is None else not_ready_report[0]
         if (
@@ -190,6 +222,31 @@ class HelperProcessLifecycle:
             log.warn("this node is not ready", reason=not_ready_because)
         self._not_ready_reason_the_parent_last_took = not_ready_because
         self._the_parent_holds_the_last_not_ready_report = True
+
+    def _tell_the_parent_how_the_computed_value_builds_stand(self) -> None:
+        """Send the parent how the builds of each computed value of a node
+        function stand when that changes, so the graph shows a build still
+        running or failed on the node."""
+        assert self._hosted is not None
+        if not self._hosted.a_node_function:
+            return
+        builds = [
+            computed_value_builds_on_the_escalate_wire(of_one)
+            for of_one in self._hosted.instance.builds_of_each_computed_value()
+        ]
+        if builds == self._computed_value_builds_the_parent_last_took:
+            return
+        try:
+            self._bridge.request_from_parent({"op": "set_computed_value_builds", "builds": builds})
+        except EscalateRequestError as refusal:
+            log.error(
+                "the parent did not take how this node's computed values build; the next hook "
+                "tells it again",
+                error=str(refusal),
+            )
+            self._computed_value_builds_the_parent_last_took = None
+            return
+        self._computed_value_builds_the_parent_last_took = builds
 
     def _send_transparent_frames_while_the_node_is_not_ready(self) -> None:
         """Send a transparent frame on each of the node's Image outputs, while
@@ -356,6 +413,11 @@ class HelperProcessLifecycle:
             self._hosted.call_hook_letting_failure_propagate(
                 "setup", self._hosted.full_access_context
             )
+            pin_groups = class_node_pin_groups_of(self._node_class)
+            if pin_groups and is_a_node_function(self._node_class):
+                self._pin_group_slots_followed = NodeFunctionPinGroupSlotsFollowed(
+                    pin_groups, port_wiring, link_data_access=self._link_data_access
+                )
         except KeyboardInterrupt:
             # The ladder interrupted a setup that outran its budget. The parent
             # hears a refusal rather than nothing, and this helper stays up to
@@ -390,6 +452,9 @@ class HelperProcessLifecycle:
             )
         if function_nodes_ran_compiled:
             ready["function_nodes_ran_compiled"] = function_nodes_ran_compiled
+        if self._pin_group_slots_followed is not None:
+            # The parent gives this node no rebuild when its slots change: it follows them here.
+            ready["takes_its_pin_group_slots_live"] = True
         self._bridge.send(ready)
 
     def _run(self, command: "dict[str, Any]") -> None:
@@ -709,6 +774,7 @@ class HelperProcessLifecycle:
             )
         if command.get("direction") == "input" and isinstance(command.get("port"), str):
             self._hand_back_what_a_link_stopped_driving(command["port"])
+        self._follow_a_link_unwired_from_a_pin_group_slot(command.get("link_id"))
 
     def _wire_link(self, command: "dict[str, Any]") -> None:
         direction = command.get("direction")
@@ -731,6 +797,11 @@ class HelperProcessLifecycle:
             )
             self._answer_the_parents_wire_link(link_id, f"unknown link direction {direction!r}")
             return
+        slots_refused = self._follow_a_link_wired_into_a_pin_group_slot(link_id, link.get("name"))
+        if slots_refused is not None:
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
+            self._answer_the_parents_wire_link(link_id, slots_refused)
+            return
         try:
             wire_link_data_access(self._link_data_access, port_wiring)
         except Exception as wire_failure:
@@ -740,6 +811,7 @@ class HelperProcessLifecycle:
                 direction=direction,
                 error=str(wire_failure),
             )
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
             self._answer_the_parents_wire_link(link_id, str(wire_failure))
             return
         self._answer_the_parents_wire_link(link_id, None)
@@ -753,6 +825,11 @@ class HelperProcessLifecycle:
                 link_id, "this node's setup did not succeed, so no island feeds its inputs"
             )
             return
+        slots_refused = self._follow_a_link_wired_into_a_pin_group_slot(link_id, input_port)
+        if slots_refused is not None:
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
+            self._answer_the_parents_wire_link(link_id, slots_refused)
+            return
         try:
             self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
         except Exception as feed_failure:
@@ -762,6 +839,7 @@ class HelperProcessLifecycle:
                 input_port=input_port,
                 error=str(feed_failure),
             )
+            self._follow_a_link_unwired_from_a_pin_group_slot(link_id)
             self._answer_the_parents_wire_link(link_id, str(feed_failure))
             return
         self._answer_the_parents_wire_link(link_id, None)
@@ -780,6 +858,7 @@ class HelperProcessLifecycle:
                 error=str(unfeed_failure),
             )
         self._hand_back_what_a_link_stopped_driving(input_port)
+        self._follow_a_link_unwired_from_a_pin_group_slot(command.get("link_id"))
 
     def _set_input_values(self, command: "dict[str, Any]") -> None:
         try:
@@ -802,6 +881,9 @@ class HelperProcessLifecycle:
                     "this node's fields could not take the input values the engine handed it",
                     error=str(field_values_refused),
                 )
+        if self._pin_group_slots_followed is not None:
+            self._pin_group_slots_followed.note_the_input_values(command.get("input_values") or {})
+            self._give_the_node_function_its_pin_group_slots()
         fired = command.get("fired") or []
         if not fired:
             return
@@ -816,6 +898,43 @@ class HelperProcessLifecycle:
                 fired=fired,
                 error=str(fire_refused),
             )
+
+    def _follow_a_link_wired_into_a_pin_group_slot(
+        self, link_id: "Optional[str]", port: "Optional[str]"
+    ) -> "Optional[str]":
+        """Give a node function the slot a link or an island wired into its port `port` reaches,
+        while it plays; why it could not hold it, or `None`."""
+        followed = self._pin_group_slots_followed
+        if followed is None or not isinstance(link_id, str) or not isinstance(port, str):
+            return None
+        followed.note_a_link_wired(link_id, port)
+        return self._give_the_node_function_its_pin_group_slots()
+
+    def _follow_a_link_unwired_from_a_pin_group_slot(self, link_id: "Optional[str]") -> None:
+        """Drop the slots of a node function no link or island reaches any more, once link or
+        island `link_id` is unwired, while it plays."""
+        followed = self._pin_group_slots_followed
+        if followed is None or not isinstance(link_id, str):
+            return
+        followed.note_a_link_unwired(link_id)
+        self._give_the_node_function_its_pin_group_slots()
+
+    def _give_the_node_function_its_pin_group_slots(self) -> "Optional[str]":
+        """Give a node function the slots its pin groups' wiring gives them; why it could not,
+        logged, with every group left holding the slots it held, or `None`."""
+        followed, hosted = self._pin_group_slots_followed, self._hosted
+        if followed is None or hosted is None or hosted.fields is None:
+            return None
+        try:
+            followed.give_the_node_its_slots(hosted.instance, hosted.fields)
+        except Exception as slots_refused:
+            log.error(
+                "this node could not hold the slots its pin groups' wiring gives them",
+                slot_counts=followed.slot_counts(),
+                error=str(slots_refused),
+            )
+            return str(slots_refused)
+        return None
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
         if link_id is None:

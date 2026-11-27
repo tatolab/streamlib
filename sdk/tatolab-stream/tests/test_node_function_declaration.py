@@ -21,9 +21,11 @@ from tatolab.stream import (
     OutputPin,
     PinGroup,
     PinTypeChoice,
+    PinTypeFromSetting,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     SettingOnly,
+    Tensor,
     Texture,
     Trigger,
     WireOnly,
@@ -185,14 +187,27 @@ def test_an_input_read_at_setup_is_refused_inside_or_around_its_input(gain: Call
     assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "level")
 
 
-def test_an_input_choosing_a_pin_type_is_refused() -> None:
+def convert(
+    *,
+    content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Texture)),
+    result: OutputPin[Annotated[Texture | Tensor, PinTypeFromSetting("content_type")]],
+) -> None: ...
+
+
+def test_an_input_choosing_a_pin_type_is_live_and_its_output_takes_the_type_it_holds() -> None:
     """Mental-revert: read a `PinTypeChoice` input as a class's field is, and the node function
-    declares a setting whose set rebuilds the node."""
-
-    def convert(*, content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Texture))) -> None: ...
-
-    refused = refusal_of(declared_with_keywords(convert))
-    assert (refused.finding_code, refused.pin) == ("pin_type_choice_on_a_node_function", "content_type")
+    declares a setting read at setup, whose set rebuilds the node; refuse it, and no node
+    function chooses a pin's type."""
+    declared = declared_with_keywords(convert)()
+    (content_type,) = getattr(declared, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    (result,) = getattr(declared, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert content_type["name"] == "content_type"
+    assert content_type["input_mode"] == {"mode": "wire_or_value"}
+    assert content_type["pin_declaration"]["pin_type"]["pin_type"]["type"] == "pin_type_choice"
+    assert result["pin_declaration"]["pin_type"] == {
+        "kind": "set_by_input",
+        "input_name": "content_type",
+    }
 
 
 def test_a_parameter_named_private_is_refused() -> None:
@@ -220,11 +235,50 @@ def test_a_generator_body_is_refused() -> None:
     assert (refused.finding_code, refused.node) == ("node_function_not_a_plain_def", "gain")
 
 
-def test_a_pin_group_is_refused() -> None:
-    def stack(*, layers: PinGroup[Layer]) -> None: ...
+@dataclasses.dataclass(frozen=True)
+class PlacedLayer:
+    picture: InputPin[Texture]
+    opacity: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 1.0
+
+
+def test_a_pin_group_is_declared_as_a_class_declares_it() -> None:
+    """Mental-revert: refuse a `PinGroup` parameter, or stamp no group, and the node function
+    declares no layers to wire."""
+
+    @node(execution="reactive")
+    def stack(*, layers: Annotated[PinGroup[PlacedLayer], Description("Each layer.")]) -> None: ...
+
+    @node(execution="reactive")
+    class StackAsAClass:
+        layers: Annotated[PinGroup[PlacedLayer], Description("Each layer.")]
+
+    assert isinstance(stack, NodeFunction)
+    assert getattr(stack, NODE_DECLARATION_PIN_GROUPS_STAMP) == getattr(
+        StackAsAClass, NODE_DECLARATION_PIN_GROUPS_STAMP
+    )
+    (layers,) = stack.pin_groups
+    assert (layers.attribute, layers.name, layers.slot_class) == ("layers", "layers", PlacedLayer)
+    assert [member.port for member in layers.members] == ["picture", "opacity"]
+
+
+@dataclasses.dataclass(frozen=True)
+class LayerHoldingASetting:
+    picture: InputPin[Texture]
+    blend: Annotated[float, SettingOnly()] = 1.0
+
+
+def test_a_slot_holding_a_setting_is_refused() -> None:
+    def stack(*, layers: PinGroup[LayerHoldingASetting]) -> None: ...
 
     refused = refusal_of(declared_with_keywords(stack))
-    assert (refused.finding_code, refused.pin) == ("pin_group_on_a_node_function", "layers")
+    assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "layers.blend")
+
+
+def test_a_pin_group_given_a_value_is_refused_as_a_class_group_is() -> None:
+    def stack(*, layers: PinGroup[Layer] = ()) -> None: ...  # pyright: ignore[reportArgumentType]
+
+    refused = refusal_of(declared_with_keywords(stack))
+    assert (refused.finding_code, refused.pin) == ("pin_has_a_value", "layers")
 
 
 def test_a_pin_given_a_value_is_refused_as_a_class_pin_is() -> None:

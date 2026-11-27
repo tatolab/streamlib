@@ -51,7 +51,7 @@ use super::open_iceoryx2_service_op::{
     open_a_read_of_a_link_by_the_reader_of_a_function_node_island,
 };
 use super::shader_node_island::{
-    is_a_call_inside_a_shader_node_island, where_a_link_into_a_fused_shader_node_is_read,
+    is_wired_as_a_call_inside_a_shader_node_island, where_a_link_into_a_fused_shader_node_is_read,
 };
 
 /// How the compiler wires one link, by the kinds of its two ends.
@@ -162,14 +162,14 @@ pub(crate) fn is_a_function_node(graph: &Graph, node_id: &NodeRunId) -> bool {
         .is_some_and(is_a_function_node_in_the_graph)
 }
 
-/// How `link_id` is wired, by whether each of its ends runs inside the read
-/// of each node it feeds.
+/// How `link_id` is wired: by where the shader node islands it touches were placed, else by
+/// whether each of its ends runs inside the read of each node it feeds.
 pub(crate) fn how_a_link_is_wired(
     graph: &Graph,
     link_id: &LinkUniqueId,
 ) -> Result<HowALinkIsWired> {
     let link = link_in(graph, link_id)?;
-    if is_a_call_inside_a_shader_node_island(graph, link) {
+    if is_wired_as_a_call_inside_a_shader_node_island(graph, link) {
         return Ok(HowALinkIsWired::AsACallInsideAShaderNodeIsland);
     }
     if let Some(host_input_port) = where_a_link_into_a_fused_shader_node_is_read(graph, link) {

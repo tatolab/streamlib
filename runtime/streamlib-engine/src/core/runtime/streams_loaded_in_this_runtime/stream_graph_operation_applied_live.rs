@@ -4,9 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use streamlib_project_repository::{
-    STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
-    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphOperation,
-    is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
+    STREAM_FRAGMENT_NODE_TYPE, StreamDocumentsAnEditStaged, StreamGraphDocument,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    StreamGraphOperation, is_a_graph_interface_node_type, is_a_node_type_of_the_graph_itself,
 };
 
 use uuid::Uuid;
@@ -261,16 +261,24 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Reconcile the live graph to itself as drawn, so each stream fragment places the stream it
-    /// references as that stream's document, or its import's, is on disk now.
-    pub(crate) async fn reconcile_each_stream_fragment_to_the_stream_it_references(
+    /// Reconcile the live graph to `graph_document`, its graph document as an edit staged it,
+    /// or, with none, to itself as drawn, so each stream fragment places the stream it
+    /// references as `stream_documents_an_edit_staged` holds it when an edit staged it, and
+    /// otherwise as that stream's document, or its import's, is on disk now.
+    pub(crate) async fn reconcile_the_live_graph_to_the_streams_an_edit_staged(
         &self,
+        graph_document: Option<serde_json::Value>,
+        stream_documents_an_edit_staged: &StreamDocumentsAnEditStaged,
     ) -> Result<()> {
-        let graph_as_drawn = self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?;
+        let graph_document = match graph_document {
+            Some(graph_document) => graph_document,
+            None => self.the_graph_as_drawn_once_what_is_pending_deletion_leaves()?,
+        };
         self.reconcile_the_live_graph_to_the_graph_document(
-            graph_as_drawn,
+            graph_document,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
             KeptNodesLeftToRebuild::HandedTheirValuesLive,
+            stream_documents_an_edit_staged,
         )
         .await
     }
@@ -313,6 +321,7 @@ impl LoadedStreamInThisRuntime {
                 graph_document.to_value(),
                 LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
                 KeptNodesLeftToRebuild::RebuiltByTheCaller,
+                &StreamDocumentsAnEditStaged::default(),
             )
             .await
         {
@@ -321,6 +330,7 @@ impl LoadedStreamInThisRuntime {
                     graph_as_drawn,
                     LinksAReconcileMakes::EachAsASavedGraphsLink,
                     KeptNodesLeftToRebuild::RebuiltByTheCaller,
+                    &StreamDocumentsAnEditStaged::default(),
                 )
                 .await
             {

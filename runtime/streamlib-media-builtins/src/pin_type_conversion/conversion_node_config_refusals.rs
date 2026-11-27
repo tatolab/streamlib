@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The config refusals the conversion nodes share, raised at setup.
+//! The refusals of the values the conversion nodes share, raised when a node builds from them.
 
 use streamlib::sdk::error::{Error, Result};
 

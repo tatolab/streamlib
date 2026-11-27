@@ -11,6 +11,7 @@ import pytest
 
 from tatolab.stream import (
     EncodedVideo,
+    Input,
     Texture,
     InputPin,
     NodeDeclarationRefusal,
@@ -66,6 +67,19 @@ def picture_passed_on_stating_its_meta_above(image: Texture) -> Texture: ...
 def picture_passed_on_stating_its_meta_below(image: Texture) -> Texture: ...
 
 
+# Mental-revert: count a node function's value inputs as inputs it converts, and this is refused
+# at import for its three inputs that take a wire.
+@node.meta(conversion=True)
+@node(execution="manual")
+def H264EncoderAsOneFunction(
+    *,
+    bitrate_bps: Input[int] = Input(4_000_000),
+    video: InputPin[Texture],
+    fps: Input[int] = Input(60),
+    encoded_video: OutputPin[EncodedVideo],
+) -> None: ...
+
+
 @node
 def level_doubled(level: float = 0.0) -> float:
     return level * 2.0
@@ -105,6 +119,7 @@ def PassedOn(value: _Passed) -> _Passed:
         level_as_text_stating_its_meta_below,
         picture_passed_on_stating_its_meta_above,
         picture_passed_on_stating_its_meta_below,
+        H264EncoderAsOneFunction,
     ],
 )
 def test_a_class_function_or_shader_stating_a_conversion_is_stamped_as_one(declared: Any):
@@ -125,6 +140,20 @@ def test_a_conversion_keeps_its_category_and_description_beside_it():
 def test_conversion_takes_only_true(not_true: object):
     with pytest.raises(TypeError, match="takes `conversion` only as `True`"):
         node.meta(conversion=not_true)  # type: ignore[arg-type]
+
+
+def test_a_node_function_with_two_streams_in_is_refused():
+    with pytest.raises(NodeDeclarationRefusal, match="two inputs that take a wire, `video` and `overlay`"):
+
+        @node.meta(conversion=True)
+        @node(execution="manual")
+        def Mixer(
+            *,
+            video: InputPin[Texture],
+            overlay: InputPin[Texture],
+            opacity: Input[float] = Input(1.0),
+            result: OutputPin[Texture],
+        ) -> None: ...
 
 
 def test_a_class_with_a_second_input_taking_a_wire_is_refused_naming_it_and_the_fix():

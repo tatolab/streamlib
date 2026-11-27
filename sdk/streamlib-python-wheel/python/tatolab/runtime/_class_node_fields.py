@@ -5,9 +5,10 @@
 
 A field holds the value its wire gave last while a wire feeds it, and the value set on it
 otherwise: its stored value from the `setup` command, then each one `set_input_values` hands
-over. A value arrives in its stored JSON form and is held in its Python form, a `Color` for a
-Color, an `Asset` for an Asset. A setting is assigned once, before `__init__()`, since a change
-to one rebuilds the node.
+over. A field of a slot a node function's pin group holds from a later time on takes the value
+last handed over for it. A value arrives in its stored JSON form and is held in its Python
+form, a `Color` for a Color, an `Asset` for an Asset. A setting is assigned once, before
+`__init__()`, since a change to one rebuilds the node.
 """
 
 from __future__ import annotations
@@ -44,26 +45,44 @@ class ClassNodeFields:
         """`assign_field_values` gives a running node each new value, by its port's name; a class
         node's fields are assigned, and a node function's inputs written to its scope."""
         self._assign_field_values = assign_field_values
+        self._link_data_access = link_data_access
         self._inputs = inputs
         self._node_id = node_id
-        self._fields = {member.port: member for member in members if member.form == "field"}
+        self._fields: "dict[str, ClassNodeMember]" = {}
         self._read_from_its_wire: "dict[str, ValueReadAtAnInputPort]" = {}
-        for member in self._fields.values():
+        self._stored_input_values = dict(stored_input_values or {})
+        self._set_values: "dict[str, Any]" = {}
+        self._each_held_from_its_wire: "set[str]" = set()
+        self.hold_the_fields_of(members)
+
+    def hold_the_fields_of(self, members: "tuple[ClassNodeMember, ...]") -> "dict[str, Any]":
+        """Hold each field of `members` it does not hold yet, each followed from its wire or its
+        set value as every field it holds is, and answer the set value of each, by its port's
+        name: a slot a node function's pin group holds while it plays brings its fields."""
+        held: "dict[str, ClassNodeMember]" = {}
+        for member in members:
+            if member.form != "field" or member.port in self._fields:
+                continue
+            self._fields[member.port] = member
+            held[member.port] = member
             declared_pin_type: Any = member.pin_declaration["pin_type"]
             if member.a_setting or declared_pin_type["kind"] != "is":
                 continue
             read = the_reader_of_a_value_at_an_input_port(
                 declared_pin_type["pin_type"],
-                link_data_access=link_data_access,
-                inputs=inputs,
-                node_id=node_id,
+                link_data_access=self._link_data_access,
+                inputs=self._inputs,
+                node_id=self._node_id,
                 input_port=member.port,
                 bundle_class=member.bundle_class,
             )
             if read is not None:
                 self._read_from_its_wire[member.port] = read
-        self._set_values = self._python_forms_of(stored_input_values or {})
-        self._each_held_from_its_wire: "set[str]" = set()
+        set_values = self._python_forms_of(
+            {port: value for port, value in self._stored_input_values.items() if port in held}
+        )
+        self._set_values.update(set_values)
+        return set_values
 
     def values_to_build_with(self) -> "dict[str, Any]":
         """The value each field is built with, by its port's name: its set value, or its default when it has none."""
@@ -75,6 +94,7 @@ class ClassNodeFields:
         `stored_input_values` is every value the node's unlinked inputs read, so a field it
         leaves out had its value taken off, and holds its default again.
         """
+        self._stored_input_values = dict(stored_input_values)
         taken = self._python_forms_of(stored_input_values)
         for port, member in self._fields.items():
             if (

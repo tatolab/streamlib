@@ -25,6 +25,9 @@ pub(super) struct CompilationPlan {
     /// Each wired link whose two ends no longer carry types that connect, to unwire and keep in
     /// the graph, carrying nothing.
     pub(super) links_to_hold_unwired: Vec<LinkUniqueId>,
+    /// Each link of `links_to_add` an end out of process refused to open, to unwire, keeping it
+    /// in the graph, before it is wired again.
+    pub(super) links_to_wire_again: Vec<LinkUniqueId>,
     /// Each function node to promote out of the islands of the reader whose
     /// helper it crashed, beside that reader and why.
     pub(super) function_node_promotions:

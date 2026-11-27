@@ -11,6 +11,12 @@ outgoing track of the gateway's broadcast and gives itself out on its own
 that track; a receive, wired a gateway's connection, reads a track of any
 broadcast at the relay its gateway dials. The nodes of one stream reach each
 other over iceoryx2 shared memory, and only the gateway touches the network.
+
+Each node is written as one function, its native thread a computed value of the
+inputs it reads: a new relay address dials a new session, a new track name
+declares or reads the new track, and the node, its links and the rest of the
+stream run on. The new thread takes its node's services from the one before,
+which has ended once it is closed.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from __future__ import annotations
 import json
 from collections.abc import Buffer, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, Final, Literal, Self, TypeVar
+from typing import Annotated, Any, Callable, Final, Literal, Self, TypeVar
 
 from tatolab.stream import (
     Audio,
@@ -27,6 +33,7 @@ from tatolab.stream import (
     EncodedAudio,
     EncodedCodecs,
     EncodedVideo,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
@@ -34,13 +41,12 @@ from tatolab.stream import (
     PinTypeFromSetting,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     SoleReferrer,
     StreamDelivery,
     Tensor,
     cast_exposed_name_to_url_safe,
+    computed,
     connection_type,
-    log,
     named_pin_type,
     node,
 )
@@ -61,10 +67,6 @@ __all__ = [
 
 GATEWAY_SETTINGS_INPUT_PORT = "settings"
 RECEIVE_CONTENT_OUTPUT_PORT = "content"
-
-#: How long `stop()` waits for a native thread. Each thread's own wait is
-#: bounded well under it; a relay session closing takes the longest.
-NATIVE_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
 
 # The tracks a gateway writes its broadcast's catalog on, which no `MoqTrack` takes.
 GATEWAY_CATALOG_TRACK_NAMES = ("catalog.json", "catalog.json.z")
@@ -189,6 +191,30 @@ def _catalog_entry_read_from(catalog: MoqCatalogEntry) -> "dict[str, Any]":
     return {"section": catalog.section, "entry": entry}
 
 
+def _gateway_settings_stated(values: "Mapping[str, str | None]") -> "dict[str, Any]":
+    """The relay settings a gateway holds, as its native half reads them: each one set, its
+    broadcast cast to URL-safe characters; refused naming a setting that holds no non-empty
+    str."""
+    for key, value in values.items():
+        if key != "kind":
+            _refuse_a_value_that_is_not_a_str("MoqGateway", key, value)
+    stated: "dict[str, Any]" = {key: value for key, value in values.items() if value is not None}
+    if "broadcast" in stated:
+        stated["broadcast"] = cast_exposed_name_to_url_safe(stated["broadcast"])
+    return stated
+
+
+def _track_name_declared(track: str) -> str:
+    """The name a `MoqTrack` declares for `track`, cast to URL-safe characters; refused while it
+    is empty or names a track the gateway writes its catalog on."""
+    if not track:
+        raise ValueError("MoqTrack: `track` is not set; it takes the track's name")
+    track_name = cast_exposed_name_to_url_safe(track)
+    if track_name in GATEWAY_CATALOG_TRACK_NAMES:
+        raise ValueError(f"MoqTrack: `track` is {track_name!r}, a name the gateway writes its catalog on")
+    return track_name
+
+
 @node.meta(
     description=(
         "Holds one connection to a MoQ relay and publishes one broadcast there.\n\n"
@@ -198,106 +224,97 @@ def _catalog_entry_read_from(catalog: MoqCatalogEntry) -> "dict[str, Any]":
         "dials from its settings, and a `MoqRelaySettings` on `settings` replaces them — the "
         "way a node reading a secret store hands over a credential, `None` unsetting one. A "
         "relay that drops the connection is dialed again, and a moq.pro credential is "
-        "renewed before it expires."
+        "renewed before it expires. A setting changed while the stream plays closes the "
+        "session and dials one with the new settings; its tracks and receives carry on over "
+        "it."
     ),
 )
 @node(execution="manual", paced_by_real_time=True)
-class MoqGateway:
-    """One relay connection, one broadcast."""
-
-    kind: Annotated[
-        MoqGatewayRelayKind | None,
-        SettingOnly(),
-        Description(
-            "The relay's kind: `moq-relay` for one a person or a rig runs, `cloudflare` for "
-            "one Cloudflare provisioned, `moqpro` for a moq.pro project."
-        ),
-    ] = None
-    broadcast: Annotated[
-        str | None,
-        SettingOnly(),
-        Description(
-            "The broadcast's name, cast to URL-safe characters; the relay serves it as "
-            "`<broadcast>.hang` under the credential's root."
-        ),
-    ] = None
-    relay_url: Annotated[
-        str | None,
-        SettingOnly(),
-        Description(
-            "`moq-relay` and `cloudflare`: the relay's URL. Cloudflare's carries its token as "
-            "the last path segment."
-        ),
-    ] = None
-    token: Annotated[
-        str | None, SettingOnly(), Description("`moq-relay`: a token its moq-auth server reads.")
-    ] = None
-    certificate_fingerprint: Annotated[
-        str | None,
-        SettingOnly(),
-        Description(
-            "`moq-relay`: the SHA-256 fingerprint of a self-signed certificate to pin, as the "
-            "relay serves it at `/certificate.sha256`."
-        ),
-    ] = None
-    project_id: Annotated[str | None, SettingOnly(), Description("`moqpro`: the project's id.")] = None
-    signing_key: Annotated[
-        str | None,
-        SettingOnly(),
-        Description("`moqpro`: the project's signing key, the JWK moq.pro gave."),
-    ] = None
+def MoqGateway(
+    *,
+    kind: Input[
+        Annotated[
+            MoqGatewayRelayKind | None,
+            Description(
+                "The relay's kind: `moq-relay` for one a person or a rig runs, `cloudflare` for "
+                "one Cloudflare provisioned, `moqpro` for a moq.pro project."
+            ),
+        ]
+    ] = Input(None),
+    broadcast: Input[
+        Annotated[
+            str | None,
+            Description(
+                "The broadcast's name, cast to URL-safe characters; the relay serves it as "
+                "`<broadcast>.hang` under the credential's root."
+            ),
+        ]
+    ] = Input(None),
+    relay_url: Input[
+        Annotated[
+            str | None,
+            Description(
+                "`moq-relay` and `cloudflare`: the relay's URL. Cloudflare's carries its token as "
+                "the last path segment."
+            ),
+        ]
+    ] = Input(None),
+    token: Input[Annotated[str | None, Description("`moq-relay`: a token its moq-auth server reads.")]] = Input(
+        None
+    ),
+    certificate_fingerprint: Input[
+        Annotated[
+            str | None,
+            Description(
+                "`moq-relay`: the SHA-256 fingerprint of a self-signed certificate to pin, as the "
+                "relay serves it at `/certificate.sha256`."
+            ),
+        ]
+    ] = Input(None),
+    project_id: Input[Annotated[str | None, Description("`moqpro`: the project's id.")]] = Input(None),
+    signing_key: Input[
+        Annotated[str | None, Description("`moqpro`: the project's signing key, the JWK moq.pro gave.")]
+    ] = Input(None),
     settings: InputPin[
         Annotated[
             MoqRelaySettings | None,
             StreamDelivery("newest"),
             Description("Relay settings replacing the gateway's own; `None` unsets one"),
         ]
-    ]
+    ],
     connection: OutputPin[
         Annotated[MoqConnection, Description("This gateway, for a MoqTrack or a MoqTrackReceive")]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """One relay connection, one broadcast: the session is computed from the relay settings."""
+    del settings, connection
+    module_host_table = ctx.open_module_host_table(input_ports=[GATEWAY_SETTINGS_INPUT_PORT])
+    settings_input = _native.MoqGatewaySettingsInput(module_host_table)
+    runtime_id, stream_id, gateway_node = ctx.runtime_id, ctx.stream_id, ctx.node_name
+    relay_settings = {
+        "kind": kind,
+        "broadcast": broadcast,
+        "relay_url": relay_url,
+        "token": token,
+        "certificate_fingerprint": certificate_fingerprint,
+        "project_id": project_id,
+        "signing_key": signing_key,
+    }
 
-    def __init__(self) -> None:
-        for key in GATEWAY_RELAY_SETTING_NAMES:
-            if key == "kind":
-                continue
-            _refuse_a_value_that_is_not_a_str("MoqGateway", key, getattr(self, key))
-        self._gateway_thread: "_native.MoqGatewayThread | None" = None
-
-    def settings_stated(self) -> "dict[str, Any]":
-        """The settings the gateway holds, as the native half reads them: each one set, its
-        broadcast cast to URL-safe characters."""
-        stated = {
-            key: getattr(self, key) for key in GATEWAY_RELAY_SETTING_NAMES if getattr(self, key) is not None
-        }
-        if "broadcast" in stated:
-            stated["broadcast"] = cast_exposed_name_to_url_safe(stated["broadcast"])
-        return stated
-
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        module_host_table = ctx.open_module_host_table(input_ports=[GATEWAY_SETTINGS_INPUT_PORT])
-        self._gateway_thread = _native.MoqGatewayThread(
+    def dial_the_relay() -> _native.MoqGatewayThread:
+        return _native.MoqGatewayThread(
             module_host_table,
-            runtime_id=ctx.runtime_id,
-            stream_id=ctx.stream_id,
-            gateway_node=ctx.node_name,
-            config_settings=self.settings_stated(),
+            settings_input,
+            runtime_id=runtime_id,
+            stream_id=stream_id,
+            gateway_node=gateway_node,
+            config_settings=_gateway_settings_stated(
+                {key: setting.get() for key, setting in relay_settings.items()}
+            ),
         )
 
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_the_gateway_thread()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_the_gateway_thread()
-
-    def _stop_the_gateway_thread(self) -> None:
-        if self._gateway_thread is None:
-            return
-        if not self._gateway_thread.stop_and_join(NATIVE_THREAD_JOIN_TIMEOUT_SECONDS):
-            log.warn("MoqGateway: the relay session is still closing")
-        self._gateway_thread = None
+    computed(dial_the_relay)
 
 
 @node.meta(
@@ -307,74 +324,61 @@ class MoqGateway:
         "It gives itself out on `connection`, which one `MoqTrackSend` takes to write to the "
         "track; a second send wired the same track is refused at load. A stream may hold "
         "the connection in a graph variable. Its catalog entry is `catalog` when set and "
-        "otherwise the one built from the stream facts of the port feeding its send."
+        "otherwise the one built from the stream facts of the port feeding its send. A "
+        "`track` or `catalog` changed while the stream plays declares the new one in its "
+        "place, and its send writes there with no restart."
     ),
 )
 @node(execution="manual")
-class MoqTrack:
-    """One track of a gateway's broadcast."""
+def MoqTrack(
+    *,
+    gateway: Input[
+        Annotated[
+            MoqConnection | None,
+            Description(
+                "The gateway whose broadcast carries the track; the node fails, naming `gateway`, until it is wired"
+            ),
+        ]
+    ] = Input(None),
+    track: Input[
+        Annotated[
+            str,
+            Description(
+                "The track's name in the broadcast, cast to URL-safe characters; the node fails, "
+                "naming `track`, while it is empty."
+            ),
+        ]
+    ] = Input(""),
+    catalog: Input[
+        Annotated[
+            MoqCatalogEntry | None,
+            Description(
+                "The track's catalog entry, replacing the one built from the stream facts of the "
+                "port feeding its send. Unset: the built entry."
+            ),
+        ]
+    ] = Input(None),
+    connection: OutputPin[Annotated[MoqTrackConnection, Description("This track, for one MoqTrackSend")]],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """One track of a gateway's broadcast: its declaration is computed from its inputs."""
+    del connection
+    module_host_table = ctx.open_module_host_table()
+    runtime_id, stream_id, track_node = ctx.runtime_id, ctx.stream_id, ctx.node_name
 
-    gateway: Annotated[
-        MoqConnection | None,
-        Description("The gateway whose broadcast carries the track; the node fails, naming `gateway`, until it is wired"),
-    ] = None
-    track: Annotated[
-        str,
-        SettingOnly(),
-        Description(
-            "The track's name in the broadcast, cast to URL-safe characters; the node fails, "
-            "naming `track`, while it is empty."
-        ),
-    ] = ""
-    catalog: Annotated[
-        MoqCatalogEntry | None,
-        SettingOnly(),
-        Description(
-            "The track's catalog entry, replacing the one built from the stream facts of the "
-            "port feeding its send. Unset: the built entry."
-        ),
-    ] = None
-    connection: OutputPin[Annotated[MoqTrackConnection, Description("This track, for one MoqTrackSend")]]
-
-    def __init__(self) -> None:
-        self._track_name = cast_exposed_name_to_url_safe(self.track) if self.track else ""
-        if self._track_name in GATEWAY_CATALOG_TRACK_NAMES:
-            raise ValueError(
-                f"MoqTrack: `track` is {self._track_name!r}, a name the gateway writes its catalog on"
-            )
-        self._catalog_entry = None if self.catalog is None else _catalog_entry_read_from(self.catalog)
-        self._declaration_thread: "_native.MoqTrackDeclarationThread | None" = None
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        if not self._track_name:
-            raise ValueError("MoqTrack: `track` is not set; it takes the track's name")
-        _set_or_refused("MoqTrack", "gateway", self.gateway, "a `MoqGateway`'s connection")
-
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        self._declaration_thread = _native.MoqTrackDeclarationThread(
-            ctx.open_module_host_table(),
-            runtime_id=ctx.runtime_id,
-            stream_id=ctx.stream_id,
-            track_node=ctx.node_name,
-            gateway_node=_set_or_refused("MoqTrack", "gateway", self.gateway, "a `MoqGateway`'s connection").name,
-            track=self._track_name,
-            catalog_entry=self._catalog_entry,
+    def declare_the_track() -> _native.MoqTrackDeclarationThread:
+        declared_catalog = catalog.get()
+        return _native.MoqTrackDeclarationThread(
+            module_host_table,
+            runtime_id=runtime_id,
+            stream_id=stream_id,
+            track_node=track_node,
+            gateway_node=_set_or_refused("MoqTrack", "gateway", gateway.get(), "a `MoqGateway`'s connection").name,
+            track=_track_name_declared(track.get()),
+            catalog_entry=None if declared_catalog is None else _catalog_entry_read_from(declared_catalog),
         )
 
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_declaring()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_declaring()
-
-    def _stop_declaring(self) -> None:
-        if self._declaration_thread is None:
-            return
-        self._declaration_thread.stop_and_join()
-        self._declaration_thread = None
+    computed(declare_the_track)
 
 
 #: What a `MoqTrackSend` writes to its track: encoded media, Audio, a CPU-resident Tensor, or a `MoqRecord`.
@@ -396,53 +400,54 @@ SentContent = EncodedVideo | EncodedAudio | Audio | Tensor | MoqRecord
         "A Texture carries no bytes off its machine: encode it first."
     ),
 )
-@node
-class MoqTrackSend:
-    """A port's messages, out to a track."""
-
-    track: Annotated[
-        SoleReferrer[MoqTrackConnection] | None,
-        Description("The track to write to; no other send takes it, and the node fails, naming `track`, until it is wired"),
-    ] = None
+@node()
+def MoqTrackSend(
+    *,
+    track: Input[
+        Annotated[
+            SoleReferrer[MoqTrackConnection] | None,
+            Description(
+                "The track to write to; no other send takes it, and the node fails, naming `track`, until it is wired"
+            ),
+        ]
+    ] = Input(None),
     content: InputPin[
         Annotated[
             SentContent,
             StreamDelivery("ordered"),
             Description("The messages to send: encoded media, Audio, a CPU-resident Tensor or a MoqRecord"),
         ]
-    ]
-
-    def __init__(self) -> None:
-        self._publisher: "_native.MoqTrackSendPublisher | None" = None
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        track = _set_or_refused("MoqTrackSend", "track", self.track, "a `MoqTrack`'s connection")
-        self._publisher = _native.MoqTrackSendPublisher(
-            ctx.open_module_host_table(),
-            runtime_id=ctx.runtime_id,
-            stream_id=ctx.stream_id,
-            track_node=track.name,
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """A port's messages, out to a track: its publisher is computed from the track it is wired."""
+    module_host_table = ctx.open_module_host_table()
+    runtime_id, stream_id = ctx.runtime_id, ctx.stream_id
+    publisher = computed(
+        lambda: _native.MoqTrackSendPublisher(
+            module_host_table,
+            runtime_id=runtime_id,
+            stream_id=stream_id,
+            track_node=_set_or_refused("MoqTrackSend", "track", track.get(), "a `MoqTrack`'s connection").name,
         )
+    )
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        publisher = self._publisher
-        if publisher is None:
-            return
-        while (message := self.content.read_message_as_sent()) is not None:
-            upstream_stream_facts = self.content.upstream_stream_facts(inbound_link=message.inbound_link)
-            publisher.send_the_upstream_stream_facts_when_they_changed(
+    def send_each_message(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        del frame_ctx
+        sending = publisher.get()
+        while (message := content.read_message_as_sent()) is not None:
+            upstream_stream_facts = content.upstream_stream_facts(inbound_link=message.inbound_link)
+            sending.send_the_upstream_stream_facts_when_they_changed(
                 None if upstream_stream_facts is None else upstream_stream_facts.to_wire()
             )
-            publisher.send_message(
+            sending.send_message(
                 message.payload,
                 message.timestamp_ns,
                 message.starts_group,
                 message.lost_since_last_read,
             )
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._publisher = None
+    return send_each_message
 
 
 #: The codecs a `MoqTrackReceive` reads encoded video in, and those it reads encoded audio in.
@@ -457,6 +462,15 @@ ReceivedContent = (
     | Annotated[EncodedAudio, EncodedCodecs("opus")]
     | MoqRecord
 )
+
+
+def _what_a_receive_carries(content_type: PinTypeChoice) -> "tuple[str, str | None]":
+    """What a `MoqTrackReceive` choosing `content_type` hands its native half: `"named"` and no
+    codec for a `MoqRecord`, else `"encoded"` and the codec its choice holds."""
+    chosen: Any = content_type.chosen
+    if chosen["type"] == "named":
+        return "named", None
+    return "encoded", chosen["codecs"][0]
 
 
 @node.meta(
@@ -474,97 +488,90 @@ ReceivedContent = (
         "the track's own, re-based onto this machine's clock: an object running more "
         "than 100 ms ahead of its arrival lowers the offset, and a track stepping back or "
         "falling a second behind takes it again. A broadcast not yet published, or "
-        "withdrawn, is asked for again and never ends the stream."
+        "withdrawn, is asked for again and never ends the stream. A `broadcast`, `track`, "
+        "`content_type` or `max_age` changed while the stream plays reads the track it "
+        "names from then on, with no restart."
     ),
 )
 @node(execution="manual", paced_by_real_time=True)
-class MoqTrackReceive:
-    """A track at a relay, into the graph."""
-
-    gateway: Annotated[
-        MoqConnection | None,
-        Description("The gateway whose connection reads the track; the node fails, naming `gateway`, until it is wired"),
-    ] = None
-    broadcast: Annotated[
-        str,
-        SettingOnly(),
-        Description(
-            "The broadcast's path at the relay, exactly as its publisher wrote it; a "
-            "`MoqGateway`'s is `<broadcast>.hang`. The node fails, naming `broadcast`, while it "
-            "is empty."
-        ),
-    ] = ""
-    track: Annotated[
-        str,
-        SettingOnly(),
-        Description(
-            "The track of `broadcast`, exactly as its publisher named it; the node fails, "
-            "naming `track`, while it is empty."
-        ),
-    ] = ""
-    content_type: Annotated[
-        PinTypeChoice,
-        Description("What `content` carries: encoded video or audio in its codec, or a MoqRecord"),
-    ] = PinTypeChoice(MoqRecord)
-    max_age: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=0),
-        Description(
-            "How far newer content on the track may run past a missing group, in whole "
-            "milliseconds of the track's own timestamps, before the group is given up. A "
-            "transport budget, never a playout delay."
-        ),
-    ] = 100
+def MoqTrackReceive(
+    *,
+    gateway: Input[
+        Annotated[
+            MoqConnection | None,
+            Description(
+                "The gateway whose connection reads the track; the node fails, naming `gateway`, until it is wired"
+            ),
+        ]
+    ] = Input(None),
+    broadcast: Input[
+        Annotated[
+            str,
+            Description(
+                "The broadcast's path at the relay, exactly as its publisher wrote it; a "
+                "`MoqGateway`'s is `<broadcast>.hang`. The node fails, naming `broadcast`, while it "
+                "is empty."
+            ),
+        ]
+    ] = Input(""),
+    track: Input[
+        Annotated[
+            str,
+            Description(
+                "The track of `broadcast`, exactly as its publisher named it; the node fails, "
+                "naming `track`, while it is empty."
+            ),
+        ]
+    ] = Input(""),
+    content_type: Input[
+        Annotated[
+            PinTypeChoice,
+            Description("What `content` carries: encoded video or audio in its codec, or a MoqRecord"),
+        ]
+    ] = Input(PinTypeChoice(MoqRecord)),
+    max_age: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=0),
+            Description(
+                "How far newer content on the track may run past a missing group, in whole "
+                "milliseconds of the track's own timestamps, before the group is given up. A "
+                "transport budget, never a playout delay."
+            ),
+        ]
+    ] = Input(100),
     content: OutputPin[
         Annotated[
             ReceivedContent,
             PinTypeFromSetting("content_type"),
             Description("Each object of the track, out of hang's container when it rides one"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """A track at a relay, into the graph: its read is computed from the track it names."""
+    del content
+    module_host_table = ctx.open_module_host_table(output_ports=[RECEIVE_CONTENT_OUTPUT_PORT])
+    runtime_id, stream_id, receive_node = ctx.runtime_id, ctx.stream_id, ctx.node_name
 
-    def __init__(self) -> None:
-        chosen: Any = self.content_type.chosen
-        self._carries = "named" if chosen["type"] == "named" else "encoded"
-        self._codec: "str | None" = None if self._carries == "named" else chosen["codecs"][0]
-        self._receive_thread: "_native.MoqTrackReceiveThread | None" = None
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        for key in ("broadcast", "track"):
-            if not getattr(self, key):
+    def read_the_track() -> _native.MoqTrackReceiveThread:
+        for key, name in (("broadcast", broadcast.get()), ("track", track.get())):
+            if not name:
                 raise ValueError(f"MoqTrackReceive: `{key}` is not set; it takes the {key}'s name")
-        _set_or_refused("MoqTrackReceive", "gateway", self.gateway, "a `MoqGateway`'s connection")
-
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        module_host_table = ctx.open_module_host_table(output_ports=[RECEIVE_CONTENT_OUTPUT_PORT])
-        self._receive_thread = _native.MoqTrackReceiveThread(
+        carries, codec = _what_a_receive_carries(content_type.get())
+        return _native.MoqTrackReceiveThread(
             module_host_table,
-            runtime_id=ctx.runtime_id,
-            stream_id=ctx.stream_id,
-            receive_node=ctx.node_name,
+            runtime_id=runtime_id,
+            stream_id=stream_id,
+            receive_node=receive_node,
             gateway_node=_set_or_refused(
-                "MoqTrackReceive", "gateway", self.gateway, "a `MoqGateway`'s connection"
+                "MoqTrackReceive", "gateway", gateway.get(), "a `MoqGateway`'s connection"
             ).name,
-            broadcast=self.broadcast,
-            track=self.track,
-            max_age_milliseconds=self.max_age,
-            carries=self._carries,
-            codec=self._codec,
+            broadcast=broadcast.get(),
+            track=track.get(),
+            max_age_milliseconds=max_age.get(),
+            carries=carries,
+            codec=codec,
         )
 
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_the_receive_thread()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_the_receive_thread()
-
-    def _stop_the_receive_thread(self) -> None:
-        if self._receive_thread is None:
-            return
-        if not self._receive_thread.stop_and_join(NATIVE_THREAD_JOIN_TIMEOUT_SECONDS):
-            log.warn("MoqTrackReceive: the receive thread is still finishing")
-        self._receive_thread = None
+    computed(read_the_track)

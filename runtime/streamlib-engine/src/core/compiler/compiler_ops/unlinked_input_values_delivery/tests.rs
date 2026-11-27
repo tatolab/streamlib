@@ -106,7 +106,7 @@ fn a_value_set_while_a_node_is_handed_its_values_is_the_one_it_is_left_with() {
 pub(crate) mod a_shader_node_in_this_process {
     use super::*;
     use crate::core::compiler::compiler_ops::shader_node_island::{
-        place_each_shader_node_island_on_its_host,
+        hand_each_running_host_the_island_placed_on_it, place_each_shader_node_island_on_its_host,
         the_host_input_port_a_fused_shader_node_input_is_read_at,
     };
     use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
@@ -290,6 +290,95 @@ pub(crate) mod a_shader_node_in_this_process {
             the_value_the_host_reads(&graph, &host, &fused_input),
             0.25,
             "a member not set on keeps its value when another member of its island is set on"
+        );
+    }
+
+    /// The members of the island the evaluator running on `host` evaluates, by name.
+    fn the_members_the_host_evaluates(graph: &RwLock<Graph>, host: &NodeRunId) -> Vec<String> {
+        let node_instance = Arc::clone(
+            &graph
+                .read()
+                .traversal()
+                .v(host)
+                .first()
+                .unwrap()
+                .get::<NodeInstanceComponent>()
+                .unwrap()
+                .0,
+        );
+        let mut node_instance = node_instance.lock();
+        node_instance
+            .as_any_mut()
+            .downcast_mut::<ShaderNodeNativeEvaluator>()
+            .expect("the host runs the shader evaluator")
+            .the_members_it_evaluates()
+    }
+
+    /// The evaluator already running on a host takes the group a live edit placed on it anew in
+    /// place of the one it evaluates, with no node built again: a value reaching a member just
+    /// fused into it is read at once, and an input both groups read keeps the value it read.
+    ///
+    /// Mental-revert: an evaluator that never takes the group handed to it reads no input of
+    /// the member added, and evaluates the group it was built with.
+    #[test]
+    fn a_running_evaluator_takes_the_group_handed_to_it_keeping_what_its_inputs_read() {
+        let (graph, fused, host) =
+            a_shader_node_fused_into_the_island_another_hosts_and_evaluates();
+        hold_live_and_deliver(&graph, &host, "amount", json!(0.75));
+        let added = {
+            let mut graph = graph.write();
+            let added = graph
+                .traversal_mut()
+                .add_v(NodeSpec::new(
+                    NodeClassImportPath::new(TINT).unwrap(),
+                    Value::Null,
+                ))
+                .unwrap()
+                .first()
+                .unwrap()
+                .id
+                .clone();
+            let fused_into_the_host = graph
+                .traversal()
+                .v(&fused)
+                .out_e()
+                .iter()
+                .map(|link| link.id.clone())
+                .collect::<Vec<_>>();
+            for link_id in &fused_into_the_host {
+                graph.traversal_mut().e(link_id).drop();
+            }
+            link(&mut graph, (&fused, "result"), (&added, "image"));
+            link(&mut graph, (&added, "result"), (&host, "image"));
+            place_each_shader_node_island_on_its_host(
+                &mut graph,
+                &[fused.clone(), added.clone(), host.clone()],
+            )
+            .unwrap();
+            hand_each_running_host_the_island_placed_on_it(&graph, std::slice::from_ref(&host));
+            added
+        };
+
+        hold_live_and_deliver(&graph, &added, "amount", json!(0.5));
+        let added_input =
+            the_host_input_port_a_fused_shader_node_input_is_read_at(&host, &added, "amount")
+                .port_name()
+                .to_string();
+        assert_eq!(the_value_the_host_reads(&graph, &host, &added_input), 0.5);
+        assert_eq!(the_value_the_host_reads(&graph, &host, "amount"), 0.75);
+        let name_of = |node_id: &NodeRunId| {
+            graph
+                .read()
+                .traversal()
+                .v(node_id)
+                .first()
+                .unwrap()
+                .display_name
+                .clone()
+        };
+        assert_eq!(
+            the_members_the_host_evaluates(&graph, &host),
+            [name_of(&fused), name_of(&added), name_of(&host)]
         );
     }
 }

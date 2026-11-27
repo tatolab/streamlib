@@ -141,10 +141,10 @@ pub use stream_document_upgrade::{
     stream_document_in_the_current_shape, upgrade_stream_document_in_place,
 };
 pub use stream_fragment_references::{
-    graph_document_as_its_project_reads_it, graph_document_holds_a_stream_fragment,
-    stream_assets_another_stream_of_the_project_places,
+    StreamDocumentsAnEditStaged, graph_document_as_its_project_reads_it,
+    graph_document_holds_a_stream_fragment, stream_assets_another_stream_of_the_project_places,
     stream_assets_of_the_project_a_graph_document_places, the_fragment_a_stream_fragment_places,
-    the_stream_document_of_an_import,
+    the_stream_document_of_an_import, the_streams_a_live_graph_places,
 };
 pub use stream_graph_action::{
     DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,

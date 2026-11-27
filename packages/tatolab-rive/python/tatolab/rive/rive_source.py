@@ -3,32 +3,38 @@
 
 """`RiveSource`: a Rive animation drawn straight into the stream's frames.
 
-`start()` lends the `video` output and the `data` input to this wheel's Rust,
-once `riv_path` names a `.riv` file that is there; until then the node reports
-itself not ready, naming the setting or the file, and the runtime sends
-transparent frames on `video` meanwhile.
-A thread there creates a Vulkan device on the runtime's GPU through the
-consumer RHI, builds rive-runtime's Vulkan renderer on it, and per frame draws
-the `.riv` state machine into a texture from the node's output pool and
+The node's body lends the `video` output and the `data` input to this wheel's
+Rust once. The scene is a computed value: each build reads the `.riv` file and
+starts a thread there that creates a Vulkan device on the runtime's GPU through
+the consumer RHI, builds rive-runtime's Vulkan renderer on it, and per frame
+draws the state machine into a texture from the node's output pool and
 publishes an Image frame in its slot. No frame is copied, and Python never runs
 at frame cadence.
+
+Changing any input while the stream plays builds a new scene off the frame
+thread, while the one before keeps publishing; the new one is taken at the
+node's next tick and the one before is closed, releasing its device and its
+render targets. A size change publishes into slots of the new size, and the
+output pool releases the old ones once nothing holds them. A build that fails
+leaves the scene before it publishing.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Annotated, Any
+from typing import Annotated
 
 from tatolab.stream import (
     Description,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
     RuntimeContextFullAccess,
-    SettingOnly,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    computed,
     node,
 )
 
@@ -40,136 +46,102 @@ RENDERED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 DATA_INPUT_PORT = "data"
 
 
+class RiveFileNotNamed(ValueError):
+    """`riv_path` is unset, so the node has no `.riv` file to play."""
+
+
+class RiveFileMissing(FileNotFoundError):
+    """`riv_path` names a `.riv` file that is not there."""
+
+
+def the_riv_file_named_by(riv_path: "str | None") -> str:
+    """`riv_path`, once it names a file that is there."""
+    if not riv_path:
+        raise RiveFileNotNamed("RiveSource: `riv_path` is not set; it takes the `.riv` file to play")
+    if not os.path.isfile(riv_path):
+        raise RiveFileMissing(f"RiveSource: the `.riv` file `riv_path` names, {riv_path}, is missing")
+    return riv_path
+
+
 @node.meta(
     description="Plays a Rive state machine, drawing each frame straight into the stream on the GPU",
 )
 @node(execution="manual")
-class RiveSource:
-    """A `.riv` file's state machine, published as RGBA pictures over transparency.
-
-    Each setting is read at start, where the animation is loaded, so a change loads it again.
-    Each `data` message's values are applied to the artboard's default view-model instance; a
-    path the instance lacks, or a value its property cannot take, is logged once and skipped.
-    """
-
-    riv_path: Annotated[
-        str | None,
-        SettingOnly(),
-        Description(
-            "The `.riv` file to play; until it names one that is there, the node is not ready "
-            "and sends transparent frames."
-        ),
-    ] = None
-    artboard: Annotated[
-        str | None, SettingOnly(), Description("The artboard to play; the file's default when unset.")
-    ] = None
-    state_machine: Annotated[
-        str | None,
-        SettingOnly(),
-        Description("The artboard's state machine to play; its default when unset."),
-    ] = None
-    width: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=1),
-        Description("Frame width in pixels; the artboard is fit inside, centred."),
-    ] = 1920
-    height: Annotated[
-        int, SettingOnly(), NumberRange(minimum=1), Description("Frame height in pixels.")
-    ] = 1080
-    frame_rate: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=1),
-        Description("Frames drawn and published per second."),
-    ] = 60
-    output_pool_rotation_depth: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=1),
-        Description("How many frames the output pool rotates before reusing a free slot."),
-    ] = 4
+def RiveSource(
+    *,
+    riv_path: Input[
+        Annotated[
+            str | None,
+            Description(
+                "The `.riv` file to play; until it names one that is there, the node plays nothing."
+            ),
+        ]
+    ] = Input(None),
+    artboard: Input[
+        Annotated[str | None, Description("The artboard to play; the file's default when unset.")]
+    ] = Input(None),
+    state_machine: Input[
+        Annotated[
+            str | None, Description("The artboard's state machine to play; its default when unset.")
+        ]
+    ] = Input(None),
+    width: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1),
+            Description("Frame width in pixels; the artboard is fit inside, centred."),
+        ]
+    ] = Input(1920),
+    height: Input[
+        Annotated[int, NumberRange(minimum=1), Description("Frame height in pixels.")]
+    ] = Input(1080),
+    frame_rate: Input[
+        Annotated[int, NumberRange(minimum=1), Description("Frames drawn and published per second.")]
+    ] = Input(60),
+    output_pool_rotation_depth: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1),
+            Description("How many frames the output pool rotates before reusing a free slot."),
+        ]
+    ] = Input(4),
     data: InputPin[
         Annotated[
             ViewModelValues,
             StreamDelivery("ordered"),
             Description("Values for the artboard's view-model properties"),
         ]
-    ]
+    ],
     video: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(RENDERED_FRAME_TEXTURE_FORMAT),
             Description("RGBA frames of the animation, colour unspecified"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """A `.riv` file's state machine, published as RGBA pictures over transparency.
 
-    def __init__(self) -> None:
-        self._rendering: "_native.RiveSceneRendering | None" = None
-        self._context: "RuntimeContextFullAccess | None" = None
-        self._module_host_table: Any = None
+    Each `data` message's values are applied to the artboard's default view-model instance; a
+    path the instance lacks, or a value its property cannot take, is logged once and skipped.
+    """
+    module_host_table = ctx.open_module_host_table(
+        output_ports=[VIDEO_OUTPUT_PORT], input_ports=[DATA_INPUT_PORT]
+    )
 
-    def start(self, ctx: RuntimeContextFullAccess) -> None:
-        """Lend both ports to this wheel's frame thread, or report the node not
-        ready while `riv_path` names no `.riv` file that is there.
-
-        The device and the renderer are built on that thread, so their start-up
-        never spends the helper's start-up budget; it logs what it plays.
-        """
-        self._context = ctx
-        self._start_rendering_or_report_why_not()
-
-    def _start_rendering_or_report_why_not(self) -> None:
-        ctx = self._context
-        assert ctx is not None
-        riv_path = self.riv_path
-        if not riv_path:
-            self._report_not_ready("`riv_path` is not set; it takes the `.riv` file to play")
-            return
-        if not os.path.isfile(riv_path):
-            self._report_not_ready(f"the `.riv` file `riv_path` names, {riv_path}, is missing")
-            return
-        if self._module_host_table is None:
-            self._module_host_table = ctx.open_module_host_table(
-                output_ports=[VIDEO_OUTPUT_PORT], input_ports=[DATA_INPUT_PORT]
-            )
-        try:
-            self._rendering = _native.RiveSceneRendering(
-                self._module_host_table,
-                VIDEO_OUTPUT_PORT,
-                DATA_INPUT_PORT,
-                riv_path,
-                self.artboard,
-                self.state_machine,
-                self.width,
-                self.height,
-                self.frame_rate,
-                self.output_pool_rotation_depth,
-            )
-        except RuntimeError as refusal:
-            self._report_not_ready(str(refusal))
-            return
-        ctx.report_ready()
-
-    def _report_not_ready(self, reason: str) -> None:
-        assert self._context is not None
-        self._context.report_not_ready(
-            f"RiveSource: {reason}",
-            image_width=max(self.width, 1),
-            image_height=max(self.height, 1),
+    def open_the_scene() -> _native.RiveSceneRendering:
+        return _native.RiveSceneRendering(
+            module_host_table,
+            VIDEO_OUTPUT_PORT,
+            DATA_INPUT_PORT,
+            the_riv_file_named_by(riv_path.get()),
+            artboard.get(),
+            state_machine.get(),
+            width.get(),
+            height.get(),
+            frame_rate.get(),
+            output_pool_rotation_depth.get(),
         )
 
-    def stop(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._context = None
-        self._stop_rendering()
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._stop_rendering()
-
-    def _stop_rendering(self) -> None:
-        if self._rendering is None:
-            return
-        self._rendering.stop()
-        self._rendering = None
+    computed(open_the_scene)
