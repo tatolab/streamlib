@@ -661,6 +661,47 @@ fn an_edit_not_live_is_spelled_as_the_wire_carries_it_and_recovered_by_a_restart
 }
 
 #[test]
+fn each_computed_value_kind_is_spelled_as_the_wire_carries_it_with_its_own_recovery() {
+    let spelled = [
+        (
+            DiagnosticKindOnTheWire::ComputedValueNotYetBuilt,
+            "computed_value_not_yet_built",
+            "wait_for_the_node",
+        ),
+        (
+            DiagnosticKindOnTheWire::ComputedValueBuildFailed,
+            "computed_value_build_failed",
+            "change_an_input_the_build_read",
+        ),
+        (
+            DiagnosticKindOnTheWire::ComputedValueBuildPanicked,
+            "computed_value_build_panicked",
+            "fix_the_code",
+        ),
+        (
+            DiagnosticKindOnTheWire::ComputedValueComparisonPanicked,
+            "computed_value_comparison_panicked",
+            "fix_the_code",
+        ),
+    ];
+    for (kind, kind_spelled, recovery_spelled) in spelled {
+        let diagnostic = DiagnosticOnTheWire::of(
+            kind,
+            DiagnosticPlaceOnTheWire::Node {
+                node_id: "n-1".to_owned(),
+                node_name: "blur".to_owned(),
+            },
+            "its words".to_owned(),
+        );
+        let wire = serde_json::to_value(&diagnostic).unwrap();
+        assert_eq!(wire["kind"], kind_spelled);
+        assert_eq!(wire["recovery"], recovery_spelled);
+        let read: DiagnosticOnTheWire = serde_json::from_value(wire).unwrap();
+        assert_eq!(read, diagnostic);
+    }
+}
+
+#[test]
 fn each_node_kind_and_language_is_named_as_it_is_written() {
     for kind in GraphNodeKindOnTheWire::EVERY_KIND {
         assert_eq!(serde_json::to_value(kind).unwrap(), kind.name());

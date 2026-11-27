@@ -3,6 +3,7 @@
 
 mod component_graph_renders;
 mod component_map;
+mod computed_value_build_diagnostics;
 mod device_matched_audio_window_contracts_component;
 mod function_node_host_component;
 mod function_node_promoted_to_its_own_process_component;

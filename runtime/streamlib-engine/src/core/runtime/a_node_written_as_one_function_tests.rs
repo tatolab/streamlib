@@ -5,7 +5,8 @@
 //! plays builds the computed value that reads it once more and runs its body no second time; a
 //! value it holds before the stream starts is the one its first build reads; no frame runs
 //! before its computed value is first built; removing it drops every value it built, with no
-//! build after; and stopping its stream drops every value it built.
+//! build after; stopping its stream drops every value it built; and a computed value still
+//! building its first value, or whose build failed, shows in the stream's diagnostics.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +14,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use serial_test::serial;
 use streamlib_project_repository::StreamGraphOperation;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DiagnosticKindOnTheWire, DiagnosticOnTheWire, DiagnosticRecoveryOnTheWire,
+};
 use uuid::Uuid;
 
 use crate::core::graph::NodeRunId;
@@ -268,4 +272,143 @@ fn stopping_the_stream_drops_every_value_the_node_built() {
         "every value the node built is dropped once its stream stops: {stopped:?}"
     );
     assert_eq!(stopped.bodies_run, 1, "{stopped:?}");
+}
+
+/// The diagnostics the stream's nodes carry once `settled` holds of them, or when the wait runs
+/// out.
+fn the_diagnostics_once_they_hold(
+    stream: &LoadedStreamInThisRuntime,
+    settled: impl Fn(&[DiagnosticOnTheWire]) -> bool,
+) -> Vec<DiagnosticOnTheWire> {
+    let deadline = Instant::now() + WAITED_ON_WITHIN;
+    loop {
+        let diagnostics = stream.diagnostics_of_its_nodes();
+        if settled(&diagnostics) || Instant::now() >= deadline {
+            return diagnostics;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The one diagnostic `diagnostics` hold, of `kind`, naming the node's computed value where the
+/// test node declares it.
+fn the_one_diagnostic_of(
+    diagnostics: &[DiagnosticOnTheWire],
+    kind: DiagnosticKindOnTheWire,
+) -> DiagnosticOnTheWire {
+    let [diagnostic] = diagnostics else {
+        panic!("one diagnostic of {kind:?}, not {diagnostics:?}");
+    };
+    assert_eq!(diagnostic.kind, kind, "{diagnostic:?}");
+    assert!(
+        diagnostic.words.contains("BuiltFromAGain` declared at")
+            && diagnostic
+                .words
+                .contains("a_node_written_as_one_function_for_a_test.rs:"),
+        "the words name the computed value: {diagnostic:?}"
+    );
+    diagnostic.clone()
+}
+
+/// Mental-revert: a report read only once a frame runs would show nothing while the first build
+/// is held, since no frame runs before it lands.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_computed_value_whose_first_build_is_pending_shows_the_node_not_ready_until_it_lands() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
+    let builds_held = hold_the_builds();
+    start(&played.stream);
+
+    let pending =
+        the_diagnostics_once_they_hold(&played.stream, |diagnostics| !diagnostics.is_empty());
+    let pending =
+        the_one_diagnostic_of(&pending, DiagnosticKindOnTheWire::ComputedValueNotYetBuilt);
+    assert_eq!(
+        pending.recovery,
+        DiagnosticRecoveryOnTheWire::WaitForTheNode
+    );
+    assert_eq!(what_the_node_function_ran().frames_run, 0);
+
+    drop(builds_held);
+    let landed = the_diagnostics_once_they_hold(&played.stream, <[_]>::is_empty);
+    assert!(landed.is_empty(), "the first value landed: {landed:?}");
+}
+
+/// Mental-revert: a failed build reported as still building, or not at all, would carry no
+/// error and no recovery.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_computed_value_whose_first_build_fails_shows_its_error_and_a_recovery_until_an_input_changes()
+{
+    let project_directory = tempfile::tempdir().unwrap();
+    let played = a_stream_of_a_node_function(project_directory.path(), json!({ "gain": -1 }));
+    start(&played.stream);
+
+    let failed = the_diagnostics_once_they_hold(&played.stream, |diagnostics| {
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == DiagnosticKindOnTheWire::ComputedValueBuildFailed)
+    });
+    let failed = the_one_diagnostic_of(&failed, DiagnosticKindOnTheWire::ComputedValueBuildFailed);
+    assert!(
+        failed
+            .words
+            .contains("failed: a gain below zero, -1, amplifies nothing; the node runs no frame"),
+        "{failed:?}"
+    );
+    assert_eq!(
+        failed.recovery,
+        DiagnosticRecoveryOnTheWire::ChangeAnInputTheBuildRead
+    );
+    assert_eq!(what_the_node_function_ran().frames_run, 0);
+
+    set_the_gain(&played.stream, played.node, 2);
+    let recovered = the_diagnostics_once_they_hold(&played.stream, <[_]>::is_empty);
+    assert!(recovered.is_empty(), "{recovered:?}");
+    let ran = what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read == Some(2));
+    assert_eq!(ran.gain_the_latest_frame_read, Some(2), "{ran:?}");
+}
+
+/// Mental-revert: a failed rebuild that dropped the previous value would stop the frames, and
+/// one left unreported would show the node healthy on a gain it was never handed.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_failed_rebuild_shows_its_error_while_the_node_runs_on_the_previous_value() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let played = a_stream_of_a_node_function(project_directory.path(), Value::Null);
+    start(&played.stream);
+    what_the_node_ran_once_it_holds(|ran| ran.gain_the_latest_frame_read == Some(1));
+
+    set_the_gain(&played.stream, played.node, -3);
+
+    let failed =
+        the_diagnostics_once_they_hold(&played.stream, |diagnostics| !diagnostics.is_empty());
+    let failed = the_one_diagnostic_of(&failed, DiagnosticKindOnTheWire::ComputedValueBuildFailed);
+    assert!(
+        failed.words.contains(
+            "failed: a gain below zero, -3, amplifies nothing; the node runs on its previous value"
+        ),
+        "{failed:?}"
+    );
+    let frames_at_the_failure = what_the_node_function_ran().frames_run;
+    let ran = what_the_node_ran_once_it_holds(|ran| ran.frames_run > frames_at_the_failure + 3);
+    assert!(
+        ran.frames_run > frames_at_the_failure + 3,
+        "frames keep running: {ran:?}"
+    );
+    assert_eq!(ran.gain_the_latest_frame_read, Some(1), "{ran:?}");
+    assert_eq!(ran.bodies_run, 1, "{ran:?}");
 }
