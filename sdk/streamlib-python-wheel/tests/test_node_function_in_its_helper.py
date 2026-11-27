@@ -337,3 +337,63 @@ def test_a_node_pacing_itself_answers_its_parent_while_a_build_is_held(stand_in_
         PUBLISHING_BUILDS_LET_GO.set()
     wait_until_the_publishing_probe_did(("closed", 0.5))
     stop_and_tear_down(stand_in_parent, lifecycle_thread)
+
+
+def test_a_function_node_raising_in_the_tick_of_a_node_pacing_itself_is_reported_on_it(
+    stand_in_parent: Any,
+):
+    """A function node island feeding the level of a node that paces itself, raising on the
+    level its pin sets, is reported on the function node from the node's tick.
+
+    Mental-revert: leave the manual tick reporting no function node's raise, and the raise its
+    field read noted reaches the parent never, since a node that paces itself runs no frame."""
+    from function_node_test_nodes import an_island_of_one_node
+    from node_function_probes import WHAT_THE_LEVEL_PUBLISHING_PROBE_DID
+
+    island = an_island_of_one_node(
+        "level",
+        "helper_process_probes:builds_an_object_then_answers_its_level_raising_on_a_negative_one",
+        None,
+        "beat-1",
+    )
+    island["nodes"][0]["pins"] = {"level": -1.0}
+    WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:LevelPublishingProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "ports": {"islands": [island], "input_values": {"level": 0.5}},
+        }
+    )
+    assert stand_in_parent.receive() == {
+        "rpc": "ready",
+        "function_nodes_ran_compiled": {"beat-1": False},
+    }
+    stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
+
+    deadline = time.monotonic() + 5.0
+    raising = None
+    while raising is None and time.monotonic() < deadline:
+        frame = stand_in_parent.receive(timeout_seconds=max(0.0, deadline - time.monotonic()))
+        if frame is None:
+            break
+        if frame.get("op") == "set_function_node_raising_because":
+            raising = frame
+        elif frame.get("rpc") == "escalate_request":
+            stand_in_parent.send(
+                {"rpc": "escalate_response", "request_id": frame["request_id"], "result": "ok"}
+            )
+    assert raising is not None, "the tick never reported the function node raising"
+    assert raising["function_node"] == "beat-1"
+    assert raising["raising_because"].startswith(
+        "raised RuntimeError: the function node broke on purpose ("
+    )
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": raising["request_id"], "result": "ok"}
+    )
+    stop_and_tear_down(stand_in_parent, lifecycle_thread)
