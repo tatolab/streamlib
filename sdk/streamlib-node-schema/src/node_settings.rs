@@ -154,14 +154,17 @@ pub fn the_choice_among_the_bundles_its_stream_declares<T: SettingChoosingAPinTy
     PinType::a_choice_among_the_bundles_its_stream_declares()
 }
 
-/// The input setting `name` is declared as: described by `description`, of `pin_type`, holding
-/// `default` until it is set, taking no wire and read when its node is set up. A setting whose
-/// default is `null` holds nothing until it is set, so it may be unset.
-pub fn the_input_of_a_setting(
+/// The input `name` taking no wire, declared as: described by `description`, of `pin_type`,
+/// holding `default` until it is set, and read at `read` — at setup for a setting, so a set
+/// rebuilds its node, or each run for a value input of a node written as one function, so a set
+/// reaches the node with no rebuild. An input whose default is `null` holds nothing until it is
+/// set, so it may be unset.
+pub fn the_input_taking_no_wire(
     name: &str,
     description: &str,
     pin_type: PinType,
     default: Value,
+    read: SettingReadTime,
 ) -> PortDescriptor {
     let may_be_unset = default.is_null();
     let setting = PortDescriptor::new(
@@ -173,16 +176,13 @@ pub fn the_input_of_a_setting(
             ..PinDeclaration::exactly(pin_type)
         },
     )
-    .with_input_mode(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    });
+    .with_input_mode(NodeInputMode::SettingOnly { read });
     let mut setting = if may_be_unset {
         setting
     } else {
         setting.with_pin_default(default)
     };
-    // The engine reads a wire into a setting in the node's place, so no message is delivered
-    // to it.
+    // The engine hands the node its value, so no message is delivered to it.
     setting.delivery_profile = None;
     setting
 }

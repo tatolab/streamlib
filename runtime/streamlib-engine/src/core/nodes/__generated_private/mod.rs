@@ -4,6 +4,7 @@
 mod dyn_generated_node;
 mod generated_node;
 mod generated_node_impl;
+mod node_function_running;
 
 pub use dyn_generated_node::DynGeneratedNode;
 pub use generated_node::GeneratedNode;
@@ -14,3 +15,5 @@ pub(crate) use generated_node_impl::{
     FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use generated_node_impl::{OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWiringEnvelope};
+pub use node_function_running::{NodeFunctionRunning, PerFrameFunction, TheDefaultOfAValueInput};
+pub use streamlib_scope::{ScopeBeingDeclared, Writes};

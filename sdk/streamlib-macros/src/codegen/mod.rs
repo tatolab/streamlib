@@ -13,6 +13,8 @@ use syn::ItemStruct;
 use syn::spanned::Spanned;
 
 mod author_visibility;
+mod node_function_emit;
+mod node_scaffold_emit;
 mod node_settings_emit;
 mod pin_declaration_tokens;
 mod port_marker_module;
@@ -21,9 +23,18 @@ use author_visibility::{
     GENERATED_MODULE_MEMBER_DEPTH, GENERATED_PORT_MARKER_DEPTH,
     author_visibility_written_from_a_nested_module,
 };
+use node_scaffold_emit::{
+    generated_node_members_read_from_the_schema, ipc_mailbox_fields, ipc_mailbox_inits,
+    node_inherent_impl, node_module,
+};
 use node_settings_emit::NodeSettingsEmitted;
 use pin_declaration_tokens::pin_declaration_tokens;
 use port_marker_module::generate_port_marker_module;
+
+pub(crate) use node_function_emit::{
+    generate_from_a_node_function, node_name_of_a_node_function,
+    refusal_of_a_value_input_on_a_struct,
+};
 
 pub(crate) fn generate_from_parsed_node_attr(
     item: &ItemStruct,
@@ -59,54 +70,31 @@ pub(crate) fn generate_from_parsed_node_attr(
     );
     let node_impl = generate_node_impl_from_schema(
         schema,
+        parsed.built_in_node,
         &member_visibility,
         &NodeDeclaredMetaAndPortDescriptions::of(parsed),
-        &node_type_minted(parsed.built_in_node, &schema.name),
         &settings,
         &custom_fields,
     );
 
-    let node_class_import_path_accessor = quote! {
-        /// This node type's identity: its class in `tatolab.stream` for a
-        /// built-in, else the module path captured where the macro expanded.
-        #[allow(dead_code, reason = "the identity function is emitted for every node, and not every crate calls it")]
-        #member_visibility fn node_class_import_path()
-            -> __streamlib_sdk::descriptors::NodeClassImportPath
-        {
-            Node::node_class_import_path()
-        }
-    };
-
-    let module_alias_and_constructor = settings.module_alias_and_constructor(&member_visibility);
-
     // Generate unsafe Send impl if required (for !Send types like AVFoundation)
-    let unsafe_send_impl = if schema.runtime.options.unsafe_send {
+    let unsafe_send_impl = schema.runtime.options.unsafe_send.then(|| {
         quote! {
             // SAFETY: This node contains !Send types (e.g., AVFoundation objects)
             // but is safe to send because these types are only accessed from a single
             // thread after initialization. The node lifecycle ensures thread safety.
             unsafe impl Send for Node {}
         }
-    } else {
-        quote! {}
-    };
+    });
 
-    quote! {
-        #[allow(non_snake_case, reason = "the generated module is named after the author's node type")]
-        #module_visibility mod #module_name {
-            use super::*;
-
-            // Alias the consumer's real SDK crate (streamlib-plugin-sdk for
-            // plugins, the streamlib facade for hosts) so the emitted paths
-            // below resolve without any `streamlib` aliasing in the consumer.
-            #[allow(unused_imports, reason = "the generated module may name nothing from the SDK root")]
-            use #sdk_root as __streamlib_sdk;
-
+    node_module(
+        module_visibility,
+        module_name,
+        &sdk_root,
+        &member_visibility,
+        &settings,
+        quote! {
             #refused_field_attribute_diagnostics
-
-            #module_alias_and_constructor
-
-            #node_class_import_path_accessor
 
             #node_struct
 
@@ -117,8 +105,8 @@ pub(crate) fn generate_from_parsed_node_attr(
             #output_link_module
 
             #node_impl
-        }
-    }
+        },
+    )
 }
 
 /// Custom field extracted from the user's struct definition.
@@ -207,17 +195,7 @@ fn generate_node_struct_from_schema(
 ) -> TokenStream {
     let settings_fields = settings.struct_fields(member_visibility);
 
-    let ipc_input_field = if !schema.inputs.is_empty() {
-        quote! { #member_visibility inputs: __streamlib_sdk::iceoryx2::InputMailboxes, }
-    } else {
-        quote! {}
-    };
-
-    let ipc_output_field = if !schema.outputs.is_empty() {
-        quote! { #member_visibility outputs: __streamlib_sdk::iceoryx2::OutputWriter, }
-    } else {
-        quote! {}
-    };
+    let ipc_mailbox_fields = ipc_mailbox_fields(schema, member_visibility);
 
     // Generate custom fields from the user's struct definition
     let custom_field_defs: Vec<TokenStream> = custom_fields
@@ -235,8 +213,7 @@ fn generate_node_struct_from_schema(
 
     quote! {
         #member_visibility struct Node {
-            #ipc_input_field
-            #ipc_output_field
+            #ipc_mailbox_fields
             #settings_fields
             #(#custom_field_defs)*
         }
@@ -262,115 +239,76 @@ fn node_type_minted(built_in_node: bool, node_class_short_name: &str) -> TokenSt
 
 fn generate_node_impl_from_schema(
     schema: &NodeSchema,
+    built_in_node: bool,
     member_visibility: &TokenStream,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
-    node_type_minted: &TokenStream,
     settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
     use streamlib_node_schema::NodeSchemaExecution;
 
-    let node_class_short_name = &schema.name;
+    let only_manual_starts = quote! {
+        Err(__streamlib_sdk::error::Error::Runtime(
+            "start() is only valid for Manual execution mode.".into()
+        ))
+    };
+    let only_manual_stops = quote! {
+        Err(__streamlib_sdk::error::Error::Runtime(
+            "stop() is only valid for Manual execution mode.".into()
+        ))
+    };
+    let (node_trait, process_impl, start_impl, stop_impl) = match &schema.execution {
+        NodeSchemaExecution::Reactive => (
+            quote! { __streamlib_sdk::nodes::ReactiveNode },
+            quote! {
+                <Self as __streamlib_sdk::nodes::ReactiveNode>::process(self, ctx)
+            },
+            only_manual_starts,
+            only_manual_stops,
+        ),
+        NodeSchemaExecution::Manual => (
+            quote! { __streamlib_sdk::nodes::ManualNode },
+            quote! {
+                let _ = ctx;
+                Err(__streamlib_sdk::error::Error::Runtime(
+                    "process() is only valid for Reactive/Continuous execution modes.".into()
+                ))
+            },
+            quote! {
+                <Self as __streamlib_sdk::nodes::ManualNode>::start(self, ctx)
+            },
+            quote! {
+                <Self as __streamlib_sdk::nodes::ManualNode>::stop(self, ctx)
+            },
+        ),
+        NodeSchemaExecution::Continuous { .. } => (
+            quote! { __streamlib_sdk::nodes::ContinuousNode },
+            quote! {
+                <Self as __streamlib_sdk::nodes::ContinuousNode>::process(self, ctx)
+            },
+            only_manual_starts,
+            only_manual_stops,
+        ),
+    };
 
-    // Derive execution mode from schema
-    let (execution_variant, execution_description, node_trait, process_impl, start_impl, stop_impl) =
-        match &schema.execution {
-            NodeSchemaExecution::Reactive => (
-                quote! { __streamlib_sdk::execution::ProcessExecution::Reactive },
-                "Reactive",
-                quote! { __streamlib_sdk::nodes::ReactiveNode },
-                quote! {
-                    <Self as __streamlib_sdk::nodes::ReactiveNode>::process(self, ctx)
-                },
-                quote! {
-                    Err(__streamlib_sdk::error::Error::Runtime(
-                        "start() is only valid for Manual execution mode.".into()
-                    ))
-                },
-                quote! {
-                    Err(__streamlib_sdk::error::Error::Runtime(
-                        "stop() is only valid for Manual execution mode.".into()
-                    ))
-                },
-            ),
-            NodeSchemaExecution::Manual => (
-                quote! { __streamlib_sdk::execution::ProcessExecution::Manual },
-                "Manual",
-                quote! { __streamlib_sdk::nodes::ManualNode },
-                quote! {
-                    let _ = ctx;
-                    Err(__streamlib_sdk::error::Error::Runtime(
-                        "process() is only valid for Reactive/Continuous execution modes.".into()
-                    ))
-                },
-                quote! {
-                    <Self as __streamlib_sdk::nodes::ManualNode>::start(self, ctx)
-                },
-                quote! {
-                    <Self as __streamlib_sdk::nodes::ManualNode>::stop(self, ctx)
-                },
-            ),
-            NodeSchemaExecution::Continuous { interval_ms } => {
-                let interval = *interval_ms;
-                (
-                    quote! { __streamlib_sdk::execution::ProcessExecution::Continuous { interval_ms: #interval } },
-                    "Continuous",
-                    quote! { __streamlib_sdk::nodes::ContinuousNode },
-                    quote! {
-                        <Self as __streamlib_sdk::nodes::ContinuousNode>::process(self, ctx)
-                    },
-                    quote! {
-                        Err(__streamlib_sdk::error::Error::Runtime(
-                            "start() is only valid for Manual execution mode.".into()
-                        ))
-                    },
-                    quote! {
-                        Err(__streamlib_sdk::error::Error::Runtime(
-                            "stop() is only valid for Manual execution mode.".into()
-                        ))
-                    },
-                )
-            }
-        };
-
+    let node_inherent_impl = node_inherent_impl(schema, built_in_node, member_visibility, settings);
     let from_config_body = generate_from_config_from_schema(schema, settings, custom_fields);
-    let descriptor_impl =
-        generate_descriptor_from_schema(schema, declared_meta_and_port_descriptions, settings);
-    let node_spec_constructor = settings.node_spec_constructor(member_visibility);
+    let descriptor_impl = generate_descriptor_from_schema(
+        schema,
+        declared_meta_and_port_descriptions,
+        settings,
+        &quote! {},
+    );
+    let members_read_from_the_schema =
+        generated_node_members_read_from_the_schema(schema, &descriptor_impl);
     let settings_taken_from_the_input_values = settings.settings_taken_from_the_input_values();
     let setup_marked = settings.setup_marked();
-    let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     quote! {
-        impl Node {
-            #member_visibility const NAME: &'static str = #node_class_short_name;
-
-            /// This node type's identity: its class in `tatolab.stream` for a
-            /// built-in, else the module path captured where the macro expanded.
-            #member_visibility fn node_class_import_path()
-                -> __streamlib_sdk::descriptors::NodeClassImportPath
-            {
-                #node_type_minted
-            }
-
-            #node_spec_constructor
-
-            #member_visibility fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
-                #execution_variant
-            }
-
-            /// Returns a human-readable description of the execution mode.
-            #member_visibility fn execution_mode_description(&self) -> &'static str {
-                #execution_description
-            }
-        }
+        #node_inherent_impl
 
         impl __streamlib_sdk::nodes::__generated_private::GeneratedNode for Node {
-            type Config = __streamlib_sdk::nodes::EmptyConfig;
-
-            fn name(&self) -> &str {
-                Self::NAME
-            }
+            #members_read_from_the_schema
 
             #from_config_body
 
@@ -389,15 +327,6 @@ fn generate_node_impl_from_schema(
             }
 
             #settings_taken_from_the_input_values
-
-            fn execution_config(&self) -> __streamlib_sdk::execution::ExecutionConfig {
-                __streamlib_sdk::execution::ExecutionConfig {
-                    execution: #execution_variant,
-                }
-            }
-
-            #descriptor_impl
-            #iceoryx2_accessors
 
             fn __generated_setup(
                 &mut self,
@@ -437,18 +366,7 @@ fn generate_from_config_from_schema(
     settings: &NodeSettingsEmitted<'_>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    let ipc_input_init = if !schema.inputs.is_empty() {
-        quote! { inputs: __streamlib_sdk::iceoryx2::InputMailboxes::empty(), }
-    } else {
-        quote! {}
-    };
-
-    let ipc_output_init = if !schema.outputs.is_empty() {
-        quote! { outputs: __streamlib_sdk::iceoryx2::OutputWriter::empty(), }
-    } else {
-        quote! {}
-    };
-
+    let ipc_mailbox_inits = ipc_mailbox_inits(schema);
     let settings_init = settings.struct_field_initializers();
 
     // Initialize custom fields with Default::default()
@@ -467,8 +385,7 @@ fn generate_from_config_from_schema(
     quote! {
         fn from_config(_config: Self::Config) -> __streamlib_sdk::error::Result<Self> {
             Ok(Self {
-                #ipc_input_init
-                #ipc_output_init
+                #ipc_mailbox_inits
                 #settings_init
                 #(#custom_field_inits)*
             })
@@ -503,10 +420,14 @@ impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
     }
 }
 
+/// The descriptor a node's schema, its declared meta and port descriptions and its settings
+/// build; `value_inputs`, the `.with_input(…)` calls of a node function's value inputs, follow
+/// its port inputs.
 fn generate_descriptor_from_schema(
     schema: &NodeSchema,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     settings: &NodeSettingsEmitted<'_>,
+    value_inputs: &TokenStream,
 ) -> TokenStream {
     let description =
         declared_description_str_expression(declared_meta_and_port_descriptions.node_description);
@@ -642,6 +563,7 @@ fn generate_descriptor_from_schema(
                     #category
                     #conversion
                     #(#ipc_input_ports)*
+                    #value_inputs
                     #setting_inputs
                     #(#ipc_output_ports)*
             )
@@ -832,3 +754,6 @@ mod node_struct_emit_tests;
 
 #[cfg(test)]
 mod pin_declaration_tokens_tests;
+
+#[cfg(test)]
+mod node_function_emit_tests;

@@ -15,3 +15,6 @@ pub use crate::core::{
     // Runtime
     runtime::Runner,
 };
+
+// A node written as one function: its value inputs and the values it computes from them.
+pub use streamlib_scope::{Computed, Input, computed};

@@ -175,7 +175,7 @@ impl RefusalCodeAndPlace {
     /// A variant with fields is coded by what it names.
     pub(crate) fn of_an_engine_error(refusal: &Error) -> Self {
         use ControlOperationRefusalCode::{
-            InputTakesNoWire, LinkAlreadyExists, LinkNeedsAModuleConversion,
+            InputTakesNoWire, InputValueNotValid, LinkAlreadyExists, LinkNeedsAModuleConversion,
             LinkPinTypesDoNotConnect, LinkStreamsIntoASetting, NodeNameTaken, NodeNotFound,
             NodeNotRunning, NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
         };
@@ -227,6 +227,10 @@ impl RefusalCodeAndPlace {
                 Self::coded(NodeTypeNotFound)
             }
             Error::NodeNameTaken { .. } => Self::coded(NodeNameTaken),
+            Error::InputValueNotTaken { input, .. } => Self {
+                refused_input: Some(input.clone()),
+                ..Self::coded(InputValueNotValid)
+            },
             Error::LinkAlreadyExists(_) => Self::coded(LinkAlreadyExists),
             Error::PinLinkRefused(refusal) => match refusal.as_ref() {
                 PinLinkRefusal::InputTakesNoWire {
@@ -280,6 +284,7 @@ impl RefusalCodeAndPlace {
             | Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget { .. }
             | Error::ClockError(_)
             | Error::Io(_)
+            | Error::ComputedValueBuildThreadNotStarted { .. }
             | Error::ReservedPublisherSubscriberSlotOccupied(_)
             | Error::BagDecodeFailed(_)
             | Error::BagEncodeFailed(_)

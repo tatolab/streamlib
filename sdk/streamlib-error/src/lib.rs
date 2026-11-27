@@ -332,6 +332,18 @@ pub enum Error {
     #[error("Invalid configuration: {0}")]
     Configuration(String),
 
+    /// A node written as one function was handed a value one of its inputs does not hold.
+    #[error("input `{input}` of `{node}` does not take the value it was handed: {why}")]
+    InputValueNotTaken {
+        node: String,
+        input: String,
+        why: String,
+    },
+
+    /// A node written as one function could not start the thread its computed values build on.
+    #[error("`{node}` could not start the thread its computed values build on: {why}")]
+    ComputedValueBuildThreadNotStarted { node: String, why: std::io::Error },
+
     /// A node refused a privacy-gated capture device whose access nobody has
     /// asked the user for, because nobody acted on its stream.
     #[error("{refusal}")]

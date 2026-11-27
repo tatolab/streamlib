@@ -53,6 +53,10 @@ streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0
 # re-exports them at `core::error`.
 streamlib-error = { path = "../../sdk/streamlib-error", version = "0.68.82" }
 
+# A node's scope: its inputs and the values computed from them, which a node written as one
+# function declares in its body and reads in its per-frame function.
+streamlib-scope = { path = "../../sdk/streamlib-scope", version = "0.68.82" }
+
 # Procedural macros
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.82" }
 

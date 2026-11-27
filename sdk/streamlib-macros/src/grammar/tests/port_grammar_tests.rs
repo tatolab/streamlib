@@ -873,3 +873,93 @@ fn a_bare_any_port_schema_is_an_error() {
         "the error must name the removal and the offending port: {msg}"
     );
 }
+
+#[test]
+fn an_input_of_a_value_is_a_value_input_and_no_port() {
+    let parsed = parse_ok(quote! {
+        execution = reactive,
+        input("video", pin_type = Texture),
+        input("gain", description = "How loud.", value = f32, default = 0.5),
+    });
+    assert_eq!(parsed.inputs.len(), 1);
+    assert_eq!(parsed.inputs[0].cast_name, "video");
+    assert_eq!(parsed.value_inputs.len(), 1);
+    let gain = &parsed.value_inputs[0];
+    assert_eq!(gain.declared_ident, "gain");
+    assert_eq!(gain.cast_name, "gain");
+    let value_type = &gain.value_type;
+    let default = &gain.default;
+    assert_eq!(quote! { #value_type }.to_string(), "f32");
+    assert_eq!(quote! { #default }.to_string(), "0.5");
+    assert_eq!(parsed.to_node_schema().inputs.len(), 1);
+}
+
+#[test]
+fn a_value_input_without_a_default_is_an_error() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("gain", value = f32),
+    });
+    assert!(
+        msg.contains("value input `gain` declares no `default = …`"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn a_default_without_a_value_type_is_an_error() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("gain", default = 0.5),
+    });
+    assert!(
+        msg.contains("input `gain` declares a `default` and no `value = <type>`"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn a_value_input_stating_a_port_key_is_an_error() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("gain", value = f32, default = 0.5, pin_type = Float),
+    });
+    assert!(
+        msg.contains("value input `gain` declares `pin_type`, which a port takes"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn a_value_on_an_output_is_an_error() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        output("level", value = f32),
+    });
+    assert!(
+        msg.contains("`value` is declared by a value input, not `output(\"level\", ...)`"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn a_value_input_and_a_port_sharing_a_name_is_an_error() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("gain", pin_type = Float),
+        input("gain", value = f32, default = 0.5),
+    });
+    assert!(
+        msg.contains("the port name `gain` is declared more than once"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn a_port_stating_a_default_is_told_a_port_takes_none() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        input("gain", pin_type = Float, default = 0.5),
+    });
+    assert!(msg.contains("a port takes no `default`"), "got: {msg}");
+}

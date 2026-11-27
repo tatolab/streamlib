@@ -1,0 +1,283 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! `#[node(…)]` on a function: each parameter read by its type, the per-frame function's type
+//! made `Send + 'static`, each value input declared on the descriptor, and each form the
+//! function does not take refused naming the fix.
+
+use quote::quote;
+
+use super::{generate_from_a_node_function, refusal_of_a_value_input_on_a_struct};
+use crate::grammar::{DeclaredNodeMeta, ParsedNodeAttr, parse2};
+
+fn parsed(attribute: proc_macro2::TokenStream) -> ParsedNodeAttr {
+    parse2(
+        attribute,
+        DeclaredNodeMeta::default(),
+        &proc_macro2::Ident::new("ANode", proc_macro2::Span::call_site()),
+    )
+    .expect("the attribute parses")
+}
+
+/// The expansion of `function` under `attribute`, without whitespace.
+fn expanded(attribute: proc_macro2::TokenStream, function: proc_macro2::TokenStream) -> String {
+    let function: syn::ItemFn = syn::parse2(function).expect("the function parses");
+    generate_from_a_node_function(function, &parsed(attribute), quote! { ::streamlib::sdk })
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+fn a_gain_and_a_video_port() -> proc_macro2::TokenStream {
+    quote! {
+        execution = reactive,
+        input("video", pin_type = Texture),
+        input("gain", description = "How loud.", value = f32, default = 0.5),
+        output("out", pin_type = Texture, formats = ["rgba8_unorm"]),
+    }
+}
+
+#[test]
+fn the_body_is_called_with_each_parameter_its_type_names() {
+    let rendered = expanded(
+        a_gain_and_a_video_port(),
+        quote! {
+            fn a_node(
+                outputs: OutputWriter,
+                gain: Input<f32>,
+                ctx: &RuntimeContextFullAccess<'_>,
+                inputs: InputMailboxes,
+            ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        rendered.contains("letper_frame=super::a_node(outputs,handles.gain,ctx,inputs);"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("modANode{"), "{rendered}");
+}
+
+#[test]
+fn the_per_frame_function_returned_is_made_send_and_static() {
+    let rendered = expanded(
+        a_gain_and_a_video_port(),
+        quote! {
+            fn a_node(gain: Input<f32>) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        rendered.contains("->Result<()>+::core::marker::Send+'static{"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_body_that_can_fail_is_called_with_its_error_handed_on() {
+    let rendered = expanded(
+        a_gain_and_a_video_port(),
+        quote! {
+            fn a_node(
+                gain: Input<f32>,
+            ) -> Result<impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> + Send> {
+                Ok(move |_ctx| Ok(()))
+            }
+        },
+    );
+    assert!(
+        rendered.contains("letper_frame=super::a_node(handles.gain)?;"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("->Result<()>+Send+'static>{"),
+        "a `Send` the author wrote is not written again: {rendered}"
+    );
+}
+
+#[test]
+fn each_value_input_is_declared_on_the_descriptor_with_its_default() {
+    let rendered = expanded(
+        a_gain_and_a_video_port(),
+        quote! {
+            fn a_node(gain: Input<f32>) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        rendered.contains(
+            "the_input_taking_no_wire(\"gain\",\"Howloud.\",<f32as__streamlib_sdk::descriptors::SettingPinType>::setting_pin_type(),__streamlib_sdk::serde_json::to_value(<_as__streamlib_sdk::nodes::__generated_private::TheDefaultOfAValueInput<f32>>::into_the_default(0.5))"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("gain:__streamlib_sdk::nodes::Input<f32>,"),
+        "{rendered}"
+    );
+}
+
+fn refusal_of(attribute: proc_macro2::TokenStream, function: proc_macro2::TokenStream) -> String {
+    let rendered = expanded(attribute, function);
+    let start = rendered
+        .find("compile_error!")
+        .unwrap_or_else(|| panic!("the expansion refuses the function: {rendered}"));
+    rendered[start..].to_owned()
+}
+
+fn a_function_of_its_gain() -> proc_macro2::TokenStream {
+    quote! {
+        fn a_node(gain: Input<f32>) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            move |_ctx| Ok(())
+        }
+    }
+}
+
+#[test]
+fn a_node_function_of_settings_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, settings = SomeSettings,
+        input("gain", value = f32, default = 0.5) },
+        a_function_of_its_gain(),
+    );
+    assert!(refusal.contains("takesno`settings=…`"), "{refusal}");
+}
+
+#[test]
+fn a_manual_node_function_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = manual, input("gain", value = f32, default = 0.5) },
+        a_function_of_its_gain(),
+    );
+    assert!(refusal.contains("`execution=manual`isnotyet"), "{refusal}");
+}
+
+#[test]
+fn a_parameter_reading_an_undeclared_value_input_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node(gain: Input<f32>, level: Input<f32>)
+                -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>
+            {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        refusal.contains("parameter`level`readsavalueinputitsnodedoesnotdeclare"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_value_input_no_parameter_reads_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node() -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        refusal.contains("valueinput`gain`isreadbynoparameter"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_parameter_of_a_type_a_node_function_does_not_take_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node(gain: Input<f32>, ctx: &RuntimeContextLimitedAccess<'_>)
+                -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>
+            {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        refusal.contains("parameter`ctx`ofanodefunctionisnotoneanodefunctiontakes"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn input_mailboxes_of_a_node_with_no_stream_input_are_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node(gain: Input<f32>, inputs: InputMailboxes)
+                -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>
+            {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(refusal.contains("declaresnostreaminput"), "{refusal}");
+}
+
+#[test]
+fn a_function_returning_no_per_frame_function_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node(gain: Input<f32>) -> Result<()> {
+                Ok(())
+            }
+        },
+    );
+    assert!(
+        refusal.contains("anodefunctionreturnsitsper-framefunction"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_value_input_on_a_struct_is_refused() {
+    let refusal = refusal_of_a_value_input_on_a_struct(&parsed(quote! {
+        execution = reactive, input("gain", value = f32, default = 0.5)
+    }))
+    .expect("a struct declaring a value input is refused")
+    .to_string();
+    assert!(
+        refusal.contains("is an input of a node written as one function"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_context_taken_mutably_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn a_node(gain: Input<f32>, ctx: &mut RuntimeContextFullAccess<'_>)
+                -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()>
+            {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(
+        refusal.contains("parameter`ctx`ofanodefunctionisnotoneanodefunctiontakes"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_function_whose_name_makes_no_node_name_is_refused() {
+    let refusal = refusal_of(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
+        quote! {
+            fn _1(gain: Input<f32>) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(refusal.contains("namesnonode"), "{refusal}");
+}

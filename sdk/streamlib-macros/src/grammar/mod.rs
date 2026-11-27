@@ -11,8 +11,9 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized};
 
 mod port_grammar;
+mod value_input_grammar;
 
-use port_grammar::parse_port;
+use port_grammar::{DeclaredPort, parse_port};
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
 /// setting only valid on an `input(...)`; the grammar rejects it on an
@@ -281,6 +282,21 @@ pub(crate) struct ParsedPort {
     pub takes_a_value: bool,
 }
 
+/// A value input of a node written as one function, as `input("name", value = T, default = …)`
+/// declares it: a value its node reads with `.get()`, holding its default until it is set.
+pub(crate) struct ParsedValueInput {
+    /// The name as the author wrote it, spanned at the declaration — the identifier of the
+    /// node function's parameter that reads it.
+    pub declared_ident: Ident,
+    /// The declared name as every exposed name is cast — what the descriptor carries.
+    pub cast_name: String,
+    pub description: Option<DeclaredDescription>,
+    /// The type of the value it holds, as `value = …` states it.
+    pub value_type: syn::Type,
+    /// The value it holds until it is set, as `default = …` states it.
+    pub default: syn::Expr,
+}
+
 pub(crate) struct ParsedNodeAttr {
     /// The author's type name — what an instance's display name defaults to.
     pub node_class_short_name: String,
@@ -301,6 +317,8 @@ pub(crate) struct ParsedNodeAttr {
     /// node's inputs; `None` when it declares none.
     pub settings_type: Option<Path>,
     pub inputs: Vec<ParsedPort>,
+    /// The value inputs, which only a node written as one function declares.
+    pub value_inputs: Vec<ParsedValueInput>,
     pub outputs: Vec<ParsedPort>,
 }
 
@@ -373,6 +391,7 @@ fn parse_body(
     let mut paced_by_real_time = false;
     let mut settings_type: Option<Path> = None;
     let mut inputs: Vec<ParsedPort> = Vec::new();
+    let mut value_inputs: Vec<ParsedValueInput> = Vec::new();
     let mut outputs: Vec<ParsedPort> = Vec::new();
 
     reject_positional_identity(input)?;
@@ -433,8 +452,23 @@ fn parse_body(
             "type" => {
                 return Err(syn::Error::new(key.span(), class_path_rule()));
             }
-            "input" => inputs.push(parse_port(input, PortDirection::Input)?),
-            "output" => outputs.push(parse_port(input, PortDirection::Output)?),
+            "input" => match parse_port(input, PortDirection::Input)? {
+                DeclaredPort::Port(port) => inputs.push(port),
+                DeclaredPort::Value(value_input) => value_inputs.push(value_input),
+            },
+            "output" => match parse_port(input, PortDirection::Output)? {
+                DeclaredPort::Port(port) => outputs.push(port),
+                DeclaredPort::Value(value_input) => {
+                    return Err(syn::Error::new(
+                        value_input.declared_ident.span(),
+                        format!(
+                            "output `{}` declares a value — an output writes what its node \
+                             sends, and holds no value of its own",
+                            value_input.cast_name
+                        ),
+                    ));
+                }
+            },
             other => {
                 return Err(syn::Error::new(
                     key.span(),
@@ -451,7 +485,17 @@ fn parse_body(
         }
     }
 
-    refuse_ports_that_cast_alike(inputs.iter().chain(&outputs))?;
+    refuse_ports_that_cast_alike(
+        inputs
+            .iter()
+            .chain(&outputs)
+            .map(|port| (&port.declared_marker_ident, port.cast_name.as_str()))
+            .chain(
+                value_inputs.iter().map(|value_input| {
+                    (&value_input.declared_ident, value_input.cast_name.as_str())
+                }),
+            ),
+    )?;
 
     let execution = execution.ok_or_else(|| {
         syn::Error::new(
@@ -473,6 +517,7 @@ fn parse_body(
         paced_by_real_time,
         settings_type,
         inputs,
+        value_inputs,
         outputs,
     })
 }
@@ -480,30 +525,29 @@ fn parse_body(
 /// Every port, input or output, needs a name of its own once cast — the rule
 /// bare `@node` holds a Python class to.
 fn refuse_ports_that_cast_alike<'port>(
-    ports: impl IntoIterator<Item = &'port ParsedPort>,
+    ports: impl IntoIterator<Item = (&'port Ident, &'port str)>,
 ) -> syn::Result<()> {
     let mut declared_marker_ident_by_cast_name = std::collections::HashMap::new();
-    for port in ports {
-        let Some(first_declared_marker_ident) = declared_marker_ident_by_cast_name
-            .insert(port.cast_name.as_str(), &port.declared_marker_ident)
+    for (declared_marker_ident, cast_name) in ports {
+        let Some(first_declared_marker_ident) =
+            declared_marker_ident_by_cast_name.insert(cast_name, declared_marker_ident)
         else {
             continue;
         };
-        let refusal = if *first_declared_marker_ident == port.declared_marker_ident {
+        let refusal = if first_declared_marker_ident == declared_marker_ident {
             format!(
-                "the port name `{}` is declared more than once — every port, input or output, \
-                 needs its own name",
-                port.declared_marker_ident
+                "the port name `{declared_marker_ident}` is declared more than once — every \
+                 port, input or output, needs its own name"
             )
         } else {
             format!(
-                "the ports `{first_declared_marker_ident}` and `{}` both cast to `{}` — a port name is \
-                 lowercased with its accents dropped and anything outside a-z 0-9 - . _ ~ \
-                 turned into '-', so two ports need names that stay apart once cast",
-                port.declared_marker_ident, port.cast_name
+                "the ports `{first_declared_marker_ident}` and `{declared_marker_ident}` both cast \
+                 to `{cast_name}` — a port name is lowercased with its accents dropped and \
+                 anything outside a-z 0-9 - . _ ~ turned into '-', so two ports need names that \
+                 stay apart once cast"
             )
         };
-        return Err(syn::Error::new(port.declared_marker_ident.span(), refusal));
+        return Err(syn::Error::new(declared_marker_ident.span(), refusal));
     }
     Ok(())
 }

@@ -14,7 +14,7 @@ pub use streamlib_node_schema::descriptors::{
 pub use streamlib_node_schema::node_settings::{
     NodeSettings, SettingChoosingAPinType, SettingChosenFromOptions, SettingPinType,
     the_choice_among_the_bundles_its_stream_declares, the_default_of_a_setting,
-    the_input_of_a_setting, the_menu_of_a_setting,
+    the_input_taking_no_wire, the_menu_of_a_setting,
 };
 pub use streamlib_node_schema::pin_type::{
     BuiltInPinTypeName, BundleMember, ConvertNodeToInsert, DeclaredPinType, FloatSize,
