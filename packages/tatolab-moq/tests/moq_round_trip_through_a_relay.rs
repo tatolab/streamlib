@@ -450,24 +450,36 @@ fn a_track_renamed_keeps_the_entry_its_stream_facts_built_and_its_objects_wrappe
     let mut receiving_gateway = a_gateway_dialing(&ipc, "receiving-gateway", "audience", &relay);
     let mut declaration = a_declaration_with_its_entry(&ipc, "first", None);
     let mut send = MoqTrackSendPublisher::open(ipc.clone(), "telemetry").expect("the send opens");
-    // Handed over once: within a second the send does not hand unchanged facts over again, so
-    // the renamed track has the entry only if the gateway carried it over.
-    send.send_the_upstream_stream_facts_when_they_changed(Some(serde_json::json!({
+    let stream_facts = serde_json::json!({
         "family": "packets", "rfc6381_codec": "avc1.64001f",
         "coded_width": 1280, "coded_height": 720,
-    })))
-    .unwrap();
+    });
     let received = Arc::new(Mutex::new(WhatTheReceiveWrote::default()));
     let mut receive = a_receive_reading(&ipc, "first", &received);
     let mut sent = 0;
+    wait_until(
+        "the receive to read the entry the stream facts built",
+        Duration::from_secs(30),
+        || {
+            send.send_the_upstream_stream_facts_when_they_changed(Some(stream_facts.clone()))
+                .unwrap();
+            send.send_message(
+                format!("first {sent}").as_bytes(),
+                1_000_000_000 + sent * 33_000_000,
+                true,
+                0,
+            )
+            .unwrap();
+            sent += 1;
+            !received.lock().unwrap().packets_stream_facts.is_empty()
+        },
+    );
     send_until_three_labelled_arrive(&mut send, &received, "first", &mut sent);
     let facts_read_for_the_first_name =
         std::mem::take(&mut received.lock().unwrap().packets_stream_facts);
-    assert!(
-        !facts_read_for_the_first_name.is_empty(),
-        "the receive reads the entry the stream facts built"
-    );
 
+    // From here the send hands the facts over no more: within a second it does not hand
+    // unchanged ones over again, so the renamed track has the entry only if the gateway kept it.
     let mut renamed_declaration = a_declaration_with_its_entry(&ipc, "second", None);
     let mut renamed_receive = a_receive_reading(&ipc, "second", &received);
     assert!(declaration.stop_and_join(Duration::ZERO));

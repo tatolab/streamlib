@@ -93,6 +93,16 @@ fn the_slot_of(holding: &str) -> HoldersSlot {
     )
 }
 
+/// Drop each slot no thread holds and no takeover is using, so a stream's nodes leave none behind.
+fn forget_the_slots_no_thread_holds() {
+    THE_SLOT_OF_EACH_NODES_SERVICES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|_, slot| {
+            Arc::strong_count(slot) > 1 || slot.try_lock().map_or(true, |holder| holder.is_some())
+        });
+}
+
 /// A node's running thread, stopped and joined by its node.
 pub struct MoqNodeThread {
     stop_signal: Arc<MoqNodeThreadStopSignal>,
@@ -175,6 +185,9 @@ impl MoqNodeThread {
             {
                 *holder = None;
             }
+            drop(holder);
+            drop(slot);
+            forget_the_slots_no_thread_holds();
         }
         true
     }
@@ -270,6 +283,27 @@ mod tests {
         assert_eq!(SERVICES.holders.load(Ordering::SeqCst), 0);
         let mut third = a_thread_holding(&SERVICES).expect("services given up open again");
         assert!(third.stop_and_join(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn the_slot_of_services_no_thread_holds_any_more_is_forgotten() {
+        let is_remembered = || {
+            THE_SLOT_OF_EACH_NODES_SERVICES
+                .lock()
+                .unwrap()
+                .contains_key("test/given-up")
+        };
+        let mut holder = MoqNodeThread::spawn_holding(
+            "test/given-up",
+            "holder",
+            Duration::ZERO,
+            || Ok(()),
+            |(), stop_signal| while !stop_signal.wait_for_a_stop_up_to(Duration::from_secs(1)) {},
+        )
+        .unwrap();
+        assert!(is_remembered());
+        assert!(holder.stop_and_join(Duration::from_secs(5)));
+        assert!(!is_remembered(), "a stream's nodes leave no slot behind");
     }
 
     #[test]

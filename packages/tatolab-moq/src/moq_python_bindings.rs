@@ -167,9 +167,7 @@ fn the_settings_source_of(
     let mut settings_not_yet_read = true;
     Box::new(move || {
         let first_read = std::mem::take(&mut settings_not_yet_read);
-        let Ok(mut settings_read) = settings_read.lock() else {
-            return None;
-        };
+        let mut settings_read = settings_read.lock().unwrap_or_else(PoisonError::into_inner);
         let mut newest_message = None;
         loop {
             match settings_read.settings_input.read() {
