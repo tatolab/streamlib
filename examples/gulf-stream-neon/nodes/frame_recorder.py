@@ -29,15 +29,15 @@ from tatolab.stream import (
 )
 
 
-#: The files a take still open writes to. A take built while another still writes its file — a
-#: new rate set at the same path — takes the next free numbered name beside it instead, so the
-#: two encoders never write one file.
-_PATHS_OF_THE_OPEN_TAKES: "set[Path]" = set()
+#: The files a take of this run has written to. A take built at a path an earlier take of the
+#: run wrote — a new rate set at the same path — takes the next numbered name beside it instead,
+#: so no take overwrites another, the one still closing or one already closed.
+_PATHS_THE_TAKES_OF_THIS_RUN_WROTE: "set[Path]" = set()
 
 
-def _a_path_no_open_take_writes(path: Path) -> Path:
+def _a_path_no_take_of_this_run_wrote(path: Path) -> Path:
     candidate, number = path, 1
-    while candidate in _PATHS_OF_THE_OPEN_TAKES:
+    while candidate in _PATHS_THE_TAKES_OF_THIS_RUN_WROTE:
         number += 1
         candidate = path.with_name(f"{path.stem}-{number}{path.suffix}")
     return candidate
@@ -52,8 +52,8 @@ class TakeBeingRecorded:
         if not path.is_absolute():
             path = Path(__file__).resolve().parent.parent / path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = _a_path_no_open_take_writes(path)
-        _PATHS_OF_THE_OPEN_TAKES.add(self.path)
+        self.path = _a_path_no_take_of_this_run_wrote(path)
+        _PATHS_THE_TAKES_OF_THIS_RUN_WROTE.add(self.path)
         self.frames_per_second = frames_per_second
         self.encoder: subprocess.Popen | None = None
         self.frames_written = 0
@@ -89,13 +89,10 @@ class TakeBeingRecorded:
             log.info("recorded", frames=self.frames_written, path=str(self.path))
 
     def close(self) -> None:
-        try:
-            if self.encoder is not None:
-                self.encoder.stdin.close()
-                self.encoder.wait(timeout=120)
-                log.info("take closed", frames=self.frames_written, path=str(self.path))
-        finally:
-            _PATHS_OF_THE_OPEN_TAKES.discard(self.path)
+        if self.encoder is not None:
+            self.encoder.stdin.close()
+            self.encoder.wait(timeout=120)
+            log.info("take closed", frames=self.frames_written, path=str(self.path))
 
 
 @node.meta(
@@ -116,7 +113,7 @@ def FrameRecorder(
     ],
 ) -> Callable[[RuntimeContextLimitedAccess], None]:
     """An ordered sink that pipes frames into ffmpeg; a new path or rate starts a new take, in a
-    numbered file beside the old one while that one is still being written."""
+    numbered file beside the old one when it is the path an earlier take wrote."""
     take = computed(lambda: TakeBeingRecorded(output_path.get(), frames_per_second.get()))
 
     def each_frame(ctx: RuntimeContextLimitedAccess) -> None:

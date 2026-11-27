@@ -84,15 +84,15 @@ class RecordingSettings:
     record_stylized: bool
 
 
-#: The roots a dataset still open writes to. A dataset opened while another still writes its
-#: root — a new rate set at the same root — takes the next free numbered root beside it
-#: instead, so the two writers never share one dataset.
-_ROOTS_OF_THE_OPEN_DATASETS: "set[str]" = set()
+#: The roots a dataset of this run has been opened at. A dataset opened at a root an earlier one
+#: of the run used — a new rate set at the same root — takes the next numbered root beside it
+#: instead, so it never shares or resumes a dataset of another rate or other features.
+_ROOTS_THE_DATASETS_OF_THIS_RUN_OPENED: "set[str]" = set()
 
 
-def _a_root_no_open_dataset_writes(root: str) -> str:
+def _a_root_no_dataset_of_this_run_opened(root: str) -> str:
     candidate, number = root, 1
-    while candidate in _ROOTS_OF_THE_OPEN_DATASETS:
+    while candidate in _ROOTS_THE_DATASETS_OF_THIS_RUN_OPENED:
         number += 1
         candidate = f"{root}-{number}"
     return candidate
@@ -107,7 +107,7 @@ class DatasetBeingRecorded:
     def __init__(self, settings: RecordingSettings) -> None:
         self.record_stylized = settings.record_stylized
         self.fps = settings.fps
-        self.root = _a_root_no_open_dataset_writes(settings.dataset_root)
+        self.root = _a_root_no_dataset_of_this_run_opened(settings.dataset_root)
         self.recording = LeRobotEpisodeRecording(
             root=self.root,
             repo_id=settings.repo_id,
@@ -118,7 +118,7 @@ class DatasetBeingRecorded:
             task="",
             record_stylized=settings.record_stylized,
         )
-        _ROOTS_OF_THE_OPEN_DATASETS.add(self.root)
+        _ROOTS_THE_DATASETS_OF_THIS_RUN_OPENED.add(self.root)
         streams = (POSE_STREAM, CAMERA_STREAM) + (
             (STYLIZED_STREAM,) if settings.record_stylized else ()
         )
@@ -163,11 +163,13 @@ class DatasetBeingRecorded:
         episode_seconds: float,
         task: str,
     ) -> None:
-        """Write each joined row, labelled `task`, saving an episode, and writing it to
-        `episodes_to_downstream`, each time one fills `episode_seconds`."""
+        """Write each joined row, saving an episode, and writing it to `episodes_to_downstream`,
+        each time one fills `episode_seconds`. An episode is labelled `task` as it holds when the
+        episode begins, so one episode never carries two labels."""
         frames_per_episode = max(int(episode_seconds * self.fps), 1)
-        self.recording.task = task
         for row in self._completed_rows:
+            if self.recording.frames_in_current_episode == 0:
+                self.recording.task = task
             self.recording.add(
                 row[POSE_STREAM],
                 row[CAMERA_STREAM],
@@ -197,10 +199,7 @@ class DatasetBeingRecorded:
         )
 
     def close(self) -> None:
-        try:
-            self.recording.close()
-        finally:
-            _ROOTS_OF_THE_OPEN_DATASETS.discard(self.root)
+        self.recording.close()
         log.info(
             "dataset sealed",
             episodes=self.recording.episodes_saved,
@@ -255,8 +254,8 @@ def LeRobotRecorder(
     """Three timestamp-joined pins in, imitation-learning episodes out.
 
     The dataset is opened from the value inputs that shape it, and opened again, the one before
-    sealed, when one of them changes: beside the old one, in a numbered root, while the old one
-    is still being sealed. The episode length and the task are read each frame.
+    sealed, when one of them changes: in a numbered root beside a root an earlier one used. The
+    episode length is read each frame, and the task as each episode begins.
     """
     dataset = computed(
         lambda: DatasetBeingRecorded(

@@ -140,7 +140,9 @@ def ToneSource(
         nonlocal rate_of_this_run
         now_ns = ctx.time
         if run_anchor_timestamp_ns is None or sample_rate.get() != rate_of_this_run:
-            start_sample_of_this_run += samples_emitted_in_this_run
+            # A block's start sample counts at the rate it states, so a new rate counts again
+            # from 0 rather than carrying a count kept at the old one.
+            start_sample_of_this_run = 0
             samples_emitted_in_this_run = 0
             run_anchor_timestamp_ns = now_ns
             rate_of_this_run = sample_rate.get()
