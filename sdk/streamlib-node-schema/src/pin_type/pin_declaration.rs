@@ -261,7 +261,6 @@ pub enum SettingReadTime {
     /// what its wire carries rebuilds the node.
     #[default]
     AtSetup,
-    /// Each run, with no rebuild and no wire: an input of a runtime-owned node, or a value
-    /// input of a node written as one function.
+    /// Each run, with no rebuild and no wire. Runtime-owned nodes only.
     EachRun,
 }
