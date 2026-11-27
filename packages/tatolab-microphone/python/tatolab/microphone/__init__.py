@@ -73,11 +73,9 @@ def MicrophoneSource(
     device's instant of its first sample.
 
     The open capture stream is a computed value: setting `device_id` while the
-    stream plays opens the new device while the old one keeps publishing, then
-    closes the old one. Opening the device it already has takes the device over,
-    closing the old stream first. A failed open shows on the node; the old stream
-    keeps publishing when the open was of another device, and nothing publishes
-    until the next set when it was of the same one.
+    stream plays closes the capture it has, then opens the device named, so two
+    devices never publish on `audio` at once. A device that fails to open shows
+    on the node, and nothing publishes until the next set.
 
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID;
     naming one that is not attached is refused with the UIDs that are. Only a
@@ -89,9 +87,15 @@ def MicrophoneSource(
     del audio  # Lent to the native half, which publishes on it.
     module_host_table = ctx.open_module_host_table(output_ports=[AUDIO_OUTPUT_PORT])
 
+    open_now: "list[_native.MicrophoneCapture]" = []
+
     def open_the_microphone() -> _native.MicrophoneCapture:
         named = device_id.get() or None
+        # The capture this one replaces closes first, so two devices never publish at once.
+        while open_now:
+            open_now.pop().close()
         capture = _native.MicrophoneCapture(module_host_table, named)
+        open_now.append(capture)
         log.info(
             f"MicrophoneSource: capture stream opened on {named or '<default>'} at "
             f"{capture.sample_rate} Hz × {capture.channels} ch, {capture.sample_format}"

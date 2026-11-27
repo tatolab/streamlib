@@ -106,11 +106,9 @@ def SpeakerSink(
     samples for is silence, and the count of it is reported.
 
     The open playback stream is a computed value: setting `device_id` while the
-    stream plays opens the new device while the old one keeps playing, then
-    closes the old one. Opening the device it already has takes the device over,
-    closing the old stream first. A failed open shows on the node; the old stream
-    keeps playing when the open was of another device, and nothing plays until
-    the next set when it was of the same one.
+    stream plays closes the playback it has, then opens the device named, so two
+    devices never drain `audio` at once. A device that fails to open shows on the
+    node, and nothing plays until the next set.
 
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID.
     Without a `device_id` playback follows the system default output as it
@@ -119,8 +117,13 @@ def SpeakerSink(
     del audio  # Lent to the native half, which drains it.
     module_host_table = ctx.open_module_host_table(input_ports=[AUDIO_INPUT_PORT])
 
+    open_now: "list[_native.SpeakerPlayback]" = []
+
     def open_the_speaker() -> _native.SpeakerPlayback:
         named = device_id.get()
+        # The playback this one replaces closes first, so two devices never drain `audio` at once.
+        while open_now:
+            open_now.pop().close()
         playback = _native.SpeakerPlayback(
             module_host_table,
             sample_rate=SPEAKER_SAMPLE_RATE,
@@ -128,6 +131,7 @@ def SpeakerSink(
             sample_format=SPEAKER_SAMPLE_FORMAT,
             device_id=named,
         )
+        open_now.append(playback)
         log.info(
             f"SpeakerSink: playback stream opened on {named or '<default>'} at "
             f"{playback.sample_rate} Hz × {playback.channels} ch, {playback.sample_format}, "
