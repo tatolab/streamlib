@@ -531,17 +531,23 @@ def _declare_a_node_function(
 ) -> NodeFunction:
     """`function` read into a node written as one function, stamped as a class node is."""
     if not inspect.isfunction(function):
-        raise TypeError(
-            f"`@node(...)` declares a class or a function defined with `def`, got {function!r}."
+        raise NodeDeclarationRefusal(
+            f"`@node(...)` declares a class or a function defined with `def`, got {function!r}. "
+            f"To fix: put it on a `def` or a class.",
+            finding_code="node_function_not_a_plain_def",
+            node=getattr(function, "__name__", type(function).__name__),
         )
     if (
         inspect.iscoroutinefunction(function)
         or inspect.isasyncgenfunction(function)
         or inspect.isgeneratorfunction(function)
     ):
-        raise TypeError(
-            f"{function.__name__} is not a plain `def`, and a node function's body runs once and "
-            f"returns the function the node calls each frame. To fix: make it a plain `def`."
+        raise NodeDeclarationRefusal(
+            f"`{function.__name__}` is not a plain `def`, and a node function's body runs once "
+            f"and returns the function the node calls each frame. To fix: make it a plain `def`, "
+            f"with no `async` and no `yield`.",
+            finding_code="node_function_not_a_plain_def",
+            node=function.__name__,
         )
     input_ports, output_ports, members, full_access_context_parameter = (
         read_node_function_ports_and_members(function)

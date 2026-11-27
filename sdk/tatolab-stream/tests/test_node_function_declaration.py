@@ -8,7 +8,7 @@ reader a class's fields and pins are read by, and refuses each mistake as a
 from __future__ import annotations
 
 import dataclasses
-from typing import Annotated, Any, Callable, Literal
+from typing import Annotated, Any, Callable, Iterator, Literal
 
 import pytest
 
@@ -20,6 +20,7 @@ from tatolab.stream import (
     NumberRange,
     OutputPin,
     PinGroup,
+    PinTypeChoice,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     SettingOnly,
@@ -170,11 +171,46 @@ def test_an_input_defaulting_to_a_plain_value_is_refused() -> None:
     assert "Input(1.0)" in str(refused)
 
 
-def test_an_input_read_at_setup_is_refused() -> None:
-    def gain(*, level: Input[Annotated[float, SettingOnly()]] = Input(1.0)) -> None: ...
+def setting_only_inside_its_input(*, level: Input[Annotated[float, SettingOnly()]] = Input(1.0)) -> None: ...
 
+
+def setting_only_around_its_input(*, level: Annotated[Input[float], SettingOnly()] = Input(1.0)) -> None: ...
+
+
+@pytest.mark.parametrize("gain", [setting_only_inside_its_input, setting_only_around_its_input])
+def test_an_input_read_at_setup_is_refused_inside_or_around_its_input(gain: Callable[..., Any]) -> None:
+    """Mental-revert: look for `SettingOnly` only inside `Input[...]`, and the one written around it
+    declares a setting whose set rebuilds the node."""
     refused = refusal_of(declared_with_keywords(gain))
     assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "level")
+
+
+def test_an_input_choosing_a_pin_type_is_refused() -> None:
+    """Mental-revert: read a `PinTypeChoice` input as a class's field is, and the node function
+    declares a setting whose set rebuilds the node."""
+
+    def convert(*, content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Texture))) -> None: ...
+
+    refused = refusal_of(declared_with_keywords(convert))
+    assert (refused.finding_code, refused.pin) == ("pin_type_choice_on_a_node_function", "content_type")
+
+
+def test_a_parameter_named_private_is_refused() -> None:
+    """Mental-revert: skip a `_` parameter as a class's private state is skipped, and the body is
+    handed the bare `Input(2.0)` its declaration wrote."""
+
+    def gain(*, level: Input[float] = Input(1.0), _hidden: Input[float] = Input(2.0)) -> None: ...
+
+    refused = refusal_of(declared_with_keywords(gain))
+    assert (refused.finding_code, refused.pin) == ("node_function_parameter_private", "_hidden")
+
+
+def test_a_generator_body_is_refused() -> None:
+    def gain(*, level: Input[float] = Input(1.0)) -> Iterator[None]:
+        yield None
+
+    refused = refusal_of(declared_with_keywords(gain))
+    assert (refused.finding_code, refused.node) == ("node_function_not_a_plain_def", "gain")
 
 
 def test_a_pin_group_is_refused() -> None:

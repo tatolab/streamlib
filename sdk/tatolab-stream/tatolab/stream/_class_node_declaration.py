@@ -654,6 +654,15 @@ class _NodeFunctionReading(_ClassNodeReading):
             if annotation is RuntimeContextFullAccess:
                 self.full_access_context_parameter = name
                 continue
+            if name.startswith("_"):
+                raise self._refusal(
+                    f"`{self._node}`'s parameter `{name}` starts with `_`, and every parameter of "
+                    f"a node function is one of its inputs or pins. To fix: name it without the "
+                    f"`_`, and keep state the node builds in a `computed(...)` value or a local "
+                    f"of its body.",
+                    "node_function_parameter_private",
+                    pin=name,
+                )
             annotations[name] = self._the_annotation_a_parameter_is_read_by(name, annotation)
         return annotations
 
@@ -688,6 +697,8 @@ class _NodeFunctionReading(_ClassNodeReading):
                 pin=name,
             )
         input_modes, _ = _taken_off(arguments[0], (SettingOnly,))
+        if not input_modes and annotation is not written:
+            input_modes, _ = _taken_off(annotation, (SettingOnly,))
         if input_modes:
             raise self._refusal(
                 f"`{self._node}`'s input `{name}` carries `{input_modes[0]!r}`, and every input of "
@@ -722,6 +733,21 @@ class _NodeFunctionReading(_ClassNodeReading):
             )
         declared: Input[Any] = default
         return declared.default
+
+    def _field(
+        self, attribute_name: str, annotation: Any, description: Optional[str]
+    ) -> tuple[DeclaredPort, Optional[DeclaredPort]]:
+        port, published_on = super()._field(attribute_name, annotation, description)
+        if _chooses_a_pin_type(port["pin_declaration"]):
+            raise self._refusal(
+                f"`{self._node}`'s input `{attribute_name}` chooses a pin type, which decides the "
+                f"node's pins and so rebuilds it when it changes, and every input of a node "
+                f"function is live. To fix: declare the node as a class under bare `@node` while "
+                f"an input chooses its pin types.",
+                "pin_type_choice_on_a_node_function",
+                pin=attribute_name,
+            )
+        return port, published_on
 
     def _pin_group(
         self, attribute_name: str, annotation: Any, description: Optional[str]

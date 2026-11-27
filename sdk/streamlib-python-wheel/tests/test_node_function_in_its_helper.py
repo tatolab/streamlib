@@ -143,3 +143,22 @@ def test_a_node_function_is_described_as_a_process_node_of_the_ports_it_declares
     assert described["input_ports"] == getattr(LevelReadingProbe, "__tatolab_node_input_ports__")
     assert [port["name"] for port in described["input_ports"]] == ["level", "gain"]
     assert described["output_ports"] == []
+
+
+def test_a_value_for_no_input_and_a_second_setup_are_refused_by_their_own_kinds():
+    from node_function_probes import LevelReadingProbe
+    from tatolab.runtime._node_function_running import (
+        NodeFunctionBodyRanAgain,
+        NodeFunctionInputNotDeclared,
+        NodeFunctionRunning,
+    )
+
+    running = NodeFunctionRunning(LevelReadingProbe, values_to_build_with={}, pins={})
+    with pytest.raises(NodeFunctionInputNotDeclared, match="declares no value input `volume`"):
+        running.write_inputs({"volume": 1.0})
+    running.setup(object())
+    try:
+        with pytest.raises(NodeFunctionBodyRanAgain, match="body has already run"):
+            running.setup(object())
+    finally:
+        running.teardown(object())

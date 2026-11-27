@@ -50,6 +50,9 @@ type NodeDeclarationFindingCode = Literal[
     "node_function_parameter_not_an_input",
     "input_default_not_an_input",
     "setting_on_a_node_function",
+    "node_function_parameter_private",
+    "pin_type_choice_on_a_node_function",
+    "node_function_not_a_plain_def",
 ]
 """What a refused declaration got wrong, as the declaration check's finding names it."""
 

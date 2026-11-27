@@ -26,7 +26,9 @@ if TYPE_CHECKING:
     from tatolab.stream._node_function import NodeFunction
 
 __all__ = [
+    "NodeFunctionBodyRanAgain",
     "NodeFunctionBodyReturnedNoPerFrameFunction",
+    "NodeFunctionInputNotDeclared",
     "NodeFunctionRunning",
     "NodeFunctionValueInputHasNoValue",
 ]
@@ -34,6 +36,14 @@ __all__ = [
 #: How long a frame waits when a computed value has no first value yet, so a reactive node with a
 #: message waiting is not called again at once for as long as its first build runs.
 UNBUILT_FRAME_BACKOFF_SECONDS = 0.001
+
+
+class NodeFunctionBodyRanAgain(RuntimeError):
+    """A node function's setup was called after its body had already run."""
+
+
+class NodeFunctionInputNotDeclared(ValueError):
+    """A value was given, by a port's name, that names no value input of the node function."""
 
 
 class NodeFunctionBodyReturnedNoPerFrameFunction(TypeError):
@@ -84,7 +94,10 @@ class NodeFunctionRunning:
         scope, then start the scope: its worker builds each computed value from here on."""
         declaring = self._declaring
         if declaring is None:
-            raise RuntimeError(f"`{self._node_function.__qualname__}`'s body has already run")
+            raise NodeFunctionBodyRanAgain(
+                f"`{self._node_function.__qualname__}`'s body has already run, and a node "
+                f"function's body runs once, at its setup"
+            )
         arguments = dict(self._arguments)
         context_parameter = self._node_function.full_access_context_parameter
         if context_parameter is not None:
@@ -125,7 +138,7 @@ class NodeFunctionRunning:
         """Write each of `values`, by its port's name, to the input of the node's scope it names."""
         unknown = sorted(set(values) - set(self._input_of_each_port))
         if unknown:
-            raise ValueError(
+            raise NodeFunctionInputNotDeclared(
                 f"`{self._node_function.__qualname__}` declares no value input "
                 f"{', '.join(f'`{port}`' for port in unknown)}; its value inputs are "
                 f"{', '.join(f'`{port}`' for port in self._input_of_each_port) or 'none'}"

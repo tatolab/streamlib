@@ -9,9 +9,8 @@ generator `add`ed in another is stored inside its graph as a fragment. A node is
 with bare `@node`, on a function whose parameters and return are its typed pins or on a class
 whose fields are, and receives a capability-typed context in every lifecycle hook; or with
 `@node(...)` on a function written as the whole node, its value inputs `Input[T]` and what it
-builds from them `computed(...)`. The
-contexts, GPU classes and timer a node is handed while it runs are `typing.Protocol`s the
-runtime implements; the clock and the timer's start are functions that reach the runtime when
+builds from them `computed(...)`. The contexts, GPU classes and timer a node is handed while it
+runs are `typing.Protocol`s the runtime implements; the clock and the timer's start are functions that reach the runtime when
 called, and raise `RuntimeError` naming themselves where no runtime is lent. Everything else
 here is pure Python, so a stream imports, type-checks and compiles with no runtime installed.
 The built-in nodes are generated from the runtime's own declarations, each with its fields and
@@ -311,6 +310,7 @@ __all__ = [
     "Time",
     "UnreadMessage",
     "clock",
+    "computed",
     "connection_type",
     "graph_generator",
     "gpu_limited_access_of_the_typed_read_in_progress",
@@ -318,10 +318,6 @@ __all__ = [
     "monotonic_now_ns",
     "named_pin_type",
     "node",
-    "computed",
-    "computed",
-    "Computed",
-    "Input",
     "run_graph_generator",
     "start_monotonic_timer",
     "stream_facts",
