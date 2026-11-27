@@ -394,6 +394,31 @@ pub(crate) fn refuse_a_link_its_pin_types_refuse(
     }
     judged
 }
+/// Refuse the link from `from` to `to` that an end carrying no type yet refuses: a member read
+/// at either end, bundle frames into an untyped input, or a named type at one end of a link
+/// untyped at the other.
+pub(super) fn refuse_a_link_an_end_carrying_no_type_yet_refuses(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Result<()> {
+    if let Some(member) = from.member() {
+        return Err(Error::InvalidLink(format!(
+            "a link from member `{member}` of `{from}` enters `{to}`, which carries no type \
+             yet, and a member is read only by a typed input. To fix: link the whole port, \
+             or link the member to a typed input"
+        )));
+    }
+    if let Some(member) = to.member() {
+        return Err(Error::InvalidLink(format!(
+            "a link from `{from}` ends at member `{member}` of `{to}`, and `{from}` carries \
+             no type yet, so the member's value cannot be read off its messages. To fix: \
+             link the member from a typed output, or link the whole port"
+        )));
+    }
+    refuse_bundle_frames_into_an_untyped_input(graph, from, to)?;
+    refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(graph, from, to)
+}
 
 /// Refuse a link from `from` to `to` as [`refuse_a_link_its_pin_types_refuse`] does, keeping no
 /// saved link a type choice left differing.
@@ -410,22 +435,7 @@ fn refuse_a_link_its_pin_types_refuse_as_it_is(
     }
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     let Some(ends) = the_typed_ends_of(graph, from, to) else {
-        if let Some(member) = from.member() {
-            return Err(Error::InvalidLink(format!(
-                "a link from member `{member}` of `{from}` enters `{to}`, which carries no type \
-                 yet, and a member is read only by a typed input. To fix: link the whole port, \
-                 or link the member to a typed input"
-            )));
-        }
-        if let Some(member) = to.member() {
-            return Err(Error::InvalidLink(format!(
-                "a link from `{from}` ends at member `{member}` of `{to}`, and `{from}` carries \
-                 no type yet, so the member's value cannot be read off its messages. To fix: \
-                 link the member from a typed output, or link the whole port"
-            )));
-        }
-        refuse_bundle_frames_into_an_untyped_input(graph, from, to)?;
-        refuse_a_named_type_at_one_end_of_a_link_untyped_at_the_other(graph, from, to)?;
+        refuse_a_link_an_end_carrying_no_type_yet_refuses(graph, from, to)?;
         if a_link_connected == ALinkConnected::MadeNow {
             refuse_a_link_made_now_a_wired_link_past_its_input_refuses(
                 graph,

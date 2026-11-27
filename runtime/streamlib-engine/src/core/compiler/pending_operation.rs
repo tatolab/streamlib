@@ -22,7 +22,8 @@ pub(crate) enum PendingOperation {
 
     /// Judge again each link the type choices of a node reach, since one of its inputs changed:
     /// a link whose two ends no longer connect is unwired and kept, carrying nothing, and one
-    /// that connects again is wired again. Neither node is rebuilt.
+    /// that connects again is wired again. Neither node is rebuilt. A link that is a call inside
+    /// an island has no channel to close: it is marked, and runs on until the stream starts again.
     JudgeTheLinksTheTypeChoicesOfTheNodeReach(NodeRunId),
 
     /// Move a function node whose call crashed or stalled its reader's helper,

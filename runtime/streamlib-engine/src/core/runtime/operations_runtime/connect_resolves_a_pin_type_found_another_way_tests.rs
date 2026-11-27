@@ -32,6 +32,8 @@ const AUDIO_SOURCE: &str = "FoundAnotherWayAudioSource";
 const FLOAT_SINK: &str = "FoundAnotherWayFloatSink";
 const STRING_SINK: &str = "FoundAnotherWayStringSink";
 const ANY_SINK: &str = "FoundAnotherWayAnySink";
+/// A node whose input `value` states no pin type.
+const UNTYPED_SINK: &str = "FoundAnotherWayUntypedSink";
 const STRING_OR_BOOLEAN_SINK: &str = "FoundAnotherWayStringOrBooleanSink";
 const PASS_ON: &str = "FoundAnotherWayPassOn";
 const CHOSEN_SOURCE: &str = "FoundAnotherWayChosenSource";
@@ -138,6 +140,14 @@ fn register_the_fixture_node_types() {
             sink(FLOAT_SINK, is(float())),
             sink(STRING_SINK, is(PinType::String {})),
             sink(ANY_SINK, DeclaredPinType::Any),
+            a_node_type(
+                UNTYPED_SINK,
+                vec![PortDescriptor {
+                    pin_declaration: None,
+                    ..a_port("value", is(PinType::String {}))
+                }],
+                Vec::new(),
+            ),
             sink(
                 STRING_OR_BOOLEAN_SINK,
                 DeclaredPinType::OneOf {
@@ -960,4 +970,29 @@ fn a_saved_link_past_a_pass_on_a_choice_upstream_left_differing_is_kept() {
             vec![chosen.clone()]
         );
     });
+}
+
+/// A choice leaving a named type at an output whose link enters an input stating no type marks
+/// the link, which no named type's bytes reach; choosing a type the input takes again connects it.
+///
+/// Mental-revert: judging only the links whose two ends are typed leaves the link wired, the
+/// input reading bytes of a named type it cannot read.
+#[test]
+fn a_named_type_chosen_into_an_input_stating_no_type_marks_the_link() {
+    register_the_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let chosen = a_node_holding(&compiler, CHOSEN_SOURCE, choosing(PinType::String {}));
+    let untyped_sink = a_node_of(&compiler, UNTYPED_SINK);
+    let link = connect(&compiler, &chosen, &untyped_sink).expect("an untyped input takes a String");
+
+    let differing = choose_and_judge(&compiler, &chosen, a_note());
+
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    assert!(differing[0].why.contains("named type"), "{differing:?}");
+    assert!(compiler.scope(|graph, _tx| graph.the_pin_types_of_the_link_differ(&link)));
+
+    let differing = choose_and_judge(&compiler, &chosen, PinType::String {});
+
+    assert!(differing.is_empty(), "{differing:?}");
+    assert!(!compiler.scope(|graph, _tx| graph.the_pin_types_of_the_link_differ(&link)));
 }

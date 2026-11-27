@@ -22,7 +22,10 @@ use super::super::{
     PendingDeletionComponent, PortInfo,
 };
 use super::wired_links_past_an_input::the_links_drawn_out_of;
-use super::{the_ends_a_link_is_judged_by, the_refusal_without_its_fix, the_typed_ends_of};
+use super::{
+    refuse_a_link_an_end_carrying_no_type_yet_refuses, the_ends_a_link_is_judged_by,
+    the_refusal_without_its_fix, the_typed_ends_of,
+};
 use crate::core::descriptors::{DeclaredPinType, PinConversion};
 
 /// What judging links again found, changing nothing yet: each link whose ends differ now, with
@@ -266,8 +269,8 @@ pub(crate) fn the_nodes_whose_type_choices_reach_the_link(
 }
 
 /// How the two ends of a link from `from` to `to` differ in `graph` now, naming the type each
-/// carries; `None` when they connect under `conversions`, or when an end is not typed yet, which
-/// is judged once it is.
+/// carries; `None` when they connect under `conversions`, or when an end not typed yet takes
+/// what the other carries.
 fn how_the_ends_of_a_link_differ_now(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -276,10 +279,15 @@ fn how_the_ends_of_a_link_differ_now(
 ) -> Option<LinkPinTypesDifferComponent> {
     let why = match refuse_a_member_its_port_does_not_hold(graph, from, to) {
         Err(refusal) => refusal.to_string(),
-        Ok(()) => the_typed_ends_of(graph, from, to)?
-            .verdict(conversions)
-            .refusal_of_the_link_made_as_it_is()?
-            .to_string(),
+        Ok(()) => match the_typed_ends_of(graph, from, to) {
+            Some(ends) => ends
+                .verdict(conversions)
+                .refusal_of_the_link_made_as_it_is()?
+                .to_string(),
+            None => refuse_a_link_an_end_carrying_no_type_yet_refuses(graph, from, to)
+                .err()?
+                .to_string(),
+        },
     };
     let ends = the_ends_a_link_is_judged_by(graph, from, to)?;
     Some(LinkPinTypesDifferComponent {
