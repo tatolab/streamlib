@@ -1,13 +1,21 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The Python probe node the live input tests set inputs on while its stream plays."""
+"""The Python probe nodes the live input tests set inputs on while their stream plays."""
 
 import fcntl
 import json
 import os
+from typing import Callable, Optional
 
-from tatolab.stream import RuntimeContextFullAccess, log, node
+from tatolab.stream import (
+    Input,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    computed,
+    log,
+    node,
+)
 
 #: Names the file whose exclusive lock stands in for one exclusive device, as a camera is.
 STUB_EXCLUSIVE_DEVICE_PATH_ENVIRONMENT_VARIABLE = (
@@ -72,3 +80,33 @@ class CountsItsBuildsHoldingAStubDevice:
             self._device.close()
             self._device = None
             report("STUB_DEVICE_CLOSED", {"pid": os.getpid()})
+
+
+class ReadingOfALevel:
+    """A value built from one level, which reports its build and its close."""
+
+    def __init__(self, level: float) -> None:
+        self.level = level
+        report("LEVEL_BUILT", {"pid": os.getpid(), "level": float(level)})
+
+    def close(self) -> None:
+        report("LEVEL_CLOSED", {"pid": os.getpid(), "level": float(self.level)})
+
+
+@node(execution="continuous", interval_ms=10)
+def reads_its_level_as_one_function(
+    *, level: Input[float] = Input(0.25)
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Reports its body running, builds a `ReadingOfALevel` of its level, and reports each level
+    the reading its frames read holds."""
+    report("NODE_FUNCTION_BODY_RAN", {"pid": os.getpid()})
+    reading = computed(lambda: ReadingOfALevel(level.get()))
+    level_last_reported: list[Optional[float]] = [None]
+
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        read = reading.get().level
+        if read != level_last_reported[0]:
+            level_last_reported[0] = read
+            report("NODE_FUNCTION_READ_LEVEL", {"pid": os.getpid(), "level": float(read)})
+
+    return each_frame

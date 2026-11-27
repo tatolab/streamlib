@@ -4,7 +4,9 @@
 """An input of a Python node set through `transact` while its stream plays restarts nothing:
 the probe reads the new value in the process it set up in, ran its setup once and no teardown,
 took its stub exclusive device, a file lock, once and was never refused it, the stream still
-runs healthy, and its graph document equals its running graph.
+runs healthy, and its graph document equals its running graph. A node written as one function
+rebuilds, in the same process, only the computed value that read the input, closes the value it
+replaced, and closes the last one when its stream stops.
 """
 
 from __future__ import annotations
@@ -36,6 +38,22 @@ GRAPH_HOLDING_THE_PROBE = {
     "links": [],
 }
 
+#: The node written as one function, its `level` saved at 0.25, as the stream `main`'s one node.
+GRAPH_HOLDING_THE_NODE_FUNCTION = {
+    "stream": "main",
+    "nodes": [
+        {
+            "name": "reader",
+            "type": "live_input_probe_nodes:reads_its_level_as_one_function",
+            "input_values": {"level": 0.25},
+        }
+    ],
+    "links": [],
+}
+
+#: The markers the node function reports about its body and the values it builds and closes.
+NODE_FUNCTION_MARKERS = ("NODE_FUNCTION_BODY_RAN", "LEVEL_BUILT", "LEVEL_CLOSED")
+
 #: The markers the probe reports about its builds and its stub exclusive device.
 BUILD_AND_DEVICE_MARKERS = (
     "PROBE_SETUP",
@@ -46,11 +64,11 @@ BUILD_AND_DEVICE_MARKERS = (
 )
 
 
-def the_markers_reported_in_order(stderr_text: str) -> list[tuple[str, Any]]:
-    """Each build and device marker in `stderr_text`, with its payload, in the order reported."""
-    parsers = [
-        MarkerLineParser(marker_name) for marker_name in BUILD_AND_DEVICE_MARKERS
-    ]
+def the_markers_reported_in_order(
+    stderr_text: str, marker_names: tuple[str, ...] = BUILD_AND_DEVICE_MARKERS
+) -> list[tuple[str, Any]]:
+    """Each of `marker_names` in `stderr_text`, with its payload, in the order reported."""
+    parsers = [MarkerLineParser(marker_name) for marker_name in marker_names]
     reported = []
     for line in stderr_text.splitlines():
         for parser in parsers:
@@ -210,3 +228,78 @@ def test_an_input_of_a_python_node_set_through_transact_while_playing_restarts_n
         json.loads(project.graph_document_path.read_text(encoding="utf-8")),
         local_api.graph(stream=stream_id),
     )
+
+
+@pytest.mark.requires_gpu
+def test_a_node_written_as_one_function_rebuilds_only_what_read_an_input_set_while_playing(
+    start_tatolabd_running_stream: StartTatolabdRunningStream, tmp_path: Path
+):
+    """Mental-revert: a set that rebuilds the node runs its body again, in a new process; a
+    helper that runs the body every frame reports it each frame; one that never closes what a
+    build replaced, or never closes the scope when the node stops, reports no `LEVEL_CLOSED`."""
+    project = write_a_hand_written_graph_project(
+        tmp_path / "project", GRAPH_HOLDING_THE_NODE_FUNCTION
+    )
+    tatolabd = start_tatolabd_running_stream(project.tatolab_run)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_read = tatolabd.await_marker("NODE_FUNCTION_READ_LEVEL")
+    assert first_read["level"] == pytest.approx(0.25), first_read
+    local_api = tatolabd.local_api_client()
+    (reader,) = [
+        node
+        for node in local_api.graph(stream=stream_id)["nodes"]
+        if node["name"] == "reader"
+    ]
+    assert [port["name"] for port in reader["ports"]["inputs"]] == ["level"], (
+        f"the node function's input is declared as any node's: {reader['ports']}"
+    )
+
+    local_api.call_tool(
+        "transact",
+        {
+            "operations": [
+                {
+                    "operation": "set_node_input_value",
+                    "stream": stream_id,
+                    "node": reader["id"],
+                    "input": "level",
+                    "value": 0.75,
+                }
+            ]
+        },
+    )
+
+    read_after_the_set = tatolabd.await_marker("NODE_FUNCTION_READ_LEVEL", occurrence=2)
+    assert read_after_the_set == {
+        "pid": first_read["pid"],
+        "level": pytest.approx(0.75),
+    }, f"the new level is read in the process the node set up in: {read_after_the_set}"
+    tatolabd.await_marker("LEVEL_CLOSED")
+    reported = the_markers_reported_in_order(tatolabd.stderr_text, NODE_FUNCTION_MARKERS)
+    assert [(marker_name, payload.get("level")) for marker_name, payload in reported] == [
+        ("NODE_FUNCTION_BODY_RAN", None),
+        ("LEVEL_BUILT", pytest.approx(0.25)),
+        ("LEVEL_BUILT", pytest.approx(0.75)),
+        ("LEVEL_CLOSED", pytest.approx(0.25)),
+    ], f"one body, one rebuild, the replaced value closed:\n{tatolabd.recent_stderr()}"
+    assert {payload["pid"] for _, payload in reported} == {first_read["pid"]}
+    (listed,) = [
+        listed for listed in local_api.list_streams() if listed["stream"] == stream_id
+    ]
+    assert listed["state"] == "running", listed
+    assert listed["condition"]["health"] == "healthy", listed
+    assert_the_graph_document_equals_the_running_graph(
+        json.loads(project.graph_document_path.read_text(encoding="utf-8")),
+        local_api.graph(stream=stream_id),
+    )
+
+    stopped = local_api.call_tool(
+        "stop_playback", {"project_directory": listed["location"]["project_directory"]}
+    )
+    assert local_api.stream_action_once_ended(stopped["action"])["state"] == "done"
+
+    closed_at_the_stop = tatolabd.await_marker("LEVEL_CLOSED", occurrence=2)
+    assert closed_at_the_stop == {
+        "pid": first_read["pid"],
+        "level": pytest.approx(0.75),
+    }, f"stopping the node closes the value its build made: {closed_at_the_stop}"
