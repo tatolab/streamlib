@@ -317,6 +317,37 @@ class LocalApiClient:
                 )
             time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
 
+    def await_the_diagnostic_of_a_node(
+        self,
+        *,
+        stream: str,
+        node_name: str,
+        kind: str,
+        timeout: float = EVERY_NODE_RUNNING_TIMEOUT_SECONDS,
+    ) -> "dict[str, Any]":
+        """Poll `list_streams` until the stream's condition carries a diagnostic of `kind` placed
+        on the node named `node_name`, and return it. Past the timeout raises naming the
+        diagnostics the stream carried last."""
+        deadline = time.monotonic() + timeout
+        diagnostics: "list[dict[str, Any]]" = []
+        while True:
+            (listed,) = [listed for listed in self.list_streams() if listed["stream"] == stream]
+            diagnostics = listed["condition"]["diagnostics"]
+            for diagnostic in diagnostics:
+                place = diagnostic["place"]
+                if (
+                    diagnostic["kind"] == kind
+                    and place.get("on") == "node"
+                    and place.get("node_name") == node_name
+                ):
+                    return diagnostic
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"the node {node_name} carried no {kind} diagnostic within {timeout}s: "
+                    f"{diagnostics}"
+                )
+            time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
+
     def await_link_state(
         self,
         link_id: str,

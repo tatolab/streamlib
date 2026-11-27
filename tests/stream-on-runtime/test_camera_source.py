@@ -44,22 +44,24 @@ def test_node_name_defaults_to_the_type_name(
 
 
 @pytest.mark.requires_gpu
-def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
+def test_a_device_that_was_named_and_cannot_be_opened_fails_its_build(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    """Landing on a different camera would be worse than failing, so the source
-    refuses and the node never reaches Running."""
+    """Landing on a different device than the one named would be worse than failing, so the
+    source's open device, a computed value, fails its build: the node runs no frame, and the
+    stream's condition names the device that was asked for."""
     tatolabd = start_tatolabd_running_stream(a_camera_naming_a_device_no_backend_can_open)
     stream_id = tatolabd.await_the_latest_stream_loaded()
-    node_states = tatolabd.local_api_client().await_every_node_past_setup(
-        stream=stream_id, timeout=READINESS_TIMEOUT_SECONDS
+    diagnostic = tatolabd.local_api_client().await_the_diagnostic_of_a_node(
+        stream=stream_id,
+        node_name=CAMERA_NODE_NAME,
+        kind="computed_value_build_failed",
+        timeout=READINESS_TIMEOUT_SECONDS,
     )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    assert node_states[CAMERA_NODE_NAME] == "Error", (
-        f"the camera must refuse at setup rather than reach Running: {node_states}"
+    assert UNOPENABLE_DEVICE_ID in diagnostic["words"], (
+        f"the failed build must name the device that was asked for: {diagnostic}"
     )
-    assert UNOPENABLE_DEVICE_ID in tatolabd.stderr_text, (
-        f"the refusal must name the device that was asked for:\n{tatolabd.recent_stderr()}"
-    )
+    assert diagnostic["recovery"] == "change_an_input_the_build_read", diagnostic
