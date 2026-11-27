@@ -36,6 +36,7 @@ from tatolab.runtime._node_type_import_folder import (
     import_the_module_of_a_node_type,
 )
 from tatolab.runtime._helper_process_environment_variables import ENTRYPOINT_ENV
+from tatolab.runtime._node_hosting import is_a_node_function
 from tatolab.runtime._parent_process_bridge import HelperProcessProtocolError
 
 
@@ -71,7 +72,8 @@ def load_node_class(import_path: str) -> type:
 
 
 
-#: Each key of a described class node type the class's own `@node` stamp fills, in wire order.
+#: Each key of a described class node type the class's own `@node` stamp fills, in wire order,
+#: and of a node function, which `@node(...)` stamps as it stamps a class.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("kind", NODE_DECLARATION_KIND_STAMP),
@@ -174,6 +176,10 @@ def _describe_the_node_class_its_imported_module_defines(
         described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
         the_decorator_that_stamps_them = "@node"
         what_it_names = "class"
+    elif is_a_node_function(resolved):
+        described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
+        the_decorator_that_stamps_them = "@node(...)"
+        what_it_names = "function"
     else:
         raise NodeClassNotDescribable(
             f"it names a {type(resolved).__name__}, not a class or a function under `@node`"

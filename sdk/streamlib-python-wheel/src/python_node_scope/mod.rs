@@ -174,11 +174,7 @@ impl PythonNodeScopeInput {
 }
 
 /// A value computed from a Python node's inputs, read with `get()` in a build or a frame.
-#[pyclass(
-    frozen,
-    name = "NodeScopeComputedValue",
-    module = "tatolab.runtime._engine"
-)]
+#[pyclass(frozen, name = "NodeScopeComputedValue", module = "tatolab.stream")]
 pub(crate) struct PythonNodeScopeComputedValue {
     declared_in: NodeScopeIdentity,
     computed: Computed<PythonValueInANodeScope>,

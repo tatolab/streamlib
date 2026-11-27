@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 __all__ = [
     "class_node_members_of",
     "class_node_pin_groups_of",
+    "is_a_node_function",
     "construct_class_node_from_its_fields_and_pins",
     "the_members_of_each_slot_built",
     "the_slots_its_pin_groups_are_built_with",
@@ -45,6 +46,19 @@ def class_node_members_of(node_class: type) -> "Optional[tuple[ClassNodeMember, 
     except ImportError:
         return None
     return class_node_members(node_class)
+
+
+def is_a_node_function(node: object) -> bool:
+    """Whether `node` is a function under `@node(...)`, a node written as one function.
+
+    Read through the `tatolab-stream` of the project's venv, which may predate node functions;
+    nothing one that does declares is one.
+    """
+    try:
+        from tatolab.stream._node_function import NodeFunction
+    except ImportError:
+        return False
+    return isinstance(node, NodeFunction)
 
 
 def class_node_pin_groups_of(node_class: type) -> "tuple[ClassNodePinGroup, ...]":

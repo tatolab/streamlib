@@ -21,6 +21,7 @@ from tatolab.runtime._engine import (
 )
 from tatolab.runtime._node_hosting import (
     class_node_members_of,
+    is_a_node_function,
     class_node_pin_groups_of,
     construct_class_node_from_its_fields_and_pins,
     construct_node_instance,
@@ -144,7 +145,8 @@ class HostedNode:
         self.full_access_context = full_access_context
         self.limited_access_context = limited_access_context
         self.fields = fields
-        """The fields of a class under bare `@node`, which follow their values; `None` for any other node."""
+        """The fields of a class under bare `@node`, or the value inputs of a node function, which
+        follow their values; `None` for any other node."""
         self._declared_hooks = {
             hook for hook in self.LIFECYCLE_HOOKS if hasattr(node_instance, hook)
         }
@@ -217,6 +219,15 @@ def construct_hosted_node(
     limited_access_context = limited_access_view_of_runtime_context_for_helper_process(
         full_access_context
     )
+    if is_a_node_function(node_class):
+        return _host_a_node_function(
+            node_class,
+            full_access_context,
+            limited_access_context,
+            link_data_access=link_data_access,
+            node_run_id=node_run_id,
+            stored_input_values=stored_input_values,
+        )
     members = class_node_members_of(node_class)
     if members is None:
         if not is_a_node_the_wheel_builds_itself(node_class):
@@ -268,6 +279,44 @@ def construct_hosted_node(
         limited_access_context,
         fields,
     )
+
+
+def _host_a_node_function(
+    node_function: Any,
+    full_access_context: RuntimeContextFullAccess,
+    limited_access_context: Any,
+    *,
+    link_data_access: NodeLinkDataAccess,
+    node_run_id: str,
+    stored_input_values: "Optional[dict[str, Any]]",
+) -> HostedNode:
+    """A node written as one function, each value input holding its stored value and each pin
+    bound, its body left for `setup` to run."""
+    from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
+    from tatolab.runtime._class_node_fields import ClassNodeFields
+    from tatolab.runtime._node_function_running import NodeFunctionRunning
+
+    inputs = link_input_data_reader_of(full_access_context)
+    fields = ClassNodeFields(
+        node_function.members,
+        link_data_access=link_data_access,
+        inputs=inputs,
+        node_id=node_run_id,
+        stored_input_values=stored_input_values,
+        assign_field_values=NodeFunctionRunning.write_inputs,
+    )
+    running = NodeFunctionRunning(
+        node_function,
+        values_to_build_with=fields.values_to_build_with(),
+        pins=bind_the_pins_of_a_class_node(
+            node_function.members,
+            link_data_access=link_data_access,
+            inputs=inputs,
+            outputs=link_output_data_writer_of(full_access_context),
+            node_id=node_run_id,
+        ),
+    )
+    return HostedNode(running, full_access_context, limited_access_context, fields)
 
 
 def the_words_a_process_raise_is_shown_in(raised: BaseException) -> str:
