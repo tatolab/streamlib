@@ -35,12 +35,21 @@ def what_the_probe_did() -> "list[tuple[str, object]]":
     return list(WHAT_THE_LEVEL_READING_PROBE_DID)
 
 
-def wait_until_the_probe_framed(seen: "tuple[float, float]", timeout_s: float = 5.0) -> None:
+def answer_the_helper_for_a_moment(stand_in_parent: Any) -> None:
+    """Answer each escalate request the helper sends for a moment, as its parent does; the helper
+    sends nothing else unasked."""
+    unasked = stand_in_parent.receive_answering_each_escalate(timeout_seconds=0.01)
+    assert unasked is None, f"the helper sent {unasked!r} unasked"
+
+
+def wait_until_the_probe_framed(
+    stand_in_parent: Any, seen: "tuple[float, float]", timeout_s: float = 5.0
+) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if what_the_probe_did()[-1:] == [("frame", seen)]:
             return
-        time.sleep(0.01)
+        answer_the_helper_for_a_moment(stand_in_parent)
     raise AssertionError(f"the probe never framed {seen!r}; it did: {what_the_probe_did()[-5:]}")
 
 
@@ -60,9 +69,9 @@ def start_the_level_reading_probe(stand_in_parent: Any) -> Any:
     stand_in_parent.send(
         {"cmd": "setup", "capability": "full", "ports": {"input_values": {"level": 0.5}}}
     )
-    assert stand_in_parent.receive() == {"rpc": "ready"}
+    assert stand_in_parent.receive_answering_each_escalate() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
-    wait_until_the_probe_framed((0.5, 1.0))
+    wait_until_the_probe_framed(stand_in_parent, (0.5, 1.0))
     return lifecycle_thread
 
 
@@ -72,11 +81,11 @@ def test_a_value_set_live_rebuilds_only_the_computed_value_that_read_it(stand_in
     lifecycle_thread = start_the_level_reading_probe(stand_in_parent)
 
     stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": 0.75}})
-    wait_until_the_probe_framed((0.75, 1.0))
+    wait_until_the_probe_framed(stand_in_parent, (0.75, 1.0))
     stand_in_parent.send(
         {"cmd": "set_input_values", "input_values": {"level": 0.75, "gain": 2.0}}
     )
-    wait_until_the_probe_framed((0.75, 2.0))
+    wait_until_the_probe_framed(stand_in_parent, (0.75, 2.0))
 
     assert done_but_frames(what_the_probe_did()) == [
         ("body", None),
@@ -85,7 +94,7 @@ def test_a_value_set_live_rebuilds_only_the_computed_value_that_read_it(stand_in
         ("closed", 0.5),
     ]
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    assert stand_in_parent.receive()["rpc"] == "done"
+    assert stand_in_parent.receive_answering_each_escalate()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
 
@@ -96,7 +105,7 @@ def test_stopping_the_node_closes_every_value_its_builds_made(stand_in_parent: A
     lifecycle_thread = start_the_level_reading_probe(stand_in_parent)
 
     stand_in_parent.send({"cmd": "stop", "capability": "full"})
-    assert stand_in_parent.receive()["rpc"] == "stopped"
+    assert stand_in_parent.receive_answering_each_escalate()["rpc"] == "stopped"
 
     assert done_but_frames(what_the_probe_did()) == [
         ("body", None),
@@ -104,7 +113,7 @@ def test_stopping_the_node_closes_every_value_its_builds_made(stand_in_parent: A
         ("closed", 0.5),
     ]
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    assert stand_in_parent.receive()["rpc"] == "done"
+    assert stand_in_parent.receive_answering_each_escalate()["rpc"] == "done"
     assert done_but_frames(what_the_probe_did())[-1] == ("closed", 0.5)
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
@@ -135,12 +144,12 @@ def test_a_body_that_reads_an_input_or_returns_no_function_fails_its_setup(
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
-    answer = stand_in_parent.receive()
+    answer = stand_in_parent.receive_answering_each_escalate()
     assert answer["rpc"] == "error"
     assert refusal in answer["error"]
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    assert stand_in_parent.receive()["rpc"] == "done"
+    assert stand_in_parent.receive_answering_each_escalate()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
 
 
@@ -184,12 +193,14 @@ def what_the_publishing_probe_did() -> "list[tuple[str, float]]":
     return list(WHAT_THE_LEVEL_PUBLISHING_PROBE_DID)
 
 
-def wait_until_the_publishing_probe_did(done: "tuple[str, float]", timeout_s: float = 5.0) -> None:
+def wait_until_the_publishing_probe_did(
+    stand_in_parent: Any, done: "tuple[str, float]", timeout_s: float = 5.0
+) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if done in what_the_publishing_probe_did():
             return
-        time.sleep(0.01)
+        answer_the_helper_for_a_moment(stand_in_parent)
     raise AssertionError(
         f"the publishing probe never did {done!r}; it did: {what_the_publishing_probe_did()}"
     )
@@ -242,26 +253,17 @@ def start_the_level_publishing_probe(stand_in_parent: Any, ports: "dict[str, Any
     stand_in_parent.send(
         {"cmd": "setup", "capability": "full", "ports": {**ports, "input_values": {"level": 0.5}}}
     )
-    assert stand_in_parent.receive() == {"rpc": "ready"}
+    assert stand_in_parent.receive_answering_each_escalate() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
-    wait_until_the_publishing_probe_did(("opened", 0.5))
+    wait_until_the_publishing_probe_did(stand_in_parent, ("opened", 0.5))
     return lifecycle_thread
 
 
 def stop_and_tear_down(stand_in_parent: Any, lifecycle_thread: Any) -> None:
     stand_in_parent.send({"cmd": "stop", "capability": "full"})
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    answers = []
-    while len(answers) < 2:
-        frame = stand_in_parent.receive()
-        assert frame is not None, "the helper did not answer stop and teardown"
-        if frame.get("rpc") == "escalate_request":
-            stand_in_parent.send(
-                {"rpc": "escalate_response", "request_id": frame["request_id"], "result": "ok"}
-            )
-        elif frame.get("op") != "log":
-            answers.append(frame["rpc"])
-    assert answers == ["stopped", "done"]
+    answers = [stand_in_parent.receive_answering_each_escalate() for _ in range(2)]
+    assert [answer and answer["rpc"] for answer in answers] == ["stopped", "done"]
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
 
@@ -272,7 +274,7 @@ def test_a_node_pacing_itself_takes_a_value_set_live_at_its_next_tick(stand_in_p
     lifecycle_thread = start_the_level_publishing_probe(stand_in_parent, {})
 
     stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": 0.75}})
-    wait_until_the_publishing_probe_did(("closed", 0.5))
+    wait_until_the_publishing_probe_did(stand_in_parent, ("closed", 0.5))
 
     assert what_the_publishing_probe_did() == [
         ("opened", 0.5),
@@ -307,7 +309,7 @@ def test_a_node_pacing_itself_takes_a_value_its_wire_gives_at_its_next_tick(stan
         start_sample=0,
         sample_rate=0,
     )
-    wait_until_the_publishing_probe_did(("closed", 0.5))
+    wait_until_the_publishing_probe_did(stand_in_parent, ("closed", 0.5))
 
     assert what_the_publishing_probe_did() == [
         ("opened", 0.5),
@@ -326,14 +328,113 @@ def test_a_node_pacing_itself_answers_its_parent_while_a_build_is_held(stand_in_
     PUBLISHING_BUILDS_LET_GO.clear()
     try:
         stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": 0.75}})
-        time.sleep(0.2)
+        for _ in range(20):
+            answer_the_helper_for_a_moment(stand_in_parent)
         stand_in_parent.send({"cmd": "on_pause"})
-        answer = stand_in_parent.receive(timeout_seconds=1.0)
-        while answer is not None and answer.get("op") == "log":
-            answer = stand_in_parent.receive(timeout_seconds=1.0)
+        answer = stand_in_parent.receive_answering_each_escalate(timeout_seconds=1.0)
         assert answer == {"rpc": "ok"}, f"the helper answered {answer!r} while a build is held"
         assert what_the_publishing_probe_did() == [("opened", 0.5)]
     finally:
         PUBLISHING_BUILDS_LET_GO.set()
-    wait_until_the_publishing_probe_did(("closed", 0.5))
+    wait_until_the_publishing_probe_did(stand_in_parent, ("closed", 0.5))
+    stop_and_tear_down(stand_in_parent, lifecycle_thread)
+
+
+def test_a_node_pacing_itself_tells_its_parent_a_build_raised_by_its_own_kind(
+    stand_in_parent: Any,
+):
+    """Mental-revert: leave a node function's builds out of what a tick tells the parent, and
+    the parent never hears that the build of a negative level raised, so the node shows healthy
+    while it publishes the level before."""
+    lifecycle_thread = start_the_level_publishing_probe(stand_in_parent, {})
+    escalates: "list[dict[str, Any]]" = []
+
+    stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": -1.0}})
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not any(
+        build["latest_build_failed"] is not None
+        for escalate in escalates
+        if escalate["op"] == "set_computed_value_builds"
+        for build in escalate["builds"]
+    ):
+        stand_in_parent.receive_answering_each_escalate(0.05, escalates)
+
+    reports = [
+        escalate["builds"] for escalate in escalates if escalate["op"] == "set_computed_value_builds"
+    ]
+    assert reports, f"the helper told its parent nothing of its builds; it sent {escalates!r}"
+    (raised,) = reports[-1]
+    assert raised["declared"].startswith("`LevelPublishingProbe.<locals>.publish_the_level` declared at ")
+    from node_function_probes import __file__ as probes_file
+
+    with open(probes_file) as probes:
+        line = next(n for n, text in enumerate(probes, 1) if "def publish_the_level" in text)
+    assert raised["declared"].endswith(f"node_function_probes.py:{line}")
+    assert raised["has_a_value"] is True
+    assert raised["building_again"] is False
+    assert raised["latest_build_failed"] == {
+        "kind": "raised",
+        "why": "LevelNegative: the level is -1.0, below 0",
+    }
+    assert what_the_publishing_probe_did() == [("opened", 0.5)]
+    stop_and_tear_down(stand_in_parent, lifecycle_thread)
+
+
+def test_a_function_node_raising_in_the_tick_of_a_node_pacing_itself_is_reported_on_it(
+    stand_in_parent: Any,
+):
+    """A function node island feeding the level of a node that paces itself, raising on the
+    level its pin sets, is reported on the function node from the node's tick.
+
+    Mental-revert: leave the manual tick reporting no function node's raise, and the raise its
+    field read noted reaches the parent never, since a node that paces itself runs no frame."""
+    from function_node_test_nodes import an_island_of_one_node
+    from node_function_probes import WHAT_THE_LEVEL_PUBLISHING_PROBE_DID
+
+    island = an_island_of_one_node(
+        "level",
+        "helper_process_probes:builds_an_object_then_answers_its_level_raising_on_a_negative_one",
+        None,
+        "beat-1",
+    )
+    island["nodes"][0]["pins"] = {"level": -1.0}
+    WHAT_THE_LEVEL_PUBLISHING_PROBE_DID.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:LevelPublishingProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "ports": {"islands": [island], "input_values": {"level": 0.5}},
+        }
+    )
+    assert stand_in_parent.receive_answering_each_escalate() == {
+        "rpc": "ready",
+        "function_nodes_ran_compiled": {"beat-1": False},
+    }
+    stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
+
+    deadline = time.monotonic() + 5.0
+    raising = None
+    while raising is None and time.monotonic() < deadline:
+        frame = stand_in_parent.receive(timeout_seconds=max(0.0, deadline - time.monotonic()))
+        if frame is None:
+            break
+        if frame.get("op") == "set_function_node_raising_because":
+            raising = frame
+        elif frame.get("rpc") == "escalate_request":
+            stand_in_parent.send(
+                {"rpc": "escalate_response", "request_id": frame["request_id"], "result": "ok"}
+            )
+    assert raising is not None, "the tick never reported the function node raising"
+    assert raising["function_node"] == "beat-1"
+    assert raising["raising_because"].startswith(
+        "raised RuntimeError: the function node broke on purpose ("
+    )
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": raising["request_id"], "result": "ok"}
+    )
     stop_and_tear_down(stand_in_parent, lifecycle_thread)

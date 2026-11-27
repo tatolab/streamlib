@@ -8,8 +8,8 @@ standalone maturin wheel that depends on `tatolab-stream`, `pyo3` and
   in the machine's browser host: one CEF the runtime starts at the first
   `BrowserSource`'s lease and stops 30 s after the last, shared by every stream
   on the machine, each stream with a CEF profile (cookies, storage) of its own.
-  The node's helper runs no CEF. On `start()` it lends its ports to this
-  wheel's Rust, which leases the host through the module host table (1.7),
+  The node's helper runs no CEF. Its body lends its ports to this wheel's
+  Rust, and each tab it opens leases the host through the module host table (1.7),
   opens the tab over the versioned tab protocol (`tab-protocol/`), and writes
   each frame the host paints, handed over in shared memory, into a texture
   from the node's output pool (`surface_write_from_host_memory`), published as

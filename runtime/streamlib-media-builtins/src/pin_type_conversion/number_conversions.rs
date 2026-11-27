@@ -11,8 +11,9 @@ use streamlib::sdk::descriptors::{
     PinConversionSavedValueCast, PinType, SavedValueNotCast, the_number_cast,
 };
 use streamlib::sdk::error::Result;
-use streamlib::sdk::iceoryx2::{ChannelsBlockDescriptorBody, DataChannelPayloadDescriptor};
-use streamlib::sdk::nodes::ReactiveNode;
+use streamlib::sdk::iceoryx2::{
+    ChannelsBlockDescriptorBody, DataChannelPayloadDescriptor, InputMailboxes, OutputWriter,
+};
 use streamlib::sdk::pin_value_packing::{
     PackedPinValue, PackedPinValueRef, pack_pin_value, unpack_pin_value,
 };
@@ -53,18 +54,25 @@ const INPUT_PORT: &str = "value";
 /// The output each number conversion writes.
 const OUTPUT_PORT: &str = "cast";
 
-/// Read each message on [`INPUT_PORT`] of `$node`, of the conversion `$name`, a value of `$from`,
-/// and write it cast into `$into` on [`OUTPUT_PORT`]; a message not cast is logged and skipped.
-macro_rules! cast_each_message {
-    ($node:expr, $name:ident, $from:expr, $into:expr) => {{
-        while let Some(message) = $node.inputs.read_raw(INPUT_PORT)? {
+/// The per-frame function of the conversion `conversion`: each message on [`INPUT_PORT`], a value
+/// of `from`, written cast into `into` on [`OUTPUT_PORT`]; a message not cast is logged and
+/// skipped.
+fn casting_each_message(
+    conversion: &'static str,
+    from: PinType,
+    into: PinType,
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> + Send + 'static {
+    move |_ctx| {
+        while let Some(message) = inputs.read_raw(INPUT_PORT)? {
             match the_message_cast(
-                &$from,
-                &$into,
+                &from,
+                &into,
                 &message.payload_descriptor,
                 message.payload.bytes(),
             ) {
-                Ok(cast) => $node.outputs.write_bytes_described_by(
+                Ok(cast) => outputs.write_bytes_described_by(
                     OUTPUT_PORT,
                     &cast.payload,
                     message.timestamp_ns,
@@ -72,15 +80,12 @@ macro_rules! cast_each_message {
                     cast.payload_descriptor,
                 )?,
                 Err(refusal) => {
-                    tracing::warn!(
-                        %refusal,
-                        concat!(stringify!($name), " wrote nothing for a message")
-                    )
+                    tracing::warn!(%refusal, conversion, "a conversion wrote nothing for a message")
                 }
             }
         }
         Ok(())
-    }};
+    }
 }
 
 #[streamlib::sdk::node(
@@ -105,12 +110,11 @@ macro_rules! cast_each_message {
                    zero and held to the range an Integer holds: 2.9 becomes 2 and -2.9 becomes \
                    -2, as a link from a Float into an Integer reads it."
 )]
-pub struct FloatToInteger;
-
-impl ReactiveNode for FloatToInteger::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, FloatToInteger, FLOAT, INTEGER)
-    }
+pub fn float_to_integer(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    casting_each_message(FloatToInteger::Node::NAME, FLOAT, INTEGER, inputs, outputs)
 }
 
 #[streamlib::sdk::node(
@@ -134,12 +138,11 @@ impl ReactiveNode for FloatToInteger::Node {
     description = "Casts each Integer on `value` into the Float of the same value on `cast`: \
                    2 becomes 2.0. Every value an Integer holds is a Float exactly."
 )]
-pub struct IntegerToFloat;
-
-impl ReactiveNode for IntegerToFloat::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, IntegerToFloat, INTEGER, FLOAT)
-    }
+pub fn integer_to_float(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    casting_each_message(IntegerToFloat::Node::NAME, INTEGER, FLOAT, inputs, outputs)
 }
 
 #[streamlib::sdk::node(
@@ -163,12 +166,17 @@ impl ReactiveNode for IntegerToFloat::Node {
     description = "Casts each Boolean on `value` into an Integer on `cast`: false becomes 0 \
                    and true becomes 1."
 )]
-pub struct BooleanToInteger;
-
-impl ReactiveNode for BooleanToInteger::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, BooleanToInteger, BOOLEAN, INTEGER)
-    }
+pub fn boolean_to_integer(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    casting_each_message(
+        BooleanToInteger::Node::NAME,
+        BOOLEAN,
+        INTEGER,
+        inputs,
+        outputs,
+    )
 }
 
 #[streamlib::sdk::node(
@@ -192,12 +200,17 @@ impl ReactiveNode for BooleanToInteger::Node {
     description = "Casts each Integer on `value` into a Boolean on `cast`: 0 becomes false \
                    and any other value true."
 )]
-pub struct IntegerToBoolean;
-
-impl ReactiveNode for IntegerToBoolean::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, IntegerToBoolean, INTEGER, BOOLEAN)
-    }
+pub fn integer_to_boolean(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    casting_each_message(
+        IntegerToBoolean::Node::NAME,
+        INTEGER,
+        BOOLEAN,
+        inputs,
+        outputs,
+    )
 }
 
 #[streamlib::sdk::node(
@@ -221,12 +234,11 @@ impl ReactiveNode for IntegerToBoolean::Node {
     description = "Casts each Boolean on `value` into a Float on `cast`: false becomes 0.0 \
                    and true becomes 1.0."
 )]
-pub struct BooleanToFloat;
-
-impl ReactiveNode for BooleanToFloat::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, BooleanToFloat, BOOLEAN, FLOAT)
-    }
+pub fn boolean_to_float(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    casting_each_message(BooleanToFloat::Node::NAME, BOOLEAN, FLOAT, inputs, outputs)
 }
 
 #[streamlib::sdk::node(
@@ -250,10 +262,9 @@ impl ReactiveNode for BooleanToFloat::Node {
     description = "Casts each Float on `value` into a Boolean on `cast`: 0.0 becomes false \
                    and any other value true."
 )]
-pub struct FloatToBoolean;
-
-impl ReactiveNode for FloatToBoolean::Node {
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        cast_each_message!(self, FloatToBoolean, FLOAT, BOOLEAN)
-    }
+pub fn float_to_boolean(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    casting_each_message(FloatToBoolean::Node::NAME, FLOAT, BOOLEAN, inputs, outputs)
 }
