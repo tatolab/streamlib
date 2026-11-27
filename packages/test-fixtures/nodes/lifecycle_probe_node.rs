@@ -64,8 +64,9 @@ pub fn lifecycle_probe(
     max_iterations: Input<u32>,
     output_path: Input<String>,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    let probe_file =
-        computed(move || LifecycleProbeFile::built(&output_path.get(), *max_iterations.get()));
+    let probe_file = computed(move |_build_ctx| {
+        LifecycleProbeFile::built(&output_path.get(), *max_iterations.get())
+    });
     let mut frames_appended = 0u32;
     move |_ctx| {
         let probe_file = probe_file.get();

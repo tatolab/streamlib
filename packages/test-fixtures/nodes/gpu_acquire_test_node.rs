@@ -38,7 +38,7 @@ pub fn gpu_acquire_test(
     ctx: &RuntimeContextFullAccess<'_>,
 ) {
     let gpu = ctx.gpu_limited_access().clone();
-    computed(move || {
+    computed(move |_build_ctx| {
         let outcome = acquire_a_pixel_buffer_and_write_its_plane(&gpu, *width.get(), *height.get())
             .map(|(w, h, ptr)| {
                 vec![

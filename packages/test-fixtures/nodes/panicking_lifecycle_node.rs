@@ -48,7 +48,7 @@ pub fn panicking_lifecycle(
     level: Input<i32>,
     panic_in_its_build: Input<bool>,
 ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
-    let level_built = computed(move || {
+    let level_built = computed(move |_build_ctx| {
         let level = *level.get();
         if *panic_in_its_build.get() {
             panic!("PanickingLifecycle: injected panic in the build of level {level}");

@@ -34,7 +34,7 @@ impl Drop for IgnoresShutdownAsItDrops {
 
 #[streamlib::sdk::node(execution = manual)]
 pub fn stop_ignoring_shutdown_test_node() {
-    computed(|| Ok::<_, String>(IgnoresShutdownAsItDrops));
+    computed(|_build_ctx| Ok::<_, String>(IgnoresShutdownAsItDrops));
 }
 
 fn a_running_stream_with_a_node_that_ignores_shutdown(

@@ -25,7 +25,7 @@ pub fn escalate_smoke_test(output_path: Input<String>, ctx: &RuntimeContextFullA
     // Coverage: wait_device_idle, acquire_pixel_buffer,
     // acquire_output_texture, register_texture_with_layout.
     let outcome = run_escalate_smoke(ctx).map(|()| Vec::new());
-    computed(move || {
+    computed(move |_build_ctx| {
         the_result_written_to_its_file("EscalateSmokeTest", &output_path.get(), &outcome)
     });
 }

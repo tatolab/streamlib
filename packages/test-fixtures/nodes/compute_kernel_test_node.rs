@@ -84,7 +84,7 @@ pub fn compute_kernel_test(
     ctx: &RuntimeContextFullAccess<'_>,
 ) {
     let gpu = ctx.gpu_limited_access().clone();
-    computed(move || {
+    computed(move |_build_ctx| {
         let element_count = *element_count.get();
         let outcome = run_compute_kernel_round_trip(&gpu, element_count)
             .map(|()| vec![element_count.to_string()]);

@@ -49,7 +49,7 @@ pub fn concurrent_escalate_test(
     // serialization invariant it guarded is covered by the unit test
     // `escalate_gate::tests::enter_serializes_concurrent_callers`.
     let gpu = ctx.gpu_limited_access().clone();
-    computed(move || {
+    computed(move |_build_ctx| {
         let outcome = escalate_from_threads_at_once(
             &gpu,
             *thread_count.get() as usize,
