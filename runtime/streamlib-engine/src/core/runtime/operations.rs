@@ -204,15 +204,6 @@ pub trait RuntimeOperations: Send + Sync {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
-    /// Hold `graph_operation`, which this stream's graph document holds and its live graph
-    /// refused in the runtime's words `refusal`, as an edit not live yet: listed among the
-    /// stream's diagnostics and drawn in its `graph` until its playback stops.
-    fn hold_an_edit_its_document_holds_not_live(
-        &self,
-        graph_operation: &streamlib_project_repository::StreamGraphOperation,
-        refusal: &str,
-    );
-
     /// What a live connect of `link`, each node by its UUID, would make of it on this stream's
     /// live graph, judged as [`Self::apply_a_stream_graph_operation_live`] judges a connect and
     /// made nowhere; refused as the connect is refused, but for a link that connects through a
@@ -333,9 +324,9 @@ pub trait RuntimeOperations: Send + Sync {
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
-    /// This stream's graph as `graph` answers it: its running graph, or, while its graph
-    /// document holds edits the running graph did not take, the document's graph over it, each
-    /// part not live yet carrying `live: false`. Every edit and check reads `to_json_async`.
+    /// This stream's graph as `graph` answers it: its running graph, each view node with the
+    /// settings its view's manifest declares among its inputs. Every edit and check reads
+    /// `to_json_async`.
     fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
     /// Hold output port `port_name` of the node whose UUID, as `graph` lists it under `id`, is

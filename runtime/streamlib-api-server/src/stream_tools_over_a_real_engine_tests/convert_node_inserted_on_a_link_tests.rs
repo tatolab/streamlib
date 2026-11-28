@@ -603,7 +603,7 @@ async fn a_link_from_a_node_the_same_transact_adds_is_refused_suggesting_no_call
 const SPARE_NODE_UUID: &str = "e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6";
 
 /// A link needing a convert node on a stream an earlier operation of the same transaction has
-/// take its edits once the documents hold them, here a collapse placing a stream, is refused
+/// take its edits through its staged graph, here a collapse placing a stream, is refused
 /// before anything is written, naming the node and the transaction of its own that places it;
 /// so is one only a module's conversion bridges, `link_needs_a_module_conversion`. A Float into
 /// an Integer connects there.

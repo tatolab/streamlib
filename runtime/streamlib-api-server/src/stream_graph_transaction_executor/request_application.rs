@@ -178,7 +178,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut staged = WhatTheTransactionHasStaged {
             streams,
             staged_graph_of_each_stream_not_running,
-            streams_taking_their_edits_once_the_documents_hold_them: BTreeSet::new(),
+            streams_taking_their_edits_through_their_staged_graph: BTreeSet::new(),
             project_repository: project_repository_held.as_deref(),
             node_by_label: HashMap::new(),
             what_the_answer_names_of_each_added_node: HashMap::new(),
@@ -196,8 +196,6 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut why_each_link_was_made_unjudged = BTreeMap::new();
         let mut links_made_unjudged_as_kept = Vec::new();
         let mut project_operations: Vec<ProjectOperation> = Vec::new();
-        let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
-            Vec::new();
         for (request_index, (request, stream_id)) in requests_and_the_stream_id_each_names
             .into_iter()
             .enumerate()
@@ -237,8 +235,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 links_made_unjudged_as_kept.extend(applied.links_made_unjudged_as_kept);
                 operations_answered.push((stream_id.clone(), applied.operation_answered));
                 project_operations.extend(applied.project_operations);
-                made_live_once_the_documents_hold_them
-                    .extend(applied.made_live_once_the_documents_hold_them);
                 overridden_by_links.extend(applied.overridden_by_a_link);
                 saved_values_retyped.extend(applied.saved_value_retyped);
                 if let Some(applied_live_now) = applied.applied_live {
@@ -252,6 +248,7 @@ impl StreamGraphTransactionExecutor<'_> {
             && let Err(refusal) = self.reconcile_each_placement_in_its_batch(
                 &staged.streams,
                 &stream_ids_in_order,
+                &staged.streams_taking_their_edits_through_their_staged_graph,
                 &staged.staged_graph_of_each_stream_not_running,
                 project_repository,
                 &mut placements_reconciled,
@@ -265,10 +262,6 @@ impl StreamGraphTransactionExecutor<'_> {
             );
             return Err(refusal);
         }
-        // A named stream brought to its graph as staged in its batch has taken each edit of its
-        // own the documents would have handed it once they hold it.
-        made_live_once_the_documents_hold_them
-            .retain(|(stream_id, _)| !placements_reconciled.holds_a_named_stream(stream_id));
         if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut staged.streams) {
             self.put_back_what_the_refused_transaction_ran(
                 &staged.streams,
@@ -307,9 +300,6 @@ impl StreamGraphTransactionExecutor<'_> {
                         self.project_repositories
                             .announce_the_transaction_if_applied_now(project_repository, &outcome);
                         let applied = outcome.into_applied_transaction();
-                        self.make_live_what_the_documents_now_hold(
-                            made_live_once_the_documents_hold_them,
-                        );
                         (
                             Some(applied.transaction.transaction.to_string()),
                             Some(applied.commit),
@@ -433,10 +423,11 @@ impl StreamGraphTransactionExecutor<'_> {
 
     /// Apply `request`, an action on the loaded stream `stream_id`: an edit of its own level
     /// made on its running stream and staged on its document, and one that reaches a running
-    /// stream only from the documents — inside a placed stream, or placing one — staged on the
-    /// documents it changes, each loaded stream it changes taking it once they are written. A
-    /// stream of `streams_taking_their_edits_once_the_documents_hold_them` takes each later edit
-    /// that way too, so its running stream takes the transaction's edits in order.
+    /// stream only through the documents — inside a placed stream, or placing one — staged on
+    /// the documents it changes, each loaded stream it changes brought to them in its batch
+    /// before the transaction commits. A stream of
+    /// `streams_taking_their_edits_through_their_staged_graph` takes each later edit that way
+    /// too, so its running stream takes the transaction's edits in order.
     pub(super) fn apply_one_request(
         &self,
         request: StreamGraphAction,
@@ -446,7 +437,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let WhatTheTransactionHasStaged {
             streams,
             staged_graph_of_each_stream_not_running,
-            streams_taking_their_edits_once_the_documents_hold_them,
+            streams_taking_their_edits_through_their_staged_graph,
             project_repository,
             node_by_label,
             what_the_answer_names_of_each_added_node,
@@ -536,12 +527,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 .block_on(stream_operations.to_json_async())?;
             Ok(the_function_nodes_of_the_render(&rendered_graph))
         };
-        let the_stream_takes_its_edits_once_the_documents_hold_them =
-            streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
+        let the_stream_takes_its_edits_through_its_staged_graph =
+            streams_taking_their_edits_through_their_staged_graph.contains(stream_id);
         let judged_by_node_types_before_commit = if !reached.is_the_streams_own_level() {
             Some(WhyConnectPlacesNoConvertNode::TheLinkIsAtAPlacedLevel)
-        } else if the_stream_takes_its_edits_once_the_documents_hold_them {
-            Some(WhyConnectPlacesNoConvertNode::TheStreamTakesItsEditsLater)
+        } else if the_stream_takes_its_edits_through_its_staged_graph {
+            Some(WhyConnectPlacesNoConvertNode::TheStreamTakesItsEditsThroughItsStagedGraph)
         } else {
             None
         };
@@ -620,8 +611,8 @@ impl StreamGraphTransactionExecutor<'_> {
             _ => None,
         };
         let made_on_the_running_stream_now = reached.is_the_streams_own_level()
-            && !edit_as_drawn.reaches_a_running_stream_once_the_documents_hold_it()
-            && !streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
+            && !edit_as_drawn.reaches_a_running_stream_only_through_its_staged_graph()
+            && !streams_taking_their_edits_through_their_staged_graph.contains(stream_id);
         if let StreamGraphOperation::AddNode { node, .. } = &mut edit_as_drawn
             && node.name.is_empty()
             && !made_on_the_running_stream_now
@@ -724,7 +715,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 operation_answered: applied,
                 applied_live: Some(applied_on_the_running_stream),
                 project_operations,
-                made_live_once_the_documents_hold_them: Vec::new(),
                 overridden_by_a_link,
                 links_made_unjudged: Vec::new(),
                 links_made_unjudged_as_kept: Vec::new(),
@@ -791,10 +781,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 *labelled = reached.the_drawn_uuid_of(*labelled);
             }
         }
-        let mut made_live_once_the_documents_hold_them = Vec::new();
         if reached.is_the_streams_own_level() {
-            made_live_once_the_documents_hold_them.push((stream_id.to_owned(), edit.clone()));
-            streams_taking_their_edits_once_the_documents_hold_them.insert(stream_id.to_owned());
+            streams_taking_their_edits_through_their_staged_graph.insert(stream_id.to_owned());
         }
         project_operations.push(ProjectOperation::StreamGraph(
             StreamGraphOperationOnAStream {
@@ -814,9 +802,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     .iter()
                     .find(|(_, held)| held.stream_location.stream_asset == placing_stream)
                 {
-                    made_live_once_the_documents_hold_them
-                        .push((placing_stream_id.clone(), carry.clone()));
-                    streams_taking_their_edits_once_the_documents_hold_them
+                    streams_taking_their_edits_through_their_staged_graph
                         .insert(placing_stream_id.clone());
                 }
                 project_operations.push(ProjectOperation::StreamGraph(
@@ -841,7 +827,6 @@ impl StreamGraphTransactionExecutor<'_> {
             operation_answered,
             applied_live: None,
             project_operations,
-            made_live_once_the_documents_hold_them,
             overridden_by_a_link,
             links_made_unjudged,
             links_made_unjudged_as_kept,

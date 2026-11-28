@@ -14,13 +14,13 @@ pub(super) const DOCUMENTS_FIRST: &str =
 
 /// What a transaction has staged so far, which each of its actions reads and adds to: the
 /// loaded streams it edits, the graph of each stream it edits that is not running, the streams
-/// taking their edits once the documents hold them, the project it is committed to, and the
+/// taking their edits through their staged graph, the project it is committed to, and the
 /// node each `as` names, the `as` of each node added, and why a `connect` inserted each node it
 /// added on its link.
 pub(super) struct WhatTheTransactionHasStaged<'transaction> {
     pub(super) streams: BTreeMap<String, StreamATransactionEdits>,
     pub(super) staged_graph_of_each_stream_not_running: BTreeMap<Uuid, StreamGraphDocument>,
-    pub(super) streams_taking_their_edits_once_the_documents_hold_them: BTreeSet<String>,
+    pub(super) streams_taking_their_edits_through_their_staged_graph: BTreeSet<String>,
     pub(super) project_repository: Option<&'transaction ProjectRepository>,
     pub(super) node_by_label: HashMap<String, Uuid>,
     pub(super) what_the_answer_names_of_each_added_node:

@@ -827,7 +827,6 @@ mod stream_action_queue;
 mod stream_records;
 mod streams_to_read_or_edit;
 
-pub(in crate::core::runtime) use recorded_stream_reload::the_graph_the_document_of_the_stream_at_holds;
 pub use streams_to_read_or_edit::StreamsToReadOrEdit;
 
 #[cfg(test)]

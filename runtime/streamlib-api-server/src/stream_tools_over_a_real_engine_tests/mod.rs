@@ -46,6 +46,7 @@ use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
 mod an_edit_a_placement_refuses_tests;
+mod an_edit_applied_or_refused_whole_tests;
 mod an_edit_recorded_before_the_update_tests;
 mod built_in_value_input_set_while_playing_tests;
 mod bundle_frame_link_tests;
@@ -801,6 +802,14 @@ fn the_node_named(graph: &Value, name: &str) -> Value {
         .find(|node| node["name"] == name)
         .cloned()
         .unwrap_or_else(|| panic!("the graph holds no node `{name}`: {graph}"))
+}
+
+/// The UUID of the node named `name` in `graph`.
+fn the_uuid_of_the_node_named(graph: &Value, name: &str) -> String {
+    the_node_named(graph, name)["id"]
+        .as_str()
+        .expect("the node holds a UUID")
+        .to_string()
 }
 
 /// The names of the nodes the fragment of `fragment_node` places, in order.
