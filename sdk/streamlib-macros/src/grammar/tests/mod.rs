@@ -23,22 +23,22 @@ fn parse_err(tokens: proc_macro2::TokenStream) -> String {
     }
 }
 
-fn node_struct_with(attributes: proc_macro2::TokenStream) -> syn::ItemStruct {
+fn node_function_with(attributes: proc_macro2::TokenStream) -> syn::ItemFn {
     syn::parse_quote! {
         #attributes
-        struct MyNode;
+        fn my_node() {}
     }
 }
 
 fn node_meta_ok(attributes: proc_macro2::TokenStream) -> DeclaredNodeMeta {
-    let mut node_struct = node_struct_with(attributes);
-    DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs)
+    let mut node_function = node_function_with(attributes);
+    DeclaredNodeMeta::take_from_attributes(&mut node_function.attrs)
         .expect("the node's meta should read")
 }
 
 fn node_meta_err(attributes: proc_macro2::TokenStream) -> String {
-    let mut node_struct = node_struct_with(attributes);
-    match DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs) {
+    let mut node_function = node_function_with(attributes);
+    match DeclaredNodeMeta::take_from_attributes(&mut node_function.attrs) {
         Ok(_) => panic!("the node's meta should be refused"),
         Err(refusal) => refusal.to_string(),
     }

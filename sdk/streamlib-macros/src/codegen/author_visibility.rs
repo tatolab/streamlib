@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// The items directly inside the module the macro names after the author's struct.
+/// The items directly inside the module the macro names after the node.
 pub(super) const GENERATED_MODULE_MEMBER_DEPTH: NonZeroUsize = NonZeroUsize::MIN;
 
 /// The port markers inside that module's `InputLink` / `OutputLink`.

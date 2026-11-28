@@ -242,7 +242,8 @@ fn a_former_name_or_may_be_unset_that_cannot_hold_is_an_error() {
 fn input_without_a_delivery_profile_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("video_in", pin_type = from_setting("bundle_type"), flow = Stream),
+        input("bundle_type", value = Option<PinType>, default = None),
+        input("video_in", pin_type = from_input(bundle_type), flow = Stream),
     });
     assert!(
         msg.contains("input port `video_in` must declare a `delivery_profile`"),
@@ -649,11 +650,12 @@ fn a_stream_fact_its_pin_type_does_not_take_is_refused_naming_the_port() {
 }
 
 #[test]
-fn a_texture_outputs_frame_rate_reaches_the_schema_stated_or_from_a_setting() {
+fn a_texture_outputs_frame_rate_reaches_the_schema_stated_or_from_a_value_input() {
     let parsed = parse_ok(quote! {
         execution = manual,
+        input("frames_per_second", value = u32, default = 30),
         output("video", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = 30),
-        output("preview", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = from_setting("frames_per_second")),
+        output("preview", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = from_input(frames_per_second)),
         output("bare", pin_type = Texture, formats = ["rgba8_unorm"]),
     });
     let schema = parsed.to_node_schema();
@@ -871,5 +873,20 @@ fn a_bare_any_port_schema_is_an_error() {
     assert!(
         msg.contains("a port declares no type") && msg.contains("output(\"out1\", ...)"),
         "the error must name the removal and the offending port: {msg}"
+    );
+}
+
+#[test]
+fn a_stream_fact_on_a_port_a_value_input_types_is_refused_naming_the_value_input() {
+    let msg = parse_err(quote! {
+        execution = manual,
+        input("content_type", value = Option<PinType>, default = None),
+        output("content", pin_type = from_input(content_type), formats = ["rgba8_unorm"]),
+    });
+    assert!(
+        msg.contains(
+            "states `formats=`, which an output of a type a value input chooses does not take"
+        ),
+        "got {msg}"
     );
 }

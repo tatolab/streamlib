@@ -83,8 +83,6 @@ pub mod sdk {
 
     pub use streamlib_engine::node;
 
-    pub use streamlib_engine::node_settings;
-
     // ---- Permission helpers ----
 
     pub mod permissions {
@@ -195,12 +193,12 @@ pub mod engine_internal {
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub use streamlib_engine::permissions;
     pub use streamlib_engine::{
-        ContinuousNode, Error, GpuContext, GraphSnapshot, InputPortMarker, ManualNode, MediaClock,
-        NODE_REGISTRY, NativeTextureHandle, NodeSpec, OutputPortMarker, PooledTextureHandle,
-        ReactiveNode, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
-        RuntimeContextLimitedAccess, StreamClock, StreamClockSpec, Texture, TextureDescriptor,
-        TextureFormat, TexturePool, TexturePoolDescriptor, TextureUsages, core, crossbeam_channel,
-        iceoryx2, input, logging, node, node_settings, output, platform, schemars, sdk, serde_json,
+        Error, GpuContext, GraphSnapshot, InputPortMarker, MediaClock, NODE_REGISTRY,
+        NativeTextureHandle, NodeSpec, OutputPortMarker, PooledTextureHandle, Result, Runner,
+        RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClock,
+        StreamClockSpec, Texture, TextureDescriptor, TextureFormat, TexturePool,
+        TexturePoolDescriptor, TextureUsages, core, crossbeam_channel, iceoryx2, input, logging,
+        node, output, platform, schemars, sdk, serde_json,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::{

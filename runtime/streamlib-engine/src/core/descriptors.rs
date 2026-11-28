@@ -11,11 +11,6 @@ pub use streamlib_node_schema::description_lint::{
 pub use streamlib_node_schema::descriptors::{
     CodeExamples, NodeDescriptor, NodeRuntime, PortDescriptor,
 };
-pub use streamlib_node_schema::node_settings::{
-    NodeSettings, SettingChoosingAPinType, SettingChosenFromOptions, SettingPinType,
-    the_choice_among_the_bundles_its_stream_declares, the_default_of_a_setting,
-    the_input_taking_no_wire, the_menu_of_a_setting,
-};
 pub use streamlib_node_schema::pin_type::{
     BuiltInPinTypeName, BundleMember, ConvertNodeToInsert, DeclaredPinType, FloatSize,
     FreePinConversion, IntegerSize, NamedPinTypeImportPath, NodeInputMode, PinAnnotationName,
@@ -27,6 +22,11 @@ pub use streamlib_node_schema::pin_type::{
     TexturePixelFormat, VectorComponentCount, WhyASavedValueTakesTheDefault, an_input_takes_a_wire,
     built_in_pin_type, pin_link_verdict, the_integer_a_float_is_cast_to, the_number_cast,
     the_saved_value_retyped, the_value_held_within_the_range,
+};
+pub use streamlib_node_schema::value_input_declaration::{
+    ValueInputChoosingAPinType, ValueInputChosenFromOptions, ValueInputPinType,
+    the_choice_among_the_bundles_its_stream_declares, the_input_taking_no_wire,
+    the_menu_of_a_value_input,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

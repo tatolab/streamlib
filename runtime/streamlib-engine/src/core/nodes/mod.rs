@@ -30,7 +30,6 @@ mod settings_a_config_schema_lists;
 pub use crate::core::graph::{NodeState, NodeStateComponent};
 
 pub use traits::{Config, ConfigValidationError};
-pub use traits::{ContinuousNode, ManualNode, ReactiveNode};
 
 // Re-export internal traits (doc-hidden but needed by macro and runtime)
 #[doc(hidden)]

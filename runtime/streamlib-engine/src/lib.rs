@@ -61,24 +61,32 @@ pub mod logging {
     };
 }
 
-pub use streamlib_macros::{node, node_settings};
+pub use streamlib_macros::node;
 
 #[cfg(doctest)]
 pub struct NodeAttributeAcceptsNoIdentity;
 
+/// `#[node(...)]` on a struct is refused, showing the node written as one function.
+///
+/// ```compile_fail
+/// use streamlib_engine::node;
+///
+/// #[node(execution = manual)]
+/// pub struct RetiredNode;
+/// ```
+#[cfg(doctest)]
+pub struct NodeAttributeRefusesAStruct;
+
 pub use core::{
-    ContinuousNode,
     Error,
     GpuContext,
     GraphSnapshot,
     InputPortMarker,
-    ManualNode,
     NODE_REGISTRY,
     NativeTextureHandle,
     NodeSpec,
     OutputPortMarker,
     PooledTextureHandle,
-    ReactiveNode,
     Result,
     RuntimeContext,
     RuntimeContextFullAccess,
@@ -247,13 +255,12 @@ pub mod sdk {
 
     pub mod nodes {
         pub use crate::core::nodes::{
-            __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
+            __generated_private, Config, ConfigValidationError, DynGeneratedNode,
             DynamicNodeConstructorFn, EmptyConfig, GRAPH_NODE_TYPE_CATEGORY, GeneratedNode,
-            InstalledModuleOfANodeType, ManualNode, NODE_REGISTRY, NodeInstance,
-            NodeInstanceFactory, NodeSpec, NodeState, NodeStateComponent,
-            NodeTypePortsDescribedOnTheWire, NodeTypesOneStreamResolves,
-            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
-            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ReactiveNode,
+            InstalledModuleOfANodeType, NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec,
+            NodeState, NodeStateComponent, NodeTypePortsDescribedOnTheWire,
+            NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
+            OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
             VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, the_descriptor_of_a_constant,
             the_node_types_of_the_graph_itself, the_pin_type_a_constant_holds_by_default, traits,
         };
@@ -270,7 +277,7 @@ pub mod sdk {
     pub use crate::schemars;
     pub use crate::serde_json;
 
-    pub use streamlib_macros::{node, node_settings};
+    pub use streamlib_macros::node;
 
     pub mod permissions {
         pub use crate::{request_audio_permission, request_camera_permission};

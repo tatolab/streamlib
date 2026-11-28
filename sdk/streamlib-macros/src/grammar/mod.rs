@@ -10,12 +10,13 @@ use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
 use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized};
 
-mod pin_type_chosen_by_an_input;
+mod from_input_grammar;
 mod port_grammar;
+mod stream_fact_grammar;
 mod string_literal_list;
 mod value_input_grammar;
 
-pub(crate) use pin_type_chosen_by_an_input::PinTypeChosenBy;
+pub(crate) use from_input_grammar::{StreamFactReadFromAValueInput, ValueInputNamedByFromInput};
 use port_grammar::{DeclaredPort, parse_port};
 pub(crate) use value_input_grammar::ValueInputChosenFrom;
 
@@ -266,9 +267,12 @@ pub(crate) struct ParsedPort {
     pub annotations: PinAnnotations,
     /// The pin type the port declares with `pin_type = …`; `None` when an input chooses it.
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
-    /// The input whose chosen pin type the port carries, as `pin_type = from_setting("…")` or
-    /// `pin_type = from_input(…)` names it; `None` when the port states its type itself.
-    pub pin_type_chosen_by: Option<PinTypeChosenBy>,
+    /// The value input whose chosen pin type the port carries, as `pin_type = from_input(…)`
+    /// names it; `None` when the port states its type itself.
+    pub pin_type_chosen_by: Option<ValueInputNamedByFromInput>,
+    /// Each fact of the port's stream read from a value input, as `rate = from_input(…)` or
+    /// `frame_rate = from_input(…)` names it.
+    pub stream_facts_read_from_value_inputs: Vec<StreamFactReadFromAValueInput>,
     /// How long a value set live on the input lives, as `lifetime = …` declares it; kept when
     /// it declares none, and always kept on an output.
     pub lifetime: streamlib_node_schema::NodeValueLifetime,
@@ -315,16 +319,12 @@ pub(crate) struct ParsedNodeAttr {
     pub conversion: bool,
     pub execution: NodeSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
-    pub unsafe_send: bool,
     /// Whether this is one of the runtime's built-in nodes, typed
-    /// `tatolab.stream:<struct name>` rather than by its module path.
+    /// `tatolab.stream:<node name>` rather than by its module path.
     pub built_in_node: bool,
     pub paced_by_real_time: bool,
-    /// The `#[node_settings]` struct the node reads at setup, each of its fields one of the
-    /// node's inputs; `None` when it declares none.
-    pub settings_type: Option<Path>,
     pub inputs: Vec<ParsedPort>,
-    /// The value inputs, which only a node written as one function declares.
+    /// The value inputs, each read by one of the node function's parameters.
     pub value_inputs: Vec<ParsedValueInput>,
     pub outputs: Vec<ParsedPort>,
 }
@@ -342,10 +342,10 @@ impl ParsedNodeAttr {
             audio_window: p.audio_window.clone(),
             annotations: p.annotations.clone(),
             pin_type: p.pin_type.clone(),
-            pin_type_from_setting: p
+            pin_type_from_input: p
                 .pin_type_chosen_by
                 .as_ref()
-                .map(|chosen_by| chosen_by.input_name().to_owned()),
+                .map(|chosen_by| chosen_by.cast_name.clone()),
             lifetime: p.lifetime,
             flow: p.flow,
             former_names: p.former_names.clone(),
@@ -361,10 +361,7 @@ impl ParsedNodeAttr {
                 .and_then(DeclaredDescription::literal_text),
             runtime: RuntimeConfig {
                 language: Default::default(),
-                options: RuntimeOptions {
-                    unsafe_send: self.unsafe_send,
-                    python_version: None,
-                },
+                options: RuntimeOptions::default(),
                 env: Default::default(),
             },
             entrypoint: None,
@@ -382,24 +379,22 @@ impl ParsedNodeAttr {
 pub(crate) fn parse2(
     attr: proc_macro2::TokenStream,
     node_meta: DeclaredNodeMeta,
-    struct_ident: &Ident,
+    node_ident: &Ident,
 ) -> syn::Result<ParsedNodeAttr> {
-    let struct_name = struct_ident.to_string();
-    let parser = move |input: ParseStream<'_>| parse_body(input, node_meta, &struct_name);
+    let node_name = node_ident.to_string();
+    let parser = move |input: ParseStream<'_>| parse_body(input, node_meta, &node_name);
     parser.parse2(attr)
 }
 
 fn parse_body(
     input: ParseStream<'_>,
     node_meta: DeclaredNodeMeta,
-    struct_name: &str,
+    node_name: &str,
 ) -> syn::Result<ParsedNodeAttr> {
     let mut execution: Option<NodeSchemaExecution> = None;
     let mut scheduling: Option<ThreadPriority> = None;
-    let mut unsafe_send = false;
     let mut built_in_node = false;
     let mut paced_by_real_time = false;
-    let mut settings_type: Option<Path> = None;
     let mut inputs: Vec<ParsedPort> = Vec::new();
     let mut value_inputs: Vec<ParsedValueInput> = Vec::new();
     let mut outputs: Vec<ParsedPort> = Vec::new();
@@ -410,7 +405,6 @@ fn parse_body(
         // `parse_any` so keyword-like keys (`type`) are accepted as raw idents.
         let key = Ident::parse_any(input)?;
         match key.to_string().as_str() {
-            "unsafe_send" => unsafe_send = true,
             "built_in_node" => built_in_node = true,
             "paced_by_real_time" => paced_by_real_time = true,
             meta_key @ ("description" | "category") => {
@@ -445,19 +439,23 @@ fn parse_body(
                     }
                 });
             }
-            retired @ ("config" | "config_field") => {
+            retired @ ("config" | "config_field" | "settings") => {
                 return Err(syn::Error::new(
                     key.span(),
                     format!(
-                        "`{retired}` is retired: a node takes every value it reads at setup as \
-                         an input of its settings, declared with `settings = …` and a \
-                         `#[node_settings]` struct"
+                        "`{retired}` is retired: a node declares each value it reads as an \
+                         input of its function, `input(\"name\", value = <type>, default = …)` \
+                         beside a parameter `name: Input<type>`, and reads it with `.get()` in a \
+                         `computed(…)` value or its per-frame function"
                     ),
                 ));
             }
-            "settings" => {
-                input.parse::<Token![=]>()?;
-                settings_type = Some(input.parse()?);
+            "unsafe_send" => {
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`unsafe_send` is retired: a node function's per-frame function and every \
+                     computed value it declares are `Send`",
+                ));
             }
             "type" => {
                 return Err(syn::Error::new(key.span(), class_path_rule()));
@@ -516,16 +514,14 @@ fn parse_body(
     })?;
 
     Ok(ParsedNodeAttr {
-        node_class_short_name: struct_name.to_string(),
+        node_class_short_name: node_name.to_string(),
         description: node_meta.description,
         category: node_meta.category,
         conversion: node_meta.conversion.unwrap_or(false),
         execution,
         scheduling,
-        unsafe_send,
         built_in_node,
         paced_by_real_time,
-        settings_type,
         inputs,
         value_inputs,
         outputs,
@@ -604,10 +600,8 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<NodeSchemaExecution> {
 const NODE_ATTRIBUTE_KEYS: &[&str] = &[
     "execution",
     "scheduling",
-    "unsafe_send",
     "built_in_node",
     "paced_by_real_time",
-    "settings",
     "input",
     "output",
 ];

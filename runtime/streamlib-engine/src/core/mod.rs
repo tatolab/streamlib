@@ -140,11 +140,11 @@ pub use graph::{
     validate_graph,
 };
 pub use nodes::{
-    __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
-    DynamicNodeConstructorFn, EmptyConfig, GeneratedNode, InstalledModuleOfANodeType, ManualNode,
-    NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeTypesOneStreamResolves,
-    OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
-    OutOfProcessLinkWiringEnvelope, ReactiveNode, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
+    __generated_private, Config, ConfigValidationError, DynGeneratedNode, DynamicNodeConstructorFn,
+    EmptyConfig, GeneratedNode, InstalledModuleOfANodeType, NODE_REGISTRY, NodeInstance,
+    NodeInstanceFactory, NodeSpec, NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
+    OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
+    VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
 };
 pub use rhi::NativeTextureHandle;
 #[cfg(test)]

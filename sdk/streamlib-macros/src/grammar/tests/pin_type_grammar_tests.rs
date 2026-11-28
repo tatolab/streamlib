@@ -128,7 +128,7 @@ fn a_port_declaring_no_pin_type_names_both_ways_to_declare_one() {
     assert!(
         msg.contains("port `video` declares no pin type")
             && msg.contains("`pin_type = …`")
-            && msg.contains("`pin_type = from_setting(\"<setting>\")`"),
+            && msg.contains("`pin_type = from_input(<value input>)`"),
         "got: {msg}"
     );
 }
@@ -150,7 +150,8 @@ fn an_input_with_a_pin_may_state_no_delivery_profile_and_one_without_still_must(
 
     let msg = parse_err(quote! {
         execution = manual,
-        input("records", pin_type = from_setting("bundle_type"), flow = Stream),
+        input("bundle_type", value = Option<PinType>, default = None),
+        input("records", pin_type = from_input(bundle_type), flow = Stream),
     });
     assert!(
         msg.contains("input port `records` must declare a `delivery_profile`")
@@ -246,6 +247,19 @@ fn a_trigger_port_flows_as_a_trigger_and_reads_ordered_alone() {
     });
     assert!(
         msg.contains("states the flow `value`, which the Trigger type does not allow"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn the_retired_from_setting_is_refused_with_the_from_input_that_replaced_it() {
+    let msg = parse_err(quote! {
+        execution = manual,
+        output("records", pin_type = from_setting("bundle_type")),
+    });
+    assert!(
+        msg.contains("`from_setting(\"bundle_type\")` is retired")
+            && msg.contains("`from_input(bundle_type)`"),
         "got: {msg}"
     );
 }

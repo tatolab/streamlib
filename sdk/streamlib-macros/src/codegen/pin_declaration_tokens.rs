@@ -11,19 +11,19 @@ use streamlib_node_schema::{
 
 /// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in the
 /// flow it states, else in its type's default flow, with the names it had and whether it may be
-/// unset and the annotations of its stream, as it states them. A port typed by the setting
-/// `pin_type_from_setting` carries the type that setting chooses, a value unless it states another
+/// unset and the annotations of its stream, as it states them. A port typed by the value input
+/// `pin_type_from_input` carries the type that input chooses, a value unless it states another
 /// flow.
 pub(super) fn pin_declaration_tokens(
     pin_type: Option<&PinType>,
-    pin_type_from_setting: Option<&str>,
+    pin_type_from_input: Option<&str>,
     flow: Option<PinFlow>,
     former_names: &[String],
     may_be_unset: bool,
     annotations: &PinAnnotations,
 ) -> TokenStream {
     let descriptors = quote! { __streamlib_sdk::descriptors };
-    if let Some(setting_name) = pin_type_from_setting {
+    if let Some(input_name) = pin_type_from_input {
         let flow = Ident::new(
             flow.unwrap_or(PinFlow::Value).declaration_name(),
             Span::call_site(),
@@ -31,7 +31,7 @@ pub(super) fn pin_declaration_tokens(
         return quote! {
             ::std::option::Option::Some(#descriptors::PinDeclaration {
                 pin_type: #descriptors::DeclaredPinType::SetByInput {
-                    input_name: ::std::string::String::from(#setting_name),
+                    input_name: ::std::string::String::from(#input_name),
                 },
                 flow: #descriptors::PinFlow::#flow,
                 annotations: ::std::default::Default::default(),
@@ -80,7 +80,7 @@ fn stream_annotation_tokens(annotations: &PinAnnotations) -> Option<TokenStream>
         Some(tokens) => quote! { ::std::option::Option::Some(#tokens) },
         None => quote! { ::std::option::Option::None },
     };
-    let from_setting = |setting: &str| quote! { setting: ::std::string::String::from(#setting) };
+    let naming_the_input = |input: &str| quote! { setting: ::std::string::String::from(#input) };
     let frame_rate = annotations.frame_rate.as_ref().map(|frame_rate| match frame_rate {
         ImageOutputPortFrameRate::Stated(frame_rate) => {
             let numerator = frame_rate.numerator;
@@ -93,7 +93,7 @@ fn stream_annotation_tokens(annotations: &PinAnnotations) -> Option<TokenStream>
             }
         }
         ImageOutputPortFrameRate::FromSetting { setting } => {
-            let setting = from_setting(setting);
+            let setting = naming_the_input(setting);
             quote! { #descriptors::ImageOutputPortFrameRate::FromSetting { #setting } }
         }
     });
@@ -102,7 +102,7 @@ fn stream_annotation_tokens(annotations: &PinAnnotations) -> Option<TokenStream>
             quote! { #descriptors::ChannelsOutputPortSampleRate::Stated(#rate) }
         }
         ChannelsOutputPortSampleRate::FromSetting { setting } => {
-            let setting = from_setting(setting);
+            let setting = naming_the_input(setting);
             quote! { #descriptors::ChannelsOutputPortSampleRate::FromSetting { #setting } }
         }
     });

@@ -21,14 +21,13 @@ pub trait GeneratedNode: Send + 'static {
     fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
 
     /// Take `input_values`, the value each input reads while no link feeds it, by input, in
-    /// place of those it took before; by default the node takes the settings and the value
-    /// inputs they hold, then each lands in its input mailboxes, which answer a read of the input
-    /// with it while no link feeds it.
+    /// place of those it took before; by default the node takes the value inputs they hold,
+    /// then each lands in its input mailboxes, which answer a read of the input with it while no
+    /// link feeds it.
     fn set_unlinked_input_values(
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()> {
-        self.take_the_settings_the_input_values_hold(input_values)?;
         self.write_the_value_inputs_the_input_values_hold(input_values)?;
         land_the_unlinked_input_values_in_the_input_mailboxes(
             self.iceoryx2_input_mailboxes_inner(),
@@ -36,20 +35,9 @@ pub trait GeneratedNode: Send + 'static {
         )
     }
 
-    /// Take the settings `input_values` hold, before the node is set up or while it runs;
-    /// refused when one holds a value its setting does not take. A node type declaring no
-    /// settings takes none.
-    fn take_the_settings_the_input_values_hold(
-        &mut self,
-        _input_values: &serde_json::Map<String, JsonValue>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Take the values `input_values` hold for the value inputs of a node written as one
-    /// function, each written to its scope once the node runs, all in one write; refused, with
-    /// none of them taken, when one holds a value its input does not take. A node of any other
-    /// form has no value inputs.
+    /// Take the values `input_values` hold for the node function's value inputs, each written
+    /// to its scope once the node runs, all in one write; refused, with none of them taken, when
+    /// one holds a value its input does not take. A node of no value inputs takes none.
     fn write_the_value_inputs_the_input_values_hold(
         &mut self,
         _input_values: &serde_json::Map<String, JsonValue>,

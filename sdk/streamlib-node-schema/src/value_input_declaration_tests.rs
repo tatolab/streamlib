@@ -3,21 +3,16 @@
 
 use serde_json::{Value, json};
 
-use crate::node_settings::the_input_taking_no_wire;
 use crate::pin_type::{IntegerSize, NodeInputMode, PinType, SettingReadTime};
+use crate::value_input_declaration::the_input_taking_no_wire;
 
 #[test]
-fn an_input_taking_no_wire_is_read_when_it_says_holding_its_default() {
+fn a_value_input_is_read_each_run_holding_its_default() {
     let pin_type = PinType::Integer {
         exact_size: Some(IntegerSize::UInt32),
     };
-    let input = the_input_taking_no_wire(
-        "sample_rate",
-        "The rate.",
-        pin_type.clone(),
-        json!(48_000),
-        SettingReadTime::EachRun,
-    );
+    let input =
+        the_input_taking_no_wire("sample_rate", "The rate.", pin_type.clone(), json!(48_000));
     assert_eq!(input.name, "sample_rate");
     assert_eq!(
         input.input_mode,
@@ -38,14 +33,8 @@ fn an_input_taking_no_wire_is_read_when_it_says_holding_its_default() {
 }
 
 #[test]
-fn an_input_taking_no_wire_whose_default_is_null_may_be_unset() {
-    let input = the_input_taking_no_wire(
-        "pin",
-        "A pin.",
-        PinType::String {},
-        Value::Null,
-        SettingReadTime::AtSetup,
-    );
+fn a_value_input_whose_default_is_null_may_be_unset() {
+    let input = the_input_taking_no_wire("pin", "A pin.", PinType::String {}, Value::Null);
     assert_eq!(input.pin_default, None);
     assert!(
         input

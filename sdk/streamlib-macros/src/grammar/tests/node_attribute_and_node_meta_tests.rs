@@ -148,15 +148,15 @@ fn a_node_meta_may_be_written_as_one_attribute_per_key() {
 }
 
 #[test]
-fn reading_a_node_meta_takes_it_off_the_struct_and_leaves_every_other_attribute() {
-    let mut node_struct = node_struct_with(quote! {
+fn reading_a_node_meta_takes_it_off_the_function_and_leaves_every_other_attribute() {
+    let mut node_function = node_function_with(quote! {
         #[derive(Debug)]
         #[meta(category = "Effects")]
         #[allow(dead_code)]
     });
-    DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs)
+    DeclaredNodeMeta::take_from_attributes(&mut node_function.attrs)
         .expect("the node's meta should read");
-    let left_on_the_struct: Vec<String> = node_struct
+    let left_on_the_function: Vec<String> = node_function
         .attrs
         .iter()
         .map(|attribute| {
@@ -167,7 +167,7 @@ fn reading_a_node_meta_takes_it_off_the_struct_and_leaves_every_other_attribute(
                 .unwrap_or_default()
         })
         .collect();
-    assert_eq!(left_on_the_struct, ["derive", "allow"]);
+    assert_eq!(left_on_the_function, ["derive", "allow"]);
 }
 
 #[test]
@@ -183,20 +183,20 @@ fn a_node_meta_key_declared_twice_is_refused_naming_the_key() {
 }
 
 #[test]
-fn every_node_meta_that_is_refused_is_reported_and_none_is_left_on_the_struct() {
-    let mut node_struct = node_struct_with(quote! {
+fn every_node_meta_that_is_refused_is_reported_and_none_is_left_on_the_function() {
+    let mut node_function = node_function_with(quote! {
         #[meta(tags = "video")]
         #[allow(dead_code)]
         #[meta(category = "")]
     });
-    let refusals: Vec<String> = DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs)
+    let refusals: Vec<String> = DeclaredNodeMeta::take_from_attributes(&mut node_function.attrs)
         .err()
         .expect("both metas are refused")
         .into_iter()
         .map(|refusal| refusal.to_string())
         .collect();
     assert_eq!(refusals.len(), 2, "got: {refusals:?}");
-    assert_eq!(node_struct.attrs.len(), 1);
+    assert_eq!(node_function.attrs.len(), 1);
 }
 
 #[test]
@@ -279,9 +279,9 @@ fn continuous_without_interval_defaults_to_zero() {
     );
 }
 
-/// Mental-revert: a node taking `config = …` again holds a config beside its settings.
+/// Mental-revert: a node taking `config = …` again holds a config beside its inputs.
 #[test]
-fn the_retired_config_keys_are_refused_by_name_with_the_settings_that_replace_them() {
+fn the_retired_config_keys_are_refused_by_name_with_the_value_inputs_that_replace_them() {
     for retired in [
         quote! { config = crate::camera_config::CameraConfig },
         quote! { config_field = "blur" },
@@ -291,28 +291,36 @@ fn the_retired_config_keys_are_refused_by_name_with_the_settings_that_replace_th
             #retired,
         });
         assert!(
-            msg.contains("is retired") && msg.contains("`settings = …`"),
+            msg.contains("is retired") && msg.contains("`input(\"name\", value = <type>"),
             "{retired}: {msg}"
         );
     }
 }
 
 #[test]
-fn a_node_declaring_no_settings_binds_no_settings_type() {
-    let parsed = parse_ok(quote! {
-        execution = manual,
+fn the_retired_settings_and_unsafe_send_keys_are_refused_naming_what_replaced_them() {
+    let msg = parse_err(quote! {
+        execution = reactive,
+        settings = crate::blur::BlurSettings,
     });
-    assert!(parsed.settings_type.is_none());
+    assert!(
+        msg.contains("`settings` is retired") && msg.contains("Input<type>"),
+        "{msg}"
+    );
+    let msg = parse_err(quote! {
+        execution = manual,
+        unsafe_send,
+    });
+    assert!(msg.contains("`unsafe_send` is retired"), "{msg}");
 }
 
 #[test]
-fn a_settings_key_binds_the_settings_type_and_no_config() {
+fn a_rate_read_from_a_value_input_names_it_by_its_identifier() {
     let parsed = parse_ok(quote! {
         execution = reactive,
-        settings = crate::blur::BlurSettings,
-        output("blurred", pin_type = Audio, rate = from_setting("sample_rate")),
+        input("sample_rate", value = u32, default = 48_000),
+        output("blurred", pin_type = Audio, rate = from_input(sample_rate)),
     });
-    assert!(parsed.settings_type.is_some());
     assert_eq!(
         parsed.outputs[0].annotations.sample_rate,
         Some(ChannelsOutputPortSampleRate::FromSetting {
@@ -328,16 +336,15 @@ fn the_retired_config_schema_key_is_refused_by_name_with_the_keys_that_remain() 
         config_schema = "com.tatolab.buffer_rechunker.config@1.0.0",
     });
     assert!(
-        msg.contains("`config_schema`") && msg.contains("`settings`"),
+        msg.contains("`config_schema`") && msg.contains("`paced_by_real_time`"),
         "the error must name the retired key and list the ones that remain: {msg}"
     );
 }
 
 #[test]
-fn the_class_short_name_is_the_authored_struct_ident() {
-    // The display-name default's only carrier. It is read off the item the
-    // attribute is attached to — never authored, and never recovered by
-    // splitting the import path.
+fn the_class_short_name_is_the_node_name_of_the_function() {
+    // The display-name default's only carrier. It is the function's name in UpperCamelCase —
+    // never authored, and never recovered by splitting the import path.
     let parsed = parse2(
         quote! { execution = reactive },
         DeclaredNodeMeta::default(),
@@ -346,15 +353,6 @@ fn the_class_short_name_is_the_authored_struct_ident() {
     .expect("a bare node should parse");
     assert_eq!(parsed.node_class_short_name, "MyLocalNode");
     assert_eq!(parsed.to_node_schema().name, "MyLocalNode");
-}
-
-#[test]
-fn unsafe_send_flag() {
-    let parsed = parse_ok(quote! {
-        execution = manual,
-        unsafe_send,
-    });
-    assert!(parsed.unsafe_send);
 }
 
 #[test]
