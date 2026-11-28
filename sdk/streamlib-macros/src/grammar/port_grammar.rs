@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use streamlib_node_schema::{
-    ArrayOutputPortResidency, AudioWindowContract, AudioWindowContractDeclaredValues,
-    ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
-    DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
-    NodeValueLifetime, cast_exposed_name_to_url_safe,
-    pin_type::{PinAnnotations, PinDeclaration, PinFlow, PinType, TexturePixelFormat},
+    AudioWindowContract, AudioWindowContractDeclaredValues, DELIVERY_PROFILE_DECLARATION_VALUES,
+    MAX_INPUT_PORT_BORROW_QUOTA, NodeValueLifetime, cast_exposed_name_to_url_safe,
+    pin_type::{PinDeclaration, PinFlow, PinType, TexturePixelFormat},
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
@@ -17,6 +15,7 @@ use unicode_normalization::UnicodeNormalization;
 use super::pin_type_chosen_by_an_input::{
     PinTypeChosenBy, parse_the_input_choosing_a_pin_type, pin_typed_by_the_input_choosing_it,
 };
+use super::stream_fact_grammar::{StreamFactsStated, parse_stream_fact_key};
 use super::string_literal_list::{parse_string_literal_list, parse_string_literals};
 use super::value_input_grammar::{
     note_the_first_port_key, reject_a_choice_on_a_port, reject_a_value_input_key_on_an_output,
@@ -365,7 +364,11 @@ pub(super) fn parse_port(
             (None, pin, Some(chosen_by))
         }
     };
-    let annotations = stream_facts.annotations;
+    let StreamFactsStated {
+        annotations,
+        read_from_value_inputs: stream_facts_read_from_value_inputs,
+        ..
+    } = stream_facts;
     // A picture port that states a flow, a former name or that it may be unset states its
     // Texture with it, so what it states is emitted.
     let stated_beside_the_pin = flow.is_some() || former_names.is_some() || may_be_unset.is_some();
@@ -414,6 +417,7 @@ pub(super) fn parse_port(
         annotations,
         pin_type,
         pin_type_chosen_by,
+        stream_facts_read_from_value_inputs,
         lifetime,
         flow: flow.map(|(_, flow)| flow),
         former_names: former_names.map(|(_, names)| names).unwrap_or_default(),
@@ -508,7 +512,7 @@ enum StatedPinType {
 }
 
 /// Whether what follows is a call, `<function>(…)`.
-fn peeks_a_call(content: ParseStream<'_>) -> bool {
+pub(super) fn peeks_a_call(content: ParseStream<'_>) -> bool {
     content.peek(Ident) && content.peek2(syn::token::Paren)
 }
 
@@ -607,161 +611,6 @@ fn parse_pin_type(pin_type_ident: &Ident, port_name: &str) -> syn::Result<PinTyp
                 ),
             )
         })
-}
-
-/// Parse `from_input(<value input>)`, when that is what follows, into the cast name of the value
-/// input the fact is read from.
-fn parse_the_input_a_fact_is_read_from(content: ParseStream<'_>) -> syn::Result<Option<String>> {
-    if !peeks_a_call(content) {
-        return Ok(None);
-    }
-    parse_the_input_choosing_a_pin_type(content, |function| {
-        format!(
-            "expected `from_input(<value input>)`, found `{function}(…)` — a fact a port \
-             states of its stream is a number, or read from a value input of its node"
-        )
-    })
-    .map(|chosen_by| Some(chosen_by.cast_name))
-}
-
-/// The stream facts a port states beside its pin type: the pixel formats of a Texture, and the
-/// annotations of an output's pin.
-#[derive(Default)]
-struct StreamFactsStated {
-    formats: Vec<String>,
-    annotations: PinAnnotations,
-}
-
-impl StreamFactsStated {
-    /// The first fact stated that a port of `pin_type`, at `direction`, does not take, as a
-    /// refusal naming the port and the key; a port typed by a setting takes none.
-    fn refusal_of_a_fact_the_port_does_not_take(
-        &self,
-        port_name: &str,
-        direction: PortDirection,
-        pin_type: Option<&PinType>,
-    ) -> Option<String> {
-        let is_an_output = direction == PortDirection::Output;
-        let is_a = |wanted: fn(&PinType) -> bool| pin_type.is_some_and(wanted);
-        let is_a_texture = is_a(|pin_type| matches!(pin_type, PinType::Texture { .. }));
-        let is_audio = is_a(|pin_type| matches!(pin_type, PinType::Audio {}));
-        let is_a_tensor = is_a(|pin_type| matches!(pin_type, PinType::Tensor {}));
-        let stated_keys: [(&str, bool, bool); 5] = [
-            ("formats", !self.formats.is_empty(), is_a_texture),
-            (
-                "frame_rate",
-                self.annotations.frame_rate.is_some(),
-                is_an_output && is_a_texture,
-            ),
-            (
-                "rate",
-                self.annotations.sample_rate.is_some(),
-                is_an_output && is_audio,
-            ),
-            (
-                "dtype",
-                self.annotations.sample_type.is_some(),
-                is_an_output && is_audio,
-            ),
-            (
-                "residency",
-                self.annotations.residency.is_some(),
-                is_an_output && is_a_tensor,
-            ),
-        ];
-        let direction_word = match direction {
-            PortDirection::Input => "input",
-            PortDirection::Output => "output",
-        };
-        let pin_type_words = pin_type.map_or_else(
-            || "a type a setting chooses".to_owned(),
-            |pin_type| format!("{pin_type}"),
-        );
-        stated_keys
-            .iter()
-            .find(|(_, stated, taken)| *stated && !*taken)
-            .map(|(key, _, _)| {
-                format!(
-                    "{direction_word} port {port_name:?} states `{key}=`, which an \
-                     {direction_word} of {pin_type_words} does not take"
-                )
-            })
-    }
-}
-
-/// Parse one stream fact key's value into `stream_facts`; which pin type and direction take it
-/// is checked once the whole port is read.
-fn parse_stream_fact_key(
-    content: ParseStream<'_>,
-    fact_key: &str,
-    port_name: &str,
-    stream_facts: &mut StreamFactsStated,
-    key_span: proc_macro2::Span,
-) -> syn::Result<()> {
-    let annotations = &mut stream_facts.annotations;
-    match fact_key {
-        "formats" => stream_facts.formats = parse_string_literal_list(content, "formats")?,
-        "rate" => {
-            annotations.sample_rate = Some(match parse_the_input_a_fact_is_read_from(content)? {
-                Some(input_name) => ChannelsOutputPortSampleRate::FromSetting {
-                    setting: input_name,
-                },
-                None => {
-                    let rate: LitInt = content.parse()?;
-                    ChannelsOutputPortSampleRate::Stated(rate.base10_parse()?)
-                }
-            });
-        }
-        "frame_rate" => {
-            annotations.frame_rate = Some(match parse_the_input_a_fact_is_read_from(content)? {
-                Some(input_name) => ImageOutputPortFrameRate::FromSetting {
-                    setting: input_name,
-                },
-                None => {
-                    let frames_per_second: LitInt = content.parse()?;
-                    ImageOutputPortFrameRate::Stated(streamlib_node_schema::ImageStreamFrameRate {
-                        numerator: frames_per_second.base10_parse()?,
-                        denominator: 1,
-                    })
-                }
-            });
-        }
-        "dtype" => {
-            let dtype: LitStr = content.parse()?;
-            annotations.sample_type = Some(match dtype.value().as_str() {
-                "f32" => ChannelsOutputPortSampleType::F32,
-                "f64" => ChannelsOutputPortSampleType::F64,
-                other => {
-                    return Err(syn::Error::new(
-                        dtype.span(),
-                        format!("port `{port_name}`: `dtype` is \"f32\" or \"f64\", not {other:?}"),
-                    ));
-                }
-            });
-        }
-        "residency" => {
-            let residency: LitStr = content.parse()?;
-            annotations.residency = Some(match residency.value().as_str() {
-                "gpu" => ArrayOutputPortResidency::Gpu,
-                "cpu" => ArrayOutputPortResidency::Cpu,
-                other => {
-                    return Err(syn::Error::new(
-                        residency.span(),
-                        format!(
-                            "port `{port_name}`: `residency` is \"gpu\" or \"cpu\", not {other:?}"
-                        ),
-                    ));
-                }
-            });
-        }
-        other => {
-            return Err(syn::Error::new(
-                key_span,
-                format!("port `{port_name}`: `{other}` is not a stream fact key"),
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Parse the `audio_window` body — the call form carrying the values, or

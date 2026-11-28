@@ -36,9 +36,6 @@ impl JsonSchema for NodeLanguage {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOptions {
-    /// [Rust] Generate unsafe Send impl for !Send nodes (AVFoundation, etc.)
-    #[serde(default)]
-    pub unsafe_send: bool,
     /// [Python] Required Python version spec (e.g., ">=3.12"). Python runtime only.
     #[serde(default)]
     pub python_version: Option<String>,
@@ -50,7 +47,7 @@ pub struct RuntimeOptions {
 enum RuntimeConfigHelper {
     /// Simple string form: `runtime: rust`
     Simple(NodeLanguage),
-    /// Full object form: `runtime: { language: rust, options: { unsafe_send: true } }`
+    /// Full object form: `runtime: { language: python, options: { python_version: ">=3.12" } }`
     Full(RuntimeConfigFull),
 }
 

@@ -79,7 +79,7 @@ pub use port_stream_facts::{
     StreamFactsOfAnotherPinType, refuse_stream_facts_of_another_pin_type,
 };
 pub use value_input_declaration::{
-    SettingChoosingAPinType, SettingChosenFromOptions, SettingPinType,
+    ValueInputChoosingAPinType, ValueInputChosenFromOptions, ValueInputPinType,
     the_choice_among_the_bundles_its_stream_declares, the_input_taking_no_wire,
-    the_menu_of_a_setting,
+    the_menu_of_a_value_input,
 };

@@ -66,6 +66,17 @@ pub use streamlib_macros::node;
 #[cfg(doctest)]
 pub struct NodeAttributeAcceptsNoIdentity;
 
+/// `#[node(...)]` on a struct is refused, showing the node written as one function.
+///
+/// ```compile_fail
+/// use streamlib_engine::node;
+///
+/// #[node(execution = manual)]
+/// pub struct RetiredNode;
+/// ```
+#[cfg(doctest)]
+pub struct NodeAttributeRefusesAStruct;
+
 pub use core::{
     Error,
     GpuContext,

@@ -4,8 +4,8 @@
 //! `#[node(…)]` on a function: a node written as one function. Its body runs once, when the
 //! node is set up, declares the node's computed values and returns its per-frame function; its
 //! parameters are its value inputs as handles, its ports and the runtime context, each told by
-//! its type. The node is emitted as the struct form's is, a module named after the node holding
-//! its `Node`, whose scope the engine hosts.
+//! its type. The node is emitted as a module named after the node holding its `Node`, whose
+//! scope the engine hosts.
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
@@ -25,12 +25,11 @@ use super::port_marker_module::generate_port_marker_module;
 use super::{NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema};
 use crate::grammar::{
     ParsedNodeAttr, ParsedPort, ParsedValueInput, PinTypeChosenBy, PortDirection,
-    ValueInputChosenFrom, declared_description_str_expression,
+    StreamFactReadFromAValueInput, ValueInputChosenFrom, declared_description_str_expression,
 };
 
 /// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase.
-/// Refused when that is no identifier, as
-/// for `_1`.
+/// Refused when that is no identifier, as for `_1`.
 pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> syn::Result<Ident> {
     let name = streamlib_node_schema::to_pascal_case(&function_ident.to_string());
     let Ok(node_name) = syn::parse_str::<Ident>(&name) else {
@@ -47,7 +46,8 @@ pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> syn::Resul
 }
 
 /// The refusal of `#[node(...)]` on anything but a function, showing the one form a node takes.
-const NODE_WRITTEN_AS_ONE_FUNCTION: &str = "#[node(...)] declares a node written as one \
+pub(crate) const NODE_WRITTEN_AS_ONE_FUNCTION: &str =
+    "#[node(...)] declares a node written as one \
 function; a node written as a struct, with a trait impl holding its lifecycle, is retired. \
 Write the node as a function whose body runs once, declares its computed values and returns \
 its per-frame function:
@@ -56,7 +56,7 @@ its per-frame function:
         execution = reactive,
         input(\"video\", pin_type = Texture),
         input(\"gain\", value = f32, default = 1.0),
-        output(\"video_out\", pin_type = Texture),
+        output(\"video_out\", pin_type = Texture, formats = [\"rgba8_unorm\"]),
     )]
     pub fn gain_node(
         gain: Input<f32>,
@@ -419,10 +419,10 @@ impl ValueInputsEmitted<'_> {
             let default = Self::default_value(value_input);
             let pin_type = match &value_input.chosen_from {
                 ValueInputChosenFrom::AnyValueOfItsType => quote! {
-                    <#value_type as __streamlib_sdk::descriptors::SettingPinType>::setting_pin_type()
+                    <#value_type as __streamlib_sdk::descriptors::ValueInputPinType>::value_input_pin_type()
                 },
                 ValueInputChosenFrom::Options(option_names) => quote! {
-                    __streamlib_sdk::descriptors::the_menu_of_a_setting::<#value_type>(
+                    __streamlib_sdk::descriptors::the_menu_of_a_value_input::<#value_type>(
                         &[#(#option_names),*],
                     )
                 },
@@ -439,7 +439,6 @@ impl ValueInputsEmitted<'_> {
                     #pin_type,
                     __streamlib_sdk::serde_json::to_value(#default)
                         .expect("a value input's default serializes, as every value an input holds does"),
-                    __streamlib_sdk::descriptors::SettingReadTime::EachRun,
                 ))
             }
         });
@@ -514,6 +513,7 @@ fn refuse_a_form_the_function_does_not_take(
 ) -> syn::Result<()> {
     for port in parsed.inputs.iter().chain(&parsed.outputs) {
         refuse_a_pin_type_no_value_input_chooses(port, &parsed.value_inputs)?;
+        refuse_a_stream_fact_read_from_no_value_input(port, &parsed.value_inputs)?;
     }
     if !item.sig.generics.params.is_empty() || item.sig.generics.where_clause.is_some() {
         return Err(syn::Error::new(
@@ -623,6 +623,37 @@ fn refuse_a_pin_type_no_value_input_chooses(
             ))
         }
     }
+}
+
+/// Refuse `port` of a node function when a fact of its stream is read `from_input(…)` a value
+/// input the node does not declare.
+fn refuse_a_stream_fact_read_from_no_value_input(
+    port: &ParsedPort,
+    value_inputs: &[ParsedValueInput],
+) -> syn::Result<()> {
+    let port_ident = &port.declared_marker_ident;
+    let Some(StreamFactReadFromAValueInput {
+        fact_key,
+        read_from: PinTypeChosenBy { named, .. },
+    }) = port
+        .stream_facts_read_from_value_inputs
+        .iter()
+        .find(|fact| {
+            !value_inputs
+                .iter()
+                .any(|value_input| value_input.cast_name == fact.read_from.cast_name)
+        })
+    else {
+        return Ok(());
+    };
+    Err(syn::Error::new(
+        named.span(),
+        format!(
+            "port `{port_ident}` reads its `{fact_key}` `from_input({named})`, and the node \
+             declares no value input `{named}`: declare it, `input(\"{named}\", value = u32, \
+             default = …)`"
+        ),
+    ))
 }
 
 /// Whether `ty` names an optional pin type, the choice of a type a value input holds.

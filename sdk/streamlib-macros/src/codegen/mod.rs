@@ -66,8 +66,9 @@ impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
     }
 }
 
-/// The descriptor a node's schema and its declared meta and port descriptions build; `value_inputs`, the `.with_input(…)` calls of a node function's value inputs, follow
-/// its port inputs.
+/// The descriptor a node's schema and its declared meta and port descriptions build;
+/// `value_inputs`, the `.with_input(…)` calls of a node function's value inputs, follow its port
+/// inputs.
 fn generate_descriptor_from_schema(
     schema: &NodeSchema,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
@@ -163,8 +164,6 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    // Reached through the bound-carrying trait rather than `schemars` directly, so a config
-    // type missing the derive fails on a diagnostic that names the fix.
     let config_schema = quote! {
         .with_config_schema(
             <__streamlib_sdk::nodes::EmptyConfig as __streamlib_sdk::descriptors::NodeConfigJsonSchema>

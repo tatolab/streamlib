@@ -7,22 +7,30 @@
 
 use quote::quote;
 
+use super::node_function_emit::NODE_WRITTEN_AS_ONE_FUNCTION;
 use super::{generate_from_a_node_function, refusal_of_a_node_not_written_as_a_function};
-use crate::grammar::{DeclaredNodeMeta, ParsedNodeAttr, parse2};
-
-fn parsed(attribute: proc_macro2::TokenStream) -> ParsedNodeAttr {
-    parse2(
-        attribute,
-        DeclaredNodeMeta::default(),
-        &proc_macro2::Ident::new("ANode", proc_macro2::Span::call_site()),
-    )
-    .expect("the attribute parses")
-}
+use crate::grammar::{DeclaredNodeMeta, parse2};
 
 /// The expansion of `function` under `attribute`, without whitespace.
 fn expanded(attribute: proc_macro2::TokenStream, function: proc_macro2::TokenStream) -> String {
+    expanded_with_its_meta(DeclaredNodeMeta::default(), attribute, function)
+}
+
+/// The expansion of `function` under `attribute` and the `#[meta(...)]` that declares `meta`,
+/// without whitespace.
+fn expanded_with_its_meta(
+    meta: DeclaredNodeMeta,
+    attribute: proc_macro2::TokenStream,
+    function: proc_macro2::TokenStream,
+) -> String {
     let function: syn::ItemFn = syn::parse2(function).expect("the function parses");
-    generate_from_a_node_function(function, &parsed(attribute), quote! { ::streamlib::sdk })
+    let parsed = parse2(
+        attribute,
+        meta,
+        &proc_macro2::Ident::new("ANode", proc_macro2::Span::call_site()),
+    )
+    .expect("the attribute parses");
+    generate_from_a_node_function(function, &parsed, quote! { ::streamlib::sdk })
         .to_string()
         .chars()
         .filter(|c| !c.is_whitespace())
@@ -110,7 +118,7 @@ fn each_value_input_is_declared_on_the_descriptor_with_its_default() {
     );
     assert!(
         rendered.contains(
-            "the_input_taking_no_wire(\"gain\",\"Howloud.\",<f32as__streamlib_sdk::descriptors::SettingPinType>::setting_pin_type(),__streamlib_sdk::serde_json::to_value(<_as__streamlib_sdk::nodes::__generated_private::TheDefaultOfAValueInput<f32>>::into_the_default(0.5))"
+            "the_input_taking_no_wire(\"gain\",\"Howloud.\",<f32as__streamlib_sdk::descriptors::ValueInputPinType>::value_input_pin_type(),__streamlib_sdk::serde_json::to_value(<_as__streamlib_sdk::nodes::__generated_private::TheDefaultOfAValueInput<f32>>::into_the_default(0.5))"
         ),
         "{rendered}"
     );
@@ -145,7 +153,7 @@ fn a_value_input_chosen_from_a_list_is_declared_with_the_list() {
     );
     assert!(
         rendered.contains(
-            "the_input_taking_no_wire(\"format\",\"\",__streamlib_sdk::descriptors::the_menu_of_a_setting::<String>(&[\"a\",\"b\"],),"
+            "the_input_taking_no_wire(\"format\",\"\",__streamlib_sdk::descriptors::the_menu_of_a_value_input::<String>(&[\"a\",\"b\"],),"
         ),
         "{rendered}"
     );
@@ -426,4 +434,275 @@ fn a_node_written_as_a_struct_is_refused_showing_the_node_written_as_one_functio
             && refusal.contains("computed(move |ctx|"),
         "{refusal}"
     );
+}
+
+#[test]
+fn the_node_the_refusal_of_a_struct_shows_is_one_the_macro_takes() {
+    let example: String = NODE_WRITTEN_AS_ONE_FUNCTION
+        .lines()
+        .filter_map(|line| line.strip_prefix("    "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut function: syn::ItemFn = syn::parse_str(&example).expect("the example parses");
+    let attribute = function.attrs.remove(0);
+    let syn::Meta::List(attribute) = attribute.meta else {
+        panic!("the example's attribute is `#[node(...)]`");
+    };
+    let node_name = super::node_name_of_a_node_function(&function.sig.ident).expect("a node name");
+    let parsed = parse2(attribute.tokens, DeclaredNodeMeta::default(), &node_name)
+        .expect("the example's attribute parses");
+    let rendered =
+        generate_from_a_node_function(function, &parsed, quote! { ::streamlib::sdk }).to_string();
+    assert!(!rendered.contains("compile_error"), "{rendered}");
+}
+
+#[test]
+fn a_frame_rate_read_from_an_undeclared_value_input_is_refused() {
+    let refusal = refusal_of(
+        quote! {
+            execution = reactive,
+            input("gain", value = f32, default = 0.5),
+            output("out", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = from_input(fps)),
+        },
+        a_function_of_its_gain(),
+    );
+    assert!(
+        refusal
+            .contains("readsits`frame_rate``from_input(fps)`,andthenodedeclaresnovalueinput`fps`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_sample_rate_read_from_an_undeclared_value_input_is_refused() {
+    let refusal = refusal_of(
+        quote! {
+            execution = reactive,
+            input("gain", value = f32, default = 0.5),
+            output("out", pin_type = Audio, rate = from_input(sample_rate)),
+        },
+        a_function_of_its_gain(),
+    );
+    assert!(
+        refusal.contains("readsits`rate``from_input(sample_rate)`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_frame_rate_read_from_a_declared_value_input_is_taken() {
+    let rendered = expanded(
+        quote! {
+            execution = reactive,
+            input("fps", value = u32, default = 30),
+            output("out", pin_type = Texture, formats = ["rgba8_unorm"], frame_rate = from_input(fps)),
+        },
+        quote! {
+            fn a_node(fps: Input<u32>, outputs: OutputWriter) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(!rendered.contains("compile_error"), "{rendered}");
+}
+
+fn a_node_of_its_gain_with(attribute: proc_macro2::TokenStream) -> String {
+    expanded(
+        quote! { #attribute input("gain", value = f32, default = 0.5), },
+        a_function_of_its_gain(),
+    )
+}
+
+#[test]
+fn only_a_node_paced_by_real_time_declares_it_on_its_descriptor() {
+    assert!(
+        a_node_of_its_gain_with(quote! { execution = reactive, paced_by_real_time, })
+            .contains(".paced_by_real_time()")
+    );
+    assert!(
+        !a_node_of_its_gain_with(quote! { execution = reactive, }).contains("paced_by_real_time")
+    );
+}
+
+#[test]
+fn only_a_node_that_declares_a_category_sets_one_on_its_descriptor() {
+    let rendered_for = |category: Option<&str>| {
+        expanded_with_its_meta(
+            DeclaredNodeMeta {
+                category: category.map(str::to_owned),
+                ..DeclaredNodeMeta::default()
+            },
+            quote! { execution = reactive, input("gain", value = f32, default = 0.5), },
+            a_function_of_its_gain(),
+        )
+    };
+    assert!(rendered_for(Some("Effects/Stylize")).contains(".with_category(\"Effects/Stylize\")"));
+    assert!(!rendered_for(None).contains("with_category"));
+}
+
+#[test]
+fn only_a_node_that_states_a_conversion_says_so_on_its_descriptor() {
+    let rendered_for = |conversion: Option<bool>| {
+        expanded_with_its_meta(
+            DeclaredNodeMeta {
+                conversion,
+                ..DeclaredNodeMeta::default()
+            },
+            a_gain_and_a_video_port(),
+            quote! {
+                fn a_node(gain: Input<f32>, inputs: InputMailboxes, outputs: OutputWriter)
+                    -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                    move |_ctx| Ok(())
+                }
+            },
+        )
+    };
+    assert!(rendered_for(Some(true)).contains(".stating_a_conversion()"));
+    assert!(!rendered_for(None).contains("stating_a_conversion"));
+}
+
+#[test]
+fn the_descriptor_captures_its_identity_with_module_path_once() {
+    let rendered = a_node_of_its_gain_with(quote! { execution = reactive, });
+    assert_eq!(
+        rendered.matches("module_path!()").count(),
+        1,
+        "identity is captured in exactly one place: {rendered}"
+    );
+    assert!(
+        rendered.contains("Node::node_class_import_path()"),
+        "the descriptor takes its identity from that one capture: {rendered}"
+    );
+}
+
+/// A built-in's type is its class in `tatolab.stream`, written whole at expansion, so moving its
+/// Rust module never changes it.
+#[test]
+fn a_built_in_nodes_identity_is_its_class_in_the_stream_package() {
+    let rendered = a_node_of_its_gain_with(quote! { execution = reactive, built_in_node, });
+    assert!(
+        rendered.contains("NodeClassImportPath::of_built_in_node(\"ANode\""),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("module_path!()"), "{rendered}");
+}
+
+#[test]
+fn the_expansion_never_reaches_for_type_name() {
+    let rendered = a_node_of_its_gain_with(quote! { execution = reactive, });
+    assert!(
+        !rendered.contains("type_name"),
+        "identity is never reflected at runtime: {rendered}"
+    );
+}
+
+/// The marker keeps the author's spelling, so `OutputLink::videoOut` still names it, while its
+/// `PORT_NAME` is the cast the descriptor registers.
+#[test]
+fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
+    let rendered = expanded(
+        quote! {
+            execution = reactive,
+            output("videoOut", pin_type = Texture, formats = ["rgba8_unorm"]),
+        },
+        quote! {
+            pub fn a_node(outputs: OutputWriter) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    assert!(rendered.contains("pubmodOutputLink"), "{rendered}");
+    assert!(rendered.contains("pubstructvideoOut"), "{rendered}");
+    assert!(
+        rendered.contains("OutputPortMarkerforvideoOut"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("constPORT_NAME:&'staticstr=\"videoout\""),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_crate_visible_node_generates_crate_visible_items_only() {
+    let rendered = expanded(
+        quote! { execution = reactive, input("gain", value = f32, default = 0.5), },
+        quote! {
+            pub(crate) fn a_node(gain: Input<f32>) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+                move |_ctx| Ok(())
+            }
+        },
+    );
+    for crate_visible_item in [
+        "pub(crate)modANode",
+        "pub(crate)fnnode(",
+        "pub(crate)structNode",
+        "pub(crate)fnnode_class_import_path(",
+    ] {
+        assert!(
+            rendered.contains(crate_visible_item),
+            "expected `{crate_visible_item}` in: {rendered}"
+        );
+    }
+    assert!(
+        !rendered.contains("pubmod")
+            && !rendered.contains("pubstruct")
+            && !rendered.contains("pubfn"),
+        "a pub(crate) node generates no public item: {rendered}"
+    );
+}
+
+#[test]
+fn the_authors_visibility_is_written_as_seen_from_each_nested_module() {
+    use std::num::NonZeroUsize;
+
+    use super::author_visibility::author_visibility_written_from_a_nested_module;
+
+    let written_from = |visibility: syn::Visibility, depth: usize| -> String {
+        author_visibility_written_from_a_nested_module(
+            &visibility,
+            NonZeroUsize::new(depth).expect("every case names a nested module"),
+        )
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+    };
+    for (visibility, depth, expected) in [
+        (syn::parse_quote! { pub }, 1, "pub"),
+        (syn::parse_quote! { pub }, 2, "pub"),
+        (syn::parse_quote! { pub(crate) }, 2, "pub(crate)"),
+        (syn::Visibility::Inherited, 1, "pub(insuper)"),
+        (syn::Visibility::Inherited, 2, "pub(insuper::super)"),
+        (syn::parse_quote! { pub(self) }, 1, "pub(insuper)"),
+        (syn::parse_quote! { pub(super) }, 1, "pub(insuper::super)"),
+        (
+            syn::parse_quote! { pub(super) },
+            2,
+            "pub(insuper::super::super)",
+        ),
+        (syn::parse_quote! { pub(crate) }, 1, "pub(crate)"),
+        (
+            syn::parse_quote! { pub(in super::super) },
+            1,
+            "pub(insuper::super::super)",
+        ),
+        (
+            syn::parse_quote! { pub(in super::nodes) },
+            2,
+            "pub(insuper::super::super::nodes)",
+        ),
+        (
+            syn::parse_quote! { pub(in super::nodes) },
+            1,
+            "pub(insuper::super::nodes)",
+        ),
+        (
+            syn::parse_quote! { pub(in crate::nodes) },
+            2,
+            "pub(incrate::nodes)",
+        ),
+    ] {
+        assert_eq!(written_from(visibility, depth), expected);
+    }
 }

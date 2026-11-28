@@ -12,10 +12,11 @@ use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized}
 
 mod pin_type_chosen_by_an_input;
 mod port_grammar;
+mod stream_fact_grammar;
 mod string_literal_list;
 mod value_input_grammar;
 
-pub(crate) use pin_type_chosen_by_an_input::PinTypeChosenBy;
+pub(crate) use pin_type_chosen_by_an_input::{PinTypeChosenBy, StreamFactReadFromAValueInput};
 use port_grammar::{DeclaredPort, parse_port};
 pub(crate) use value_input_grammar::ValueInputChosenFrom;
 
@@ -269,6 +270,9 @@ pub(crate) struct ParsedPort {
     /// The value input whose chosen pin type the port carries, as `pin_type = from_input(…)`
     /// names it; `None` when the port states its type itself.
     pub pin_type_chosen_by: Option<PinTypeChosenBy>,
+    /// Each fact of the port's stream read from a value input, as `rate = from_input(…)` or
+    /// `frame_rate = from_input(…)` names it.
+    pub stream_facts_read_from_value_inputs: Vec<StreamFactReadFromAValueInput>,
     /// How long a value set live on the input lives, as `lifetime = …` declares it; kept when
     /// it declares none, and always kept on an output.
     pub lifetime: streamlib_node_schema::NodeValueLifetime,
@@ -357,10 +361,7 @@ impl ParsedNodeAttr {
                 .and_then(DeclaredDescription::literal_text),
             runtime: RuntimeConfig {
                 language: Default::default(),
-                options: RuntimeOptions {
-                    unsafe_send: false,
-                    python_version: None,
-                },
+                options: RuntimeOptions::default(),
                 env: Default::default(),
             },
             entrypoint: None,

@@ -24,9 +24,9 @@ pub use streamlib_node_schema::pin_type::{
     the_saved_value_retyped, the_value_held_within_the_range,
 };
 pub use streamlib_node_schema::value_input_declaration::{
-    SettingChoosingAPinType, SettingChosenFromOptions, SettingPinType,
+    ValueInputChoosingAPinType, ValueInputChosenFromOptions, ValueInputPinType,
     the_choice_among_the_bundles_its_stream_declares, the_input_taking_no_wire,
-    the_menu_of_a_setting,
+    the_menu_of_a_value_input,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

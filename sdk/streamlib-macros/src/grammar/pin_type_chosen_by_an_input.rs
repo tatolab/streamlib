@@ -35,6 +35,14 @@ pub(crate) struct PinTypeChosenBy {
     pub(crate) cast_name: String,
 }
 
+/// A fact of a port's stream, `rate` or `frame_rate`, that `from_input(<value input>)` reads
+/// from a value input of its node.
+#[derive(Clone)]
+pub(crate) struct StreamFactReadFromAValueInput {
+    pub(crate) fact_key: &'static str,
+    pub(crate) read_from: PinTypeChosenBy,
+}
+
 impl std::fmt::Display for PinTypeChosenBy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "from_input({})", self.named)
