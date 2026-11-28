@@ -46,6 +46,7 @@ use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
 mod an_edit_a_placement_refuses_tests;
+mod an_edit_applied_or_refused_whole_tests;
 mod an_edit_recorded_before_the_update_tests;
 mod built_in_value_input_set_while_playing_tests;
 mod bundle_frame_link_tests;

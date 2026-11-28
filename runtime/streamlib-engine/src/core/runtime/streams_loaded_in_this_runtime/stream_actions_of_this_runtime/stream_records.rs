@@ -151,11 +151,7 @@ impl Runner {
                     StreamLoadOnTheWire::Loaded,
                     playback,
                     why_it_cannot_play.as_ref().map(StreamFailure::diagnostic),
-                    stream
-                        .diagnostics_of_its_nodes()
-                        .into_iter()
-                        .chain(stream.the_edits_its_document_holds_not_live())
-                        .collect(),
+                    stream.diagnostics_of_its_nodes(),
                 );
                 StreamListing {
                     stream_id: stream.stream_id().to_string(),

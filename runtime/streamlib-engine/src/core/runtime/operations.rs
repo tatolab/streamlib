@@ -204,15 +204,6 @@ pub trait RuntimeOperations: Send + Sync {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
-    /// Hold `graph_operation`, which this stream's graph document holds and its live graph
-    /// refused in the runtime's words `refusal`, as an edit not live yet: listed among the
-    /// stream's diagnostics and drawn in its `graph` until its playback stops.
-    fn hold_an_edit_its_document_holds_not_live(
-        &self,
-        graph_operation: &streamlib_project_repository::StreamGraphOperation,
-        refusal: &str,
-    );
-
     /// What a live connect of `link`, each node by its UUID, would make of it on this stream's
     /// live graph, judged as [`Self::apply_a_stream_graph_operation_live`] judges a connect and
     /// made nowhere; refused as the connect is refused, but for a link that connects through a

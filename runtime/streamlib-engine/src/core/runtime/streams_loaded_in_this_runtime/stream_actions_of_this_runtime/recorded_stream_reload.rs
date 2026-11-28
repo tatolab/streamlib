@@ -794,7 +794,7 @@ pub(super) fn the_graph_the_recorded_stream_holds(
 /// The graph the document of the stream asset at `location` holds as it is on disk now, or
 /// why there is none: the project is gone from where it was, or no document holds the stream
 /// asset, or the document holds no graph.
-pub(in crate::core::runtime) fn the_graph_the_document_of_the_stream_at_holds(
+pub(super) fn the_graph_the_document_of_the_stream_at_holds(
     location: &StreamLocation,
 ) -> std::result::Result<GraphSnapshot, String> {
     let (project_file, stream_document) = the_graph_document_of_the_stream_at(location)?;

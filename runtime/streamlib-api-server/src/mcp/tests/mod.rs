@@ -51,10 +51,6 @@ pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
     exported_graph: Arc<Mutex<Value>>,
     pub(crate) recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
     armed_add_node_refusal: crate::control_plane_stub_support::ArmedAddNodeRefusal,
-    armed_refusal_of_each_edit_the_documents_hold_first:
-        crate::control_plane_stub_support::ArmedRefusalOfEachEditTheDocumentsHoldFirst,
-    pub(crate) recorded_edits_held_not_live:
-        crate::control_plane_stub_support::RecordedEditsHeldNotLive,
     add_node_answers_after: Option<Duration>,
 }
 
@@ -64,8 +60,6 @@ impl ControlPlaneMcpDispatchStubRuntime {
             exported_graph: Arc::new(Mutex::new(json!({ "nodes": [], "links": [] }))),
             recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
             armed_add_node_refusal: Arc::new(Mutex::new(None)),
-            armed_refusal_of_each_edit_the_documents_hold_first: Arc::new(Mutex::new(None)),
-            recorded_edits_held_not_live: Arc::new(Mutex::new(Vec::new())),
             add_node_answers_after: None,
         }
     }
@@ -86,17 +80,6 @@ impl ControlPlaneMcpDispatchStubRuntime {
     ) -> Self {
         Self {
             armed_add_node_refusal: Arc::new(Mutex::new(Some(Arc::new(the_refusal)))),
-            ..Self::new()
-        }
-    }
-
-    /// A stub refusing with `refusal` each edit a running stream takes only once the project's
-    /// graph documents hold it, standing in for a running graph that cannot take it.
-    pub(crate) fn refusing_each_edit_the_documents_hold_first(refusal: &str) -> Self {
-        Self {
-            armed_refusal_of_each_edit_the_documents_hold_first: Arc::new(Mutex::new(Some(
-                refusal.to_owned(),
-            ))),
             ..Self::new()
         }
     }

@@ -69,57 +69,6 @@ pub(super) fn the_open_batch_of<'streams>(
 }
 
 impl StreamGraphTransactionExecutor<'_> {
-    /// Make each of `operations`, each by the loaded stream it changes, on that running stream,
-    /// once the project's graph documents hold it. A running stream that refuses one holds it,
-    /// and each later one of that stream, as an edit not live yet, which `graph` draws and its
-    /// diagnostics list until its playback stops and brings it to its document.
-    pub(super) fn make_live_what_the_documents_now_hold(
-        &self,
-        operations: Vec<(String, StreamGraphOperation)>,
-    ) {
-        let mut refusal_of_each_stream_that_refused: HashMap<String, String> = HashMap::new();
-        for (stream_id, operation) in operations {
-            let stream_operations = match self
-                .operations_on_the_loaded_streams
-                .runtime_operations_of_the_stream_a_call_names(&stream_id)
-            {
-                Ok(stream_operations) => stream_operations,
-                Err(why) => {
-                    tracing::warn!(
-                        stream = %stream_id,
-                        %why,
-                        "the project's graph documents hold an edit of a stream not loaded; the \
-                         stream takes it at its next load"
-                    );
-                    continue;
-                }
-            };
-            if let Some(refusal) = refusal_of_each_stream_that_refused.get(&stream_id) {
-                stream_operations.hold_an_edit_its_document_holds_not_live(
-                    &operation,
-                    &format!("an earlier edit of the same transaction was not taken: {refusal}"),
-                );
-                continue;
-            }
-            let held_if_refused = operation.clone();
-            if let Err(refusal) = self
-                .async_runtime
-                .block_on(stream_operations.apply_a_stream_graph_operation_live(operation))
-            {
-                let refusal = refusal.to_string();
-                tracing::warn!(
-                    stream = %stream_id,
-                    %refusal,
-                    "the project's graph documents hold an edit its running stream refused; the \
-                     stream holds it not live until its playback stops"
-                );
-                stream_operations
-                    .hold_an_edit_its_document_holds_not_live(&held_if_refused, &refusal);
-                refusal_of_each_stream_that_refused.insert(stream_id, refusal);
-            }
-        }
-    }
-
     /// Apply the undo or redo `reversal_of` names for `author` in the project at
     /// `project_directory`: its graph edits to the running streams, then the whole of it to
     /// the project, recorded as a new transaction.
@@ -162,9 +111,7 @@ impl StreamGraphTransactionExecutor<'_> {
             the_stream_documents_with_the_reversal_applied(&project_repository, &reversal)?;
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
-        let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
-            Vec::new();
-        let mut streams_taking_their_operations_once_the_documents_hold_them: BTreeSet<String> =
+        let mut streams_taking_their_edits_through_their_staged_graph: BTreeSet<String> =
             BTreeSet::new();
         self.refuse_an_input_value_set_its_input_no_longer_takes(
             &project_repository,
@@ -177,10 +124,7 @@ impl StreamGraphTransactionExecutor<'_> {
             .operations
             .iter()
             .filter_map(|operation| match operation {
-                ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
-                    stream,
-                    graph_operation,
-                }) if !graph_operation.reaches_a_running_stream_once_the_documents_hold_it() => {
+                ProjectOperation::StreamGraph(StreamGraphOperationOnAStream { stream, .. }) => {
                     stream_id_of_each_stream_asset
                         .get(stream)
                         .map(|stream_id| (stream_id, *stream))
@@ -192,8 +136,8 @@ impl StreamGraphTransactionExecutor<'_> {
             .keys()
             .map(|stream_id| (*stream_id).clone())
             .collect();
-        // Each loaded stream the reversal edits, whether its edits reach it now or once the
-        // documents hold them.
+        // Each loaded stream the reversal edits, whether its edits reach it one by one or through
+        // its staged graph.
         let stream_ids_named: Vec<String> = staged_graph_of_each_stream_asset
             .keys()
             .filter_map(|stream_asset| stream_id_of_each_stream_asset.get(stream_asset))
@@ -281,13 +225,10 @@ impl StreamGraphTransactionExecutor<'_> {
             let Some(stream_id) = stream_id_of_each_stream_asset.get(stream) else {
                 continue;
             };
-            if graph_operation.reaches_a_running_stream_once_the_documents_hold_it()
-                || streams_taking_their_operations_once_the_documents_hold_them.contains(stream_id)
+            if graph_operation.reaches_a_running_stream_only_through_its_staged_graph()
+                || streams_taking_their_edits_through_their_staged_graph.contains(stream_id)
             {
-                made_live_once_the_documents_hold_them
-                    .push((stream_id.clone(), graph_operation.clone()));
-                streams_taking_their_operations_once_the_documents_hold_them
-                    .insert(stream_id.clone());
+                streams_taking_their_edits_through_their_staged_graph.insert(stream_id.clone());
                 continue;
             }
             let applied_to_the_running_stream = || {
@@ -319,6 +260,7 @@ impl StreamGraphTransactionExecutor<'_> {
         if let Err(refused) = self.reconcile_each_placement_in_its_batch(
             &streams,
             &stream_ids_named,
+            &streams_taking_their_edits_through_their_staged_graph,
             &staged_graph_of_each_stream_asset,
             &project_repository,
             &mut placements_reconciled,
@@ -331,10 +273,6 @@ impl StreamGraphTransactionExecutor<'_> {
             );
             return Err(refused.refusal);
         }
-        // A named stream brought to its graph as staged in its batch has taken each edit of its
-        // own the documents would have handed it once they hold it.
-        made_live_once_the_documents_hold_them
-            .retain(|(stream_id, _)| !placements_reconciled.holds_a_named_stream(stream_id));
         if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut streams) {
             self.put_back_what_the_refused_transaction_ran(
                 &streams,
@@ -358,7 +296,6 @@ impl StreamGraphTransactionExecutor<'_> {
                     project_repository.the_undo_state_of_each_transaction()?;
                 let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
-                self.make_live_what_the_documents_now_hold(made_live_once_the_documents_hold_them);
                 bring_the_loaded_streams_in_line_with_the_stream_documents_of(
                     self.operations_on_the_loaded_streams,
                     project,
@@ -639,15 +576,24 @@ pub(super) fn close_the_graph_edits_of_each_stream(
     }
 }
 
-/// The graph document of each stream asset `reversal` edits, as the project `project_repository`
-/// holds it with each of the reversal's graph edits of it applied; a stream whose document does
-/// not read yet, one the reversal makes, is left out.
+/// The graph document of each stream asset `reversal` edits or makes: one it makes as the
+/// reversal writes it, and any other as the project `project_repository` holds it, each with
+/// each of the reversal's graph edits of it applied.
 fn the_stream_documents_with_the_reversal_applied(
     project_repository: &ProjectRepository,
     reversal: &ProjectTransactionReversal,
 ) -> Result<BTreeMap<Uuid, StreamGraphDocument>, GraphRequestRefusal> {
     let mut staged: BTreeMap<Uuid, StreamGraphDocument> = BTreeMap::new();
     for operation in &reversal.operations {
+        if let ProjectOperation::StreamDocument(
+            ProjectStreamDocumentOperation::CreateStreamDocument {
+                stream, document, ..
+            },
+        ) = operation
+        {
+            staged.insert(*stream, StreamGraphDocument::from_value(document.clone())?);
+            continue;
+        }
         let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
             stream,
             graph_operation,

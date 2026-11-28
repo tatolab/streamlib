@@ -196,9 +196,9 @@ fn the_convert_node_a_live_connect_places(
 enum WhyConnectPlacesNoConvertNode {
     /// The link is inside a placed stream, not at the stream's own level.
     TheLinkIsAtAPlacedLevel,
-    /// An earlier operation of the transaction has the stream take its edits once the
-    /// documents hold them.
-    TheStreamTakesItsEditsLater,
+    /// An earlier operation of the transaction has the stream take its edits through its
+    /// staged graph.
+    TheStreamTakesItsEditsThroughItsStagedGraph,
 }
 
 /// The refusal of a link only `convert_node` bridges, which `connect` does not place `because`.
@@ -212,10 +212,10 @@ fn the_refusal_of_a_link_only_a_convert_node_bridges(
              is inside a placed stream; add the node and its two links there yourself",
             convert_node.refusal_without_it
         ),
-        WhyConnectPlacesNoConvertNode::TheStreamTakesItsEditsLater => format!(
+        WhyConnectPlacesNoConvertNode::TheStreamTakesItsEditsThroughItsStagedGraph => format!(
             "{}, or connect the link in a transaction of its own: `connect` places that node \
              itself only on a stream that takes the edit live, and an earlier operation of this \
-             transaction has the stream take its edits once the documents hold them",
+             transaction has the stream take its edits through its staged graph",
             convert_node.refusal_without_it
         ),
     };
@@ -270,15 +270,13 @@ fn refuse_a_link_judged_by_the_node_types_of_its_level(
 }
 
 /// One graph operation applied: the operation its answer reports, as the stream it names draws
-/// it; what it made on that running stream; the project operations it records, in order; each
-/// operation a loaded stream takes once the project's documents hold it; the link that
+/// it; what it made on that running stream; the project operations it records, in order; the link that
 /// overrides the input value it sets, when one feeds that input; and each link it made without
 /// judging it, with why, as the stream draws it and as the transaction keeps it.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
     applied_live: Option<OneOperationAppliedLive>,
     project_operations: Vec<ProjectOperation>,
-    made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)>,
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
     links_made_unjudged: Vec<(StreamGraphDocumentLink, String)>,
     links_made_unjudged_as_kept: Vec<ProjectTransactionLinkMadeUnjudged>,

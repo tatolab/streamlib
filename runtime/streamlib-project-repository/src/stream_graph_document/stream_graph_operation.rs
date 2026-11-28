@@ -242,10 +242,10 @@ impl StreamGraphOperation {
         }
     }
 
-    /// Whether a running stream can take the operation only once the project's graph documents
-    /// hold it: it places a stream, or follows an edit inside one, and a running stream places a
-    /// stream as that stream's document is on disk.
-    pub fn reaches_a_running_stream_once_the_documents_hold_it(&self) -> bool {
+    /// Whether a running stream can take the operation only through its graph as a transaction
+    /// stages it, brought to that graph whole: it places a stream, or follows an edit inside one,
+    /// and a running stream places a stream as that stream's document is staged or on disk.
+    pub fn reaches_a_running_stream_only_through_its_staged_graph(&self) -> bool {
         match self {
             Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => {
                 fold.fragment.value.get("type").and_then(Value::as_str)

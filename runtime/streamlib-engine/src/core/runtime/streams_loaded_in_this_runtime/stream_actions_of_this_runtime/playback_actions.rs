@@ -407,8 +407,8 @@ impl Runner {
     }
 
     /// End the playback of `loaded`, which stays held: every instance torn down, its graph
-    /// kept to read and edit and brought to its document when that holds edits it did not take
-    /// live, and its function-node states forgotten so the next start begins fresh. A stream
+    /// kept to read and edit, and its function-node states forgotten so the next start begins
+    /// fresh. A stream
     /// whose graph cannot be put back is unloaded, and refused naming why.
     pub(super) fn stop_the_playback_of_a_held_stream(
         &self,
@@ -419,9 +419,6 @@ impl Runner {
             .run_entered(|| loaded.stop_playback_keeping_the_graph());
         self.forget_the_function_node_states_of_the_stream(loaded.stream_id());
         let Err(not_kept) = playback_stopped else {
-            loaded
-                .log_route()
-                .run_entered(|| loaded.bring_the_stopped_stream_to_its_document());
             return Ok(());
         };
         let why_it_is_unloaded = format!(
@@ -590,8 +587,6 @@ impl Runner {
                 break;
             }
             let stream_id = held.stream_id().to_string();
-            held.log_route()
-                .run_entered(|| held.bring_the_stopped_stream_to_its_document());
             if let Some(why_it_cannot_play) =
                 held.why_its_graph_as_held_keeps_this_stream_from_playing()
             {

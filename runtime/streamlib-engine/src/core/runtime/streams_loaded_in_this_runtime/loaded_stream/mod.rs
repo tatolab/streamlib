@@ -37,9 +37,7 @@ use crate::core::runtime::{
     TeardownProgressNoteOfOneStream,
 };
 use crate::core::{Error, Result};
-use streamlib_runtime_client_contract::local_api_wire_contract::DiagnosticOnTheWire;
 
-mod edits_its_document_holds_not_live;
 mod input_values_set_live;
 mod live_graph_edits;
 pub(crate) use live_graph_edits::InputValueSetOnANode;
@@ -156,9 +154,6 @@ pub struct LoadedStreamInThisRuntime {
     display_name: RwLock<String>,
     /// The project and stream asset the stream is.
     stream_location: StreamLocation,
-    /// Each edit its graph document holds that its running graph did not take, as the
-    /// diagnostic at the part it changes, until the stream is brought to its document.
-    edits_its_document_holds_not_live: Mutex<Vec<DiagnosticOnTheWire>>,
     /// The task that hands each node what a Value wire into one of its settings carried, or
     /// the setting's own value once its wire is taken off, while the stream is started.
     pub(in crate::core::runtime) hand_over_of_what_wires_into_settings_carry:
@@ -346,7 +341,6 @@ impl LoadedStreamInThisRuntime {
             one_writer_of_the_graph_at_a_time: Arc::new(tokio::sync::Mutex::new(())),
             thread_holding_a_graph_edit_batch: Mutex::new(None),
             is_held_stopped: AtomicBool::new(false),
-            edits_its_document_holds_not_live: Mutex::new(Vec::new()),
             hand_over_of_what_wires_into_settings_carry: Mutex::new(None),
             engine_resources_shared_by_every_stream,
             compiler,
@@ -533,12 +527,10 @@ impl LoadedStreamInThisRuntime {
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
     }
 
-    /// This stream's graph as `graph` answers it: its running graph, or, while its graph
-    /// document holds edits the running graph did not take, the document's graph over it; each
-    /// view node with the settings its view's manifest declares among its inputs.
+    /// This stream's graph as `graph` answers it: its running graph, each view node with the
+    /// settings its view's manifest declares among its inputs.
     pub fn the_graph_as_answered(&self) -> Result<serde_json::Value> {
         let mut graph_response = self.the_running_graph_rendered();
-        self.render_the_document_over_the_live_graph_while_edits_are_not_live(&mut graph_response);
         crate::core::nodes::render_the_settings_of_each_view_node_into(
             &mut graph_response.nodes,
             &self.node_types_this_stream_resolves,
