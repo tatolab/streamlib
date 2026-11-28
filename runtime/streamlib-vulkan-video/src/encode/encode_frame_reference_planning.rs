@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Planning a frame's references before its encode is recorded: picture order counts, the H.264
-//! and H.265 codec DPB pipelines, and the DPB slots the frame writes and reads.
+//! and H.265 codec DPB pipelines, and the DPB slots the frame writes and reads; and recording
+//! the frame in its slot once it is coded.
 
 use vulkanalia::vk;
 
@@ -374,5 +375,85 @@ impl SimpleEncoder {
             setup_slot_index,
             reference_slot_indices,
         }
+    }
+}
+
+/// A frame the GPU has coded: what its DPB slot and the codec counters
+/// record of it.
+pub(super) struct CodedFrame {
+    pub(super) frame_type: FrameType,
+    pub(super) setup_slot_index: usize,
+    pub(super) is_reference: bool,
+    pub(super) is_h264: bool,
+    pub(super) is_h265: bool,
+    pub(super) h264_frame_num: u32,
+    pub(super) h264_poc: i32,
+    pub(super) h265_poc: i32,
+}
+
+impl SimpleEncoder {
+    /// Record `coded` in its DPB slot and advance the frame counters, once
+    /// its coding has completed.
+    pub(super) fn record_the_coded_frame(&mut self, coded: CodedFrame) {
+        let CodedFrame {
+            frame_type,
+            setup_slot_index,
+            is_reference,
+            is_h264,
+            is_h265,
+            h264_frame_num,
+            h264_poc,
+            h265_poc,
+        } = coded;
+        let h265_pic_type = match frame_type {
+            FrameType::Idr => vk::video::STD_VIDEO_H265_PICTURE_TYPE_IDR,
+            FrameType::I => vk::video::STD_VIDEO_H265_PICTURE_TYPE_I,
+            FrameType::P => vk::video::STD_VIDEO_H265_PICTURE_TYPE_P,
+            FrameType::B => vk::video::STD_VIDEO_H265_PICTURE_TYPE_B,
+        };
+        // --- Update DPB slot ---
+        // Only reference frames (IDR/I/P) persist in the DPB.
+        // B-frames are non-reference: the slot can be reused immediately.
+        self.dpb_slots[setup_slot_index].in_use = is_reference;
+        // Record the picture type so references carry the correct type
+        // (e.g. IDR references are marked as IDR, not P).
+        self.dpb_slots[setup_slot_index].pic_type = match frame_type {
+            FrameType::Idr => vk::video::STD_VIDEO_H264_PICTURE_TYPE_IDR,
+            FrameType::I => vk::video::STD_VIDEO_H264_PICTURE_TYPE_I,
+            FrameType::P => vk::video::STD_VIDEO_H264_PICTURE_TYPE_P,
+            FrameType::B => vk::video::STD_VIDEO_H264_PICTURE_TYPE_B,
+        };
+        self.dpb_slots[setup_slot_index].h265_pic_type = h265_pic_type;
+        if is_h265 && self.h265_encoder.is_some() {
+            // H.265: use DPB-managed POC
+            self.dpb_slots[setup_slot_index].frame_num = self.frame_count;
+            self.dpb_slots[setup_slot_index].poc = h265_poc;
+        } else if is_h264 && let Some(enc) = self.h264_encoder.as_mut() {
+            // H.264: use DPB-provided frame_num and POC
+            self.dpb_slots[setup_slot_index].frame_num = h264_frame_num as u64;
+            self.dpb_slots[setup_slot_index].poc = h264_poc;
+
+            // Advance H.264-specific counters via VkVideoEncoderH264
+            if is_reference {
+                let max_frame_num = 1u32 << (enc.log2_max_frame_num_minus4 + 4);
+                enc.frame_num = (enc.frame_num + 1) % max_frame_num;
+            }
+            let max_poc_lsb = 1i32 << (enc.log2_max_pic_order_cnt_lsb_minus4 + 4);
+            enc.poc_lsb = (enc.poc_lsb + 2) % max_poc_lsb;
+        } else {
+            // Fallback: use poc_counter
+            self.dpb_slots[setup_slot_index].frame_num = self.frame_count;
+            self.dpb_slots[setup_slot_index].poc =
+                if self.codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
+                    self.poc_counter as i32
+                } else {
+                    (self.poc_counter * 2) as i32
+                };
+        }
+
+        // --- Advance counters ---
+        self.frame_count += 1;
+        self.poc_counter += 1;
+        self.encode_order_count += 1;
     }
 }
