@@ -53,7 +53,6 @@ from ._class_node_pins import InputPin as InputPin
 from ._class_node_pins import OutputPin as OutputPin
 from ._class_node_pins import PinGroup as PinGroup
 from ._input_declaration_annotations import InputValueLifetime as InputValueLifetime
-from ._input_declaration_annotations import SettingOnly as SettingOnly
 from ._input_declaration_annotations import StreamDelivery as StreamDelivery
 from ._input_declaration_annotations import WireOnly as WireOnly
 from ._pin_types import Asset as Asset
@@ -267,7 +266,6 @@ __all__ = [
     "InputValueLifetime",
     "OutputPin",
     "PinGroup",
-    "SettingOnly",
     "StreamDelivery",
     "Tensor",
     "Texture",

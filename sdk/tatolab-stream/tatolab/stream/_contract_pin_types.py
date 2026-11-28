@@ -90,7 +90,12 @@ type PinAnnotationName = Literal[
 
 
 type NodeInputMode = Literal["wire_or_value", "wire_only", "setting_only"]
-"""Whether an input takes a wire, a stored value, or both."""
+"""Whether an input takes a wire, a stored value, or both.
+
+The variant the engine hands its value to serializes as contract 4's `setting_only`, and
+a `read` beside it, which a `tatolab-stream` released before every input was live still
+stamps, is ignored: every input is read each run.
+"""
 
 
 class BooleanPinType(TypedDict):

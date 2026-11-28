@@ -4,7 +4,6 @@
 use super::graph_variable_node_types::the_settings_of_a_graph_variable_node;
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeInputMode, PinDeclaration, PinType, PortDescriptor,
-    SettingReadTime,
 };
 use crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference;
 use crate::core::graph::graph_variable_resolution::{
@@ -36,9 +35,7 @@ fn the_settings_of(import_path: &str) -> Vec<(String, PinType, bool, Option<Node
         .collect()
 }
 
-const READ_AT_SETUP: Option<NodeInputMode> = Some(NodeInputMode::SettingOnly {
-    read: SettingReadTime::AtSetup,
-});
+const READ_AT_SETUP: Option<NodeInputMode> = Some(NodeInputMode::HandedToItsNode);
 
 /// Mental-revert: reading `variable` and `node_reference` from a config, as before, declares no
 /// setting, so neither type lists one.

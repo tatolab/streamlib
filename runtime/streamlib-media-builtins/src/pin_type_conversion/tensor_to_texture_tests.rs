@@ -271,7 +271,7 @@ fn the_catalog_lists_its_format_as_a_menu_read_each_run() {
     assert_eq!(format["default_value"], serde_json::json!("rgba8_unorm"));
     assert_eq!(
         format["input_mode"],
-        serde_json::json!({"mode": "setting_only", "read": "each_run"})
+        serde_json::json!({"mode": "setting_only"})
     );
     assert!(
         descriptor

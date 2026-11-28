@@ -10,11 +10,8 @@ fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
 }
 
 fn a_setting(name: &str) -> PortDescriptor {
-    a_typed_port(name, PinType::Float { exact_size: None }).with_input_mode(
-        NodeInputMode::SettingOnly {
-            read: SettingReadTime::AtSetup,
-        },
-    )
+    a_typed_port(name, PinType::Float { exact_size: None })
+        .with_input_mode(NodeInputMode::HandedToItsNode)
 }
 
 fn a_node_type(inputs: Vec<PortDescriptor>, outputs: Vec<PortDescriptor>) -> NodeDescriptor {

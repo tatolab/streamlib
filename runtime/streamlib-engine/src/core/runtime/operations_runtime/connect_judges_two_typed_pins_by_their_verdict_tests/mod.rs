@@ -18,7 +18,7 @@ use crate::core::descriptors::{
     DeclaredPinType, FreePinConversion, FunctionNodeLanguage, NamedPinTypeImportPath,
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, NodeKind,
     PinDeclaration, PinFlow, PinLinkOutcome, PinLinkRefusal, PinType, PortDescriptor,
-    SettingReadTime, TexturePixelFormat,
+    TexturePixelFormat,
 };
 use crate::core::graph::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
@@ -174,9 +174,7 @@ fn register_the_verdict_fixture_node_types() {
             vec![
                 a_typed_port("count", PinType::Integer { exact_size: None }),
                 a_typed_port("label", PinType::String {}),
-                a_typed_port("gain", float()).with_input_mode(NodeInputMode::SettingOnly {
-                    read: SettingReadTime::AtSetup,
-                }),
+                a_typed_port("gain", float()).with_input_mode(NodeInputMode::HandedToItsNode),
             ],
             Vec::new(),
         ));

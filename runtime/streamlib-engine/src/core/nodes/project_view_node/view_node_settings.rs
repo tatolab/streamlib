@@ -8,9 +8,7 @@
 //! of the node's config, checked by the view's `settings` schema as before, so `graph` serves the
 //! same config keys.
 
-use crate::core::descriptors::{
-    NodeDescriptor, NodeInputMode, PinDeclaration, PortDescriptor, SettingReadTime,
-};
+use crate::core::descriptors::{NodeDescriptor, NodeInputMode, PinDeclaration, PortDescriptor};
 use crate::core::graph::input_values::{
     TakesAWireRendered, the_settings_rendered_reading_the_values_held,
 };
@@ -47,9 +45,7 @@ fn a_view_setting_declared(setting: ConfigFieldDescribedAsASetting) -> PortDescr
             PortDescriptor::of_a_pin_declared_or_not(setting.name, setting.description, false, None)
         }
     }
-    .with_input_mode(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    });
+    .with_input_mode(NodeInputMode::HandedToItsNode);
     match setting.default_value {
         Some(default) => port.with_pin_default(default),
         None => port,

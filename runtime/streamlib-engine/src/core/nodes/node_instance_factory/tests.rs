@@ -264,11 +264,9 @@ fn carried_as_a_value(port: PortDescriptor) -> PortDescriptor {
     })
 }
 
-/// `port` as a setting read each run.
-fn a_setting_read_each_run(port: PortDescriptor) -> PortDescriptor {
-    port.with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly {
-        read: crate::core::descriptors::SettingReadTime::EachRun,
-    })
+/// `port` as an input the engine hands its node.
+fn an_input_handed_to_its_node(port: PortDescriptor) -> PortDescriptor {
+    port.with_input_mode(crate::core::descriptors::NodeInputMode::HandedToItsNode)
 }
 
 /// Whether `refusal` refuses the port `level` of `path` as declared twice.
@@ -283,7 +281,7 @@ fn refuses_level_declared_twice(refusal: &Error, path: &str) -> bool {
 #[test]
 fn an_output_sharing_the_name_of_the_setting_it_publishes_is_registered() {
     let descriptor = descriptor_for("my_app.panels:Level")
-        .with_input(a_setting_read_each_run(carried_as_a_value(port_named(
+        .with_input(an_input_handed_to_its_node(carried_as_a_value(port_named(
             "level",
         ))))
         .with_output(carried_as_a_value(port_named("level")));
@@ -296,7 +294,7 @@ fn an_output_that_is_no_value_sharing_a_settings_name_is_refused_by_name() {
     let path = "my_app.panels:Level";
     assert_refused_by_either_registration(
         descriptor_for(path)
-            .with_input(a_setting_read_each_run(carried_as_a_value(port_named(
+            .with_input(an_input_handed_to_its_node(carried_as_a_value(port_named(
                 "level",
             ))))
             .with_output(port_named("level")),

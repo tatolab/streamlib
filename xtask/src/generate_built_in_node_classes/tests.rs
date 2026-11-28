@@ -37,7 +37,7 @@ fn texture_tinter_descriptor_with_settings() -> Value {
                 "required": false, "delivery_profile": null,
                 "pin_type": {"kind": "is", "pin_type": {"type": "integer", "exact_size": "uint8"}},
                 "flow": "value",
-                "input_mode": {"mode": "setting_only", "read": "at_setup"},
+                "input_mode": {"mode": "setting_only"},
                 "default_value": 3
             },
             {
@@ -45,7 +45,7 @@ fn texture_tinter_descriptor_with_settings() -> Value {
                 "required": false, "delivery_profile": null,
                 "pin_type": {"kind": "is", "pin_type": {"type": "menu", "option_names": ["warm", "cool"]}},
                 "flow": "value",
-                "input_mode": {"mode": "setting_only", "read": "each_run"},
+                "input_mode": {"mode": "setting_only"},
                 "default_value": "warm"
             }
         ],
@@ -70,7 +70,7 @@ from typing import Annotated, ClassVar, Literal
 from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin, OutputPin
 from ._description import Description
-from ._input_declaration_annotations import SettingOnly, StreamDelivery
+from ._input_declaration_annotations import HandedToItsNode, StreamDelivery
 from ._pin_types import Texture, UInt8
 
 __all__ = [
@@ -100,13 +100,13 @@ class TextureTinter(BuiltInNode):
 
     strength: Annotated[
         UInt8,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("How strongly each is tinted."),
     ] = 3
 
     tint: Annotated[
         Literal["warm", "cool"],
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The tint."),
     ] = "warm"
 
@@ -210,7 +210,7 @@ fn a_port_typed_by_a_setting_renders_as_a_pin_typed_by_that_setting() {
              "pin_type": typed_by_the_setting, "flow": "value"},
             {"name": "bundle_type", "description": "The bundle carried",
              "pin_type": {"kind": "is", "pin_type": {"type": "pin_type_choice"}}, "flow": "value",
-             "input_mode": {"mode": "setting_only", "read": "at_setup"}}
+             "input_mode": {"mode": "setting_only"}}
         ],
         "outputs": [
             {"name": "passed", "description": "What passes on", "pin_type": typed_by_the_setting,
@@ -232,7 +232,7 @@ fn a_port_typed_by_a_setting_renders_as_a_pin_typed_by_that_setting() {
     );
     assert!(
         rendered.contains(
-            "    bundle_type: Annotated[\n        PinTypeChoice | None,\n        SettingOnly(),\n"
+            "    bundle_type: Annotated[\n        PinTypeChoice | None,\n        HandedToItsNode(),\n"
         ),
         "{rendered}"
     );

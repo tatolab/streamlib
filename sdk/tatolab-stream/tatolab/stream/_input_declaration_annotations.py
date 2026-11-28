@@ -3,9 +3,9 @@
 
 """How a class node's input takes its value and its messages, each written as one object on its annotation.
 
-`radius: Annotated[float, SettingOnly()] = 4.0` declares a field that is read at setup, from its
-set value or from a Value wire, each change of either assigned to the field live. `WireOnly()` declares a field that takes only a wire, and `InputValueLifetime("reset")`
-one whose live value is forgotten at Stop. `voice: InputPin[Annotated[Audio,
+`HandedToItsNode()` declares an input of one of the runtime's own nodes whose value the engine
+hands its node, from its set value or from a Value wire. `WireOnly()` declares an input that
+takes only a wire, and `InputValueLifetime("reset")` one whose live value is forgotten at Stop. `voice: InputPin[Annotated[Audio,
 StreamDelivery("ordered")]]` declares how a Stream input reads its messages. None of them is a
 pin annotation of the contract: each says how the engine serves the input, so each is sent as a
 key of the port beside its pin declaration.
@@ -19,8 +19,7 @@ __all__ = [
     "INPUT_DECLARATION_ANNOTATION_CLASSES",
     "InputValueLifetime",
     "PublishedOnAnOutput",
-    "SettingOnly",
-    "SettingReadTime",
+    "HandedToItsNode",
     "StreamDelivery",
     "WireOnly",
 ]
@@ -47,47 +46,19 @@ class _InputModeAnnotation:
         return f"{type(self).__name__}()"
 
 
-type SettingReadTime = Literal["at_setup", "each_run"]
-"""When a setting is read, as the engine names it."""
-
-
 @final
-class SettingOnly:
-    """A field the node reads at setup: `Annotated[int, SettingOnly()]`.
+class HandedToItsNode(_InputModeAnnotation):
+    """An input whose value the engine hands its node, which only the runtime's own nodes
+    declare: `Annotated[str, HandedToItsNode()]`.
 
     It takes a set value or a wire from an output that flows as a value, which the engine reads
-    in the node's place, handing the node each new value it carries; a change is assigned to the
-    field live and rebuilds nothing. `SettingOnly(read="each_run")` is read on every run, which
-    only the runtime's own nodes declare."""
+    in the node's place, handing the node each new value it carries."""
 
-    __slots__ = ("_read",)
-
-    def __init__(self, *, read: SettingReadTime = "at_setup") -> None:
-        read_times = get_args(SettingReadTime.__value__)
-        if read not in read_times:
-            raise ValueError(
-                f"SettingOnly(read=...) takes one of {', '.join(repr(each) for each in read_times)}, "
-                f"got {read!r}."
-            )
-        self._read: SettingReadTime = read
-
-    @property
-    def read(self) -> SettingReadTime:
-        """When the setting is read, as written."""
-        return self._read
+    __slots__ = ()
 
     def input_mode(self) -> dict[str, str]:
         """The input mode it states, as the engine reads it."""
-        return {"mode": "setting_only", "read": self._read}
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, SettingOnly) and other._read == self._read
-
-    def __hash__(self) -> int:
-        return hash((SettingOnly, self._read))
-
-    def __repr__(self) -> str:
-        return "SettingOnly()" if self._read == "at_setup" else f"SettingOnly(read={self._read!r})"
+        return {"mode": "setting_only"}
 
 
 @final
@@ -192,7 +163,7 @@ class StreamDelivery:
 
 
 INPUT_DECLARATION_ANNOTATION_CLASSES: Final[tuple[type, ...]] = (
-    SettingOnly,
+    HandedToItsNode,
     WireOnly,
     PublishedOnAnOutput,
     InputValueLifetime,

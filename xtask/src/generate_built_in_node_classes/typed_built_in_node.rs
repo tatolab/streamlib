@@ -142,16 +142,7 @@ fn render_input(
     }
     let mode = match input.input_mode.as_ref() {
         None => None,
-        Some(input_mode) if input_mode.mode == "setting_only" => {
-            if !matches!(input_mode.read.as_deref(), Some("at_setup" | "each_run")) {
-                bail!(
-                    "{port_label} is an input taking no wire read {:?}, and a built-in's is read \
-                     at setup or each run",
-                    input_mode.read
-                );
-            }
-            Some("SettingOnly")
-        }
+        Some(input_mode) if input_mode.mode == "setting_only" => Some("HandedToItsNode"),
         Some(input_mode) if input_mode.mode == "wire_only" => Some("WireOnly"),
         Some(input_mode) if input_mode.mode == "wire_or_value" => None,
         Some(input_mode) => bail!("{port_label} takes its value as `{}`", input_mode.mode),

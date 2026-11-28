@@ -32,7 +32,7 @@ from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_nam
 from ._input_declaration_annotations import (
     InputValueLifetime,
     PublishedOnAnOutput,
-    SettingOnly,
+    HandedToItsNode,
     StreamDelivery,
     WireOnly,
 )
@@ -352,7 +352,7 @@ class _ClassNodeReading:
     ) -> tuple[DeclaredPort, Optional[DeclaredPort]]:
         """The input port a field declares, and the output of its name it is published on when
         it is `PublishedOnAnOutput()`."""
-        input_modes, annotation = _taken_off(annotation, (SettingOnly, WireOnly))
+        input_modes, annotation = _taken_off(annotation, (HandedToItsNode, WireOnly))
         lifetimes, annotation = _taken_off(annotation, (InputValueLifetime,))
         published, annotation = _taken_off(annotation, (PublishedOnAnOutput,))
         self._refuse_what_only_the_runtimes_own_node_declares(attribute_name, input_modes, published)
@@ -372,7 +372,7 @@ class _ClassNodeReading:
                 pin=attribute_name,
             )
         default = self._default_of(attribute_name)
-        a_setting = bool(input_modes) and isinstance(input_modes[0], SettingOnly)
+        a_setting = bool(input_modes) and isinstance(input_modes[0], HandedToItsNode)
         declared = self._read_field(attribute_name, annotation, default, a_setting=a_setting)
         port: DeclaredPort = {
             "name": self._cast_port_name(attribute_name),
@@ -384,7 +384,7 @@ class _ClassNodeReading:
         if input_modes:
             port["input_mode"] = input_modes[0].input_mode()  # pyright: ignore[reportAttributeAccessIssue]
         elif _chooses_a_pin_type(declared.declaration):
-            port["input_mode"] = SettingOnly().input_mode()
+            port["input_mode"] = HandedToItsNode().input_mode()
         else:
             # Stated, not left to the engine's default for a node of its kind, since the field
             # reads whole any value its pin type takes, from its wire or set on it.
@@ -409,7 +409,7 @@ class _ClassNodeReading:
         if self._of_the_runtimes_own_node:
             return
         only_the_runtimes = [*published] + [
-            mode for mode in input_modes if isinstance(mode, SettingOnly) and mode.read != "at_setup"
+            mode for mode in input_modes if isinstance(mode, HandedToItsNode)
         ]
         if only_the_runtimes:
             raise self._refusal(
@@ -664,9 +664,9 @@ class _NodeFunctionReading(_ClassNodeReading):
                 "pin_has_no_type",
                 pin=name,
             )
-        input_modes, _ = _taken_off(arguments[0], (SettingOnly,))
+        input_modes, _ = _taken_off(arguments[0], (HandedToItsNode,))
         if not input_modes and annotation is not written:
-            input_modes, _ = _taken_off(annotation, (SettingOnly,))
+            input_modes, _ = _taken_off(annotation, (HandedToItsNode,))
         if input_modes:
             raise self._refusal(
                 f"`{self._node}`'s input `{name}` carries `{input_modes[0]!r}`, and every input of "
@@ -716,20 +716,10 @@ class _NodeFunctionReading(_ClassNodeReading):
         self, attribute_name: str, annotation: Any, description: Optional[str]
     ) -> ClassNodePinGroup:
         """The group a `PinGroup[Slot]` parameter declares, its slot read as a class's is, each of
-        its values live: a slot value that is a setting, or that chooses a pin type, is refused."""
+        its values live: a slot value that chooses a pin type is refused."""
         pin_group = super()._pin_group(attribute_name, annotation, description)
         for member in pin_group.members:
             slot_member = f"{attribute_name}{PIN_GROUP_SLOT_PORT_NAME_SEPARATOR}{member.attribute}"
-            if member.a_setting:
-                raise self._refusal(
-                    f"`{self._node}`'s pin group `{attribute_name}` holds the setting "
-                    f"`{member.attribute}`, and every input of a node function is live: a "
-                    f"computed value whose build reads the group builds again when it changes. "
-                    f"To fix: drop its `SettingOnly()`, and read `{attribute_name}` in a "
-                    f"`computed(...)` build.",
-                    "setting_on_a_node_function",
-                    pin=slot_member,
-                )
             if member.form == "field" and _chooses_a_pin_type(member.pin_declaration):
                 raise self._refusal(
                     f"`{self._node}`'s pin group `{attribute_name}` holds `{member.attribute}`, "

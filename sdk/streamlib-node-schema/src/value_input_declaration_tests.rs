@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use crate::pin_type::{IntegerSize, NodeInputMode, PinType, SettingReadTime};
+use crate::pin_type::{IntegerSize, NodeInputMode, PinType};
 use crate::value_input_declaration::the_input_taking_no_wire;
 
 #[test]
@@ -14,12 +14,7 @@ fn a_value_input_is_read_each_run_holding_its_default() {
     let input =
         the_input_taking_no_wire("sample_rate", "The rate.", pin_type.clone(), json!(48_000));
     assert_eq!(input.name, "sample_rate");
-    assert_eq!(
-        input.input_mode,
-        Some(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun
-        })
-    );
+    assert_eq!(input.input_mode, Some(NodeInputMode::HandedToItsNode));
     assert_eq!(input.pin_default, Some(json!(48_000)));
     assert_eq!(input.delivery_profile, None);
     let pin_declaration = input

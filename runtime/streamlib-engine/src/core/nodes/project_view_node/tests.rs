@@ -160,9 +160,7 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
     );
     assert_eq!(
         setting.input_mode,
-        Some(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun
-        }),
+        Some(NodeInputMode::HandedToItsNode),
         "the input is a setting read each run"
     );
     assert_eq!(

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ._description import description_and_annotation_without_it
-from ._input_declaration_annotations import SettingOnly
+from ._input_declaration_annotations import HandedToItsNode
 from ._node_declaration_refusal import NodeDeclarationRefusal
 from ._pin_declaration import NO_DEFAULT, read_pin_declaration
 
@@ -59,7 +59,7 @@ def the_settings_a_graph_generator_promotes(
             "name": parameter.name,
             "description": description or "",
             "pin_declaration": declared.declaration,
-            "input_mode": SettingOnly().input_mode(),
+            "input_mode": HandedToItsNode().input_mode(),
         }
         if declared.default_value is not NO_DEFAULT:
             setting["pin_default"] = declared.default_value

@@ -13,7 +13,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use crate::core::descriptors::{
     NodeDescriptor, NodeInputMode, NodeKind, NodeValueLifetime, PinDeclaration, PinGroupSlotCount,
-    PortDescriptor, SettingReadTime,
+    PortDescriptor,
 };
 use crate::core::graph::PortInfo;
 use crate::core::graph::input_values::the_input_port_takes_a_value;
@@ -106,12 +106,12 @@ fn an_input_port_described(
         ..PortInfo::from(port)
     };
     let takes_a_value = the_input_port_takes_a_value(Some(node_kind), &port_info);
-    let (mode, read) = NodeTypeInputMode::of(mode);
+    let mode = NodeTypeInputMode::of(mode);
     NodeTypeInputDescribed {
         port: a_port_described(port),
         mode: Some(mode),
         takes_a_wire: port_info.takes_a_wire_on_a_node_of(&descriptor.node_class_import_path),
-        read,
+        read: mode.read_time(),
         default_value: port.pin_default.clone(),
         lifetime: Some(port.lifetime),
         value_json_schema: declared
@@ -134,9 +134,7 @@ fn the_mode_of_an_input_declaring_none(
         .as_ref()
         .is_some_and(|pin| !pin.pin_type.takes_a_wire())
     {
-        return NodeInputMode::SettingOnly {
-            read: SettingReadTime::AtSetup,
-        };
+        return NodeInputMode::HandedToItsNode;
     }
     if the_input_port_takes_a_value(Some(node_kind), &port_info) {
         NodeInputMode::WireOrValue
@@ -153,9 +151,7 @@ fn a_setting_described(setting: ConfigFieldDescribedAsASetting) -> NodeTypeInput
         annotations: setting.annotations.clone(),
         ..PinDeclaration::exactly(pin_type)
     });
-    let (mode, read) = NodeTypeInputMode::of(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    });
+    let mode = NodeTypeInputMode::of(NodeInputMode::HandedToItsNode);
     NodeTypeInputDescribed {
         port: NodeTypePortDescribed {
             name: setting.name,
@@ -168,7 +164,7 @@ fn a_setting_described(setting: ConfigFieldDescribedAsASetting) -> NodeTypeInput
         },
         mode: Some(mode),
         takes_a_wire: false,
-        read,
+        read: mode.read_time(),
         default_value: setting.default_value,
         lifetime: Some(NodeValueLifetime::Kept),
         value_json_schema: declared

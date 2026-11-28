@@ -419,7 +419,7 @@ async fn a_built_in_node_type_is_described_with_each_input_mode_value_schema_and
               "pin_type": { "kind": "is", "pin_type": { "type": "texture" } }, "flow": "stream",
               "mode": "wire_only", "takes_a_wire": true, "lifetime": "kept" },
             { "name": "frame_width", "documentation": "", "mode": "setting_only",
-              "takes_a_wire": false, "read": "at_setup", "lifetime": "kept",
+              "takes_a_wire": false, "read": "each_run", "lifetime": "kept",
               "value_json_schema": {
                   "type": ["integer", "null"], "format": "uint32", "minimum": 0,
                   "default": null,

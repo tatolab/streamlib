@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use crate::core::descriptors::{
     DeclaredPinType, NodeDescriptor, NodeInputMode, NodeValueLifetime, PinAnnotations,
-    PinDeclaration, PinFlow, PinType, PortDescriptor, SettingReadTime,
+    PinDeclaration, PinFlow, PinType, PortDescriptor,
 };
 use crate::core::error::Result;
 use crate::core::graph::graph_interface_resolution::{
@@ -115,16 +115,14 @@ pub(crate) fn the_node_type_of_a_graph_input() -> Result<NodeDescriptor> {
             vec![GRAPH_INPUT_VALUE_FORMER_NAME.to_string()],
             true,
         )
-        .with_input_mode(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun,
-        }),
+        .with_input_mode(NodeInputMode::HandedToItsNode),
     ];
     descriptor.outputs = vec![value_port("What enters the Input.", Vec::new(), false)];
     Ok(descriptor)
 }
 
-/// The descriptor of the `GraphOutput` node type: its settings `port` and `pin_type`, each read
-/// at setup, and its `value` input, the port linked into it, of the type `pin_type` chooses,
+/// The descriptor of the `GraphOutput` node type: its settings `port` and `pin_type`, and its
+/// `value` input, the port linked into it, of the type `pin_type` chooses,
 /// else of that port.
 pub(crate) fn the_node_type_of_a_graph_output() -> Result<NodeDescriptor> {
     let mut descriptor = node_type_of_the_graph_itself(
@@ -143,7 +141,7 @@ pub(crate) fn the_node_type_of_a_graph_output() -> Result<NodeDescriptor> {
 }
 
 /// A setting of a node type the runtime owns, named `name` of `pin_type`, stating
-/// `description`, read at setup, reading `pin_default` while it holds no value, and unset only
+/// `description`, handed to its node, reading `pin_default` while it holds no value, and unset only
 /// when `may_be_unset` says so.
 pub(super) fn setting(
     name: &str,
@@ -161,9 +159,7 @@ pub(super) fn setting(
             ..PinDeclaration::exactly(pin_type)
         },
     )
-    .with_input_mode(NodeInputMode::SettingOnly {
-        read: SettingReadTime::AtSetup,
-    });
+    .with_input_mode(NodeInputMode::HandedToItsNode);
     match pin_default {
         Some(pin_default) => port.with_pin_default(pin_default),
         None => port,
@@ -172,12 +168,9 @@ pub(super) fn setting(
 
 /// A setting of a `GraphInput` named `name` of `pin_type`, stating `description`, that holds
 /// one annotation of its `value` and may be unset. The running node never reads it: it changes
-/// what `graph` serves on `value` and how a value set there is checked, so it is read each run
-/// and a change rebuilds nothing.
+/// what `graph` serves on `value` and how a value set there is checked.
 fn annotation_setting(name: &str, description: &str, pin_type: PinType) -> PortDescriptor {
-    setting(name, description, pin_type, true, None).with_input_mode(NodeInputMode::SettingOnly {
-        read: SettingReadTime::EachRun,
-    })
+    setting(name, description, pin_type, true, None)
 }
 
 /// The `port` setting: the name the interface node declares, a String every node holds.

@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::NodeClassImportPath;
-use crate::core::descriptors::{
-    DeclaredPinType, NodeInputMode, PinType, PortDescriptor, SettingReadTime,
-};
+use crate::core::descriptors::{DeclaredPinType, NodeInputMode, PinType, PortDescriptor};
 use crate::core::graph::PortInfo;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
@@ -76,13 +74,8 @@ fn a_set_variable_takes_any_type_on_value_and_a_get_variable_gives_any_type_on_v
             .iter()
             .map(|input| (input.name.as_str(), input.input_mode))
             .collect::<Vec<_>>(),
-        [(
-            "variable",
-            Some(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup
-            })
-        )],
-        "a GetVariable takes only its `variable`, a setting read at setup"
+        [("variable", Some(NodeInputMode::HandedToItsNode))],
+        "a GetVariable takes only its `variable`, an input handed to its node"
     );
     assert_eq!(
         get.outputs
@@ -121,7 +114,7 @@ fn every_setting_of_a_node_type_of_the_graph_itself_is_described_as_taking_no_wi
                 .iter()
                 .find(|declared| declared.name == input.port.name)
                 .and_then(|declared| declared.input_mode)
-                .is_some_and(NodeInputMode::is_a_setting);
+                .is_some_and(NodeInputMode::is_handed_to_its_node);
             assert_eq!(
                 input.takes_a_wire, !is_a_setting,
                 "`{}` of {node_type}",

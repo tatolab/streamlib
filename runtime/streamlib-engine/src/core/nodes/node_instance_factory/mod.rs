@@ -821,7 +821,7 @@ fn publishes_the_setting_of_its_name(input: &PortDescriptor, output: &PortDescri
     else {
         return false;
     };
-    input.is_a_setting() && input_pin.pin_type == output_pin.pin_type
+    input.is_handed_to_its_node() && input_pin.pin_type == output_pin.pin_type
 }
 
 /// Refuse a port name not in cast form, and one declared twice: an output takes the name of an

@@ -14,7 +14,7 @@ from typing import Annotated, ClassVar, Literal
 from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin, OutputPin
 from ._description import Description
-from ._input_declaration_annotations import SettingOnly, StreamDelivery
+from ._input_declaration_annotations import HandedToItsNode, StreamDelivery
 from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 from ._pin_types import Audio, Tensor, Texture, UInt32
 
@@ -150,7 +150,7 @@ class BreakBundle(BuiltInNode):
 
     bundle_type: Annotated[
         PinTypeChoice | None,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The bundle the node carries: one a node type of the stream declares."),
     ] = None
 
@@ -307,7 +307,7 @@ class MakeBundle(BuiltInNode):
 
     bundle_type: Annotated[
         PinTypeChoice | None,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The bundle the node carries: one a node type of the stream declares."),
     ] = None
 
@@ -349,19 +349,19 @@ class TensorToAudio(BuiltInNode):
 
     attribute: Annotated[
         str,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The attribute of each Array frame read as the block's samples."),
     ] = "samples"
 
     channel_names: Annotated[
         list[str],
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The names of the channels `channels` carries, one per row of the attribute."),
     ] = ["value"]
 
     sample_rate: Annotated[
         UInt32,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The sample rate `channels` states, in samples per second per channel."),
     ] = 48000
 
@@ -405,13 +405,13 @@ class TensorToTexture(BuiltInNode):
 
     attribute: Annotated[
         str,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The attribute of each Array frame read as the image."),
     ] = "image"
 
     format: Annotated[
         Literal["rgba8_unorm", "rgba8_unorm_srgb", "bgra8_unorm", "bgra8_unorm_srgb", "rgba16_float", "rgba32_float"],
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The texture format each Image frame states, by its wire name."),
     ] = "rgba8_unorm"
 

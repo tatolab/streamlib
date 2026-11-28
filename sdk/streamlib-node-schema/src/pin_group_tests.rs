@@ -5,7 +5,7 @@
 
 use crate::descriptors::PortDescriptor;
 use crate::pin_group::{PinGroupDescriptor, PinGroupSlotCount};
-use crate::pin_type::{NodeInputMode, PinDeclaration, PinType, SettingReadTime};
+use crate::pin_type::{NodeInputMode, PinDeclaration, PinType};
 
 fn a_float_input(input_mode: Option<NodeInputMode>) -> PortDescriptor {
     let input = PortDescriptor::new(
@@ -39,14 +39,12 @@ fn a_slot_holding_an_input_that_takes_a_wire_follows_its_wires() {
 }
 
 #[test]
-fn a_slot_holding_only_settings_or_outputs_has_its_count_set() {
-    for read in [SettingReadTime::AtSetup, SettingReadTime::EachRun] {
-        let setting = a_float_input(Some(NodeInputMode::SettingOnly { read }));
-        assert_eq!(
-            a_group_of(vec![setting], Vec::new()).slot_count(),
-            PinGroupSlotCount::SetByItsInput
-        );
-    }
+fn a_slot_holding_only_inputs_handed_to_its_node_or_outputs_has_its_count_set() {
+    let handed = a_float_input(Some(NodeInputMode::HandedToItsNode));
+    assert_eq!(
+        a_group_of(vec![handed], Vec::new()).slot_count(),
+        PinGroupSlotCount::SetByItsInput
+    );
     assert_eq!(
         a_group_of(Vec::new(), vec![a_float_input(None)]).slot_count(),
         PinGroupSlotCount::SetByItsInput

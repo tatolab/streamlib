@@ -249,7 +249,7 @@ impl Graph {
             .v(node_run_id)
             .first()
             .is_some_and(|node| match node.input_port(input) {
-                Some(port) => port.is_a_setting(),
+                Some(port) => port.is_handed_to_its_node(),
                 None => self.is_a_schema_setting_of_a_function_node_run_on_its_own(
                     node,
                     node_run_id,

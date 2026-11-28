@@ -363,9 +363,9 @@ fn different_meanings_warn_and_never_block() {
     );
 }
 
-fn a_setting(read: SettingReadTime, pin_type: &PinType) -> PinLinkInputEnd<'_> {
+fn an_input_handed_to_its_node(pin_type: &PinType) -> PinLinkInputEnd<'_> {
     PinLinkInputEnd {
-        input_mode: Some(NodeInputMode::SettingOnly { read }),
+        input_mode: Some(NodeInputMode::HandedToItsNode),
         ..an_input(pin_type)
     }
 }
@@ -378,14 +378,14 @@ fn a_value_output(pin_type: &PinType) -> PinLinkEnd<'_> {
 }
 
 #[test]
-fn a_value_wire_into_a_setting_read_at_setup_connects_as_its_types_do() {
+fn a_value_wire_into_an_input_handed_to_its_node_connects_as_its_types_do() {
     for output in [an_output(&float()), a_value_output(&float())] {
-        let verdict = pin_link_verdict(output, a_setting(SettingReadTime::AtSetup, &float()), &[]);
+        let verdict = pin_link_verdict(output, an_input_handed_to_its_node(&float()), &[]);
         assert_eq!(verdict.outcome, PinLinkOutcome::Connects, "{verdict:?}");
     }
     let verdict = pin_link_verdict(
         a_value_output(&float()),
-        a_setting(SettingReadTime::AtSetup, &integer()),
+        an_input_handed_to_its_node(&integer()),
         &[],
     );
     assert_eq!(
@@ -395,27 +395,17 @@ fn a_value_wire_into_a_setting_read_at_setup_connects_as_its_types_do() {
 }
 
 #[test]
-fn a_stream_or_a_trigger_into_a_setting_is_refused_naming_the_sampling_fix() {
-    for (output_flow, pin_type, read) in [
-        (PinFlow::Stream, float(), SettingReadTime::AtSetup),
-        (
-            PinFlow::Trigger,
-            PinType::Trigger {},
-            SettingReadTime::AtSetup,
-        ),
-        (PinFlow::Stream, float(), SettingReadTime::EachRun),
-        (
-            PinFlow::Trigger,
-            PinType::Trigger {},
-            SettingReadTime::EachRun,
-        ),
+fn a_stream_or_a_trigger_into_an_input_handed_to_its_node_is_refused_naming_the_sampling_fix() {
+    for (output_flow, pin_type) in [
+        (PinFlow::Stream, float()),
+        (PinFlow::Trigger, PinType::Trigger {}),
     ] {
         let verdict = pin_link_verdict(
             PinLinkEnd {
                 flow: Some(output_flow),
                 ..an_output(&pin_type)
             },
-            a_setting(read, &float()),
+            an_input_handed_to_its_node(&float()),
             &[],
         );
         let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
@@ -457,18 +447,6 @@ fn a_stream_into_an_input_read_each_run_connects_as_its_types_do() {
     assert_eq!(verdict.outcome, PinLinkOutcome::Connects);
 }
 
-/// Mental-revert: refusing every wire into a setting read each run refuses a Value wire the
-/// engine reads into it as it does one into a setting read at setup.
-#[test]
-fn a_value_wire_into_a_setting_read_each_run_connects_as_its_types_do() {
-    let verdict = pin_link_verdict(
-        a_value_output(&float()),
-        a_setting(SettingReadTime::EachRun, &float()),
-        &[],
-    );
-    assert_eq!(verdict.outcome, PinLinkOutcome::Connects);
-}
-
 #[test]
 fn a_setting_of_a_type_no_message_carries_takes_no_wire() {
     let node_reference = PinType::NodeReference {
@@ -477,7 +455,7 @@ fn a_setting_of_a_type_no_message_carries_takes_no_wire() {
     };
     let verdict = pin_link_verdict(
         a_value_output(&node_reference),
-        a_setting(SettingReadTime::AtSetup, &node_reference),
+        an_input_handed_to_its_node(&node_reference),
         &[],
     );
     let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
@@ -486,7 +464,7 @@ fn a_setting_of_a_type_no_message_carries_takes_no_wire() {
     assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
 }
 
-/// A setting read at setup of each node type of the graph itself — `GraphInput`,
+/// An input handed to its node of each node type of the graph itself — `GraphInput`,
 /// `GraphOutput`, `SetVariable` and `GetVariable` — takes no wire, though the same setting on
 /// another node takes a Value wire; an input of one of them that is no setting still takes one.
 ///
@@ -505,7 +483,7 @@ fn a_setting_of_a_node_type_of_the_graph_itself_takes_no_wire() {
             a_value_output(&float()),
             PinLinkInputEnd {
                 node_type: &node_type,
-                ..a_setting(SettingReadTime::AtSetup, &float())
+                ..an_input_handed_to_its_node(&float())
             },
             &[],
         );
@@ -525,9 +503,7 @@ fn a_setting_of_a_node_type_of_the_graph_itself_takes_no_wire() {
     }
     assert!(an_input_takes_a_wire(
         the_sinks_node_type(),
-        Some(NodeInputMode::SettingOnly {
-            read: SettingReadTime::AtSetup
-        }),
+        Some(NodeInputMode::HandedToItsNode),
         Some(&float())
     ));
 }

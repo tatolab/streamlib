@@ -165,11 +165,8 @@ fn a_node_renders_its_kind_and_a_function_node_its_language_beside_it() {
     assert_eq!(function["language"], "python");
 }
 
-/// A node of `node_type` whose one input, `port`, is a String setting `read` at `read`.
-fn a_node_whose_one_setting_is_read(
-    node_type: &str,
-    read: crate::core::descriptors::SettingReadTime,
-) -> crate::core::graph::GraphNode {
+/// A node of `node_type` whose one input, `port`, is a String input the engine hands its node.
+fn a_node_whose_one_input_is_handed_to_it(node_type: &str) -> crate::core::graph::GraphNode {
     let setting = crate::core::graph::PortInfo::from(
         &crate::core::descriptors::PortDescriptor::new(
             "port",
@@ -179,7 +176,7 @@ fn a_node_whose_one_setting_is_read(
                 crate::core::descriptors::PinType::String {},
             ),
         )
-        .with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly { read }),
+        .with_input_mode(crate::core::descriptors::NodeInputMode::HandedToItsNode),
     );
     crate::core::graph::GraphNode::new(
         streamlib_node_schema::NodeClassImportPath::new(node_type).expect("a legal import path"),
@@ -191,31 +188,23 @@ fn a_node_whose_one_setting_is_read(
     )
 }
 
-/// Each input `graph` serves says whether it takes a wire as the link check rules: a setting
-/// read at setup or each run takes one, and no setting of a node type of the graph itself does;
-/// an output says nothing of it.
+/// Each input `graph` serves says whether it takes a wire as the link check rules: an input
+/// handed to its node takes one, and no such input of a node type of the graph itself does; an
+/// output says nothing of it.
 ///
 /// Mental-revert: reading the mark from the mode alone says the `GraphInput`'s `port` takes one;
 /// exempting a `GraphInput` alone says the `GetVariable`'s does.
 #[test]
 fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
-    use crate::core::descriptors::SettingReadTime;
-    let takes_a_wire = |node_type: &str, read| {
-        serde_json::to_value(GraphNodeOutput::from(&a_node_whose_one_setting_is_read(
-            node_type, read,
-        )))
+    let takes_a_wire = |node_type: &str| {
+        serde_json::to_value(GraphNodeOutput::from(
+            &a_node_whose_one_input_is_handed_to_it(node_type),
+        ))
         .unwrap()["ports"]["inputs"][0]["takes_a_wire"]
             .clone()
     };
 
-    assert_eq!(
-        takes_a_wire("tests:Labeller", SettingReadTime::AtSetup),
-        serde_json::json!(true)
-    );
-    assert_eq!(
-        takes_a_wire("tests:Labeller", SettingReadTime::EachRun),
-        serde_json::json!(true)
-    );
+    assert_eq!(takes_a_wire("tests:Labeller"), serde_json::json!(true));
     for node_type in [
         streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,
         streamlib_project_repository::GRAPH_OUTPUT_NODE_TYPE,
@@ -223,7 +212,7 @@ fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
         streamlib_project_repository::GET_VARIABLE_NODE_TYPE,
     ] {
         assert_eq!(
-            takes_a_wire(node_type, SettingReadTime::AtSetup),
+            takes_a_wire(node_type),
             serde_json::json!(false),
             "{node_type}"
         );

@@ -43,9 +43,7 @@ fn a_class_node_fields_mode_and_lifetime_reach_its_descriptor() {
     assert_eq!(
         (input("quality").input_mode, input("quality").lifetime),
         (
-            Some(NodeInputMode::SettingOnly {
-                read: crate::core::descriptors::SettingReadTime::AtSetup
-            }),
+            Some(NodeInputMode::HandedToItsNode),
             NodeValueLifetime::Reset
         )
     );

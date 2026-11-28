@@ -255,7 +255,7 @@ impl LoadedStreamInThisRuntime {
             };
             let is_a_setting = |input: &str| {
                 is_a_schema_setting(input)
-                    || node.input_port(input).is_some_and(PortInfo::is_a_setting)
+                    || node.input_port(input).is_some_and(PortInfo::is_handed_to_its_node)
             };
             if !sets.iter().any(|set| is_a_setting(&set.input)) {
                 return Ok(false);

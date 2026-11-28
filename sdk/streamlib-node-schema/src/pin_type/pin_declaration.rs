@@ -186,20 +186,21 @@ pub struct PinNumberRange {
 }
 
 /// Whether an input takes a wire, a stored value, or both.
+///
+/// The variant the engine hands its value to serializes as contract 4's `setting_only`, and a
+/// `read` beside it, which a `tatolab-stream` released before every input was live still
+/// stamps, is ignored: every input is read each run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "mode", rename_all = "snake_case")]
 pub enum NodeInputMode {
     /// A link or a stored value, read each run.
     WireOrValue,
     /// A link only, read each run.
     WireOnly,
-    /// A setting: a stored value, or what a Value wire into it carries, read when `read` says.
-    /// The engine reads its wire and hands its node each value, as it hands a stored one.
-    SettingOnly {
-        /// When the node reads it.
-        #[serde(default)]
-        read: SettingReadTime,
-    },
+    /// A value the engine hands its node each run: a stored value, or what a Value wire into
+    /// it carries, which the engine reads for it.
+    #[serde(rename = "setting_only")]
+    HandedToItsNode,
 }
 
 /// Whether a link may end at an input of `mode` carrying `pin_type` on a node of `node_type`,
@@ -215,49 +216,15 @@ pub fn an_input_takes_a_wire(
     pin_type: Option<&PinType>,
 ) -> bool {
     mode.is_none_or(|mode| {
-        !mode.is_a_setting()
+        !mode.is_handed_to_its_node()
             || !(node_type.is_a_node_type_of_the_graph_itself()
                 || pin_type.is_some_and(|pin_type| !pin_type.takes_a_wire()))
     })
 }
 
 impl NodeInputMode {
-    /// Whether an input of this mode is a setting, read at setup or each run.
-    pub fn is_a_setting(self) -> bool {
-        matches!(self, Self::SettingOnly { .. })
+    /// Whether the engine hands an input of this mode its value, rather than delivering it.
+    pub fn is_handed_to_its_node(self) -> bool {
+        matches!(self, Self::HandedToItsNode)
     }
-
-    /// Whether an input of this mode is a setting its node reads each run.
-    pub fn is_a_setting_read_each_run(self) -> bool {
-        matches!(
-            self,
-            Self::SettingOnly {
-                read: SettingReadTime::EachRun
-            }
-        )
-    }
-
-    /// Whether an input of this mode is a setting its node reads once, when it is set up.
-    pub fn is_a_setting_read_at_setup(self) -> bool {
-        matches!(
-            self,
-            Self::SettingOnly {
-                read: SettingReadTime::AtSetup
-            }
-        )
-    }
-}
-
-/// When a node reads a setting.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum SettingReadTime {
-    /// Once, when the node is set up; a later value, set or carried by its wire, is handed to
-    /// the node while it runs.
-    #[default]
-    AtSetup,
-    /// Each run.
-    EachRun,
 }

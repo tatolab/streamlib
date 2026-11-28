@@ -3,7 +3,6 @@
 
 use streamlib::sdk::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeDescriptor, NodeInputMode, PinType, PortDescriptor,
-    SettingReadTime,
 };
 use streamlib::sdk::nodes::NODE_REGISTRY;
 
@@ -69,12 +68,7 @@ fn both_nodes_carry_the_bundle_their_bundle_type_input_chooses() {
         );
         assert!(declared.may_be_unset);
         assert_eq!(setting.pin_default, None);
-        assert_eq!(
-            setting.input_mode,
-            Some(NodeInputMode::SettingOnly {
-                read: SettingReadTime::EachRun
-            })
-        );
+        assert_eq!(setting.input_mode, Some(NodeInputMode::HandedToItsNode));
     }
 }
 

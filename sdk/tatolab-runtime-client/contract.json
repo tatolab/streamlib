@@ -5,7 +5,7 @@
     "version": "4",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 4,
-    "x-contract-revision": 8
+    "x-contract-revision": 9
   },
   "methods": [
     {
@@ -5666,7 +5666,7 @@
     {
       "name": "describe_node_types",
       "summary": "Describe the inputs and outputs of the node types named, each with its pin type.",
-      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup` or `each_run`; either takes a link from an output that flows as a `value`, and each change is handed to the running node), `takes_a_wire`, whether a link may end at it: false for a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
+      "description": "Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, an input the engine hands its node, always `read` `each_run`; either takes a link from an output that flows as a `value`, and each change is handed to the running node), `takes_a_wire`, whether a link may end at it: false for a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -18373,7 +18373,7 @@
           },
           "takes_a_wire": {
             "type": "boolean",
-            "description": "Whether a link may end at it: `false` on a setting read each run, a setting of a type no\nmessage carries, every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or\n`GetVariable`, and each legacy field of a node type not yet typed, which is no port.",
+            "description": "Whether a link may end at it: `false` on an input handed to its node of a type no\nmessage carries, every such input of a `GraphInput`, `GraphOutput`, `SetVariable` or\n`GetVariable`, and each legacy field of a node type not yet typed, which is no port.",
             "default": true
           },
           "read": {
@@ -18385,7 +18385,7 @@
                 "type": "null"
               }
             ],
-            "description": "When the node reads a setting: once at setup, a change rebuilding the node, or each run.\nAbsent on an input that takes a wire."
+            "description": "When its node reads an input the engine hands it: always each run, as every input is\nlive. Absent on an input that takes a wire."
           },
           "default_value": {
             "description": "The value it reads while nothing feeds it and no value is set, null for an input that\nreads nothing by default; absent when it declares none."
@@ -18524,7 +18524,7 @@
           {
             "type": "string",
             "const": "setting_only",
-            "description": "A setting: a stored value, read when its `read` says; one read at setup also takes a\nlink from an output that flows as a value, each change of either rebuilding its node."
+            "description": "A value the engine hands its node each run: a stored value, or what a Value wire into\nit carries."
           }
         ],
         "description": "Whether an input takes a wire, a stored value, or both."
@@ -18534,7 +18534,7 @@
           {
             "type": "string",
             "const": "at_setup",
-            "description": "Once, when the node is set up; a later value, set or carried by its wire, is handed to\nthe node while it runs."
+            "description": "Once, at setup: no runtime answers it since every input is live."
           },
           {
             "type": "string",
@@ -18542,7 +18542,7 @@
             "description": "Each run."
           }
         ],
-        "description": "When a node reads a setting."
+        "description": "When a node reads an input the engine hands it, under the name contract 4 publishes, which\ncontract 5 drops."
       },
       "NodeValueLifetime": {
         "oneOf": [
@@ -20666,7 +20666,6 @@
             "required": [
               "mode"
             ],
-            "additionalProperties": false,
             "description": "A link or a stored value, read each run."
           },
           {
@@ -20680,18 +20679,11 @@
             "required": [
               "mode"
             ],
-            "additionalProperties": false,
             "description": "A link only, read each run."
           },
           {
             "type": "object",
-            "additionalProperties": false,
             "properties": {
-              "read": {
-                "$ref": "#/components/schemas/SettingReadTime",
-                "description": "When the node reads it.",
-                "default": "at_setup"
-              },
               "mode": {
                 "type": "string",
                 "const": "setting_only"
@@ -20700,10 +20692,10 @@
             "required": [
               "mode"
             ],
-            "description": "A setting: a stored value, or what a Value wire into it carries, read when `read` says.\nThe engine reads its wire and hands its node each value, as it hands a stored one."
+            "description": "A value the engine hands its node each run: a stored value, or what a Value wire into\nit carries, which the engine reads for it."
           }
         ],
-        "description": "Whether an input takes a wire, a stored value, or both."
+        "description": "Whether an input takes a wire, a stored value, or both.\n\nThe variant the engine hands its value to serializes as contract 4's `setting_only`, and a\n`read` beside it, which a `tatolab-stream` released before every input was live still\nstamps, is ignored: every input is read each run."
       }
     }
   }

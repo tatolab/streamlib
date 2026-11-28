@@ -4,7 +4,7 @@
 //! Node types for tests: one that reads three settings at setup and records each setup it runs
 //! and each set of values it is handed after, what a test of a node handed an input live runs;
 //! one whose Integer output, which flows as a value, a test writes, to wire into one of them,
-//! with a setting read at setup of its own that another source's wire may feed; one like the
+//! with an input of its own handed to it that another source's wire may feed; one like the
 //! first whose pin group of Integer layers follows its wires; and one whose pin group of Integer
 //! taps holds as many slots as its count says.
 
@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinDeclaration,
-    PinGroupDescriptor, PinType, PortDescriptor, SettingReadTime,
+    PinGroupDescriptor, PinType, PortDescriptor,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -54,7 +54,7 @@ static VALUES_WRITTEN_AT_SETUP: Mutex<Option<HashMap<Uuid, i64>>> = Mutex::new(N
 /// Each source node whose setup fails.
 static SOURCES_WHOSE_SETUP_FAILS: Mutex<Vec<Uuid>> = Mutex::new(Vec::new());
 
-/// The setting of the source node type, read at setup, that a wire from another source feeds.
+/// The input of the source node type, handed to its node, that a wire from another source feeds.
 pub const THE_SOURCES_SETTING: &str = "offset";
 
 /// The output of the source node type, an Integer that flows as a value.
@@ -65,12 +65,9 @@ fn the_fixture_node_type() -> NodeClassImportPath {
         .expect("a module path and a type name make an import path")
 }
 
-fn a_setting_read_at_setup(name: &str, pin_type: PinType) -> PortDescriptor {
-    PortDescriptor::new(name, name, true, PinDeclaration::exactly(pin_type)).with_input_mode(
-        NodeInputMode::SettingOnly {
-            read: SettingReadTime::AtSetup,
-        },
-    )
+fn an_input_handed_to_its_node(name: &str, pin_type: PinType) -> PortDescriptor {
+    PortDescriptor::new(name, name, true, PinDeclaration::exactly(pin_type))
+        .with_input_mode(NodeInputMode::HandedToItsNode)
 }
 
 /// A node reading `kernel_size`, `width` and `height` at setup and taking them again each time
@@ -299,7 +296,7 @@ fn register_the_source_node_type_once() {
             false,
             PinDeclaration::exactly(integer.clone()),
         )];
-        descriptor.inputs = vec![a_setting_read_at_setup(THE_SOURCES_SETTING, integer)];
+        descriptor.inputs = vec![an_input_handed_to_its_node(THE_SOURCES_SETTING, integer)];
         let described = descriptor.clone();
         NODE_REGISTRY
             .register_with_a_constructor_for_a_test(
@@ -368,9 +365,9 @@ fn register_the_node_type_once() {
             "a node reading its settings once, at setup",
         );
         descriptor.inputs = vec![
-            a_setting_read_at_setup("kernel_size", PinType::Integer { exact_size: None }),
-            a_setting_read_at_setup("width", PinType::Integer { exact_size: None }),
-            a_setting_read_at_setup("height", PinType::Integer { exact_size: None }),
+            an_input_handed_to_its_node("kernel_size", PinType::Integer { exact_size: None }),
+            an_input_handed_to_its_node("width", PinType::Integer { exact_size: None }),
+            an_input_handed_to_its_node("height", PinType::Integer { exact_size: None }),
         ];
         let described = descriptor.clone();
         NODE_REGISTRY

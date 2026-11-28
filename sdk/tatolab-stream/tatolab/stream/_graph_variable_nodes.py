@@ -10,7 +10,7 @@ from typing import Annotated, ClassVar
 from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin, OutputPin
 from ._description import Description
-from ._input_declaration_annotations import SettingOnly
+from ._input_declaration_annotations import HandedToItsNode
 from ._stream_graph_builder import NodeReference
 
 __all__ = [
@@ -28,7 +28,7 @@ class SetVariable(BuiltInNode):
     type: ClassVar[str] = "tatolab.stream:SetVariable"
 
     variable: Annotated[
-        str, SettingOnly(), Description("The variable's name, which every `GetVariable` of it reads")
+        str, HandedToItsNode(), Description("The variable's name, which every `GetVariable` of it reads")
     ]
     node_reference: Annotated[
         NodeReference | None,
@@ -57,7 +57,7 @@ class GetVariable(BuiltInNode):
 
     variable: Annotated[
         str,
-        SettingOnly(),
+        HandedToItsNode(),
         Description("The variable it reads, set on its level or an enclosing one"),
     ]
     value: OutputPin[

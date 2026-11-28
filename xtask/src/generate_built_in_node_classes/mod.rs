@@ -63,18 +63,16 @@ struct BuiltInNodePortDescriptor {
     annotations: Option<Map<String, Value>>,
 }
 
-/// The part of an input's mode the generator reads: whether it is a setting, and when it is
-/// read.
+/// The part of an input's mode the generator reads: whether the engine hands it to its node.
 #[derive(Debug, Deserialize)]
 struct BuiltInNodeInputMode {
     mode: String,
-    #[serde(default)]
-    read: Option<String>,
 }
 
 impl BuiltInNodePortDescriptor {
-    /// Whether the catalog lists this input as a setting, which a field renders.
-    fn is_a_setting(&self) -> bool {
+    /// Whether the catalog lists this input as one the engine hands its node, which a field
+    /// renders.
+    fn is_handed_to_its_node(&self) -> bool {
         self.input_mode
             .as_ref()
             .is_some_and(|input_mode| input_mode.mode == "setting_only")
@@ -325,7 +323,7 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
     let input_ports: Vec<&BuiltInNodePortDescriptor> = descriptor
         .inputs
         .iter()
-        .filter(|input| !input.is_a_setting())
+        .filter(|input| !input.is_handed_to_its_node())
         .collect();
     let output_ports: Vec<&BuiltInNodePortDescriptor> = descriptor.outputs.iter().collect();
     for (heading, ports) in [("Inputs", &input_ports), ("Outputs", &output_ports)] {

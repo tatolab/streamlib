@@ -33,7 +33,7 @@ pub use pin_conversion::{
 };
 pub use pin_declaration::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinFlow, PinNumberRange,
-    PinProjectAssetAnnotation, ResolvedPin, SettingReadTime, an_input_takes_a_wire,
+    PinProjectAssetAnnotation, ResolvedPin, an_input_takes_a_wire,
 };
 pub use pin_link_verdict::{
     ConvertNodeToInsert, FreePinConversion, PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd,

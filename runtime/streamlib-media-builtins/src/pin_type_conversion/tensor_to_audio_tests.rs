@@ -55,7 +55,7 @@ fn the_catalog_lists_its_value_inputs_as_inputs_taking_no_wire_after_its_port() 
     for name in ["channel_names", "sample_rate", "attribute"] {
         assert_eq!(
             setting(name)["input_mode"],
-            serde_json::json!({"mode": "setting_only", "read": "each_run"}),
+            serde_json::json!({"mode": "setting_only"}),
             "{name}"
         );
     }

@@ -402,7 +402,7 @@ fn the_passes_setting_a_run_declares() -> Value {
             "pin_type": { "kind": "is", "pin_type": { "type": "integer" } },
             "flow": "value",
         },
-        "input_mode": { "mode": "setting_only", "read": "at_setup" },
+        "input_mode": { "mode": "setting_only" },
         "pin_default": 3,
     })
 }

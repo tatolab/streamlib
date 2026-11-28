@@ -373,9 +373,8 @@ class NodeDeclarationDecorator:
         types be listed from source without running them.
 
         `conversion=True` states that the node converts the pin type of its one input that
-        takes a wire into that of its one output; every other input is `SettingOnly()`, or a
-        value input of a node written as one function. Its
-        pins say what it bridges. A link only it bridges is refused naming it, with the call
+        takes a wire into that of its one output; every other input is a value input of a node
+        written as one function. Its pins say what it bridges. A link only it bridges is refused naming it, with the call
         that places it, and `connect` never places it itself. Only bare `@node` and
         `@node.shader` declare one, and any other shape is refused at decoration as a
         `NodeDeclarationRefusal`. A node that is no conversion leaves it out.
