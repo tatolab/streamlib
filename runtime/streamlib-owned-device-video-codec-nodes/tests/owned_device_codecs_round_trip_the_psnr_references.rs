@@ -308,7 +308,9 @@ fn round_trip_every_psnr_reference_on_owned_devices(codec: Codec) {
 
 /// Two rate-controlled bitrates far enough apart that a session which
 /// applies its rate control codes the same pictures at very different sizes.
-const LOW_BITRATE_BPS: u32 = 1_000_000;
+/// A still picture codes to well under a megabit a second, so the low one is
+/// set far below that.
+const LOW_BITRATE_BPS: u32 = 100_000;
 const HIGH_BITRATE_BPS: u32 = 16_000_000;
 
 #[test]

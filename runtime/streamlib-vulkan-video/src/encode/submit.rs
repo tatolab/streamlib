@@ -380,7 +380,8 @@ impl SimpleEncoder {
 
             // NVIDIA refuses a rate control layer at vkEndCommandBuffer, with
             // ERROR_INITIALIZATION_FAILED, unless the codec's own layer info is
-            // chained into it, even with every field left at zero.
+            // chained into it, even with every field left at zero; H.264 and
+            // H.265 alike.
             let mut h264_rate_control_layer = vk::VideoEncodeH264RateControlLayerInfoKHR::default();
             let mut h265_rate_control_layer = vk::VideoEncodeH265RateControlLayerInfoKHR::default();
             let mut rate_control_layer = vk::VideoEncodeRateControlLayerInfoKHR::builder()
