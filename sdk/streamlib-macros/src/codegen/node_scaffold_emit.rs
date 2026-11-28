@@ -1,15 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What a node emits whether it is written as a struct or as one function: the module holding
-//! it, its port mailboxes, its inherent `impl Node` and the members of `GeneratedNode` that read
-//! only its schema.
+//! The scaffold a node function is emitted in: the module holding it, its port mailboxes, its
+//! inherent `impl Node` and the members of `GeneratedNode` that read only its schema.
 
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use streamlib_node_schema::{NodeSchema, NodeSchemaExecution};
 
-use super::node_settings_emit::NodeSettingsEmitted;
 use super::{generate_iceoryx2_accessors_from_schema, node_type_minted};
 
 /// The module a node is emitted in, named after the author's node, holding `body`.
@@ -18,10 +16,8 @@ pub(super) fn node_module(
     module_name: &Ident,
     sdk_root: &TokenStream,
     member_visibility: &TokenStream,
-    settings: &NodeSettingsEmitted<'_>,
     body: TokenStream,
 ) -> TokenStream {
-    let module_alias_and_constructor = settings.module_alias_and_constructor(member_visibility);
     quote! {
         #[allow(non_snake_case, reason = "the generated module is named after the author's node type")]
         #module_visibility mod #module_name {
@@ -33,7 +29,11 @@ pub(super) fn node_module(
             #[allow(unused_imports, reason = "the generated module may name nothing from the SDK root")]
             use #sdk_root as __streamlib_sdk;
 
-            #module_alias_and_constructor
+            #member_visibility type Config = __streamlib_sdk::nodes::EmptyConfig;
+
+            #member_visibility fn node(config: Config) -> __streamlib_sdk::nodes::NodeSpec {
+                Node::node(config)
+            }
 
             /// This node type's identity: its class in `tatolab.stream` for a
             /// built-in, else the module path captured where the macro expanded.
@@ -92,11 +92,9 @@ pub(super) fn node_inherent_impl(
     schema: &NodeSchema,
     built_in_node: bool,
     member_visibility: &TokenStream,
-    settings: &NodeSettingsEmitted<'_>,
 ) -> TokenStream {
     let node_class_short_name = &schema.name;
     let node_type_minted = node_type_minted(built_in_node, node_class_short_name);
-    let node_spec_constructor = settings.node_spec_constructor(member_visibility);
     let execution_variant = execution_variant(&schema.execution);
     let execution_description = match schema.execution {
         NodeSchemaExecution::Reactive => "Reactive",
@@ -115,7 +113,13 @@ pub(super) fn node_inherent_impl(
                 #node_type_minted
             }
 
-            #node_spec_constructor
+            #member_visibility fn node(config: __streamlib_sdk::nodes::EmptyConfig) -> __streamlib_sdk::nodes::NodeSpec {
+                __streamlib_sdk::nodes::NodeSpec::new(
+                    Self::node_class_import_path(),
+                    __streamlib_sdk::serde_json::to_value(&config)
+                        .expect("Config serialization failed"),
+                )
+            }
 
             #member_visibility fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
                 #execution_variant

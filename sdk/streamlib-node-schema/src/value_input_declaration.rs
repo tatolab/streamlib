@@ -1,58 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A Rust node type's settings: a struct whose every field is an input the node reads from its
-//! value or from a Value wire into it, handed to the node again at each change. `#[node_settings]` derives
-//! [`NodeSettings`] for the struct, and `#[node(settings = …)]` declares each field as one of
-//! the node's inputs and builds the struct from the values they hold before the node is set up.
+//! What a value input of a Rust node function is declared with: the pin type of the value it
+//! holds, a list it is chosen from, or the bundles its stream declares, and the input itself.
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::descriptors::PortDescriptor;
 use crate::pin_type::{IntegerSize, NodeInputMode, PinDeclaration, PinType, SettingReadTime};
-
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is a node `settings =` type but is not declared with `#[node_settings]`",
-    note = "add `#[streamlib::sdk::node_settings]` to `{Self}`, which declares each of its fields as a setting the node reads at setup"
-)]
-pub trait NodeSettings: Default + Serialize + DeserializeOwned + Send + 'static {
-    /// Each setting, in the order the struct declares its fields, as an input of the node read
-    /// at setup, holding its field's default until it is set or a wire into it carries a value.
-    fn setting_inputs() -> Vec<PortDescriptor>;
-
-    /// The settings `input_values` hold, each input's value by its name: a setting they name
-    /// no value for keeps its default, and every other value is left to the inputs it names.
-    /// Refused, naming the setting, when a value is not of its field's type.
-    fn read_from_the_input_values(input_values: &Map<String, Value>) -> Result<Self, String> {
-        let mut settings = match serde_json::to_value(Self::default()) {
-            Ok(Value::Object(defaults)) => defaults,
-            Ok(other) => {
-                return Err(format!(
-                    "the settings serialize as {other}, and settings are a struct of named \
-                     fields"
-                ));
-            }
-            Err(refusal) => {
-                return Err(format!(
-                    "the settings' default does not serialize: {refusal}"
-                ));
-            }
-        };
-        for setting in Self::setting_inputs() {
-            if let Some(value) = input_values
-                .get(&setting.name)
-                .filter(|value| !value.is_null())
-            {
-                settings.insert(setting.name, value.clone());
-            }
-        }
-        serde_json::from_value(Value::Object(settings)).map_err(|refusal| {
-            format!("a setting holds a value its field does not take: {refusal}")
-        })
-    }
-}
 
 /// The pin type a setting holding a value of this Rust type is declared with.
 #[diagnostic::on_unimplemented(
@@ -185,10 +140,4 @@ pub fn the_input_taking_no_wire(
     // The engine hands the node its value, so no message is delivered to it.
     setting.delivery_profile = None;
     setting
-}
-
-/// The default of field `name` of the settings `defaults` serialize to; `Null` when they hold
-/// none under that name.
-pub fn the_default_of_a_setting(defaults: &Value, name: &str) -> Value {
-    defaults.get(name).cloned().unwrap_or(Value::Null)
 }

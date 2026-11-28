@@ -3,8 +3,8 @@
 
 use serde_json::{Value, json};
 
-use crate::node_settings::the_input_taking_no_wire;
 use crate::pin_type::{IntegerSize, NodeInputMode, PinType, SettingReadTime};
+use crate::value_input_declaration::the_input_taking_no_wire;
 
 #[test]
 fn an_input_taking_no_wire_is_read_when_it_says_holding_its_default() {

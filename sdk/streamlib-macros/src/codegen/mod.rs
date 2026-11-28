@@ -1,224 +1,26 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{quote, quote_spanned};
+use proc_macro2::TokenStream;
+use quote::quote;
 use streamlib_node_schema::NodeSchema;
 
 use crate::grammar::{
-    DeclaredDescription, ParsedNodeAttr, ParsedPort, PortDirection,
-    declared_description_str_expression,
+    DeclaredDescription, ParsedNodeAttr, ParsedPort, declared_description_str_expression,
 };
-use syn::ItemStruct;
-use syn::spanned::Spanned;
 
 mod author_visibility;
 mod node_function_emit;
 mod node_scaffold_emit;
-mod node_settings_emit;
 mod pin_declaration_tokens;
 mod port_marker_module;
 
-use author_visibility::{
-    GENERATED_MODULE_MEMBER_DEPTH, GENERATED_PORT_MARKER_DEPTH,
-    author_visibility_written_from_a_nested_module,
-};
-use node_scaffold_emit::{
-    generated_node_members_read_from_the_schema, ipc_mailbox_fields, ipc_mailbox_inits,
-    node_inherent_impl, node_module,
-};
-use node_settings_emit::NodeSettingsEmitted;
 use pin_declaration_tokens::pin_declaration_tokens;
-use port_marker_module::generate_port_marker_module;
 
 pub(crate) use node_function_emit::{
     generate_from_a_node_function, node_name_of_a_node_function,
-    refusal_of_a_value_input_on_a_struct,
+    refusal_of_a_node_not_written_as_a_function,
 };
-
-pub(crate) fn generate_from_parsed_node_attr(
-    item: &ItemStruct,
-    parsed: &ParsedNodeAttr,
-    sdk_root: TokenStream,
-) -> TokenStream {
-    let module_name = &item.ident;
-    let module_visibility = &item.vis;
-    let member_visibility =
-        author_visibility_written_from_a_nested_module(&item.vis, GENERATED_MODULE_MEMBER_DEPTH);
-    let port_marker_visibility =
-        author_visibility_written_from_a_nested_module(&item.vis, GENERATED_PORT_MARKER_DEPTH);
-    let schema = &parsed.to_node_schema();
-    let settings = NodeSettingsEmitted::of(parsed.settings_type.as_ref());
-
-    // Extract custom fields from the user's struct
-    let custom_fields = extract_custom_fields(item);
-    let refused_field_attribute_diagnostics = refused_field_attribute_diagnostics(item);
-
-    let node_struct =
-        generate_node_struct_from_schema(schema, &settings, &custom_fields, &member_visibility);
-    let input_link_module = generate_port_marker_module(
-        PortDirection::Input,
-        &parsed.inputs,
-        &member_visibility,
-        &port_marker_visibility,
-    );
-    let output_link_module = generate_port_marker_module(
-        PortDirection::Output,
-        &parsed.outputs,
-        &member_visibility,
-        &port_marker_visibility,
-    );
-    let node_impl = generate_node_impl_from_schema(
-        schema,
-        parsed.built_in_node,
-        &member_visibility,
-        &NodeDeclaredMetaAndPortDescriptions::of(parsed),
-        &settings,
-        &custom_fields,
-    );
-
-    // Generate unsafe Send impl if required (for !Send types like AVFoundation)
-    let unsafe_send_impl = schema.runtime.options.unsafe_send.then(|| {
-        quote! {
-            // SAFETY: This node contains !Send types (e.g., AVFoundation objects)
-            // but is safe to send because these types are only accessed from a single
-            // thread after initialization. The node lifecycle ensures thread safety.
-            unsafe impl Send for Node {}
-        }
-    });
-
-    node_module(
-        module_visibility,
-        module_name,
-        &sdk_root,
-        &member_visibility,
-        &settings,
-        quote! {
-            #refused_field_attribute_diagnostics
-
-            #node_struct
-
-            #unsafe_send_impl
-
-            #input_link_module
-
-            #output_link_module
-
-            #node_impl
-        },
-    )
-}
-
-/// Custom field extracted from the user's struct definition.
-struct CustomField {
-    name: Ident,
-    ty: syn::Type,
-    /// The field's authored attributes verbatim; each emission site filters.
-    attributes_authored_on_node_struct_field: Vec<syn::Attribute>,
-}
-
-fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
-    if is_forwarded_onto_from_config_initializer(attribute) {
-        return true;
-    }
-
-    let path = attribute.path();
-    path.is_ident("doc")
-        || path.is_ident("allow")
-        || path.is_ident("warn")
-        || path.is_ident("deny")
-        || path.is_ident("forbid")
-}
-
-/// `cfg` is the load-bearing forward — dropping it makes a platform-conditional
-/// field unconditional and its platform-specific type fails to resolve off that
-/// platform — and it is the only attribute a struct-expression field takes
-/// cleanly: a `doc` there is an `unused_doc_comments` warning and the gates deny
-/// warnings.
-fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool {
-    attribute.path().is_ident("cfg")
-}
-
-fn refused_field_attribute_diagnostics(item: &ItemStruct) -> TokenStream {
-    let syn::Fields::Named(fields) = &item.fields else {
-        return quote! {};
-    };
-
-    let diagnostics: Vec<TokenStream> = fields
-        .named
-        .iter()
-        .filter_map(|authored_field| {
-            let field_name = authored_field.ident.as_ref()?;
-            let refused = authored_field
-                .attrs
-                .iter()
-                .find(|attribute| attribute.path().is_ident("cfg_attr"))?;
-            let message = format!(
-                "`#[cfg_attr(...)]` is not supported on `#[node]` struct fields (field \
-                 `{field_name}`): a `cfg_attr` that expands to a `cfg` would change the field's \
-                 presence on the generated `Node` struct without changing it on the \
-                 `from_config` initializer, and the two would no longer agree. Author the \
-                 `#[cfg(...)]` directly on the field instead."
-            );
-            Some(quote_spanned! { refused.span() => compile_error!(#message); })
-        })
-        .collect();
-
-    quote! { #(#diagnostics)* }
-}
-
-/// Extract custom fields from the user's struct definition.
-fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
-    match &item.fields {
-        syn::Fields::Named(fields) => fields
-            .named
-            .iter()
-            .map(|authored_field| CustomField {
-                name: authored_field
-                    .ident
-                    .clone()
-                    .expect("Named field must have ident"),
-                ty: authored_field.ty.clone(),
-                attributes_authored_on_node_struct_field: authored_field.attrs.clone(),
-            })
-            .collect(),
-        syn::Fields::Unit => Vec::new(),
-        syn::Fields::Unnamed(_) => Vec::new(),
-    }
-}
-
-fn generate_node_struct_from_schema(
-    schema: &NodeSchema,
-    settings: &NodeSettingsEmitted<'_>,
-    custom_fields: &[CustomField],
-    member_visibility: &TokenStream,
-) -> TokenStream {
-    let settings_fields = settings.struct_fields(member_visibility);
-
-    let ipc_mailbox_fields = ipc_mailbox_fields(schema, member_visibility);
-
-    // Generate custom fields from the user's struct definition
-    let custom_field_defs: Vec<TokenStream> = custom_fields
-        .iter()
-        .map(|custom_field| {
-            let attributes = custom_field
-                .attributes_authored_on_node_struct_field
-                .iter()
-                .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute));
-            let name = &custom_field.name;
-            let ty = &custom_field.ty;
-            quote! { #(#attributes)* #member_visibility #name: #ty, }
-        })
-        .collect();
-
-    quote! {
-        #member_visibility struct Node {
-            #ipc_mailbox_fields
-            #settings_fields
-            #(#custom_field_defs)*
-        }
-    }
-}
 
 /// The expression minting a node type's identity: a built-in's class in
 /// `tatolab.stream`, else the module path captured where the macro expands.
@@ -233,160 +35,6 @@ fn node_type_minted(built_in_node: bool, node_class_short_name: &str) -> TokenSt
         quote! {
             __streamlib_sdk::descriptors::NodeClassImportPath::new(::core::module_path!())
                 .expect("module_path! always names the enclosing module")
-        }
-    }
-}
-
-fn generate_node_impl_from_schema(
-    schema: &NodeSchema,
-    built_in_node: bool,
-    member_visibility: &TokenStream,
-    declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
-    settings: &NodeSettingsEmitted<'_>,
-    custom_fields: &[CustomField],
-) -> TokenStream {
-    use streamlib_node_schema::NodeSchemaExecution;
-
-    let only_manual_starts = quote! {
-        Err(__streamlib_sdk::error::Error::Runtime(
-            "start() is only valid for Manual execution mode.".into()
-        ))
-    };
-    let only_manual_stops = quote! {
-        Err(__streamlib_sdk::error::Error::Runtime(
-            "stop() is only valid for Manual execution mode.".into()
-        ))
-    };
-    let (node_trait, process_impl, start_impl, stop_impl) = match &schema.execution {
-        NodeSchemaExecution::Reactive => (
-            quote! { __streamlib_sdk::nodes::ReactiveNode },
-            quote! {
-                <Self as __streamlib_sdk::nodes::ReactiveNode>::process(self, ctx)
-            },
-            only_manual_starts,
-            only_manual_stops,
-        ),
-        NodeSchemaExecution::Manual => (
-            quote! { __streamlib_sdk::nodes::ManualNode },
-            quote! {
-                let _ = ctx;
-                Err(__streamlib_sdk::error::Error::Runtime(
-                    "process() is only valid for Reactive/Continuous execution modes.".into()
-                ))
-            },
-            quote! {
-                <Self as __streamlib_sdk::nodes::ManualNode>::start(self, ctx)
-            },
-            quote! {
-                <Self as __streamlib_sdk::nodes::ManualNode>::stop(self, ctx)
-            },
-        ),
-        NodeSchemaExecution::Continuous { .. } => (
-            quote! { __streamlib_sdk::nodes::ContinuousNode },
-            quote! {
-                <Self as __streamlib_sdk::nodes::ContinuousNode>::process(self, ctx)
-            },
-            only_manual_starts,
-            only_manual_stops,
-        ),
-    };
-
-    let node_inherent_impl = node_inherent_impl(schema, built_in_node, member_visibility, settings);
-    let from_config_body = generate_from_config_from_schema(schema, settings, custom_fields);
-    let descriptor_impl = generate_descriptor_from_schema(
-        schema,
-        declared_meta_and_port_descriptions,
-        settings,
-        &quote! {},
-    );
-    let members_read_from_the_schema =
-        generated_node_members_read_from_the_schema(schema, &descriptor_impl);
-    let settings_taken_from_the_input_values = settings.settings_taken_from_the_input_values();
-
-    quote! {
-        #node_inherent_impl
-
-        impl __streamlib_sdk::nodes::__generated_private::GeneratedNode for Node {
-            #members_read_from_the_schema
-
-            #from_config_body
-
-            fn process(&mut self, ctx: &__streamlib_sdk::context::RuntimeContextLimitedAccess<'_>) -> __streamlib_sdk::error::Result<()> {
-                #process_impl
-            }
-
-            fn start(&mut self, ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>) -> __streamlib_sdk::error::Result<()> {
-                let _ = ctx;
-                #start_impl
-            }
-
-            fn stop(&mut self, ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>) -> __streamlib_sdk::error::Result<()> {
-                let _ = ctx;
-                #stop_impl
-            }
-
-            #settings_taken_from_the_input_values
-
-            fn __generated_setup(
-                &mut self,
-                ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
-            ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #node_trait>::setup(self, ctx)
-            }
-
-            fn __generated_teardown(
-                &mut self,
-                ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
-            ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #node_trait>::teardown(self, ctx)
-            }
-
-            fn __generated_on_pause(
-                &mut self,
-                ctx: &__streamlib_sdk::context::RuntimeContextLimitedAccess<'_>,
-            ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #node_trait>::on_pause(self, ctx)
-            }
-
-            fn __generated_on_resume(
-                &mut self,
-                ctx: &__streamlib_sdk::context::RuntimeContextLimitedAccess<'_>,
-            ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #node_trait>::on_resume(self, ctx)
-            }
-        }
-    }
-}
-
-/// Generate from_config method from schema.
-fn generate_from_config_from_schema(
-    schema: &NodeSchema,
-    settings: &NodeSettingsEmitted<'_>,
-    custom_fields: &[CustomField],
-) -> TokenStream {
-    let ipc_mailbox_inits = ipc_mailbox_inits(schema);
-    let settings_init = settings.struct_field_initializers();
-
-    // Initialize custom fields with Default::default()
-    let custom_field_inits: Vec<TokenStream> = custom_fields
-        .iter()
-        .map(|custom_field| {
-            let attributes = custom_field
-                .attributes_authored_on_node_struct_field
-                .iter()
-                .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute));
-            let name = &custom_field.name;
-            quote! { #(#attributes)* #name: ::std::default::Default::default(), }
-        })
-        .collect();
-
-    quote! {
-        fn from_config(_config: Self::Config) -> __streamlib_sdk::error::Result<Self> {
-            Ok(Self {
-                #ipc_mailbox_inits
-                #settings_init
-                #(#custom_field_inits)*
-            })
         }
     }
 }
@@ -418,13 +66,11 @@ impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
     }
 }
 
-/// The descriptor a node's schema, its declared meta and port descriptions and its settings
-/// build; `value_inputs`, the `.with_input(…)` calls of a node function's value inputs, follow
+/// The descriptor a node's schema and its declared meta and port descriptions build; `value_inputs`, the `.with_input(…)` calls of a node function's value inputs, follow
 /// its port inputs.
 fn generate_descriptor_from_schema(
     schema: &NodeSchema,
     declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
-    settings: &NodeSettingsEmitted<'_>,
     value_inputs: &TokenStream,
 ) -> TokenStream {
     let description =
@@ -446,7 +92,7 @@ fn generate_descriptor_from_schema(
             let audio_window_tokens = audio_window_contract_tokens(p.audio_window.as_ref());
             let pin_declaration_tokens = pin_declaration_tokens(
                 p.pin_type.as_ref(),
-                p.pin_type_from_setting.as_deref(),
+                p.pin_type_from_input.as_deref(),
                 p.flow,
                 &p.former_names,
                 p.may_be_unset,
@@ -494,7 +140,7 @@ fn generate_descriptor_from_schema(
             let port_desc = declared_description_str_expression(*declared_description);
             let pin_declaration_tokens = pin_declaration_tokens(
                 p.pin_type.as_ref(),
-                p.pin_type_from_setting.as_deref(),
+                p.pin_type_from_input.as_deref(),
                 p.flow,
                 &p.former_names,
                 p.may_be_unset,
@@ -517,8 +163,14 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    let config_schema = settings.descriptor_config_schema();
-    let setting_inputs = settings.descriptor_setting_inputs();
+    // Reached through the bound-carrying trait rather than `schemars` directly, so a config
+    // type missing the derive fails on a diagnostic that names the fix.
+    let config_schema = quote! {
+        .with_config_schema(
+            <__streamlib_sdk::nodes::EmptyConfig as __streamlib_sdk::descriptors::NodeConfigJsonSchema>
+                ::node_config_schema_document()
+        )
+    };
 
     let scheduling = schema.scheduling.as_ref().map(|s| {
         let priority_tokens = thread_priority_tokens(s.priority);
@@ -541,16 +193,15 @@ fn generate_descriptor_from_schema(
         .conversion
         .then(|| quote! { .stating_a_conversion() });
 
-    // `module_path!()` resolves here to `<author's module>::<authored type>`,
-    // because this expansion lands inside the module the macro names after
-    // the author's struct — the generated module's own path *is* the type
-    // path, with no `stringify!` needed to append the name.
+    // `module_path!()` resolves here to `<author's module>::<node name>`, because this
+    // expansion lands inside the module the macro names after the author's node function: the
+    // generated module's own path *is* the node type's path.
     quote! {
         fn descriptor() -> Option<__streamlib_sdk::descriptors::NodeDescriptor> {
             Some(
                 __streamlib_sdk::descriptors::NodeDescriptor::new(
                     __streamlib_sdk::descriptors::NodeClassShortName::new(Node::NAME)
-                        .expect("a struct's identifier is never blank"),
+                        .expect("a node function's name is never blank"),
                     Node::node_class_import_path(),
                     #description,
                 )
@@ -562,7 +213,6 @@ fn generate_descriptor_from_schema(
                     #conversion
                     #(#ipc_input_ports)*
                     #value_inputs
-                    #setting_inputs
                     #(#ipc_output_ports)*
             )
         }
@@ -746,9 +396,6 @@ fn audio_window_contract_tokens(
         }
     }
 }
-
-#[cfg(test)]
-mod node_struct_emit_tests;
 
 #[cfg(test)]
 mod pin_declaration_tokens_tests;

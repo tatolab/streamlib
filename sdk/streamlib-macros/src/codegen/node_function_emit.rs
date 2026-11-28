@@ -21,7 +21,6 @@ use super::node_scaffold_emit::{
     generated_node_members_read_from_the_schema, ipc_mailbox_fields, ipc_mailbox_inits,
     node_inherent_impl, node_module,
 };
-use super::node_settings_emit::NodeSettingsEmitted;
 use super::port_marker_module::generate_port_marker_module;
 use super::{NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema};
 use crate::grammar::{
@@ -29,8 +28,8 @@ use crate::grammar::{
     ValueInputChosenFrom, declared_description_str_expression,
 };
 
-/// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase,
-/// as the struct form names a node after its struct. Refused when that is no identifier, as
+/// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase.
+/// Refused when that is no identifier, as
 /// for `_1`.
 pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> syn::Result<Ident> {
     let name = streamlib_node_schema::to_pascal_case(&function_ident.to_string());
@@ -47,29 +46,35 @@ pub(crate) fn node_name_of_a_node_function(function_ident: &Ident) -> syn::Resul
     Ok(Ident::new(&node_name.to_string(), function_ident.span()))
 }
 
-/// The refusal of a value input declared on a struct, or of a port typed by one, which only a
-/// node written as one function declares; `None` when the struct declares neither.
-pub(crate) fn refusal_of_a_value_input_on_a_struct(parsed: &ParsedNodeAttr) -> Option<syn::Error> {
-    let refusal = |named: &Ident| {
-        syn::Error::new(
-            named.span(),
-            format!(
-                "value input `{named}` is an input of a node written as one function: put \
-                 `#[node(...)]` on the node's function"
-            ),
-        )
-    };
-    if let Some(value_input) = parsed.value_inputs.first() {
-        return Some(refusal(&value_input.declared_ident));
+/// The refusal of `#[node(...)]` on anything but a function, showing the one form a node takes.
+const NODE_WRITTEN_AS_ONE_FUNCTION: &str = "#[node(...)] declares a node written as one \
+function; a node written as a struct, with a trait impl holding its lifecycle, is retired. \
+Write the node as a function whose body runs once, declares its computed values and returns \
+its per-frame function:
+
+    #[node(
+        execution = reactive,
+        input(\"video\", pin_type = Texture),
+        input(\"gain\", value = f32, default = 1.0),
+        output(\"video_out\", pin_type = Texture),
+    )]
+    pub fn gain_node(
+        gain: Input<f32>,
+        inputs: InputMailboxes,
+        outputs: OutputWriter,
+    ) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        let kernel = computed(move |ctx| build_the_kernel(ctx, *gain.get()));
+        move |ctx| run_a_frame(ctx, &inputs, &outputs, &kernel.get())
     }
-    parsed
-        .inputs
-        .iter()
-        .chain(&parsed.outputs)
-        .find_map(|port| match &port.pin_type_chosen_by {
-            Some(PinTypeChosenBy::ValueInput { named, .. }) => Some(refusal(named)),
-            _ => None,
-        })
+
+What `setup` opened is a `computed(...)` value, built again when an input it reads changes; \
+`teardown` is the drop of what the body made; a manual node returns nothing and its computed \
+values publish on their own.";
+
+/// The refusal of `#[node(...)]` written at `span` on a struct or any other item that is not a
+/// function, showing the node written as one function.
+pub(crate) fn refusal_of_a_node_not_written_as_a_function(span: proc_macro2::Span) -> syn::Error {
+    syn::Error::new(span, NODE_WRITTEN_AS_ONE_FUNCTION)
 }
 
 pub(crate) fn generate_from_a_node_function(
@@ -94,7 +99,6 @@ pub(crate) fn generate_from_a_node_function(
     let port_marker_visibility =
         author_visibility_written_from_a_nested_module(&item.vis, GENERATED_PORT_MARKER_DEPTH);
     let schema = parsed.to_node_schema();
-    let no_settings = NodeSettingsEmitted::of(None);
 
     let input_link_module = generate_port_marker_module(
         PortDirection::Input,
@@ -114,15 +118,9 @@ pub(crate) fn generate_from_a_node_function(
     let descriptor_impl = generate_descriptor_from_schema(
         &schema,
         &NodeDeclaredMetaAndPortDescriptions::of(parsed),
-        &no_settings,
         &value_inputs.descriptor_inputs(),
     );
-    let node_inherent_impl = node_inherent_impl(
-        &schema,
-        parsed.built_in_node,
-        &member_visibility,
-        &no_settings,
-    );
+    let node_inherent_impl = node_inherent_impl(&schema, parsed.built_in_node, &member_visibility);
     let members_read_from_the_schema =
         generated_node_members_read_from_the_schema(&schema, &descriptor_impl);
     let ipc_mailbox_fields = ipc_mailbox_fields(&schema, &member_visibility);
@@ -183,7 +181,6 @@ pub(crate) fn generate_from_a_node_function(
         &module_name,
         &sdk_root,
         &member_visibility,
-        &no_settings,
         quote! {
             /// The node the function declares, which runs its body once, when it is set up.
             #member_visibility struct Node {
@@ -515,22 +512,6 @@ fn refuse_a_form_the_function_does_not_take(
     item: &ItemFn,
     parsed: &ParsedNodeAttr,
 ) -> syn::Result<()> {
-    let span = item.sig.ident.span();
-    if parsed.settings_type.is_some() {
-        return Err(syn::Error::new(
-            span,
-            "a node written as one function takes no `settings = …`: declare each value it \
-             reads as an input, `input(\"name\", value = <type>, default = …)`, and read it with \
-             `.get()` in a `computed(…)` value or the per-frame function",
-        ));
-    }
-    if parsed.unsafe_send {
-        return Err(syn::Error::new(
-            span,
-            "a node written as one function takes no `unsafe_send`: its per-frame function and \
-             every computed value are `Send`",
-        ));
-    }
     for port in parsed.inputs.iter().chain(&parsed.outputs) {
         refuse_a_pin_type_no_value_input_chooses(port, &parsed.value_inputs)?;
     }
@@ -607,9 +588,8 @@ fn read_the_node_function(
     })
 }
 
-/// Refuse `port` of a node written as one function when it takes its pin type from anything but
-/// one of its `value_inputs` holding a pin type: a node function has no settings for
-/// `from_setting(…)` to name, and the input `from_input(…)` names holds the type chosen.
+/// Refuse `port` of a node function when the value input its `from_input(…)` names is not one
+/// of its `value_inputs`, or holds no pin type to choose.
 fn refuse_a_pin_type_no_value_input_chooses(
     port: &ParsedPort,
     value_inputs: &[ParsedValueInput],
@@ -617,15 +597,7 @@ fn refuse_a_pin_type_no_value_input_chooses(
     let port_ident = &port.declared_marker_ident;
     match &port.pin_type_chosen_by {
         None => Ok(()),
-        Some(PinTypeChosenBy::Setting(setting_name)) => Err(syn::Error::new(
-            port_ident.span(),
-            format!(
-                "port `{port_ident}` of a node written as one function states `pin_type = \
-                 from_setting(\"{setting_name}\")`; a node function has no settings: name the \
-                 value input choosing its type, `pin_type = from_input(<value input>)`"
-            ),
-        )),
-        Some(PinTypeChosenBy::ValueInput { named, cast_name }) => {
+        Some(PinTypeChosenBy { named, cast_name }) => {
             let Some(value_input) = value_inputs
                 .iter()
                 .find(|value_input| &value_input.cast_name == cast_name)

@@ -65,7 +65,7 @@ pub struct TensorToAudioInputs {
         "channels",
         description = "One Channels block per frame, one channel per name in `channel_names`",
         pin_type = Audio,
-        rate = from_setting("sample_rate")
+        rate = from_input(sample_rate)
     ),
 )]
 #[meta(

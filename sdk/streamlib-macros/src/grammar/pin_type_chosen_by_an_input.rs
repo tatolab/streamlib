@@ -1,18 +1,16 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A port whose pin type an input of its node chooses: `pin_type = from_setting("<setting>")` on
-//! a node written as a struct, `pin_type = from_input(<value input>)` on one written as one
-//! function.
+//! A port whose pin type, or a fact of whose stream, a value input of its node chooses:
+//! `pin_type = from_input(<value input>)`, `rate = from_input(<value input>)`.
 
 use streamlib_node_schema::cast_exposed_name_to_url_safe;
 use streamlib_node_schema::pin_type::{DeclaredPinType, PinAnnotations, PinDeclaration, PinFlow};
 use syn::parse::ParseStream;
 use syn::{Ident, LitStr, parenthesized};
 
-/// The pin of a port typed by the input `input_name`, as `pin_type = from_setting("…")` or
-/// `pin_type = from_input(…)` states it: a value, or of the flow it states, of the type the input
-/// chooses.
+/// The pin of a port typed by the input `input_name`, as `pin_type = from_input(…)` states it: a
+/// value, or of the flow it states, of the type the input chooses.
 pub(super) fn pin_typed_by_the_input_choosing_it(
     input_name: &str,
     flow: Option<(proc_macro2::Span, PinFlow)>,
@@ -28,66 +26,49 @@ pub(super) fn pin_typed_by_the_input_choosing_it(
     }
 }
 
-/// The input whose chosen pin type a port carries, as the port names it.
+/// The value input a port reads its pin type or a fact of its stream from, as
+/// `from_input(<value input>)` names it: spanned where it is named, with its name cast as every
+/// exposed name is.
 #[derive(Clone)]
-pub(crate) enum PinTypeChosenBy {
-    /// A setting of a node written as a struct, as `from_setting("<setting>")` names it.
-    Setting(String),
-    /// A value input of a node written as one function, as `from_input(<value input>)` names
-    /// it, spanned where it is named, with its name cast as every exposed name is.
-    ValueInput { named: Ident, cast_name: String },
-}
-
-impl PinTypeChosenBy {
-    /// The name of the input, as the node's descriptor names it.
-    pub(crate) fn input_name(&self) -> &str {
-        match self {
-            Self::Setting(setting_name) => setting_name,
-            Self::ValueInput { cast_name, .. } => cast_name,
-        }
-    }
+pub(crate) struct PinTypeChosenBy {
+    pub(crate) named: Ident,
+    pub(crate) cast_name: String,
 }
 
 impl std::fmt::Display for PinTypeChosenBy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Setting(setting_name) => write!(formatter, "from_setting(\"{setting_name}\")"),
-            Self::ValueInput { named, .. } => write!(formatter, "from_input({named})"),
-        }
+        write!(formatter, "from_input({})", self.named)
     }
 }
 
-/// Parse `from_setting("<setting>")` or `from_input(<value input>)` into the input it names,
-/// refusing any other call with `refusal` of the function it names.
+/// Parse `from_input(<value input>)` into the value input it names, refusing any other call with
+/// `refusal` of the function it names, and the retired `from_setting("…")` with the spelling that
+/// replaced it.
 pub(super) fn parse_the_input_choosing_a_pin_type(
     content: ParseStream<'_>,
     refusal: impl FnOnce(&Ident) -> String,
 ) -> syn::Result<PinTypeChosenBy> {
-    if !content.peek(Ident) || content.fork().parse::<Ident>()? != "from_input" {
-        return parse_from_setting(content, refusal).map(PinTypeChosenBy::Setting);
-    }
-    content.parse::<Ident>()?;
+    let function: Ident = content.parse()?;
     let arguments;
     parenthesized!(arguments in content);
+    if function == "from_setting" {
+        let named = arguments
+            .parse::<LitStr>()
+            .map_or_else(|_| "<value input>".to_owned(), |named| named.value());
+        return Err(syn::Error::new(
+            function.span(),
+            format!(
+                "`from_setting(\"{named}\")` is retired: a node has no settings, and a port names \
+                 the value input it follows by its identifier, `from_input({named})`"
+            ),
+        ));
+    }
+    if function != "from_input" {
+        return Err(syn::Error::new(function.span(), refusal(&function)));
+    }
     let named: Ident = arguments.parse()?;
     let cast_name = cast_exposed_name_to_url_safe(&named.to_string())
         .map_err(|casts_to_nothing| syn::Error::new(named.span(), casts_to_nothing))?
         .into_owned();
-    Ok(PinTypeChosenBy::ValueInput { named, cast_name })
-}
-
-/// Parse `from_setting("<setting>")` into the setting it names, refusing any other call with
-/// `refusal` of the function it names.
-pub(super) fn parse_from_setting(
-    content: ParseStream<'_>,
-    refusal: impl FnOnce(&Ident) -> String,
-) -> syn::Result<String> {
-    let function: Ident = content.parse()?;
-    if function != "from_setting" {
-        return Err(syn::Error::new(function.span(), refusal(&function)));
-    }
-    let arguments;
-    parenthesized!(arguments in content);
-    let setting_name: LitStr = arguments.parse()?;
-    Ok(setting_name.value())
+    Ok(PinTypeChosenBy { named, cast_name })
 }

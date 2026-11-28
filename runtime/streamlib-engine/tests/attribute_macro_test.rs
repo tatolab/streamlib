@@ -2,52 +2,44 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use streamlib_engine::core::GeneratedNode;
-use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
+use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextLimitedAccess};
+use streamlib_engine::iceoryx2::{InputMailboxes, OutputWriter};
 
 #[streamlib::sdk::node(
-    execution = manual,
+    execution = reactive,
     input("video_in", delivery_profile = "newest", pin_type = Texture),
     output("video_out", pin_type = Texture, formats = ["rgba8_unorm"]),
 )]
-pub struct TestNode;
-
-impl streamlib_engine::ManualNode for TestNode::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+pub fn test_node(
+    inputs: InputMailboxes,
+    outputs: OutputWriter,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        let _ = (&inputs, &outputs);
         Ok(())
     }
 }
 
 #[test]
-fn test_module_structure_generated() {
-    fn assert_node_type<T: streamlib_engine::core::ManualNode>() {}
+fn the_node_function_is_emitted_beside_a_module_named_after_its_node() {
+    fn assert_node_type<T: GeneratedNode>() {}
     assert_node_type::<TestNode::Node>();
 }
 
 #[test]
 fn test_input_link_module_exists() {
-    // Verify InputLink module has the expected port marker
     fn assert_input_marker<T: streamlib_engine::core::InputPortMarker>() {}
     assert_input_marker::<TestNode::InputLink::video_in>();
 }
 
 #[test]
 fn test_output_link_module_exists() {
-    // Verify OutputLink module has the expected port marker
     fn assert_output_marker<T: streamlib_engine::core::OutputPortMarker>() {}
     assert_output_marker::<TestNode::OutputLink::video_out>();
 }
 
 #[test]
 fn test_port_marker_names() {
-    // Verify port names are correct
     use streamlib_engine::core::{InputPortMarker, OutputPortMarker};
 
     assert_eq!(
@@ -63,8 +55,6 @@ fn test_port_marker_names() {
 #[test]
 fn test_node_instantiation() {
     let node = TestNode::Node::from_config(EmptyConfig).unwrap();
-
-    // Verify it has the expected name from YAML schema
     assert_eq!(node.name(), "TestNode");
 }
 
@@ -112,19 +102,15 @@ const PROBE_NODE_DESCRIPTION: &str = "Records `video_out` to `path`.";
     ),
 )]
 #[meta(category = "Probes/Recording", description = PROBE_NODE_DESCRIPTION)]
-pub struct DescribedProbeNode;
-
-impl streamlib_engine::ManualNode for DescribedProbeNode::Node {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
+pub fn described_probe_node(outputs: OutputWriter) {
+    drop(outputs);
 }
 
 #[test]
-fn the_class_short_name_is_the_authored_struct_ident() {
-    // `NAME` is the display-name default's only carrier. It comes off the item
-    // the attribute is attached to — never a string in the attribute, and never
-    // recovered by splitting the import path.
+fn the_class_short_name_is_the_node_function_named_in_upper_camel_case() {
+    // `NAME` is the display-name default's only carrier. It comes off the function the
+    // attribute is attached to — never a string in the attribute, and never recovered by
+    // splitting the import path.
     assert_eq!(TestNode::Node::NAME, "TestNode");
     assert_eq!(
         BareNode::Node::NAME,
@@ -134,26 +120,11 @@ fn the_class_short_name_is_the_authored_struct_ident() {
 }
 
 #[streamlib::sdk::node(execution = manual)]
-pub struct BareNode;
-
-impl streamlib_engine::ManualNode for BareNode::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn bare_node() {}
 
 #[test]
 fn a_bare_node_is_named_by_its_import_path() {
-    // The org/package synthesis is gone with the grammar. The class path is
-    // the whole identity, and it names the module the macro expanded in —
+    // The class path is the whole identity, and it names the module the macro expanded in —
     // nothing is synthesized and no file is read.
     assert_eq!(
         BareNode::node_class_import_path().as_str(),
@@ -161,89 +132,10 @@ fn a_bare_node_is_named_by_its_import_path() {
     );
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Default)]
-pub struct CfgGatedFieldLinuxOnlyState {
-    pub linux_only_marker: u32,
-}
-
-/// The non-Linux half of the same pair.
-#[cfg(not(target_os = "linux"))]
-#[derive(Default)]
-pub struct CfgGatedFieldNonLinuxOnlyState {
-    pub non_linux_only_marker: u32,
-}
-
-/// A field type compiled on every target, gated by an always-true `cfg`.
-#[derive(Default)]
-pub struct CfgGatedFieldAlwaysCompiledState {
-    pub always_compiled_marker: u32,
-}
-
-#[streamlib::sdk::node(
-    execution = manual,
-    input("video_in", delivery_profile = "newest", pin_type = Texture),
-    output("video_out", pin_type = Texture, formats = ["rgba8_unorm"]),
-)]
-pub struct CfgGatedFieldNode {
-    #[cfg(any())]
-    never_compiled_state: ThisTypeIsDeliberatelyUndeclared,
-    // The forwarded `allow` is load-bearing twice over: it silences
-    // `non_minimal_cfg` on the deliberately-degenerate always-true predicate,
-    // and it only reaches the generated field at all if the macro forwards lint
-    // controls — so this line also exercises that half of the filter in-tree.
-    #[allow(
-        clippy::non_minimal_cfg,
-        reason = "the test field exercises the macro forwarding lint controls"
-    )]
-    #[cfg(all())]
-    always_compiled_state: CfgGatedFieldAlwaysCompiledState,
-    #[cfg(target_os = "linux")]
-    linux_only_state: CfgGatedFieldLinuxOnlyState,
-    #[cfg(not(target_os = "linux"))]
-    non_linux_only_state: CfgGatedFieldNonLinuxOnlyState,
-}
-
-impl streamlib_engine::ManualNode for CfgGatedFieldNode::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
-
-#[test]
-fn cfg_gated_node_field_survives_onto_both_generated_sites() {
-    let node = CfgGatedFieldNode::Node::from_config(EmptyConfig).unwrap();
-    assert_eq!(node.always_compiled_state.always_compiled_marker, 0);
-    #[cfg(target_os = "linux")]
-    assert_eq!(node.linux_only_state.linux_only_marker, 0);
-    #[cfg(not(target_os = "linux"))]
-    assert_eq!(node.non_linux_only_state.non_linux_only_marker, 0);
-}
-
-#[test]
-fn cfg_gated_node_still_declares_its_port_fields_unconditionally() {
-    // The `inputs` / `outputs` handle fields are emitted ahead of the
-    // custom fields and are patched by name in `set_iceoryx2_resources` — the
-    // field-attribute filter must never reach them. Naming both fields here is
-    // the compile-level half; `is_configured()` is false until the host wires
-    // them after `from_config` returns.
-    let node = CfgGatedFieldNode::Node::from_config(EmptyConfig).unwrap();
-    assert!(!node.inputs.is_configured());
-    assert!(!node.outputs.is_configured());
-}
-
 #[test]
 fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
-    // Two fields, two jobs: the path is identity, the short name is only the
-    // display default. Collapsing either into the other is the regression.
+    // Two fields, two jobs: the path is identity, the short name is only the display default.
+    // Collapsing either into the other is the regression.
     let descriptor =
         <TestNode::Node as GeneratedNode>::descriptor().expect("the macro emits a descriptor");
     assert_eq!(descriptor.node_class_short_name.as_str(), "TestNode");
@@ -269,15 +161,8 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
     ),
     output("windows", pin_type = String, flow = Stream),
 )]
-pub struct WindowedAudioConsumer;
-
-impl streamlib_engine::ReactiveNode for WindowedAudioConsumer::Node {
-    fn process(
-        &mut self,
-        _ctx: &streamlib_engine::core::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
-        Ok(())
-    }
+pub fn windowed_audio_consumer() -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 #[test]
@@ -306,9 +191,9 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
     );
 }
 
-// A windowed consumer that names no channel count: its windows carry whatever
-// its source sends, which is what lets a graph grow a source without editing
-// every consumer downstream of it.
+// A windowed consumer that names no channel count: its windows carry whatever its source
+// sends, which is what lets a graph grow a source without editing every consumer downstream of
+// it.
 #[streamlib::sdk::node(
     execution = reactive,
     input(
@@ -318,15 +203,9 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
         pin_type = Audio,
     ),
 )]
-pub struct SourceFollowingAudioConsumer;
-
-impl streamlib_engine::ReactiveNode for SourceFollowingAudioConsumer::Node {
-    fn process(
-        &mut self,
-        _ctx: &streamlib_engine::core::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
-        Ok(())
-    }
+pub fn source_following_audio_consumer()
+-> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    |_ctx| Ok(())
 }
 
 #[test]
@@ -383,21 +262,7 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
     input("signals", delivery_profile = "ordered", pin_type = Audio),
     output("telemetry", pin_type = Audio, rate = 48000, dtype = "f64"),
 )]
-pub struct StreamFactsTestNode;
-
-impl streamlib_engine::ManualNode for StreamFactsTestNode::Node {
-    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
+pub fn stream_facts_test_node() {}
 
 #[test]
 fn a_ports_stream_facts_reach_the_descriptor_the_macro_emits_as_its_pins_annotations() {
@@ -417,6 +282,37 @@ fn a_ports_stream_facts_reach_the_descriptor_the_macro_emits_as_its_pins_annotat
     assert_eq!(
         telemetry.sample_type,
         Some(ChannelsOutputPortSampleType::F64)
+    );
+}
+
+#[streamlib::sdk::node(
+    execution = reactive,
+    input("sample_rate", value = u32, default = 48_000),
+    output("telemetry", pin_type = Audio, rate = from_input(sample_rate)),
+)]
+pub fn rate_following_test_node(
+    sample_rate: streamlib_engine::core::prelude::Input<u32>,
+) -> impl FnMut(&RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    move |_ctx| {
+        let _ = sample_rate.get();
+        Ok(())
+    }
+}
+
+#[test]
+fn a_rate_read_from_a_value_input_reaches_the_descriptor_naming_that_input() {
+    use streamlib_engine::core::descriptors::ChannelsOutputPortSampleRate;
+
+    let descriptor = RateFollowingTestNode::Node::descriptor().expect("a descriptor");
+    let telemetry = descriptor.outputs[0]
+        .declared_pin()
+        .expect("a typed output")
+        .annotations;
+    assert_eq!(
+        telemetry.sample_rate,
+        Some(ChannelsOutputPortSampleRate::FromSetting {
+            setting: "sample_rate".to_owned()
+        })
     );
 }
 

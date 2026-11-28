@@ -373,15 +373,10 @@ class AudioConsumer:
             pin_type = Audio,
         ),
     )]
-    struct RustDeclaredAudioConsumer;
-
-    impl streamlib::sdk::nodes::ReactiveNode for RustDeclaredAudioConsumer::Node {
-        fn process(
-            &mut self,
-            _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-        ) -> streamlib::sdk::error::Result<()> {
-            Ok(())
-        }
+    fn rust_declared_audio_consumer() -> impl FnMut(
+        &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+    ) -> streamlib::sdk::error::Result<()> {
+        |_ctx| Ok(())
     }
 
     #[test]

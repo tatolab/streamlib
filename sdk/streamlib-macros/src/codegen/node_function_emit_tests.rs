@@ -7,7 +7,7 @@
 
 use quote::quote;
 
-use super::{generate_from_a_node_function, refusal_of_a_value_input_on_a_struct};
+use super::{generate_from_a_node_function, refusal_of_a_node_not_written_as_a_function};
 use crate::grammar::{DeclaredNodeMeta, ParsedNodeAttr, parse2};
 
 fn parsed(attribute: proc_macro2::TokenStream) -> ParsedNodeAttr {
@@ -173,16 +173,6 @@ fn a_function_of_its_gain() -> proc_macro2::TokenStream {
     }
 }
 
-#[test]
-fn a_node_function_of_settings_is_refused() {
-    let refusal = refusal_of(
-        quote! { execution = reactive, settings = SomeSettings,
-        input("gain", value = f32, default = 0.5) },
-        a_function_of_its_gain(),
-    );
-    assert!(refusal.contains("takesno`settings=…`"), "{refusal}");
-}
-
 fn a_gain_on_its_own_clock() -> proc_macro2::TokenStream {
     quote! { execution = manual, input("gain", value = f32, default = 0.5) }
 }
@@ -332,19 +322,6 @@ fn a_function_returning_no_per_frame_function_is_refused() {
 }
 
 #[test]
-fn a_value_input_on_a_struct_is_refused() {
-    let refusal = refusal_of_a_value_input_on_a_struct(&parsed(quote! {
-        execution = reactive, input("gain", value = f32, default = 0.5)
-    }))
-    .expect("a struct declaring a value input is refused")
-    .to_string();
-    assert!(
-        refusal.contains("is an input of a node written as one function"),
-        "{refusal}"
-    );
-}
-
-#[test]
 fn a_context_taken_mutably_is_refused() {
     let refusal = refusal_of(
         quote! { execution = reactive, input("gain", value = f32, default = 0.5) },
@@ -438,28 +415,15 @@ fn a_port_typed_by_a_value_input_holding_no_pin_type_is_refused() {
 }
 
 #[test]
-fn a_port_of_a_node_function_typed_by_a_setting_is_refused() {
-    let refusal = refusal_of(
-        quote! {
-            execution = reactive,
-            input("format", value = Option<PinType>, default = None),
-            output("out", pin_type = from_setting("format")),
-        },
-        a_function_of_its_format(),
-    );
-    assert!(refusal.contains("anodefunctionhasnosettings"), "{refusal}");
-}
-
-#[test]
-fn a_port_of_a_struct_typed_by_a_value_input_is_refused() {
-    let refusal = refusal_of_a_value_input_on_a_struct(&parsed(quote! {
-        execution = reactive,
-        output("out", pin_type = from_input(format)),
-    }))
-    .expect("a struct port typed by a value input is refused")
-    .to_string();
+fn a_node_written_as_a_struct_is_refused_showing_the_node_written_as_one_function() {
+    let refusal =
+        refusal_of_a_node_not_written_as_a_function(proc_macro2::Span::call_site()).to_string();
     assert!(
-        refusal.contains("value input `format` is an input of a node written as one function"),
+        refusal.contains(
+            "a node written as a struct, with a trait impl holding its lifecycle, is retired"
+        ) && refusal.contains("pub fn gain_node(")
+            && refusal.contains("gain: Input<f32>,")
+            && refusal.contains("computed(move |ctx|"),
         "{refusal}"
     );
 }

@@ -15,8 +15,7 @@ use syn::{Ident, LitInt, LitStr, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
 use super::pin_type_chosen_by_an_input::{
-    PinTypeChosenBy, parse_from_setting, parse_the_input_choosing_a_pin_type,
-    pin_typed_by_the_input_choosing_it,
+    PinTypeChosenBy, parse_the_input_choosing_a_pin_type, pin_typed_by_the_input_choosing_it,
 };
 use super::string_literal_list::{parse_string_literal_list, parse_string_literals};
 use super::value_input_grammar::{
@@ -36,7 +35,7 @@ pub(crate) enum DeclaredPort {
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, pin_type = <PinType> |
-/// pin_type = from_setting("<setting>") | pin_type = from_input(<value input>), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
+/// pin_type = from_input(<value input>), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
 /// takes_a_value = true, <stream fact key> = …]`, or, for a value input of a node written as
 /// one function, `<name-string>, value = <Type>, default = <expression>[, description = "...",
 /// options = ["…", …] | among_the_bundles_its_stream_declares = true]`.
@@ -210,9 +209,7 @@ pub(super) fn parse_port(
                 let chosen_by = parse_the_input_choosing_a_pin_type(&content, |function| {
                     format!(
                         "port `{name}` declares `pin_type = {function}(…)` — a port typed by a \
-                         value input of a node written as one function states `pin_type = \
-                         from_input(<value input>)`, and one typed by a setting `pin_type = \
-                         from_setting(\"<setting>\")`"
+                         value input of its node states `pin_type = from_input(<value input>)`"
                     )
                 })?;
                 pin_type_chosen_by_an_input = Some((key_span, chosen_by));
@@ -335,9 +332,8 @@ pub(super) fn parse_port(
             return Err(syn::Error::new(
                 name_lit.span(),
                 format!(
-                    "port `{name}` declares no pin type — add `pin_type = …`, one of {}, \
-                     `pin_type = from_input(<value input>)` or `pin_type = \
-                     from_setting(\"<setting>\")`",
+                    "port `{name}` declares no pin type — add `pin_type = …`, one of {}, or \
+                     `pin_type = from_input(<value input>)`",
                     rendered_rust_declared_pin_type_names()
                 ),
             ));
@@ -365,7 +361,7 @@ pub(super) fn parse_port(
             (Some(pin_type), pin, None)
         }
         StatedPinType::ChosenBy(chosen_by) => {
-            let pin = pin_typed_by_the_input_choosing_it(chosen_by.input_name(), flow);
+            let pin = pin_typed_by_the_input_choosing_it(&chosen_by.cast_name, flow);
             (None, pin, Some(chosen_by))
         }
     };
@@ -613,19 +609,19 @@ fn parse_pin_type(pin_type_ident: &Ident, port_name: &str) -> syn::Result<PinTyp
         })
 }
 
-/// Parse `from_setting("name")`, when that is what follows, into the setting the fact is read
-/// from.
-fn parse_the_setting_a_fact_is_read_from(content: ParseStream<'_>) -> syn::Result<Option<String>> {
+/// Parse `from_input(<value input>)`, when that is what follows, into the cast name of the value
+/// input the fact is read from.
+fn parse_the_input_a_fact_is_read_from(content: ParseStream<'_>) -> syn::Result<Option<String>> {
     if !peeks_a_call(content) {
         return Ok(None);
     }
-    parse_from_setting(content, |function| {
+    parse_the_input_choosing_a_pin_type(content, |function| {
         format!(
-            "expected `from_setting(\"<setting>\")`, found `{function}(…)` — a Rust node holds \
-             no config, so a fact read at setup is read from one of its settings"
+            "expected `from_input(<value input>)`, found `{function}(…)` — a fact a port \
+             states of its stream is a number, or read from a value input of its node"
         )
     })
-    .map(Some)
+    .map(|chosen_by| Some(chosen_by.cast_name))
 }
 
 /// The stream facts a port states beside its pin type: the pixel formats of a Texture, and the
@@ -706,9 +702,9 @@ fn parse_stream_fact_key(
     match fact_key {
         "formats" => stream_facts.formats = parse_string_literal_list(content, "formats")?,
         "rate" => {
-            annotations.sample_rate = Some(match parse_the_setting_a_fact_is_read_from(content)? {
-                Some(setting_name) => ChannelsOutputPortSampleRate::FromSetting {
-                    setting: setting_name,
+            annotations.sample_rate = Some(match parse_the_input_a_fact_is_read_from(content)? {
+                Some(input_name) => ChannelsOutputPortSampleRate::FromSetting {
+                    setting: input_name,
                 },
                 None => {
                     let rate: LitInt = content.parse()?;
@@ -717,9 +713,9 @@ fn parse_stream_fact_key(
             });
         }
         "frame_rate" => {
-            annotations.frame_rate = Some(match parse_the_setting_a_fact_is_read_from(content)? {
-                Some(setting_name) => ImageOutputPortFrameRate::FromSetting {
-                    setting: setting_name,
+            annotations.frame_rate = Some(match parse_the_input_a_fact_is_read_from(content)? {
+                Some(input_name) => ImageOutputPortFrameRate::FromSetting {
+                    setting: input_name,
                 },
                 None => {
                     let frames_per_second: LitInt = content.parse()?;

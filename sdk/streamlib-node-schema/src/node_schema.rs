@@ -346,13 +346,13 @@ pub struct NodePortSchema {
     /// What an output states of its stream as the annotations of its pin.
     #[serde(default)]
     pub annotations: crate::pin_type::PinAnnotations,
-    /// The pin type this port declares; `None` when a setting chooses it.
+    /// The pin type this port declares; `None` when a value input chooses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_type: Option<crate::pin_type::PinType>,
-    /// The setting whose chosen pin type this port carries, as `pin_type = from_setting("…")`
+    /// The value input whose chosen pin type this port carries, as `pin_type = from_input(…)`
     /// states it; `None` when the port states its type itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pin_type_from_setting: Option<String>,
+    pub pin_type_from_input: Option<String>,
     /// Whether a value set live on this input is kept across Stop and a restart of the runtime,
     /// or reset at Stop; kept when it declares none, and on every output port.
     #[serde(default, skip_serializing_if = "crate::NodeValueLifetime::is_kept")]

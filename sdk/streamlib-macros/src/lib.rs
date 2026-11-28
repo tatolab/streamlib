@@ -2,22 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod codegen;
-mod field_attribute;
 mod grammar;
-mod node_settings;
 
 use grammar as attribute_grammar;
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Item, ItemFn, ItemStruct, parse_macro_input};
+use syn::{Item, ItemFn, parse_macro_input};
 
-/// Declares a node type, on a struct or on a function.
-///
-/// On a function, the node is written as one function: its body runs once, when the node is set
-/// up, declares the node's `computed(…)` values and returns its per-frame function. Its
-/// parameters are the node's value inputs as `Input<T>` handles, each declared with
+/// Declares a node type written as one function: its body runs once, when the node is set up,
+/// declares the node's `computed(…)` values and returns its per-frame function. Its parameters are the node's value inputs as `Input<T>` handles, each declared with
 /// `input("name", value = T, default = …)`, a String chosen from a list stating `options = ["…",
 /// …]` and an `Option<PinType>` choosing a bundle its stream declares stating
 /// `among_the_bundles_its_stream_declares = true`, and named after its input, its `InputMailboxes`, its
@@ -27,13 +22,14 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item = parse_macro_input!(item as Item);
     match item {
         Item::Fn(item_fn) => node_function(attr, item_fn),
-        Item::Struct(item_struct) => node_struct(attr, item_struct),
-        other => syn::Error::new(
-            other.span(),
-            "#[node(...)] declares a node on a struct, or on a function written as one function",
-        )
-        .to_compile_error()
-        .into(),
+        Item::Struct(item_struct) => {
+            codegen::refusal_of_a_node_not_written_as_a_function(item_struct.ident.span())
+                .to_compile_error()
+                .into()
+        }
+        other => codegen::refusal_of_a_node_not_written_as_a_function(other.span())
+            .to_compile_error()
+            .into(),
     }
 }
 
@@ -56,39 +52,6 @@ fn node_function(attr: TokenStream, mut item_fn: ItemFn) -> TokenStream {
         &parsed,
         sdk_root(),
     ))
-}
-
-fn node_struct(attr: TokenStream, mut item_struct: ItemStruct) -> TokenStream {
-    let node_meta =
-        match attribute_grammar::DeclaredNodeMeta::take_from_attributes(&mut item_struct.attrs) {
-            Ok(node_meta) => node_meta,
-            Err(err) => return err.to_compile_error().into(),
-        };
-    let parsed = match attribute_grammar::parse2(attr.into(), node_meta, &item_struct.ident) {
-        Ok(parsed) => parsed,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    if let Some(refusal) = codegen::refusal_of_a_value_input_on_a_struct(&parsed) {
-        return refusal.to_compile_error().into();
-    }
-
-    TokenStream::from(codegen::generate_from_parsed_node_attr(
-        &item_struct,
-        &parsed,
-        sdk_root(),
-    ))
-}
-
-/// Declares a struct as a node type's settings: each field an input read once, when the node is
-/// set up, from its value or from a Value wire into it, described by `#[description = "…"]`. A
-/// node takes it with `#[node(settings = …)]`.
-#[proc_macro_attribute]
-pub fn node_settings(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_struct = parse_macro_input!(item as ItemStruct);
-    match node_settings::expand_node_settings(attr.into(), item_struct, sdk_root()) {
-        Ok(expanded) => expanded.into(),
-        Err(refusal) => refusal.to_compile_error().into(),
-    }
 }
 
 /// Resolve the path to the `sdk` module the emitted code authors against.

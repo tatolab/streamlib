@@ -397,13 +397,6 @@ impl NodeDescriptor {
         self
     }
 
-    /// Declare each of the settings `S` as one of the node type's inputs, after those it
-    /// declares already.
-    pub fn with_the_inputs_of_its_settings<S: crate::NodeSettings>(mut self) -> Self {
-        self.inputs.extend(S::setting_inputs());
-        self
-    }
-
     pub fn with_output(mut self, port: PortDescriptor) -> Self {
         self.outputs.push(port);
         self
