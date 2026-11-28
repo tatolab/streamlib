@@ -260,8 +260,8 @@ impl PortInfo {
             .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_each_run)
     }
 
-    /// Whether this input is a setting a node reads once, when it is set up, so a value set on
-    /// it while the node runs rebuilds the node.
+    /// Whether this input is a setting a node reads once, when it is set up; a value set on it
+    /// while the node runs is handed to the node.
     pub fn is_a_setting_read_at_setup(&self) -> bool {
         self.input_mode
             .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_at_setup)

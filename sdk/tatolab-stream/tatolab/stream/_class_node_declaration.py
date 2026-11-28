@@ -87,7 +87,7 @@ class ClassNodeMember:
     pin_declaration: PinDeclarationOnTheWire
 
     a_setting: bool
-    """Whether the field is read at setup, so a change rebuilds the node and is never assigned live."""
+    """Whether the field is declared read at setup; a change is assigned live all the same."""
 
     default: object
     """The field's default, `NO_DEFAULT` for a pin."""

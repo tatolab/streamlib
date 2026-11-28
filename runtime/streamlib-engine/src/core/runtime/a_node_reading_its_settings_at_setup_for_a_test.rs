@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A node type for tests that reads three settings once, at setup, and records each setup it
-//! runs: what a test of a node rebuilt to take a setting read at setup runs; and a node type
-//! whose Integer output, which flows as a value, a test writes, to wire into one of them, with
-//! a setting read at setup of its own that another source's wire may feed; a node type like the
+//! Node types for tests: one that reads three settings at setup and records each setup it runs
+//! and each set of values it is handed after, what a test of a node handed an input live runs;
+//! one whose Integer output, which flows as a value, a test writes, to wire into one of them,
+//! with a setting read at setup of its own that another source's wire may feed; one like the
 //! first whose pin group of Integer layers follows its wires; and one whose pin group of Integer
 //! taps holds as many slots as its count says.
 
@@ -25,14 +25,14 @@ use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::GraphNode;
 use crate::core::nodes::{DynGeneratedNode, NODE_REGISTRY};
 
-/// The kernel size the fixture node cannot build with.
-pub const A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH: i64 = 0;
-
 /// The kernel size the fixture node refuses to be handed at all, before its setup.
 pub const A_KERNEL_SIZE_IT_IS_NOT_HANDED: i64 = -1;
 
 /// Each setup the fixture node ran, by node: the settings it read.
 static SETUPS_RUN: Mutex<Vec<(Uuid, Map<String, Value>)>> = Mutex::new(Vec::new());
+
+/// Each set of values the fixture node was handed, by node, in the order handed.
+static VALUES_HANDED: Mutex<Vec<(Uuid, Map<String, Value>)>> = Mutex::new(Vec::new());
 
 /// Each setup and teardown the fixture node ran, by node, in the order run.
 static SETUPS_AND_TEARDOWNS_RUN: Mutex<Vec<(Uuid, WhatANodeRan)>> = Mutex::new(Vec::new());
@@ -73,8 +73,8 @@ fn a_setting_read_at_setup(name: &str, pin_type: PinType) -> PortDescriptor {
     )
 }
 
-/// A node reading `kernel_size`, `width` and `height` once, at setup, refusing to build with the
-/// kernel size [`A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH`].
+/// A node reading `kernel_size`, `width` and `height` at setup and taking them again each time
+/// it is handed them, refusing to be handed the kernel size [`A_KERNEL_SIZE_IT_IS_NOT_HANDED`].
 struct NodeReadingItsSettingsAtSetup {
     node_uuid: Uuid,
     descriptor: NodeDescriptor,
@@ -89,11 +89,6 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
         SETUPS_AND_TEARDOWNS_RUN
             .lock()
             .push((self.node_uuid, WhatANodeRan::Setup));
-        if self.settings.get("kernel_size") == Some(&json!(A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH)) {
-            return Err(Error::Configuration(format!(
-                "a kernel of size {A_KERNEL_SIZE_IT_CANNOT_BUILD_WITH} blurs nothing"
-            )));
-        }
         Ok(())
     }
 
@@ -166,6 +161,9 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
                 "a kernel of size {A_KERNEL_SIZE_IT_IS_NOT_HANDED} is not taken"
             )));
         }
+        VALUES_HANDED
+            .lock()
+            .push((self.node_uuid, input_values.clone()));
         self.settings = input_values.clone();
         Ok(())
     }
@@ -401,6 +399,17 @@ pub fn the_node_type_reading_its_settings_at_setup() -> NodeClassImportPath {
 pub fn forget_every_setup_run() {
     SETUPS_RUN.lock().clear();
     SETUPS_AND_TEARDOWNS_RUN.lock().clear();
+    VALUES_HANDED.lock().clear();
+}
+
+/// The values the node `node` was last handed, if it was handed any.
+pub fn the_values_last_handed_to(node: Uuid) -> Option<Map<String, Value>> {
+    VALUES_HANDED
+        .lock()
+        .iter()
+        .rev()
+        .find(|(handed, _)| *handed == node)
+        .map(|(_, values)| values.clone())
 }
 
 /// Each setup and teardown a node of the type ran, by node, in the order run.

@@ -22,7 +22,7 @@ use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::InputValueSetOnANode;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    KeptNodesLeftToRebuild, LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
+    LinksAReconcileMakes, RunningLinkBetweenTwoNodesByUuid,
 };
 use crate::core::compiler::compiler_ops::node_interpreter_describe::a_node_interpreter_describes;
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
@@ -277,7 +277,6 @@ impl LoadedStreamInThisRuntime {
         self.reconcile_the_live_graph_to_the_graph_document(
             graph_document,
             LinksAReconcileMakes::EachAsASavedGraphsLink,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
             stream_documents_an_edit_staged,
         )
         .await
@@ -285,7 +284,6 @@ impl LoadedStreamInThisRuntime {
 
     /// Apply `graph_operation` to this stream's graph as drawn and reconcile the live graph to
     /// the result, the live graph reconciled back to what it was drawn as when that is refused.
-    /// Each node either reconcile leaves to rebuild is left to the caller's rebuild.
     async fn apply_a_stream_graph_operation_by_reconciling_the_live_graph(
         &self,
         mut graph_operation: StreamGraphOperation,
@@ -320,7 +318,6 @@ impl LoadedStreamInThisRuntime {
             .reconcile_the_live_graph_to_the_graph_document(
                 graph_document.to_value(),
                 LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-                KeptNodesLeftToRebuild::RebuiltByTheCaller,
                 &StreamDocumentsAnEditStaged::default(),
             )
             .await
@@ -329,7 +326,6 @@ impl LoadedStreamInThisRuntime {
                 .reconcile_the_live_graph_to_the_graph_document(
                     graph_as_drawn,
                     LinksAReconcileMakes::EachAsASavedGraphsLink,
-                    KeptNodesLeftToRebuild::RebuiltByTheCaller,
                     &StreamDocumentsAnEditStaged::default(),
                 )
                 .await
@@ -447,20 +443,12 @@ impl LoadedStreamInThisRuntime {
                 value,
             })
             .collect();
-        self.set_the_input_values_of_a_node(&node_run_id, sets.clone())?;
-        if sets
-            .iter()
-            .any(|set| self.is_a_setting_the_node_reads_at_setup(&node_run_id, &set.input))
-        {
-            self.leave_the_node_to_rebuild(&node_run_id);
-        }
+        self.set_the_input_values_of_a_node(&node_run_id, sets)?;
         Ok(())
     }
 
     /// Set the input value `input` of `node`, or its member `member` when one is named, to
-    /// `value`, `None` taking it off. A setting the node reads at setup is saved and leaves the
-    /// node to rebuild, which [`Self::rebuild_each_node_a_setting_read_at_setup_changed`] does
-    /// once for every such set made before it.
+    /// `value`, `None` taking it off, and hand the node what its inputs read now.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,
@@ -469,11 +457,7 @@ impl LoadedStreamInThisRuntime {
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         let node_run_id = self.the_node_of_the_node(node)?;
-        self.set_pin_value(&node_run_id, input, member, value)?;
-        if self.is_a_setting_the_node_reads_at_setup(&node_run_id, input) {
-            self.leave_the_node_to_rebuild(&node_run_id);
-        }
-        Ok(())
+        self.set_pin_value(&node_run_id, input, member, value)
     }
 
     /// Whether input `input` of the node `node` takes a `Connection`, whose wire the graph as

@@ -137,8 +137,9 @@ def assign_live_field_values(node_instance: object, field_values: Mapping[str, o
     """Assign each of `field_values`, by its port's name and in its Python form, to the field it names on a running node.
 
     A field of a slot, `layers.0.opacity`, gives its group that slot again holding the value. A
-    setting is left as it is, since a change to one rebuilds the node, and a name that is no
-    field is refused with a `ValueError` before anything is assigned.
+    setting is assigned as any field is, and a node that read it only in `__init__()` reads the
+    new value nowhere. A name that is no field is refused with a `ValueError` before anything is
+    assigned.
     """
     node_class = type(node_instance)
     fields = {member.port: member for member in _the_members_of(node_class) if member.form == "field"}
@@ -151,15 +152,17 @@ def assign_live_field_values(node_instance: object, field_values: Mapping[str, o
     for port, value in field_values.items():
         if port in slot_fields:
             pin_group, slot, member = _the_slot_field_named(node_instance, port)
-            if not member.a_setting:
-                slots_given.setdefault((pin_group.attribute, slot), {})[member.attribute] = value
-            continue
-        member = fields[port]
-        if not member.a_setting:
-            setattr(node_instance, member.attribute, value)
+            slots_given.setdefault((pin_group.attribute, slot), {})[member.attribute] = value
+    # Every group's slots are built before anything is assigned, so a slot that refuses its
+    # values leaves the node as it was.
+    groups_given: dict[str, list[Any]] = {}
     for (attribute, slot), values in slots_given.items():
-        slots = list(getattr(node_instance, attribute))
+        slots = groups_given.setdefault(attribute, list(getattr(node_instance, attribute)))
         slots[slot] = dataclasses.replace(slots[slot], **values)
+    for port, value in field_values.items():
+        if port not in slot_fields:
+            setattr(node_instance, fields[port].attribute, value)
+    for attribute, slots in groups_given.items():
         setattr(node_instance, attribute, tuple(slots))
 
 

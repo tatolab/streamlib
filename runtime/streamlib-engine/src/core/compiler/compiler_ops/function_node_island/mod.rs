@@ -578,51 +578,69 @@ pub(crate) fn hand_each_reader_an_island_evaluating_the_nodes_again_when_it_chan
 
 /// Hand the reader of each of `island_links` its island again, in place of the one it
 /// evaluates, when the two differ: re-recorded and, for a reader that already runs, handed over.
+/// A link whose reader is not handed its island leaves every other link tried, and the first
+/// such failure is answered.
 fn hand_each_reader_its_island_again_when_it_changed(
     graph: &mut Graph,
     island_links: Vec<LinkUniqueId>,
 ) -> Result<()> {
+    let mut first_not_handed_over = None;
     for link_id in island_links {
-        let reader_id = link_in(graph, &link_id)?.to_port().node_run_id().clone();
-        let Some(reader_link_wiring) = graph
-            .traversal()
-            .v(&reader_id)
-            .first()
-            .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
-            .map(|component| std::sync::Arc::clone(&component.0))
-        else {
-            continue;
-        };
-        record_the_stream_facts_an_island_link_carries_on(graph, &link_id)?;
-        let island_as_it_is_now = the_island_feeding_a_link(graph, &link_id)?;
-        if reader_link_wiring
-            .the_function_node_island_recorded_for_a_link(link_id.as_str())
-            .as_ref()
-            == Some(&island_as_it_is_now)
+        if let Err(not_handed_over) = hand_a_reader_its_island_again_when_it_changed(graph, link_id)
         {
-            continue;
+            tracing::warn!(
+                %not_handed_over,
+                "a reader was not handed its function node island again"
+            );
+            first_not_handed_over.get_or_insert(not_handed_over);
         }
-        tracing::info!(
-            "Handing `{reader_id}` the function node island of {link_id} again, as this edit \
-             changed it"
-        );
-        let function_node_ids = the_function_node_ids_an_island_calls(&island_as_it_is_now);
-        let answer_awaited_from_the_reader = reader_link_wiring
-            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
-                island_as_it_is_now,
-            )?;
-        reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
-            function_node_ids.iter().filter_map(|function_node_id| {
-                the_report_of_how_its_helpers_ran_a_function_node(graph, function_node_id)
-                    .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
-            }),
-        );
-        mark_an_island_link_by_whether_its_reader_owes_an_answer(
-            graph,
-            &link_id,
-            answer_awaited_from_the_reader,
-        )?;
     }
+    first_not_handed_over.map_or(Ok(()), Err)
+}
+
+fn hand_a_reader_its_island_again_when_it_changed(
+    graph: &mut Graph,
+    link_id: LinkUniqueId,
+) -> Result<()> {
+    let reader_id = link_in(graph, &link_id)?.to_port().node_run_id().clone();
+    let Some(reader_link_wiring) = graph
+        .traversal()
+        .v(&reader_id)
+        .first()
+        .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+        .map(|component| std::sync::Arc::clone(&component.0))
+    else {
+        return Ok(());
+    };
+    record_the_stream_facts_an_island_link_carries_on(graph, &link_id)?;
+    let island_as_it_is_now = the_island_feeding_a_link(graph, &link_id)?;
+    if reader_link_wiring
+        .the_function_node_island_recorded_for_a_link(link_id.as_str())
+        .as_ref()
+        == Some(&island_as_it_is_now)
+    {
+        return Ok(());
+    }
+    tracing::info!(
+        "Handing `{reader_id}` the function node island of {link_id} again, as this edit \
+         changed it"
+    );
+    let function_node_ids = the_function_node_ids_an_island_calls(&island_as_it_is_now);
+    let answer_awaited_from_the_reader = reader_link_wiring
+        .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+            island_as_it_is_now,
+        )?;
+    reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
+        function_node_ids.iter().filter_map(|function_node_id| {
+            the_report_of_how_its_helpers_ran_a_function_node(graph, function_node_id)
+                .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
+        }),
+    );
+    mark_an_island_link_by_whether_its_reader_owes_an_answer(
+        graph,
+        &link_id,
+        answer_awaited_from_the_reader,
+    )?;
     Ok(())
 }
 

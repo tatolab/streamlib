@@ -112,19 +112,6 @@ impl LinksAReconcileMakes {
     }
 }
 
-/// Whether the caller of a reconcile rebuilds, once it commits, each kept node a setting read
-/// at setup leaves to rebuild.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::core::runtime) enum KeptNodesLeftToRebuild {
-    /// Rebuilt by the caller, so a kept node left to rebuild is not handed the document's values
-    /// live: the ports it was built with may carry another type than its values now choose,
-    /// and its rebuild reads them.
-    RebuiltByTheCaller,
-    /// Not rebuilt by the caller, so each kept node is handed the document's values live, and
-    /// a node that does not take them fails the reconcile.
-    HandedTheirValuesLive,
-}
-
 /// One node the live graph holds, as a reconcile compares it to the document's.
 pub(in crate::core::runtime) struct LiveNodeAsTheGraphHoldsIt {
     pub(in crate::core::runtime) node_run_id: NodeRunId,
@@ -170,21 +157,17 @@ impl LoadedStreamInThisRuntime {
     /// as `links_it_makes` says, is kept when its pin types or Image formats alone refuse it and
     /// both its ends travel as one kind of message, and is set aside, not made, when the engine
     /// cannot wire it; so is a link the stream held set aside before, and a link the live graph
-    /// keeps that the engine cannot wire once the reconcile made its links. A kept node left to
-    /// rebuild is handed its values, or left to its rebuild, as `left_to_rebuild` says. Each
-    /// stream fragment placing a stream `stream_documents_an_edit_staged` holds places it as the
+    /// keeps that the engine cannot wire once the reconcile made its links. Each stream fragment placing a stream `stream_documents_an_edit_staged` holds places it as the
     /// edit staged it rather than as its document is on disk.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
-        left_to_rebuild: KeptNodesLeftToRebuild,
         stream_documents_an_edit_staged: &StreamDocumentsAnEditStaged,
     ) -> Result<()> {
         self.in_one_commit(self.reconcile_the_live_graph_within_the_graph_edits_held(
             graph_document,
             links_it_makes,
-            left_to_rebuild,
             stream_documents_an_edit_staged,
         ))
         .await
@@ -196,7 +179,6 @@ impl LoadedStreamInThisRuntime {
         self: &Arc<Self>,
         graph_document: serde_json::Value,
         links_it_makes: LinksAReconcileMakes,
-        left_to_rebuild: KeptNodesLeftToRebuild,
     ) -> Result<()> {
         let stream = Arc::clone(self);
         self.block_on_the_engines_tokio_runtime(async move {
@@ -204,7 +186,6 @@ impl LoadedStreamInThisRuntime {
                 .reconcile_the_live_graph_to_the_graph_document(
                     graph_document,
                     links_it_makes,
-                    left_to_rebuild,
                     &StreamDocumentsAnEditStaged::default(),
                 )
                 .await
@@ -217,7 +198,6 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_document: Value,
         links_it_makes: LinksAReconcileMakes,
-        left_to_rebuild: KeptNodesLeftToRebuild,
         stream_documents_an_edit_staged: &StreamDocumentsAnEditStaged,
     ) -> Result<()> {
         if let Value::Object(document) = &mut graph_document {
@@ -407,19 +387,6 @@ impl LoadedStreamInThisRuntime {
                 }
                 None => document_input_values,
             };
-            let a_setting_read_at_setup_changes = live_node
-                .input_values
-                .keys()
-                .chain(document_input_values.keys())
-                .filter(|input| {
-                    live_node.input_values.get(*input) != document_input_values.get(*input)
-                })
-                .any(|input| {
-                    self.is_a_setting_the_node_reads_at_setup(&live_node.node_run_id, input)
-                });
-            if a_setting_read_at_setup_changes {
-                self.leave_the_node_to_rebuild(&live_node.node_run_id);
-            }
             if live_node.input_values != document_input_values
                 || live_node.studio != document_node.studio
             {
@@ -427,9 +394,6 @@ impl LoadedStreamInThisRuntime {
                     node_run_id: live_node.node_run_id.clone(),
                     input_values: document_input_values,
                     studio: document_node.studio.clone(),
-                    handed_over_now: left_to_rebuild
-                        == KeptNodesLeftToRebuild::HandedTheirValuesLive
-                        || !self.is_left_to_rebuild(&live_node.node_run_id),
                 });
             }
         }

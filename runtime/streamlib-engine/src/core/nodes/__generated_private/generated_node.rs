@@ -36,7 +36,7 @@ pub trait GeneratedNode: Send + 'static {
         )
     }
 
-    /// Take the settings `input_values` hold, each read at setup, until the node is set up;
+    /// Take the settings `input_values` hold, before the node is set up or while it runs;
     /// refused when one holds a value its setting does not take. A node type declaring no
     /// settings takes none.
     fn take_the_settings_the_input_values_hold(

@@ -151,7 +151,7 @@ pub(crate) fn the_function_node_pool_evaluates_an_island_from_into(
         return false;
     }
     if reader.node_kind() == Some(NodeKind::Shader)
-        || graph.is_a_setting_read_at_setup(reader_id, to.port_name())
+        || graph.is_a_setting_whose_wire_the_engine_reads(reader_id, to.port_name())
     {
         return true;
     }
@@ -278,7 +278,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
 
 /// Replace `link_id` with a link from its island into a new input of the pool
 /// and a link from the matching new output of the pool into its reader. A
-/// carry into a setting read at setup is written as the pool sets up too, so
+/// carry into a setting is written as the pool sets up too, so
 /// its reader, set up after the pool, is built with what the island computes.
 fn carry_one_link_through_the_pool(
     graph: &mut Graph,
@@ -304,8 +304,10 @@ fn carry_one_link_through_the_pool(
                 .find(|port| port.name == source.port_name())
         })
         .is_some_and(|port| the_input_an_output_takes_the_type_of(port).is_some());
-    let feeds_a_setting_read_at_setup =
-        graph.is_a_setting_read_at_setup(destination.node_run_id(), destination.port_name());
+    let feeds_a_setting = graph.is_a_setting_whose_wire_the_engine_reads(
+        destination.node_run_id(),
+        destination.port_name(),
+    );
     let pin =
         the_pin_a_link_out_of_an_output_carries(graph, source.node_run_id(), source.port_name());
     let written_as = if !hands_a_message_on_unread
@@ -360,7 +362,7 @@ fn carry_one_link_through_the_pool(
         CARRY_WRITTEN_AS_KEY.to_owned(),
         JsonValue::String(written_as.to_owned()),
     );
-    if feeds_a_setting_read_at_setup {
+    if feeds_a_setting {
         carry.insert("written_at_setup".to_owned(), JsonValue::Bool(true));
     }
     let mut every_carry = every_carry_of(pool);

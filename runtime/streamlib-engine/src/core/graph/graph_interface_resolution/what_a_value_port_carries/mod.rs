@@ -17,9 +17,19 @@ use crate::core::graph::PortInfo;
 pub(crate) fn what_the_value_port_of_an_interface_node_carries(
     settings: Option<&serde_json::Value>,
 ) -> std::result::Result<Option<PinType>, String> {
+    settings.and_then(serde_json::Value::as_object).map_or(
+        Ok(None),
+        the_pin_type_the_settings_of_an_interface_node_choose,
+    )
+}
+
+/// The pin type the `pin_type` setting among `settings` of an interface node chooses, `None`
+/// when it holds none; refused for a pin type no link carries.
+pub(crate) fn the_pin_type_the_settings_of_an_interface_node_choose(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> std::result::Result<Option<PinType>, String> {
     let Some(held) = settings
-        .and_then(serde_json::Value::as_object)
-        .and_then(|settings| settings.get(GRAPH_INTERFACE_PIN_TYPE_SETTING))
+        .get(GRAPH_INTERFACE_PIN_TYPE_SETTING)
         .filter(|held| !held.is_null())
     else {
         return Ok(None);

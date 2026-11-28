@@ -33,8 +33,7 @@ use crate::core::compiler::compiler_ops::function_node_promotion::{
 };
 use crate::core::compiler::compiler_ops::running_node_restart::{
     RunningNodesALiveEditRestarts, forget_the_build_of_each_node_restarted,
-    hold_each_link_to_wire_again_as_pending, the_running_nodes_a_rebuild_restarts,
-    unwire_each_link_of_the_nodes_restarted,
+    hold_each_link_to_wire_again_as_pending, unwire_each_link_of_the_nodes_restarted,
 };
 use crate::core::compiler::compiler_ops::shader_node_island::{
     hand_each_running_host_the_island_placed_on_it, place_each_shader_node_island_on_its_host,
@@ -276,14 +275,7 @@ impl Compiler {
                 &links_changed,
             )?;
             let nodes_restarted = shader_node_islands_placed_anew
-                .the_nodes_and_links_built_again_in_their_new_place()
-                .joined_with(the_running_nodes_a_rebuild_restarts(
-                    &graph,
-                    &plan.nodes_to_rebuild,
-                    &plan.nodes_to_add,
-                    &node_ids_to_remove,
-                    &links_changed,
-                )?);
+                .the_nodes_and_links_built_again_in_their_new_place();
             (shader_node_islands_placed_anew, nodes_restarted)
         };
         plan.add_each_node_and_link_restarted(&nodes_restarted);
@@ -783,11 +775,6 @@ fn the_plan_these_operations_make(
             }
             PendingOperation::RemoveLink(id) => {
                 plan.links_to_remove.push(id);
-            }
-            PendingOperation::RebuildNode(node_run_id) => {
-                if !plan.nodes_to_rebuild.contains(&node_run_id) {
-                    plan.nodes_to_rebuild.push(node_run_id);
-                }
             }
             PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(node_run_id) => {
                 if !plan

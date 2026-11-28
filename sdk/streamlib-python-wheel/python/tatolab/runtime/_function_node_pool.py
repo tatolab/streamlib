@@ -14,7 +14,7 @@ setting its reader reads at setup is written as the pool sets up too, so the
 reader, which the engine sets up after the pool, is built with its value; an
 island that raises there is logged, and its reader is built with the setting's
 own value. Such an island is written again only once its value changes, since
-each value the engine reads into a setting may rebuild its node.
+the engine hands the setting's node each value it reads into it.
 """
 
 from __future__ import annotations

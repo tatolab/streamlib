@@ -211,9 +211,9 @@ class PinGroup(Generic[SlotOfTheGroup]):
     values as set. A slot wired or unwired while the node plays, or a value set on one, gives
     `get()` the new slots, and builds again each computed value that read them.
 
-    On a running class node the attribute holds the slots the node was built with, in order. A
-    change in the count rebuilds a class node, so `len(self.layers)` read in `__init__()` or
-    `setup()` holds for its life.
+    On a running class node the attribute holds the slots the node was built with, in order.
+    Nothing rebuilds a class node when the count changes, so `len(self.layers)` read in
+    `__init__()` or `setup()` holds for its life.
     """
 
     __slots__ = ()

@@ -451,9 +451,6 @@ class HelperProcessLifecycle:
             )
         if function_nodes_ran_compiled:
             ready["function_nodes_ran_compiled"] = function_nodes_ran_compiled
-        if self._pin_group_slots_followed is not None:
-            # The parent gives this node no rebuild when its slots change: it follows them here.
-            ready["takes_its_pin_group_slots_live"] = True
         self._answer_the_parent(command, ready)
 
     def _answer_the_parent(

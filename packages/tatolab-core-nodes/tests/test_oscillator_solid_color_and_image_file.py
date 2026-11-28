@@ -90,6 +90,31 @@ def test_an_oscillators_pitch_changes_from_the_next_block_without_a_click():
     assert second[12] == pytest.approx(0.2 * numpy.sin(2 * numpy.pi * 0.24), abs=1e-6)
 
 
+def test_an_oscillators_rate_set_while_it_plays_starts_a_run_at_that_rate():
+    """Mental-revert: count the samples owed since the anchor at the new rate, and halving the
+    rate after a block owes none until the old count is reached, so the tone falls silent."""
+    audio = RecordingOutputPin("audio")
+    oscillator: Any = construct_class_node(
+        Oscillator,
+        field_values={"frequency": 480.0, "sample_rate": 48_000, "channels": 1, "block_size": 100},
+        pins={"audio": audio},
+    )
+    clock = OscillatorClock()
+    oscillator.process(clock)
+    clock.time = 1_000 * 1_000_000_000 // 48_000 + 1
+    oscillator.process(clock)
+    assert len(audio.writes) == 10
+
+    oscillator.sample_rate = 24_000
+    oscillator.process(clock)
+    clock.time += 100 * 1_000_000_000 // 24_000 + 1
+    oscillator.process(clock)
+
+    assert len(audio.writes) == 11
+    assert audio.writes[-1][2]["sample_rate"] == 24_000
+    assert audio.writes[-1][2]["start_sample"] == 1_000
+
+
 class SolidColorContext:
     """A context the picture is filled through, its GPU left to the stand-in fill."""
 

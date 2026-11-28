@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A Rust node type's settings: a struct whose every field is an input read once, when the node
-//! is set up, from its value or from a Value wire into it, so a change rebuilds the node. `#[node_settings]` derives
+//! A Rust node type's settings: a struct whose every field is an input the node reads from its
+//! value or from a Value wire into it, handed to the node again at each change. `#[node_settings]` derives
 //! [`NodeSettings`] for the struct, and `#[node(settings = …)]` declares each field as one of
 //! the node's inputs and builds the struct from the values they hold before the node is set up.
 
@@ -155,10 +155,10 @@ pub fn the_choice_among_the_bundles_its_stream_declares<T: SettingChoosingAPinTy
 }
 
 /// The input `name` taking no wire, declared as: described by `description`, of `pin_type`,
-/// holding `default` until it is set, and read at `read` — at setup for a setting, so a set
-/// rebuilds its node, or each run for a value input of a node written as one function, so a set
-/// reaches the node with no rebuild. An input whose default is `null` holds nothing until it is
-/// set, so it may be unset.
+/// holding `default` until it is set, and read at `read` — at setup for a setting, or each run
+/// for a value input of a node written as one function; either way a set reaches the node
+/// where it runs. An input whose default is `null` holds nothing until it is set, so it may be
+/// unset.
 pub fn the_input_taking_no_wire(
     name: &str,
     description: &str,

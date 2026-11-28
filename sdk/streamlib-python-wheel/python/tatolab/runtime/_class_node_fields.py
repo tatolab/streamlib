@@ -7,8 +7,8 @@ A field holds the value its wire gave last while a wire feeds it, and the value 
 otherwise: its stored value from the `setup` command, then each one `set_input_values` hands
 over. A field of a slot a node function's pin group holds from a later time on takes the value
 last handed over for it. A value arrives in its stored JSON form and is held in its Python
-form, a `Color` for a Color, an `Asset` for an Asset. A setting is assigned once, before
-`__init__()`, since a change to one rebuilds the node.
+form, a `Color` for a Color, an `Asset` for an Asset. A setting is assigned before `__init__()`
+and again at each change, as any field is.
 """
 
 from __future__ import annotations

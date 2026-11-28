@@ -163,7 +163,7 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
         Some(NodeInputMode::SettingOnly {
             read: SettingReadTime::EachRun
         }),
-        "the input takes no wire and is read each run"
+        "the input is a setting read each run"
     );
     assert_eq!(
         setting.lifetime,

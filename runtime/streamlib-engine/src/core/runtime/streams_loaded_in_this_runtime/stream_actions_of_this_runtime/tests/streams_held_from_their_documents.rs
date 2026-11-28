@@ -326,7 +326,6 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
     held.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
         renamed_sink,
         LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-        KeptNodesLeftToRebuild::HandedTheirValuesLive,
     )
     .expect("an edit keeps the link already set aside");
     assert!(
@@ -350,7 +349,6 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
         .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
             a_second_refused_link,
             LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .expect_err("a new link its validation refuses is refused")
         .to_string();
@@ -359,7 +357,6 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
     held.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
         the_graph_of_a_source_linked_into_a_sink("camera", false),
         LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-        KeptNodesLeftToRebuild::HandedTheirValuesLive,
     )
     .expect("taking the refused link out is an edit");
     assert_eq!(

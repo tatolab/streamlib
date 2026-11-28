@@ -478,10 +478,10 @@ pub(super) fn as_a_percentage(value: &Value) -> std::result::Result<Value, Saved
 }
 
 /// On a running stream, a `transact` choosing a String for a Float `GraphInput` and saving `"x"`
-/// saves both, the node rebuilt for its new type, and the next value set takes.
+/// saves both, the running node taking its new type live, and the next value set takes.
 ///
-/// Mental-revert: handing `"x"` to the running node before it is rebuilt refuses it for the
-/// Channels its output still carries.
+/// Mental-revert: handing `"x"` to the running node before it takes its new type refuses it for
+/// the Channels its output still carries.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),

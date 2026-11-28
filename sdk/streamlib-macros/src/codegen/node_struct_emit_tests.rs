@@ -862,10 +862,10 @@ fn a_crate_visible_node_generates_crate_visible_items_only() {
 }
 
 /// A node declaring `settings = …` holds its settings on its `Node`, taken from the input values
-/// until it is set up, declares each as an input after those it declares, and takes no config;
-/// `node` builds a spec holding the settings as input values.
+/// each time it is handed them, declares each as an input after those it declares, and takes no
+/// config; `node` builds a spec holding the settings as input values.
 ///
-/// Mental-revert: settings taken after setup reach a running node rather than rebuilding it.
+/// Mental-revert: settings taken only until setup leave a value set on a running node unread.
 #[test]
 fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
     let settings_type: syn::Path = syn::parse_quote! { crate::BlurSettings };
@@ -882,7 +882,7 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         "{node_struct}"
     );
     assert!(
-        node_struct.contains("__streamlib_settings_were_read_at_setup:bool,"),
+        !node_struct.contains("__streamlib_settings_were_read_at_setup"),
         "{node_struct}"
     );
 
@@ -911,11 +911,7 @@ fn a_node_declaring_settings_holds_them_and_declares_each_as_an_input() {
         "{node_impl}"
     );
     assert!(
-        node_impl.contains("ifself.__streamlib_settings_were_read_at_setup{returnOk(());}"),
-        "{node_impl}"
-    );
-    assert!(
-        node_impl.contains("self.__streamlib_settings_were_read_at_setup=true;"),
+        !node_impl.contains("__streamlib_settings_were_read_at_setup"),
         "{node_impl}"
     );
     assert!(

@@ -21,7 +21,7 @@ use crate::core::nodes::{
 };
 
 /// Each setting `descriptor`, the node type of a view, declares in its manifest's `settings`, in
-/// the order the manifest lists them, as an input that takes no wire.
+/// the order the manifest lists them, as an input read each run.
 pub(crate) fn the_settings_of_a_view_node(descriptor: &NodeDescriptor) -> Vec<PortDescriptor> {
     the_config_fields_described_as_settings(descriptor)
         .into_iter()

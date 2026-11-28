@@ -24,11 +24,6 @@ pub(crate) type ArmedAddNodeRefusal = ::std::sync::Arc<
 pub(crate) type ArmedRefusalOfEachEditTheDocumentsHoldFirst =
     ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
 
-/// How many rebuilds a front end asked a stub runtime for, and the refusal it answers each with
-/// when the test has armed one, standing in for a node that does not build.
-pub(crate) type RecordedRebuildsAndTheArmedRefusal =
-    ::std::sync::Arc<::parking_lot::Mutex<(usize, Option<String>)>>;
-
 /// Each edit a front end held on a stub runtime as not live, with the refusal it was held for,
 /// in call order.
 pub(crate) type RecordedEditsHeldNotLive = ::std::sync::Arc<
@@ -169,22 +164,6 @@ macro_rules! graph_mutation_ops_record_the_call {
             Ok(::std::boxed::Box::new(
                 $crate::control_plane_stub_support::GraphEditsOfAStubAppliedOneByOne(self),
             ))
-        }
-        fn rebuild_each_node_a_setting_read_at_setup_changed(
-            &self,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<
-            '_,
-            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
-        > {
-            let refusal = {
-                let mut rebuilds = self.recorded_rebuilds_and_the_armed_refusal.lock();
-                rebuilds.0 += 1;
-                rebuilds.1.clone()
-            };
-            ::std::boxed::Box::pin(::std::future::ready(match refusal {
-                Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
-                None => Ok(::std::vec::Vec::new()),
-            }))
         }
         fn hold_an_edit_its_document_holds_not_live(
             &self,

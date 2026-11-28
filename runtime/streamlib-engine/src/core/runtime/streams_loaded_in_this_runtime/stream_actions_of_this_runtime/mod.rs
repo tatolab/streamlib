@@ -66,7 +66,7 @@ use crate::core::runtime::streams_loaded_in_this_runtime::stream_condition::{
     StreamFailure, the_condition_of_a_stream, the_condition_while_an_action_works_on_it,
 };
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    KeptNodesLeftToRebuild, LinksAReconcileMakes,
+    LinksAReconcileMakes,
 };
 
 /// How a loaded stream is held: recorded by the runtime, or living as long as

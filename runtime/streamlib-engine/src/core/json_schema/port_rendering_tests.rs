@@ -192,8 +192,8 @@ fn a_node_whose_one_setting_is_read(
 }
 
 /// Each input `graph` serves says whether it takes a wire as the link check rules: a setting
-/// read at setup takes one, a setting read each run takes none, and neither does any setting of
-/// a node type of the graph itself; an output says nothing of it.
+/// read at setup or each run takes one, and no setting of a node type of the graph itself does;
+/// an output says nothing of it.
 ///
 /// Mental-revert: reading the mark from the mode alone says the `GraphInput`'s `port` takes one;
 /// exempting a `GraphInput` alone says the `GetVariable`'s does.
@@ -214,7 +214,7 @@ fn each_input_the_graph_serves_says_whether_it_takes_a_wire() {
     );
     assert_eq!(
         takes_a_wire("tests:Labeller", SettingReadTime::EachRun),
-        serde_json::json!(false)
+        serde_json::json!(true)
     );
     for node_type in [
         streamlib_project_repository::GRAPH_INPUT_NODE_TYPE,

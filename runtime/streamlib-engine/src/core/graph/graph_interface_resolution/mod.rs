@@ -37,6 +37,7 @@ use crate::core::{Error, Result};
 
 pub(crate) use what_a_value_port_carries::{
     an_interface_node_states_what_its_value_port_carries, carry_on_every_value_port,
+    the_pin_type_the_settings_of_an_interface_node_choose,
     what_the_value_port_of_an_interface_node_carries, what_the_value_ports_of_a_constant_carry,
 };
 

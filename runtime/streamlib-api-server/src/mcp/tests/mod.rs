@@ -55,8 +55,6 @@ pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
         crate::control_plane_stub_support::ArmedRefusalOfEachEditTheDocumentsHoldFirst,
     pub(crate) recorded_edits_held_not_live:
         crate::control_plane_stub_support::RecordedEditsHeldNotLive,
-    pub(crate) recorded_rebuilds_and_the_armed_refusal:
-        crate::control_plane_stub_support::RecordedRebuildsAndTheArmedRefusal,
     add_node_answers_after: Option<Duration>,
 }
 
@@ -68,7 +66,6 @@ impl ControlPlaneMcpDispatchStubRuntime {
             armed_add_node_refusal: Arc::new(Mutex::new(None)),
             armed_refusal_of_each_edit_the_documents_hold_first: Arc::new(Mutex::new(None)),
             recorded_edits_held_not_live: Arc::new(Mutex::new(Vec::new())),
-            recorded_rebuilds_and_the_armed_refusal: Arc::new(Mutex::new((0, None))),
             add_node_answers_after: None,
         }
     }
@@ -99,18 +96,6 @@ impl ControlPlaneMcpDispatchStubRuntime {
         Self {
             armed_refusal_of_each_edit_the_documents_hold_first: Arc::new(Mutex::new(Some(
                 refusal.to_owned(),
-            ))),
-            ..Self::new()
-        }
-    }
-
-    /// A stub refusing with `refusal` each rebuild of the nodes a setting read at setup left to
-    /// rebuild, standing in for a node that does not build with them.
-    pub(crate) fn refusing_each_rebuild(refusal: &str) -> Self {
-        Self {
-            recorded_rebuilds_and_the_armed_refusal: Arc::new(Mutex::new((
-                0,
-                Some(refusal.to_owned()),
             ))),
             ..Self::new()
         }

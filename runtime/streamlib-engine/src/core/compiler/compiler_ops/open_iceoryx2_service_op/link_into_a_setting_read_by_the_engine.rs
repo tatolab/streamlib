@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A link into a setting read at setup is read by the engine, never by the setting's node: a
-//! reader of the link's channel on a thread of its own hands each value the wire carries to the
-//! stream's values carried into settings, which rebuild the node with it. However the two ends
-//! are hosted, the node is handed the value as it is handed a value set on the setting.
+//! A link into a setting is read by the engine, never by the setting's node: a reader of the
+//! link's channel on a thread of its own hands each value the wire carries to the stream's values
+//! carried into settings, which hand it to the node as a value set on the setting is handed,
+//! however the two ends are hosted.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,9 +24,7 @@ use super::{
 use crate::core::NodeRunId;
 use crate::core::descriptors::PinType;
 use crate::core::error::{Error, Result};
-use crate::core::graph::input_values::{
-    ValuesWiresCarryIntoSettings, the_value_a_setting_reads_with_no_wire,
-};
+use crate::core::graph::input_values::ValuesWiresCarryIntoSettings;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
 };
@@ -40,7 +38,7 @@ use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
 /// The longest a reader waits for its source to write before it looks whether it is to stop.
 const A_READER_LOOKS_WHETHER_TO_STOP_AT_LEAST_EVERY: Duration = Duration::from_millis(50);
 
-/// The engine's reader of a link into a setting read at setup, on the link while it is wired:
+/// The engine's reader of a link into a setting, on the link while it is wired:
 /// dropping it stops and joins its thread.
 pub(crate) struct ReaderOfALinkIntoASettingComponent {
     read: Arc<TheReadOfALinkIntoASetting>,
@@ -97,12 +95,12 @@ fn the_type_its_values_are_read_as(
         })
 }
 
-/// Open link `link_id`, from `from` into the setting `to` its node reads at setup, for the
-/// engine to read: the source's side as any link's, and on this side a reader of the newest
-/// message, which hands each value it reads to `graph`'s values carried into settings. The
-/// setting is held as built with the value it reads with no wire until the wire carries
-/// another, and a value the source kept is handed over before this returns, so a node built
-/// after it is built with it. The source's side is released again when the rest does not open.
+/// Open link `link_id`, from `from` into the setting `to`, for the engine to read: the source's
+/// side as any link's, and on this side a reader of the newest message, which hands each value
+/// it reads to `graph`'s values carried into settings. The setting reads the value it reads with
+/// no wire until the wire carries one, and a value the source kept is handed over before this
+/// returns, so a node built after it is built with it. The source's side is released again when
+/// the rest does not open.
 pub(super) fn open_a_link_into_a_setting_read_by_the_engine(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
@@ -117,7 +115,6 @@ pub(super) fn open_a_link_into_a_setting_read_by_the_engine(
         .ok_or_else(|| Error::NodeNotFound(to.node_run_id().to_string()))?;
     let pin_type = the_type_its_values_are_read_as(graph, from, to_node, to.port_name())?;
     let node_uuid = to_node.node_uuid;
-    let read_with_no_wire = the_value_a_setting_reads_with_no_wire(graph, to_node, to.port_name());
     let the_engines_reader = NodeRunId::new();
     let delivery = DeliveryProfile::Newest.resolve();
     let destination = DestinationOfALinkAsItsWiringReadsIt {
@@ -134,9 +131,6 @@ pub(super) fn open_a_link_into_a_setting_read_by_the_engine(
     };
     let opened = open_the_source_side_of_a_link(graph, from, link_id, &destination, iceoryx2_node)?;
     let carried = Arc::clone(graph.values_wires_carry_into_settings());
-    if let Some(value) = read_with_no_wire {
-        carried.built_with_unless_its_wire_carried_one(node_uuid, to.port_name(), value);
-    }
     let reader = TheSettingAndWhereItsValuesGo {
         carried,
         node: node_uuid,

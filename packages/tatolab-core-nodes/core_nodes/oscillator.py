@@ -60,8 +60,9 @@ class Oscillator:
 
     The tick is shorter than any block: each `process()` emits however many
     whole blocks elapsed time owes, so the tone stays locked to real time. Its
-    pitch, waveform and loudness follow their inputs from the next block on;
-    a change to its rate, channels or block size builds it again.
+    pitch, waveform and loudness follow their inputs from the next block on,
+    and so do its channels and block size; a change of its rate starts a new
+    run at that rate from the tick it is seen on.
     """
 
     frequency: Annotated[
@@ -85,11 +86,19 @@ class Oscillator:
         self.start_sample_of_this_run = 0
         self.samples_emitted_in_this_run = 0
         self.next_phase_in_cycles = 0.0
+        # The rate this run counts its samples at.
+        self.sample_rate_of_this_run = self.sample_rate
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         now_ns = ctx.time
         if self.run_anchor_timestamp_ns is None:
             self.run_anchor_timestamp_ns = now_ns
+        if self.sample_rate != self.sample_rate_of_this_run:
+            # Counted at the old rate, the samples owed would leave a backlog or a silence.
+            self.start_sample_of_this_run += self.samples_emitted_in_this_run
+            self.run_anchor_timestamp_ns = now_ns
+            self.samples_emitted_in_this_run = 0
+            self.sample_rate_of_this_run = self.sample_rate
 
         samples_owed = (
             (now_ns - self.run_anchor_timestamp_ns) * self.sample_rate

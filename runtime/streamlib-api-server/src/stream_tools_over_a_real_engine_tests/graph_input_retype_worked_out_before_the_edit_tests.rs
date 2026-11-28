@@ -157,14 +157,12 @@ async fn a_function_node_conversion_casts_a_retyped_value_with_the_project_unloc
 }
 
 /// On a running stream, a module's conversion casts a retyped value with the project's lock free
-/// and no edit batch of the stream open, and the transaction answers: the Input, still built
-/// for its Float, is not handed `"10%"` before its rebuild.
+/// and no edit batch of the stream open, and the transaction answers: the running Input takes
+/// its new type before it is handed `"10%"`.
 ///
 /// Mental-revert: as on a stream not started, and casting once the stream's batch is open runs
-/// the conversion beside it. Handing the running Input `"10%"` before its rebuild refuses it
-/// for the Channels its output still carries; and when the retype's own reversal also rebuilds
-/// it while the batch is open, that waits for ever on the stream's writer, holding the
-/// project's lock.
+/// the conversion beside it. Handing the running Input `"10%"` before it takes its new type
+/// refuses it for the Channels its output still carries.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),

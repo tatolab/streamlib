@@ -64,7 +64,7 @@ pub(crate) fn place_each_stateful_function_node_in_a_process_of_its_own(
 /// Mark `function_node_id` promoted into a helper of its own driven the way
 /// `process_execution` says, sharing the report `graph` renders as its
 /// `ran_compiled` with that helper, and evaluated as it sets up when an output
-/// of it feeds a setting read at setup.
+/// of it feeds a setting.
 fn mark_a_function_node_promoted_to_its_own_process(
     graph: &mut Graph,
     function_node_id: &NodeRunId,
@@ -81,7 +81,7 @@ fn mark_a_function_node_promoted_to_its_own_process(
         .out_e()
         .iter()
         .any(|link| {
-            graph.is_a_setting_read_at_setup(
+            graph.is_a_setting_whose_wire_the_engine_reads(
                 link.to_port().node_run_id(),
                 link.to_port().port_name(),
             )

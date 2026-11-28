@@ -25,8 +25,8 @@ use crate::core::descriptors::{
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::graph_interface_resolution::{
-    carry_on_every_value_port, what_the_value_port_of_an_interface_node_carries,
-    what_the_value_ports_of_a_constant_carry,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, carry_on_every_value_port,
+    the_pin_type_the_settings_of_an_interface_node_choose,
 };
 use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
 use crate::core::graph::{GraphNode, GraphNodePorts};
@@ -102,8 +102,7 @@ pub(crate) fn the_node_type_of_a_project_view(
 }
 
 /// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
-/// output's name and description, a setting read each run that takes no wire and holds no saved
-/// value, and returned to no value at Stop, since what a panel writes is live data. It is of the
+/// output's name and description, a setting read each run that holds no saved value, and returned to no value at Stop, since what a panel writes is live data. It is of the
 /// output's pin type, read as a value where that type holds one; an Audio block or a Tensor,
 /// which holds none, flows as its type does and takes what that type packs into the message the
 /// output publishes.
@@ -250,11 +249,46 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
 pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
+    /// How the pin type its `value` ports carry is read off its settings, for a `GraphInput` or
+    /// a `Constant`, whose `pin_type` setting chooses it; `None` for a view's node.
+    value_ports_typed_by: Option<ValuePortsTypedBy>,
     pin_type_of_each_output: HashMap<String, PinType>,
     current_value_of_each_output: HashMap<String, JsonValue>,
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
+}
+
+/// The node type whose `pin_type` setting chooses the pin type a value source's `value` ports
+/// carry.
+#[derive(Clone, Copy)]
+enum ValuePortsTypedBy {
+    GraphInput,
+    Constant,
+}
+
+impl ValuePortsTypedBy {
+    fn node_type_name(self) -> &'static str {
+        match self {
+            Self::GraphInput => "GraphInput",
+            Self::Constant => "Constant",
+        }
+    }
+
+    /// The pin type `settings` choose for the `value` ports: `None` when a `GraphInput`'s
+    /// choose none, a Float when a `Constant`'s do, or why they choose no type.
+    fn the_type_chosen_by(
+        self,
+        settings: &serde_json::Map<String, JsonValue>,
+    ) -> std::result::Result<Option<PinType>, String> {
+        let chosen = the_pin_type_the_settings_of_an_interface_node_choose(settings)?;
+        Ok(match self {
+            Self::GraphInput => chosen,
+            Self::Constant => Some(
+                chosen.unwrap_or_else(crate::core::nodes::the_pin_type_a_constant_holds_by_default),
+            ),
+        })
+    }
 }
 
 /// One message a [`ValueSourceNode`] is about to publish: on output `port`, the value `value` as
@@ -272,43 +306,82 @@ impl ValueSourceNode {
     /// The value source a top-level `GraphInput` runs as: both its `value` ports of the pin type
     /// its `pin_type` setting chooses, or a link resolved.
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
-        Self::with_value_ports_carrying(
+        Self::with_value_ports_typed_by(
             node,
-            "GraphInput",
+            ValuePortsTypedBy::GraphInput,
             the_node_type_of_a_graph_input()?,
-            what_the_value_port_of_an_interface_node_carries,
         )
     }
 
     /// The value source a `Constant` runs as: both its `value` ports of the pin type its
     /// `pin_type` setting chooses, else a Float.
     pub(crate) fn for_a_constant(node: &GraphNode) -> Result<Self> {
-        Self::with_value_ports_carrying(
+        Self::with_value_ports_typed_by(
             node,
-            "Constant",
+            ValuePortsTypedBy::Constant,
             THE_DESCRIPTOR_OF_A_CONSTANT.clone(),
-            |settings| what_the_value_ports_of_a_constant_carry(settings).map(Some),
         )
     }
 
-    /// The value source `node`, of the node type `type_name` whose `descriptor` declares it,
-    /// runs as: its `value` ports carrying what `carried` reads off its settings, or refused
+    /// The value source `node`, of the node type `typed_by` names whose `descriptor` declares
+    /// it, runs as: its `value` ports carrying the pin type its settings choose, or refused
     /// naming the node and why.
-    fn with_value_ports_carrying(
+    fn with_value_ports_typed_by(
         node: &GraphNode,
-        type_name: &str,
-        mut descriptor: NodeDescriptor,
-        carried: impl FnOnce(Option<&JsonValue>) -> std::result::Result<Option<PinType>, String>,
+        typed_by: ValuePortsTypedBy,
+        descriptor: NodeDescriptor,
     ) -> Result<Self> {
-        let settings = JsonValue::Object(node.input_values.clone());
-        let chosen = carried(Some(&settings)).map_err(|why| {
-            Error::Configuration(format!("`{type_name}` node `{}`: {why}", node.display_name))
-        })?;
+        let mut source = Self {
+            value_ports_typed_by: Some(typed_by),
+            ..Self::for_the_node(node, descriptor)
+        };
+        source.carry_the_pin_type_its_settings_choose(&node.input_values)?;
+        Ok(source)
+    }
+
+    /// Carry on its `value` ports the pin type `input_values` choose, when it reads its type off
+    /// its settings and they choose another than its ports carry: a value its `value` output
+    /// carried before is published again, of the new type, when it is next handed one. Settings
+    /// that choose none leave the ports as they are; settings choosing no type are refused
+    /// naming the node and why, the ports left as they are.
+    fn carry_the_pin_type_its_settings_choose(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<()> {
+        let Some(typed_by) = self.value_ports_typed_by else {
+            return Ok(());
+        };
+        let Some(chosen) = typed_by.the_type_chosen_by(input_values).map_err(|why| {
+            Error::Configuration(format!(
+                "`{}` node `{}`: {why}",
+                typed_by.node_type_name(),
+                self.node_name
+            ))
+        })?
+        else {
+            return Ok(());
+        };
+        if self
+            .pin_type_of_each_output
+            .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
+            == Some(&chosen)
+        {
+            return Ok(());
+        }
         carry_on_every_value_port(
-            descriptor.inputs.iter_mut().chain(&mut descriptor.outputs),
-            chosen.as_ref(),
+            self.descriptor
+                .inputs
+                .iter_mut()
+                .chain(&mut self.descriptor.outputs),
+            Some(&chosen),
         );
-        Ok(Self::for_the_node(node, descriptor))
+        self.pin_type_of_each_output
+            .insert(GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(), chosen);
+        self.current_value_of_each_output
+            .remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        self.next_start_sample_of_each_channels_output
+            .remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        Ok(())
     }
 
     pub(crate) fn for_the_node(node: &GraphNode, descriptor: NodeDescriptor) -> Self {
@@ -323,6 +396,7 @@ impl ValueSourceNode {
         Self {
             node_name: node.display_name.clone(),
             descriptor,
+            value_ports_typed_by: None,
             pin_type_of_each_output,
             current_value_of_each_output: HashMap::new(),
             next_start_sample_of_each_channels_output: HashMap::new(),
@@ -554,6 +628,7 @@ impl DynGeneratedNode for ValueSourceNode {
         input_values: &serde_json::Map<String, JsonValue>,
         set_live: &[String],
     ) -> Result<()> {
+        self.carry_the_pin_type_its_settings_choose(input_values)?;
         let read_by_an_input_alone =
             self.publish_each_input_value_on_its_output(input_values, set_live)?;
         land_the_unlinked_input_values_in_the_input_mailboxes(

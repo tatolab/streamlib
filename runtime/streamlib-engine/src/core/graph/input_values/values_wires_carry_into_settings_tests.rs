@@ -1,16 +1,19 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A value a wire carries into a setting waits for its node's rebuild, a burst of them as its
-//! last, and a value the node is built with, or did not build with, waits for nothing.
+//! A value a wire carries into a setting is what the setting reads, and leaves its node to be
+//! handed it once, however many values a burst carries; a value the wire carried already leaves
+//! nothing to hand; a wire taken off a setting it carried a value into leaves its node to be
+//! handed the setting's own value.
 
 use serde_json::json;
 use uuid::Uuid;
 
-use super::{ValueAWireCarriedIntoASetting, ValuesWiresCarryIntoSettings};
+use super::ValuesWiresCarryIntoSettings;
 
+/// Mental-revert: leaving the node to be handed each value of a burst hands it six times.
 #[test]
-fn a_burst_of_values_on_one_setting_waits_as_its_last() {
+fn a_burst_of_values_on_one_setting_reads_as_its_last_and_leaves_its_node_to_hand_once() {
     let carried = ValuesWiresCarryIntoSettings::default();
     let node = Uuid::new_v4();
     for kernel_size in 4..=9 {
@@ -18,86 +21,31 @@ fn a_burst_of_values_on_one_setting_waits_as_its_last() {
     }
 
     assert_eq!(
-        carried.take_each_value_waiting(),
-        vec![ValueAWireCarriedIntoASetting {
-            node,
-            setting: "kernel_size".to_owned(),
-            value: json!(9),
-            built_with_before: None,
-        }]
-    );
-    assert_eq!(
-        carried.the_value_its_node_is_built_with(node, "kernel_size"),
+        carried.the_value_its_wire_carried(node, "kernel_size"),
         Some(json!(9))
     );
-    assert!(carried.take_each_value_waiting().is_empty());
+    assert_eq!(
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([node])
+    );
+    assert!(carried.take_each_node_waiting_for_its_values().is_empty());
 }
 
+/// Mental-revert: leaving the node to be handed every value, equal or not, hands it 5 again.
 #[test]
-fn a_value_its_node_is_built_with_waits_for_nothing() {
+fn a_value_its_wire_carried_already_leaves_nothing_to_hand() {
     let carried = ValuesWiresCarryIntoSettings::default();
     let node = Uuid::new_v4();
-    carried.built_with_unless_its_wire_carried_one(node, "kernel_size", json!(3));
-    carried.carried(node, "kernel_size", json!(3));
-    assert!(carried.take_each_value_waiting().is_empty());
+    carried.carried(node, "kernel_size", json!(5));
+    carried.take_each_node_waiting_for_its_values();
 
     carried.carried(node, "kernel_size", json!(5));
+    assert!(carried.take_each_node_waiting_for_its_values().is_empty());
     carried.carried(node, "kernel_size", json!(3));
-    let waiting = carried.take_each_value_waiting();
-    assert_eq!(waiting.len(), 1, "{waiting:?}");
-    assert_eq!(waiting[0].value, json!(3));
-    assert_eq!(waiting[0].built_with_before, Some(json!(3)));
-}
-
-#[test]
-fn a_value_put_back_keeps_the_earlier_one_and_waits_for_nothing_until_another_arrives() {
-    let carried = ValuesWiresCarryIntoSettings::default();
-    let node = Uuid::new_v4();
-    carried.built_with_unless_its_wire_carried_one(node, "kernel_size", json!(3));
-    carried.carried(node, "kernel_size", json!(0));
-    let refused = carried.take_each_value_waiting();
-    carried.put_back(&refused);
-
     assert_eq!(
-        carried.the_value_its_node_is_built_with(node, "kernel_size"),
-        Some(json!(3))
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([node])
     );
-    carried.carried(node, "kernel_size", json!(0));
-    assert!(
-        carried.take_each_value_waiting().is_empty(),
-        "a value its node did not build with is not tried again"
-    );
-    carried.carried(node, "kernel_size", json!(7));
-    assert_eq!(carried.take_each_value_waiting()[0].value, json!(7));
-}
-
-/// A value that arrived as its node's rebuild was being built, and which the node was built
-/// with in place of the one taken, is the one held as refused when the rebuild is refused.
-///
-/// Mental-revert: holding the value taken as refused leaves 9, the value the node refused, to
-/// be tried again, and the value taken, 4, never tried.
-#[test]
-fn a_rebuild_refused_holds_the_value_its_node_was_built_with_as_refused() {
-    let carried = ValuesWiresCarryIntoSettings::default();
-    let node = Uuid::new_v4();
-    carried.built_with_unless_its_wire_carried_one(node, "kernel_size", json!(3));
-    carried.carried(node, "kernel_size", json!(4));
-    let taken = carried.take_each_value_waiting();
-    carried.carried(node, "kernel_size", json!(9));
-    carried.build_each_of_the_nodes_with_what_waits(&[node]);
-    carried.put_back(&taken);
-
-    assert_eq!(
-        carried.the_value_its_node_is_built_with(node, "kernel_size"),
-        Some(json!(3))
-    );
-    carried.carried(node, "kernel_size", json!(9));
-    assert!(
-        carried.take_each_value_waiting().is_empty(),
-        "the value its node was refused with is not tried again"
-    );
-    carried.carried(node, "kernel_size", json!(4));
-    assert_eq!(carried.take_each_value_waiting()[0].value, json!(4));
 }
 
 #[test]
@@ -109,52 +57,38 @@ fn a_node_forgotten_holds_nothing() {
     carried.carried(another, "kernel_size", json!(6));
     carried.forget_the_node(node);
 
-    let waiting = carried.take_each_value_waiting();
-    assert_eq!(waiting.len(), 1);
-    assert_eq!(waiting[0].node, another);
     assert_eq!(
-        carried.the_value_its_node_is_built_with(node, "kernel_size"),
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([another])
+    );
+    assert_eq!(
+        carried.the_value_its_wire_carried(node, "kernel_size"),
         None
     );
 }
 
-/// Mental-revert: forgetting the setting alone as its wire leaves leaves its node built with
-/// the wire's value.
+/// Mental-revert: forgetting the value alone as its wire leaves leaves its node holding the
+/// wire's last value.
 #[test]
-fn a_wire_leaving_a_setting_its_node_was_built_with_from_it_waits_with_the_settings_own_value() {
+fn a_wire_leaving_a_setting_it_carried_a_value_into_leaves_its_node_to_hand_its_own() {
     let carried = ValuesWiresCarryIntoSettings::default();
     let node = Uuid::new_v4();
-    carried.built_with_unless_its_wire_carried_one(node, "kernel_size", json!(3));
     carried.carried(node, "kernel_size", json!(5));
-    carried.take_each_value_waiting();
+    carried.take_each_node_waiting_for_its_values();
 
-    carried.its_wire_left(node, "kernel_size", Some(json!(3)));
-    let waiting = carried.take_each_value_waiting();
-    assert_eq!(waiting.len(), 1, "{waiting:?}");
-    assert_eq!(waiting[0].value, json!(3));
-
-    carried.its_wire_left(node, "kernel_size", Some(json!(3)));
-    assert!(
-        carried.take_each_value_waiting().is_empty(),
-        "a node built with the setting's own value rebuilds for nothing"
-    );
-}
-
-/// Mental-revert: leaving the values waiting rebuilds a node right after it is built with them.
-#[test]
-fn a_value_waiting_for_a_node_about_to_be_built_is_what_it_is_built_with() {
-    let carried = ValuesWiresCarryIntoSettings::default();
-    let built = Uuid::new_v4();
-    let running = Uuid::new_v4();
-    carried.carried(built, "kernel_size", json!(5));
-    carried.carried(running, "kernel_size", json!(6));
-
-    carried.build_each_of_the_nodes_with_what_waits(&[built]);
+    carried.its_wire_left(node, "kernel_size");
     assert_eq!(
-        carried.the_value_its_node_is_built_with(built, "kernel_size"),
-        Some(json!(5))
+        carried.the_value_its_wire_carried(node, "kernel_size"),
+        None
     );
-    let waiting = carried.take_each_value_waiting();
-    assert_eq!(waiting.len(), 1);
-    assert_eq!(waiting[0].node, running);
+    assert_eq!(
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([node])
+    );
+
+    carried.its_wire_left(node, "kernel_size");
+    assert!(
+        carried.take_each_node_waiting_for_its_values().is_empty(),
+        "a wire that carried nothing leaves nothing to hand"
+    );
 }

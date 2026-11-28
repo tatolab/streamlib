@@ -209,14 +209,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn rebuild_each_node_a_setting_read_at_setup_changed(
-            &self,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<
-            '_,
-            ::streamlib::sdk::error::Result<::std::vec::Vec<::uuid::Uuid>>,
-        > {
-            ::std::boxed::Box::pin(::std::future::ready(Ok(::std::vec::Vec::new())))
-        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -782,8 +774,7 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 mod graph_mutations_recorded_by_a_stub;
 pub(crate) use graph_mutations_recorded_by_a_stub::{
     ArmedAddNodeRefusal, ArmedRefusalOfEachEditTheDocumentsHoldFirst,
-    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, RecordedRebuildsAndTheArmedRefusal,
-    graph_mutation_ops_record_the_call,
+    GraphEditsOfAStubAppliedOneByOne, RecordedEditsHeldNotLive, graph_mutation_ops_record_the_call,
 };
 
 /// The target of every tracing span and event raised on the calling thread
