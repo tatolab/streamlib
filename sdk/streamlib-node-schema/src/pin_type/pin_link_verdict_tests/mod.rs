@@ -447,23 +447,16 @@ fn a_stream_into_an_input_read_each_run_connects_as_its_types_do() {
     assert_eq!(verdict.outcome, PinLinkOutcome::Connects);
 }
 
+/// Mental-revert: refusing every wire into a setting read each run refuses a Value wire the
+/// engine reads into it as it does one into a setting read at setup.
 #[test]
-fn a_link_into_a_setting_read_each_run_is_refused_whatever_the_types() {
+fn a_value_wire_into_a_setting_read_each_run_connects_as_its_types_do() {
     let verdict = pin_link_verdict(
         a_value_output(&float()),
         a_setting(SettingReadTime::EachRun, &float()),
         &[],
     );
-    let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
-        panic!("a setting read each run takes no wire: {verdict:?}");
-    };
-    assert_eq!(*refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
-    assert!(
-        refusal
-            .to_string()
-            .contains("input `in` of `sink`, a setting"),
-        "{refusal}"
-    );
+    assert_eq!(verdict.outcome, PinLinkOutcome::Connects);
 }
 
 #[test]

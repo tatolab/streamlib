@@ -88,8 +88,7 @@ fn an_input_whose_pin_type_takes_no_wire_is_described_as_a_setting() {
 }
 
 /// Each input says whether it takes a wire as the link check rules: an input read each run and
-/// a setting read at setup take one; a setting read each run, and every setting of a
-/// `GraphInput`, take none.
+/// a setting, read at setup or each run, take one; every setting of a `GraphInput` takes none.
 ///
 /// Mental-revert: reading the mark from the mode alone says a `GraphInput`'s `port` takes one.
 #[test]
@@ -127,7 +126,7 @@ fn each_input_says_whether_it_takes_a_wire_as_the_link_check_rules() {
         [
             ("amount".to_owned(), true),
             ("radius".to_owned(), true),
-            ("gain".to_owned(), false),
+            ("gain".to_owned(), true),
         ]
     );
 

@@ -360,7 +360,7 @@ fn a_panel_reads_a_view_nodes_input_through_a_viewer_of_the_port_linked_into_it(
 
 #[test]
 #[serial]
-fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_no_link() {
+fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_a_value_wire_only() {
     let stream = AStreamOfAProjectBringingViews::load();
     let camera_id = stream
         .add_a_node(
@@ -391,9 +391,12 @@ fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_no_link() {
             OutputLinkPortRef::new(camera_id, "out1"),
             InputLinkPortRef::new(deck_id, "cue"),
         )
-        .expect_err("the input of an output's name is a setting, which takes no wire")
+        .expect_err("the input of an output's name is a setting, which takes a Value wire only")
         .to_string();
-    assert!(refusal.contains("takes no wire"), "{refusal}");
+    assert!(
+        refusal.contains("a setting takes a `value` wire only"),
+        "{refusal}"
+    );
 }
 
 /// The Records message `message` carries, read back.
