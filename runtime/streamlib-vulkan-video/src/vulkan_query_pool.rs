@@ -256,11 +256,14 @@ impl VulkanQueryPool {
     }
 
     /// Fetch a single video-encode-feedback query's results into a
-    /// typed [`VideoEncodeFeedbackResult`]. Blocks until the GPU
-    /// signals the query (`vk::QueryResultFlags::WAIT`).
+    /// typed [`VideoEncodeFeedbackResult`], once the submission that ended
+    /// the query has completed. It never waits: a query the GPU did not
+    /// write, such as one in a coding the driver refused, is an error
+    /// rather than a wait that never returns.
     ///
-    /// Errors when `query_type != VIDEO_ENCODE_FEEDBACK_KHR` or
-    /// `query_index >= query_count`. The result's `Some(...)` fields
+    /// Errors when `query_type != VIDEO_ENCODE_FEEDBACK_KHR`,
+    /// `query_index >= query_count` or the query's results are not
+    /// available. The result's `Some(...)` fields
     /// correspond to the flags requested at construction; un-requested
     /// fields are `None`.
     pub fn fetch_video_encode_feedback(
@@ -296,14 +299,14 @@ impl VulkanQueryPool {
         };
 
         let device = self.vulkan_device.device();
-        unsafe {
+        let fetched = unsafe {
             device.get_query_pool_results(
                 self.handle,
                 query_index,
                 1,
                 bytes,
                 (slot_count * std::mem::size_of::<u32>()) as u64,
-                vk::QueryResultFlags::WAIT,
+                vk::QueryResultFlags::empty(),
             )
         }
         .map_err(|e| {
@@ -313,6 +316,13 @@ impl VulkanQueryPool {
                 self.label,
             ))
         })?;
+        if fetched == vk::SuccessCode::NOT_READY {
+            return Err(VideoError::Rhi(format!(
+                "VulkanQueryPool::fetch_video_encode_feedback ({}): query {query_index} has no \
+                 results after its submission completed",
+                self.label,
+            )));
+        }
 
         Ok(VideoEncodeFeedbackResult::decode(
             &slots,
