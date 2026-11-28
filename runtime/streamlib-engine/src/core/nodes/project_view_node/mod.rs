@@ -102,8 +102,7 @@ pub(crate) fn the_node_type_of_a_project_view(
 }
 
 /// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
-/// output's name and description, a setting read each run that takes no wire and holds no saved
-/// value, and returned to no value at Stop, since what a panel writes is live data. It is of the
+/// output's name and description, a setting read each run that holds no saved value, and returned to no value at Stop, since what a panel writes is live data. It is of the
 /// output's pin type, read as a value where that type holds one; an Audio block or a Tensor,
 /// which holds none, flows as its type does and takes what that type packs into the message the
 /// output publishes.

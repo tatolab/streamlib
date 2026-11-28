@@ -30,11 +30,11 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     InputValueComesFromOnTheWire, InputValueReadOnTheWire,
 };
 
-fn the_uuid_of(graph: &Graph, node_run_id: &NodeRunId) -> Uuid {
+pub(super) fn the_uuid_of(graph: &Graph, node_run_id: &NodeRunId) -> Uuid {
     graph.traversal().v(node_run_id).first().unwrap().node_uuid
 }
 
-fn a_set(node: Uuid, input: &str, value: Option<Value>) -> InputValueToSetLive {
+pub(super) fn a_set(node: Uuid, input: &str, value: Option<Value>) -> InputValueToSetLive {
     InputValueToSetLive {
         member: None,
         node,
@@ -45,7 +45,7 @@ fn a_set(node: Uuid, input: &str, value: Option<Value>) -> InputValueToSetLive {
 
 /// A level meter in a helper past its setup command, handing what it is handed to the delivery
 /// answered.
-fn a_level_meter_past_its_setup(
+pub(super) fn a_level_meter_past_its_setup(
     graph: &mut Graph,
 ) -> (NodeRunId, RecordingOutOfProcessFarSideLinkDelivery) {
     let level_meter = a_level_meter_in_a_helper(graph);
@@ -56,7 +56,7 @@ fn a_level_meter_past_its_setup(
     (level_meter, delivery)
 }
 
-fn the_values_set_live(
+pub(super) fn the_values_set_live(
     graph: &RwLock<Graph>,
     sets: &[InputValueToSetLive],
 ) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {

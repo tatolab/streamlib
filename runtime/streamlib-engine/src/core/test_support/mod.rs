@@ -13,7 +13,9 @@ use crate::core::nodes::NODE_REGISTRY;
 
 mod a_setting_read_at_setup_for_a_test;
 mod recording_far_side_link_delivery;
-pub(crate) use a_setting_read_at_setup_for_a_test::make_in1_a_setting_read_at_setup;
+pub(crate) use a_setting_read_at_setup_for_a_test::{
+    make_in1_a_setting_read_at_setup, make_in1_a_setting_read_each_run,
+};
 pub(crate) use recording_far_side_link_delivery::{
     ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery,
 };

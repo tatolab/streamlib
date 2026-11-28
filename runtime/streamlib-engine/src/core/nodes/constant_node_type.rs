@@ -84,13 +84,11 @@ fn the_node_type_of_a_constant() -> Result<NodeDescriptor> {
                     .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
             ),
         ),
-        the_value_port_of_a_constant(
-            "The value the Constant holds; it takes no wire.",
-            Vec::new(),
-        )
-        .with_input_mode(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun,
-        }),
+        the_value_port_of_a_constant("The value the Constant holds.", Vec::new()).with_input_mode(
+            NodeInputMode::SettingOnly {
+                read: SettingReadTime::EachRun,
+            },
+        ),
     ];
     descriptor.outputs = vec![the_value_port_of_a_constant(
         "The value the Constant holds.",

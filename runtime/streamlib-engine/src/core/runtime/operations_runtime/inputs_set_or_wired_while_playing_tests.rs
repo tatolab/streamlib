@@ -17,10 +17,10 @@ use super::LoadedStreamInThisRuntime;
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_node_reading_its_settings_at_setup_for_a_test::{
-    THE_LAYERED_NODES_PIN_GROUP, THE_SOURCES_OUTPUT, forget_every_setup_run,
-    the_node_type_built_for_its_layers, the_node_type_reading_its_settings_at_setup,
-    the_node_type_whose_output_a_test_writes, the_settings_each_setup_read,
-    the_values_last_handed_to, write_from_the_source,
+    A_KERNEL_SIZE_IT_IS_NOT_HANDED, THE_LAYERED_NODES_PIN_GROUP, THE_SOURCES_OUTPUT,
+    forget_every_setup_run, the_node_type_built_for_its_layers,
+    the_node_type_reading_its_settings_at_setup, the_node_type_whose_output_a_test_writes,
+    the_settings_each_setup_read, the_values_last_handed_to, write_from_the_source,
 };
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::operations::RuntimeOperations;
@@ -222,6 +222,40 @@ fn wiring_unwiring_and_rewiring_a_setting_while_playing_hands_its_node_each_valu
     playing.wire_the_source_into_the_kernel_size();
     assert_eq!(playing.write_until_handed(9), Some(json!(9)));
     playing.assert_set_up_once_and_started();
+    playing.stream.stop().expect("the stream stops");
+}
+
+/// A value a wire carries that its node refuses leaves the node with the value it was last
+/// handed, and the stream started.
+///
+/// Mental-revert: a refusal that stops the hand-over task hands the node nothing after it; one
+/// that fails the stream leaves it no longer started.
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+fn a_value_a_wire_carries_that_its_node_refuses_leaves_it_its_last_value_and_the_stream_started() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let playing = a_playing_stream(project_directory.path());
+    let reader = playing.reader_uuid;
+    playing.wire_the_source_into_the_kernel_size();
+    assert_eq!(playing.write_until_handed(7), Some(json!(7)));
+
+    playing.write(A_KERNEL_SIZE_IT_IS_NOT_HANDED);
+    std::thread::sleep(Duration::from_millis(300));
+
+    assert_eq!(
+        the_values_last_handed_to(reader).and_then(|values| values.get("kernel_size").cloned()),
+        Some(json!(7))
+    );
+    playing.assert_set_up_once_and_started();
+    assert_eq!(
+        playing.write_until_handed(9),
+        Some(json!(9)),
+        "the next value is handed"
+    );
     playing.stream.stop().expect("the stream stops");
 }
 

@@ -264,7 +264,7 @@ fn carried_as_a_value(port: PortDescriptor) -> PortDescriptor {
     })
 }
 
-/// `port` as a setting read each run, which takes no wire.
+/// `port` as a setting read each run.
 fn a_setting_read_each_run(port: PortDescriptor) -> PortDescriptor {
     port.with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly {
         read: crate::core::descriptors::SettingReadTime::EachRun,

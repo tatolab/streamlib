@@ -395,17 +395,27 @@ fn a_value_wire_into_a_setting_read_at_setup_connects_as_its_types_do() {
 }
 
 #[test]
-fn a_stream_or_a_trigger_into_a_setting_read_at_setup_is_refused_naming_the_sampling_fix() {
-    for (output_flow, pin_type) in [
-        (PinFlow::Stream, float()),
-        (PinFlow::Trigger, PinType::Trigger {}),
+fn a_stream_or_a_trigger_into_a_setting_is_refused_naming_the_sampling_fix() {
+    for (output_flow, pin_type, read) in [
+        (PinFlow::Stream, float(), SettingReadTime::AtSetup),
+        (
+            PinFlow::Trigger,
+            PinType::Trigger {},
+            SettingReadTime::AtSetup,
+        ),
+        (PinFlow::Stream, float(), SettingReadTime::EachRun),
+        (
+            PinFlow::Trigger,
+            PinType::Trigger {},
+            SettingReadTime::EachRun,
+        ),
     ] {
         let verdict = pin_link_verdict(
             PinLinkEnd {
                 flow: Some(output_flow),
                 ..an_output(&pin_type)
             },
-            a_setting(SettingReadTime::AtSetup, &float()),
+            a_setting(read, &float()),
             &[],
         );
         let PinLinkOutcome::Refused(refusal) = verdict.outcome else {

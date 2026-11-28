@@ -61,7 +61,7 @@ class Oscillator:
     The tick is shorter than any block: each `process()` emits however many
     whole blocks elapsed time owes, so the tone stays locked to real time. Its
     pitch, waveform and loudness follow their inputs from the next block on;
-    a change to its rate, channels or block size builds it again.
+    its rate, channels and block size are read once, at setup.
     """
 
     frequency: Annotated[

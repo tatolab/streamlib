@@ -567,6 +567,8 @@ pub(crate) fn the_output_feeding_the_input(
 }
 
 #[cfg(test)]
+mod a_setting_read_at_setup_set_live_tests;
+#[cfg(test)]
 mod bundle_member_links_tests;
 #[cfg(test)]
 mod bundle_member_sets_tests;

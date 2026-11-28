@@ -11,7 +11,9 @@ use serde_json::json;
 use super::*;
 use crate::core::descriptors::PinType;
 use crate::core::pin_value_packing::pack_pin_value;
-use crate::core::test_support::{MockOutputOnlyNode, make_in1_a_setting_read_at_setup};
+use crate::core::test_support::{
+    MockOutputOnlyNode, make_in1_a_setting_read_at_setup, make_in1_a_setting_read_each_run,
+};
 
 /// The longest a test waits for the engine's reader to hand a value over.
 const A_VALUE_IS_HANDED_OVER_WITHIN: Duration = Duration::from_secs(5);
@@ -87,16 +89,61 @@ fn a_link_into_a_setting_read_at_setup_is_read_by_the_engine_until_it_is_closed(
     );
 
     close_iceoryx2_service(&mut graph, &link_id).expect("the link closes");
+    the_engine_reads_no_more_of(&graph, &link_id, &source_output);
+}
+
+/// The engine reads a link into a setting read each run as it reads one into a setting read at
+/// setup: the value the wire carried is held as what the setting reads.
+///
+/// Mental-revert: leaving a wire into a setting read each run to its node's own read waits on a
+/// node instance the destination does not have, and no value is held.
+#[test]
+fn a_link_into_a_setting_read_each_run_is_read_by_the_engine() {
+    let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+    let mut graph = Graph::new();
+    let source_id = add_mock_output_only(&mut graph);
+    let (_, source_output, _) =
+        attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
+    let source_output = source_output.expect("an output-only mock holds an output writer");
+    let dest_id = add_mock_input_only(&mut graph);
+    let dest_uuid = make_in1_a_setting_read_each_run(&mut graph, &dest_id);
+    let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+
+    open_iceoryx2_service(&mut graph, &link_id, &iceoryx2_node)
+        .expect("a link into a setting read each run wires with no node instance to read it");
+    write_a_gain(&source_output, 0.5, 1).expect("the source's output is wired");
+
+    assert_eq!(
+        the_nodes_waiting_within(&graph, A_VALUE_IS_HANDED_OVER_WITHIN),
+        std::collections::BTreeSet::from([dest_uuid])
+    );
+    assert_eq!(
+        graph
+            .values_wires_carry_into_settings()
+            .the_value_its_wire_carried(dest_uuid, "in1"),
+        Some(json!(0.5))
+    );
+    close_iceoryx2_service(&mut graph, &link_id).expect("the link closes");
+    the_engine_reads_no_more_of(&graph, &link_id, &source_output);
+}
+
+/// Once link `link_id` is closed, its reader is gone and a value its source writes is held for
+/// nothing.
+fn the_engine_reads_no_more_of(
+    graph: &Graph,
+    link_id: &LinkUniqueId,
+    source_output: &crate::iceoryx2::OutputWriterInner,
+) {
     let reader_left = graph
         .traversal()
-        .e(&link_id)
+        .e(link_id)
         .first()
         .is_some_and(|link| link.has::<ReaderOfALinkIntoASettingComponent>());
     assert!(!reader_left, "closing the link takes its reader off");
     // The source's output may have no channel left to write to, which is a write gone nowhere.
-    let _ = write_a_gain(&source_output, 0.75, 2);
+    let _ = write_a_gain(source_output, 0.75, 2);
     assert_eq!(
-        the_nodes_waiting_within(&graph, Duration::from_millis(300)),
+        the_nodes_waiting_within(graph, Duration::from_millis(300)),
         std::collections::BTreeSet::<uuid::Uuid>::new(),
         "a closed link's reader holds nothing more"
     );
