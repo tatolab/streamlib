@@ -12,8 +12,8 @@ use syn::parse::ParseStream;
 use syn::{Ident, LitInt, LitStr, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
-use super::pin_type_chosen_by_an_input::{
-    PinTypeChosenBy, parse_the_input_choosing_a_pin_type, pin_typed_by_the_input_choosing_it,
+use super::from_input_grammar::{
+    ValueInputNamedByFromInput, parse_from_input, peeks_a_call, pin_typed_by_the_input_choosing_it,
 };
 use super::stream_fact_grammar::{StreamFactsStated, parse_stream_fact_key};
 use super::string_literal_list::{parse_string_literal_list, parse_string_literals};
@@ -34,8 +34,8 @@ pub(crate) enum DeclaredPort {
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, pin_type = <PinType> |
-/// pin_type = from_input(<value input>), lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
-/// takes_a_value = true, <stream fact key> = …]`, or, for a value input of a node written as
+/// pin_type = from_input(<value input>), lifetime = kept | reset, flow = <PinFlow>,
+/// former_names = ["…"], may_be_unset = true, takes_a_value = true, <stream fact key> = …]`, or, for a value input of a node written as
 /// one function, `<name-string>, value = <Type>, default = <expression>[, description = "...",
 /// options = ["…", …] | among_the_bundles_its_stream_declares = true]`.
 ///
@@ -92,7 +92,7 @@ pub(super) fn parse_port(
     let mut borrow_quota = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
-    let mut pin_type_chosen_by_an_input: Option<(proc_macro2::Span, PinTypeChosenBy)> = None;
+    let mut from_input_grammar: Option<(proc_macro2::Span, ValueInputNamedByFromInput)> = None;
     let mut lifetime = NodeValueLifetime::Kept;
     let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
     let mut former_names: Option<(proc_macro2::Span, Vec<String>)> = None;
@@ -205,13 +205,13 @@ pub(super) fn parse_port(
                 ));
             }
             "pin_type" if peeks_a_call(&content) => {
-                let chosen_by = parse_the_input_choosing_a_pin_type(&content, |function| {
+                let chosen_by = parse_from_input(&content, |function| {
                     format!(
                         "port `{name}` declares `pin_type = {function}(…)` — a port typed by a \
                          value input of its node states `pin_type = from_input(<value input>)`"
                     )
                 })?;
-                pin_type_chosen_by_an_input = Some((key_span, chosen_by));
+                from_input_grammar = Some((key_span, chosen_by));
             }
             "pin_type" => {
                 let pin_type_ident: Ident = content.parse()?;
@@ -315,7 +315,7 @@ pub(super) fn parse_port(
         ));
     }
 
-    let stated_pin_type = match (pin_type, pin_type_chosen_by_an_input) {
+    let stated_pin_type = match (pin_type, from_input_grammar) {
         (Some(_), Some((chosen_by_span, chosen_by))) => {
             return Err(syn::Error::new(
                 chosen_by_span,
@@ -508,12 +508,7 @@ fn declared_pin(
 /// How a port states its pin type: exactly, at its span, or by the input it names.
 enum StatedPinType {
     Exactly(proc_macro2::Span, PinType),
-    ChosenBy(PinTypeChosenBy),
-}
-
-/// Whether what follows is a call, `<function>(…)`.
-pub(super) fn peeks_a_call(content: ParseStream<'_>) -> bool {
-    content.peek(Ident) && content.peek2(syn::token::Paren)
+    ChosenBy(ValueInputNamedByFromInput),
 }
 
 /// Parse `flow = <PinFlow>`'s value: `Value`, `Stream` or `Trigger`.

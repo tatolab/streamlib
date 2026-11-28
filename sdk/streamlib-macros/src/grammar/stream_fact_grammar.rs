@@ -14,27 +14,44 @@ use syn::parse::ParseStream;
 use syn::{LitInt, LitStr};
 
 use super::PortDirection;
-use super::pin_type_chosen_by_an_input::{
-    PinTypeChosenBy, StreamFactReadFromAValueInput, parse_the_input_choosing_a_pin_type,
+use super::from_input_grammar::{
+    StreamFactReadFromAValueInput, ValueInputNamedByFromInput, parse_from_input, peeks_a_call,
 };
-use super::port_grammar::peeks_a_call;
 use super::string_literal_list::parse_string_literal_list;
 
 /// Parse `from_input(<value input>)`, when that is what follows, into the value input the fact
 /// is read from.
 fn parse_the_input_a_fact_is_read_from(
     content: ParseStream<'_>,
-) -> syn::Result<Option<PinTypeChosenBy>> {
+) -> syn::Result<Option<ValueInputNamedByFromInput>> {
     if !peeks_a_call(content) {
         return Ok(None);
     }
-    parse_the_input_choosing_a_pin_type(content, |function| {
+    parse_from_input(content, |function| {
         format!(
             "expected `from_input(<value input>)`, found `{function}(…)` — a fact a port \
              states of its stream is a number, or read from a value input of its node"
         )
     })
     .map(Some)
+}
+
+/// Parse `from_input(<value input>)` for `fact_key`, when that is what follows, noting the value
+/// input in `read_from_value_inputs` and answering its cast name.
+fn the_input_a_fact_is_read_from(
+    content: ParseStream<'_>,
+    fact_key: &'static str,
+    read_from_value_inputs: &mut Vec<StreamFactReadFromAValueInput>,
+) -> syn::Result<Option<String>> {
+    let Some(read_from) = parse_the_input_a_fact_is_read_from(content)? else {
+        return Ok(None);
+    };
+    let cast_name = read_from.cast_name.clone();
+    read_from_value_inputs.push(StreamFactReadFromAValueInput {
+        fact_key,
+        read_from,
+    });
+    Ok(Some(cast_name))
 }
 
 /// The stream facts a port states beside its pin type: the pixel formats of a Texture, and the
@@ -48,7 +65,7 @@ pub(super) struct StreamFactsStated {
 
 impl StreamFactsStated {
     /// The first fact stated that a port of `pin_type`, at `direction`, does not take, as a
-    /// refusal naming the port and the key; a port typed by a setting takes none.
+    /// refusal naming the port and the key; a port typed by a value input takes none.
     pub(super) fn refusal_of_a_fact_the_port_does_not_take(
         &self,
         port_name: &str,
@@ -88,7 +105,7 @@ impl StreamFactsStated {
             PortDirection::Output => "output",
         };
         let pin_type_words = pin_type.map_or_else(
-            || "a type a setting chooses".to_owned(),
+            || "a type a value input chooses".to_owned(),
             |pin_type| format!("{pin_type}"),
         );
         stated_keys
@@ -120,39 +137,32 @@ pub(super) fn parse_stream_fact_key(
     match fact_key {
         "formats" => *formats = parse_string_literal_list(content, "formats")?,
         "rate" => {
-            annotations.sample_rate = Some(match parse_the_input_a_fact_is_read_from(content)? {
-                Some(read_from) => {
-                    let setting = read_from.cast_name.clone();
-                    read_from_value_inputs.push(StreamFactReadFromAValueInput {
-                        fact_key: "rate",
-                        read_from,
-                    });
-                    ChannelsOutputPortSampleRate::FromSetting { setting }
-                }
-                None => {
-                    let rate: LitInt = content.parse()?;
-                    ChannelsOutputPortSampleRate::Stated(rate.base10_parse()?)
-                }
-            });
+            annotations.sample_rate = Some(
+                match the_input_a_fact_is_read_from(content, "rate", read_from_value_inputs)? {
+                    Some(setting) => ChannelsOutputPortSampleRate::FromSetting { setting },
+                    None => {
+                        let rate: LitInt = content.parse()?;
+                        ChannelsOutputPortSampleRate::Stated(rate.base10_parse()?)
+                    }
+                },
+            );
         }
         "frame_rate" => {
-            annotations.frame_rate = Some(match parse_the_input_a_fact_is_read_from(content)? {
-                Some(read_from) => {
-                    let setting = read_from.cast_name.clone();
-                    read_from_value_inputs.push(StreamFactReadFromAValueInput {
-                        fact_key: "frame_rate",
-                        read_from,
-                    });
-                    ImageOutputPortFrameRate::FromSetting { setting }
-                }
-                None => {
-                    let frames_per_second: LitInt = content.parse()?;
-                    ImageOutputPortFrameRate::Stated(streamlib_node_schema::ImageStreamFrameRate {
-                        numerator: frames_per_second.base10_parse()?,
-                        denominator: 1,
-                    })
-                }
-            });
+            annotations.frame_rate = Some(
+                match the_input_a_fact_is_read_from(content, "frame_rate", read_from_value_inputs)?
+                {
+                    Some(setting) => ImageOutputPortFrameRate::FromSetting { setting },
+                    None => {
+                        let frames_per_second: LitInt = content.parse()?;
+                        ImageOutputPortFrameRate::Stated(
+                            streamlib_node_schema::ImageStreamFrameRate {
+                                numerator: frames_per_second.base10_parse()?,
+                                denominator: 1,
+                            },
+                        )
+                    }
+                },
+            );
         }
         "dtype" => {
             let dtype: LitStr = content.parse()?;

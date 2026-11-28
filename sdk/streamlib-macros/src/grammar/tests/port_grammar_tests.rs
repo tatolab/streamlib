@@ -875,3 +875,18 @@ fn a_bare_any_port_schema_is_an_error() {
         "the error must name the removal and the offending port: {msg}"
     );
 }
+
+#[test]
+fn a_stream_fact_on_a_port_a_value_input_types_is_refused_naming_the_value_input() {
+    let msg = parse_err(quote! {
+        execution = manual,
+        input("content_type", value = Option<PinType>, default = None),
+        output("content", pin_type = from_input(content_type), formats = ["rgba8_unorm"]),
+    });
+    assert!(
+        msg.contains(
+            "states `formats=`, which an output of a type a value input chooses does not take"
+        ),
+        "got {msg}"
+    );
+}

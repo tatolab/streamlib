@@ -24,8 +24,8 @@ use super::node_scaffold_emit::{
 use super::port_marker_module::generate_port_marker_module;
 use super::{NodeDeclaredMetaAndPortDescriptions, generate_descriptor_from_schema};
 use crate::grammar::{
-    ParsedNodeAttr, ParsedPort, ParsedValueInput, PinTypeChosenBy, PortDirection,
-    StreamFactReadFromAValueInput, ValueInputChosenFrom, declared_description_str_expression,
+    ParsedNodeAttr, ParsedPort, ParsedValueInput, PortDirection, StreamFactReadFromAValueInput,
+    ValueInputChosenFrom, ValueInputNamedByFromInput, declared_description_str_expression,
 };
 
 /// The name of the node a function `function_ident` declares: its identifier in UpperCamelCase.
@@ -595,34 +595,39 @@ fn refuse_a_pin_type_no_value_input_chooses(
     value_inputs: &[ParsedValueInput],
 ) -> syn::Result<()> {
     let port_ident = &port.declared_marker_ident;
-    match &port.pin_type_chosen_by {
-        None => Ok(()),
-        Some(PinTypeChosenBy { named, cast_name }) => {
-            let Some(value_input) = value_inputs
-                .iter()
-                .find(|value_input| &value_input.cast_name == cast_name)
-            else {
-                return Err(syn::Error::new(
-                    named.span(),
-                    format!(
-                        "port `{port_ident}` takes its pin type `from_input({named})`, and the \
-                         node declares no value input `{named}`: declare it, `input(\"{named}\", \
-                         value = Option<PinType>, default = None)`"
-                    ),
-                ));
-            };
-            if holds_a_pin_type(&value_input.value_type) {
-                return Ok(());
-            }
-            Err(syn::Error::new(
-                value_input.value_type.span(),
-                format!(
-                    "value input `{named}` chooses the pin type of port `{port_ident}`, so it \
-                     holds the choice of one: `value = Option<PinType>`"
-                ),
-            ))
-        }
+    let Some(ValueInputNamedByFromInput { named, cast_name }) = &port.pin_type_chosen_by else {
+        return Ok(());
+    };
+    let Some(value_input) = the_value_input_named(value_inputs, cast_name) else {
+        return Err(syn::Error::new(
+            named.span(),
+            format!(
+                "port `{port_ident}` takes its pin type `from_input({named})`, and the node \
+                 declares no value input `{named}`: declare it, `input(\"{named}\", value = \
+                 Option<PinType>, default = None)`"
+            ),
+        ));
+    };
+    if holds_a_pin_type(&value_input.value_type) {
+        return Ok(());
     }
+    Err(syn::Error::new(
+        value_input.value_type.span(),
+        format!(
+            "value input `{named}` chooses the pin type of port `{port_ident}`, so it holds the \
+             choice of one: `value = Option<PinType>`"
+        ),
+    ))
+}
+
+/// The value input of `value_inputs` whose name is cast to `cast_name`.
+fn the_value_input_named<'a>(
+    value_inputs: &'a [ParsedValueInput],
+    cast_name: &str,
+) -> Option<&'a ParsedValueInput> {
+    value_inputs
+        .iter()
+        .find(|value_input| value_input.cast_name == cast_name)
 }
 
 /// Refuse `port` of a node function when a fact of its stream is read `from_input(…)` a value
@@ -634,15 +639,11 @@ fn refuse_a_stream_fact_read_from_no_value_input(
     let port_ident = &port.declared_marker_ident;
     let Some(StreamFactReadFromAValueInput {
         fact_key,
-        read_from: PinTypeChosenBy { named, .. },
+        read_from: ValueInputNamedByFromInput { named, .. },
     }) = port
         .stream_facts_read_from_value_inputs
         .iter()
-        .find(|fact| {
-            !value_inputs
-                .iter()
-                .any(|value_input| value_input.cast_name == fact.read_from.cast_name)
-        })
+        .find(|fact| the_value_input_named(value_inputs, &fact.read_from.cast_name).is_none())
     else {
         return Ok(());
     };

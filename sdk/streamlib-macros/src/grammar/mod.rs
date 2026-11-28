@@ -10,13 +10,13 @@ use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
 use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized};
 
-mod pin_type_chosen_by_an_input;
+mod from_input_grammar;
 mod port_grammar;
 mod stream_fact_grammar;
 mod string_literal_list;
 mod value_input_grammar;
 
-pub(crate) use pin_type_chosen_by_an_input::{PinTypeChosenBy, StreamFactReadFromAValueInput};
+pub(crate) use from_input_grammar::{StreamFactReadFromAValueInput, ValueInputNamedByFromInput};
 use port_grammar::{DeclaredPort, parse_port};
 pub(crate) use value_input_grammar::ValueInputChosenFrom;
 
@@ -269,7 +269,7 @@ pub(crate) struct ParsedPort {
     pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
     /// The value input whose chosen pin type the port carries, as `pin_type = from_input(…)`
     /// names it; `None` when the port states its type itself.
-    pub pin_type_chosen_by: Option<PinTypeChosenBy>,
+    pub pin_type_chosen_by: Option<ValueInputNamedByFromInput>,
     /// Each fact of the port's stream read from a value input, as `rate = from_input(…)` or
     /// `frame_rate = from_input(…)` names it.
     pub stream_facts_read_from_value_inputs: Vec<StreamFactReadFromAValueInput>,

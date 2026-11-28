@@ -103,8 +103,8 @@ pub trait ValueInputChoosingAPinType {}
 
 impl ValueInputChoosingAPinType for Option<PinType> {}
 
-/// The pin type choice a value input of type `T` is declared with when it chooses one of the bundles
-/// its stream's node types declare, which the runtime lists for a placed node.
+/// The pin type choice a value input of type `T` is declared with when it chooses one of the
+/// bundles its stream's node types declare, which the runtime lists for a placed node.
 pub fn the_choice_among_the_bundles_its_stream_declares<T: ValueInputChoosingAPinType>() -> PinType
 {
     PinType::a_choice_among_the_bundles_its_stream_declares()
