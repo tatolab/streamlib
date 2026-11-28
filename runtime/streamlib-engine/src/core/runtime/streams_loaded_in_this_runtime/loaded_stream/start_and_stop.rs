@@ -10,6 +10,10 @@ use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
+use crate::core::compiler::compiler_ops::function_node_island::{
+    hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed,
+    runs_inside_the_read_of_each_node_it_feeds,
+};
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::context::{
     GpuContext, RuntimeContext, StreamClock, StreamClockReading,
@@ -266,29 +270,49 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Hand each node a Value wire into one of its settings carried a new value into, or took
-    /// a wire off, what its inputs read now, as a value set on them is handed. A node not
-    /// handed its values is logged and keeps what it read.
+    /// a wire off, what its inputs read now, as a value set on them is handed: a function node
+    /// read inside an island through each island evaluating it, any other node on its own, so
+    /// one that refuses is logged, keeps what it read, and leaves every other node handed its
+    /// values.
     fn hand_each_node_what_the_wires_into_its_settings_carried(&self) {
-        let node_run_ids = self.compiler.scope_reading(|graph| {
-            graph
-                .values_wires_carry_into_settings()
-                .take_each_node_waiting_for_its_values()
-                .into_iter()
-                .filter_map(|node| graph.node_by_uuid(node).map(|node| node.id.clone()))
-                .collect::<Vec<_>>()
-        });
-        if node_run_ids.is_empty() {
+        let (read_inside_an_island, handed_on_their_own): (Vec<NodeRunId>, Vec<NodeRunId>) =
+            self.compiler.scope_reading(|graph| {
+                graph
+                    .values_wires_carry_into_settings()
+                    .take_each_node_waiting_for_its_values()
+                    .into_iter()
+                    .filter_map(|node| graph.node_by_uuid(node).map(|node| node.id.clone()))
+                    .partition(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))
+            });
+        if read_inside_an_island.is_empty() && handed_on_their_own.is_empty() {
             return;
         }
+        let graph_lock = self.compiler.graph_lock();
         self.with_no_other_input_value_change(|| {
-            if let Err(not_handed_over) = deliver_the_unlinked_input_values_of_each_node(
-                self.compiler.graph_lock(),
-                &node_run_ids,
-            ) {
+            if !read_inside_an_island.is_empty()
+                && let Err(not_handed_over) =
+                    hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
+                        &mut graph_lock.write(),
+                        &read_inside_an_island,
+                    )
+            {
                 tracing::warn!(
                     %not_handed_over,
-                    "a node was not handed what a wire into one of its settings carried"
+                    "an island was not handed what a wire into a setting of a node it evaluates \
+                     carried"
                 );
+            }
+            for node_id in &handed_on_their_own {
+                if let Err(not_handed_over) = deliver_the_unlinked_input_values_of_each_node(
+                    graph_lock,
+                    std::slice::from_ref(node_id),
+                ) {
+                    tracing::warn!(
+                        node = %node_id,
+                        %not_handed_over,
+                        "a node was not handed what a wire into one of its settings carried"
+                    );
+                }
             }
         });
     }

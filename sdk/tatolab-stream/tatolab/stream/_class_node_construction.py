@@ -153,11 +153,16 @@ def assign_live_field_values(node_instance: object, field_values: Mapping[str, o
         if port in slot_fields:
             pin_group, slot, member = _the_slot_field_named(node_instance, port)
             slots_given.setdefault((pin_group.attribute, slot), {})[member.attribute] = value
-            continue
-        setattr(node_instance, fields[port].attribute, value)
+    # Every group's slots are built before anything is assigned, so a slot that refuses its
+    # values leaves the node as it was.
+    groups_given: dict[str, list[object]] = {}
     for (attribute, slot), values in slots_given.items():
-        slots = list(getattr(node_instance, attribute))
+        slots = groups_given.setdefault(attribute, list(getattr(node_instance, attribute)))
         slots[slot] = dataclasses.replace(slots[slot], **values)
+    for port, value in field_values.items():
+        if port not in slot_fields:
+            setattr(node_instance, fields[port].attribute, value)
+    for attribute, slots in groups_given.items():
         setattr(node_instance, attribute, tuple(slots))
 
 
