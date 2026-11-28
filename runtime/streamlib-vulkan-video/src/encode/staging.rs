@@ -468,10 +468,10 @@ impl SimpleEncoder {
             }
 
             let display_pts = self.frame_counter;
-            self.frame_counter += 1;
 
             // Encode from the NV12 image (already in VIDEO_ENCODE_SRC layout).
             let output = self.encode_frame(nv12_image, nv12_view, frame_type)?;
+            self.frame_counter += 1;
 
             let is_keyframe = frame_type == FrameType::Idr;
             let mut data = Vec::new();

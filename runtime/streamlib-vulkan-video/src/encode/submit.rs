@@ -20,6 +20,11 @@ use super::SimpleEncoder;
 use super::config::{EncodedOutput, FrameType, RateControlMode};
 use super::encode_frame_reference_planning::EncodeFrameReferencePlan;
 
+/// The rate controller's virtual buffer: a second of the stream, entered half
+/// full. A layered rate control may not leave it at zero.
+const RATE_CONTROL_VIRTUAL_BUFFER_MS: u32 = 1_000;
+const RATE_CONTROL_INITIAL_VIRTUAL_BUFFER_MS: u32 = 500;
+
 impl SimpleEncoder {
     /// Encode a single frame.
     ///
@@ -34,6 +39,22 @@ impl SimpleEncoder {
     /// The caller must ensure `source_image` and `source_view` are valid and
     /// that the image is in `VIDEO_ENCODE_SRC_KHR` layout.
     pub(crate) unsafe fn encode_frame(
+        &mut self,
+        source_image: vk::Image,
+        source_view: vk::ImageView,
+        frame_type: FrameType,
+    ) -> VideoResult<EncodedOutput> {
+        let encoded =
+            unsafe { self.record_and_submit_frame(source_image, source_view, frame_type) };
+        if encoded.is_err() {
+            // A failed frame wrote no reference picture, so the next frame
+            // starts a new group instead of predicting from it.
+            self.force_idr_flag = true;
+        }
+        encoded
+    }
+
+    unsafe fn record_and_submit_frame(
         &mut self,
         _source_image: vk::Image,
         source_view: vk::ImageView,
@@ -357,11 +378,21 @@ impl SimpleEncoder {
             // of VkVideoBeginCodingInfoKHR for every coding scope.
             let rc_mode = config.rate_control_mode.to_vk_flags();
 
-            let rate_control_layer = vk::VideoEncodeRateControlLayerInfoKHR::builder()
+            // NVIDIA refuses a rate control layer at vkEndCommandBuffer, with
+            // ERROR_INITIALIZATION_FAILED, unless the codec's own layer info is
+            // chained into it, even with every field left at zero.
+            let mut h264_rate_control_layer = vk::VideoEncodeH264RateControlLayerInfoKHR::default();
+            let mut h265_rate_control_layer = vk::VideoEncodeH265RateControlLayerInfoKHR::default();
+            let mut rate_control_layer = vk::VideoEncodeRateControlLayerInfoKHR::builder()
                 .average_bitrate(config.average_bitrate as u64)
                 .max_bitrate(config.max_bitrate as u64)
                 .frame_rate_numerator(config.framerate_numerator)
                 .frame_rate_denominator(config.framerate_denominator);
+            if is_h264 {
+                rate_control_layer = rate_control_layer.push_next(&mut h264_rate_control_layer);
+            } else if is_h265 {
+                rate_control_layer = rate_control_layer.push_next(&mut h265_rate_control_layer);
+            }
 
             // Per Vulkan spec: when rate_control_mode is DEFAULT or DISABLED (CQP),
             // layerCount must be 0. Only include layers for CBR/VBR modes.
@@ -372,7 +403,10 @@ impl SimpleEncoder {
                 vk::VideoEncodeRateControlInfoKHR::builder().rate_control_mode(rc_mode);
 
             if needs_layers {
-                begin_rc_info = begin_rc_info.layers(std::slice::from_ref(&rate_control_layer));
+                begin_rc_info = begin_rc_info
+                    .layers(std::slice::from_ref(&rate_control_layer))
+                    .virtual_buffer_size_in_ms(RATE_CONTROL_VIRTUAL_BUFFER_MS)
+                    .initial_virtual_buffer_size_in_ms(RATE_CONTROL_INITIAL_VIRTUAL_BUFFER_MS);
             }
 
             // --- vkCmdBeginVideoCodingKHR ---
@@ -398,8 +432,10 @@ impl SimpleEncoder {
                     vk::VideoEncodeRateControlInfoKHR::builder().rate_control_mode(rc_mode);
 
                 if needs_layers {
-                    control_rc_info =
-                        control_rc_info.layers(std::slice::from_ref(&rate_control_layer));
+                    control_rc_info = control_rc_info
+                        .layers(std::slice::from_ref(&rate_control_layer))
+                        .virtual_buffer_size_in_ms(RATE_CONTROL_VIRTUAL_BUFFER_MS)
+                        .initial_virtual_buffer_size_in_ms(RATE_CONTROL_INITIAL_VIRTUAL_BUFFER_MS);
                 }
 
                 let mut control_flags = vk::VideoCodingControlFlagsKHR::RESET;
@@ -422,9 +458,8 @@ impl SimpleEncoder {
                 }
 
                 device.cmd_control_video_coding_khr(self.command_buffer, &control_info);
-
-                self.rate_control_sent = true;
             }
+            let resets_the_session = !self.rate_control_sent;
 
             // --- Source picture resource (caller's image) ---
             let src_resource = vk::VideoPictureResourceInfoKHR::builder()
@@ -874,6 +909,11 @@ impl SimpleEncoder {
             self.codec_device
                 .submit_to_queue(self.encode_queue, &[submit_info], self.fence)?;
             device.wait_for_fences(&[self.fence], true, u64::MAX)?;
+            // Only a reset the GPU ran leaves the session initialized; until
+            // one has, every frame records it again.
+            if resets_the_session {
+                self.rate_control_sent = true;
+            }
 
             // --- Query encode feedback ---
             let feedback = self

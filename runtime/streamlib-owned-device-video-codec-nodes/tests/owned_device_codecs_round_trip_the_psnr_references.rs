@@ -116,6 +116,16 @@ fn owned_device_encoder(
     owned_device: &Arc<OwnedVulkanVideoCodecDevice>,
     codec: Codec,
 ) -> RgbaPixelBufferVideoEncoder {
+    owned_device_encoder_at(owned_device, codec, None)
+}
+
+/// The encoder a codec module mints for a reference-sized frame, rate
+/// controlled to `bitrate_bps` when it is set.
+fn owned_device_encoder_at(
+    owned_device: &Arc<OwnedVulkanVideoCodecDevice>,
+    codec: Codec,
+    bitrate_bps: Option<u32>,
+) -> RgbaPixelBufferVideoEncoder {
     let codec_device: Arc<dyn VulkanVideoCodecDevice> = owned_device.clone();
     RgbaPixelBufferVideoEncoder::new(
         SimpleEncoder::new(
@@ -127,7 +137,7 @@ fn owned_device_encoder(
                 codec,
                 preset: Preset::Medium,
                 qp: None,
-                bitrate_bps: None,
+                bitrate_bps,
                 streaming: true,
                 idr_interval_secs: KEYFRAME_INTERVAL_SECONDS,
                 prepend_header_to_idr: Some(true),
@@ -293,6 +303,88 @@ fn round_trip_every_psnr_reference_on_owned_devices(codec: Codec) {
         (complex_pattern_chroma_db * 100.0).round() / 100.0 >= lock_db,
         "{codec:?}: complex_pattern's chroma is {complex_pattern_chroma_db:.3} dB, under the \
          {lock_db} dB lock"
+    );
+}
+
+/// Two rate-controlled bitrates far enough apart that a session which
+/// applies its rate control codes the same pictures at very different sizes.
+const LOW_BITRATE_BPS: u32 = 1_000_000;
+const HIGH_BITRATE_BPS: u32 = 16_000_000;
+
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn owned_device_h264_encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate() {
+    encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate(Codec::H264);
+}
+
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn owned_device_h265_encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate() {
+    encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate(Codec::H265);
+}
+
+/// The bytes two seconds of `complex_pattern` code to at `bitrate_bps`, each
+/// frame encoded and the first a sync point.
+fn bytes_of_two_seconds_at(
+    owned_encode_device: &Arc<OwnedVulkanVideoCodecDevice>,
+    codec: Codec,
+    bitrate_bps: u32,
+) -> usize {
+    let mut encoder = owned_device_encoder_at(owned_encode_device, codec, Some(bitrate_bps));
+    let reference_path = psnr_reference_paths()
+        .into_iter()
+        .find(|path| {
+            path.file_stem()
+                .is_some_and(|stem| stem == CHROMA_LOCK_REFERENCE)
+        })
+        .expect("complex_pattern is among the references");
+    let reference = Rgba8Picture::read_png(&reference_path);
+    let pixel_buffer = reference_imported_onto_the_owned_device(&reference, owned_encode_device);
+    let mut bytes = 0;
+    for frame_index in 0..2 * FRAMES_PER_REFERENCE as i64 {
+        let packets = encoder
+            .encode_rgba_pixel_buffer(
+                &pixel_buffer,
+                u64::from(REFERENCE_WIDTH) * 4,
+                REFERENCE_WIDTH,
+                REFERENCE_HEIGHT,
+                1_000_000_000 + frame_index * FRAME_INTERVAL_NS,
+            )
+            .unwrap_or_else(|failure| {
+                panic!("{codec:?} at {bitrate_bps} b/s: frame {frame_index} encodes: {failure}")
+            });
+        assert_eq!(packets.len(), 1, "{codec:?}: one access unit per frame");
+        if frame_index == 0 {
+            assert!(
+                packets[0].is_keyframe,
+                "{codec:?} at {bitrate_bps} b/s: the first frame is a sync point"
+            );
+        }
+        bytes += packets[0].data.len();
+    }
+    bytes
+}
+
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the measured sizes are the run's evidence, printed for whoever ran it"
+)]
+fn encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate(codec: Codec) {
+    let Some(owned_encode_device) =
+        owned_device_on_the_runtimes_gpu(VulkanVideoCodecDirection::Encode)
+    else {
+        return;
+    };
+    let low_bytes = bytes_of_two_seconds_at(&owned_encode_device, codec, LOW_BITRATE_BPS);
+    let high_bytes = bytes_of_two_seconds_at(&owned_encode_device, codec, HIGH_BITRATE_BPS);
+    eprintln!(
+        "owned-device {codec:?} complex_pattern, two seconds: {low_bytes} bytes at \
+         {LOW_BITRATE_BPS} b/s, {high_bytes} bytes at {HIGH_BITRATE_BPS} b/s"
+    );
+    assert!(
+        low_bytes * 2 < high_bytes,
+        "{codec:?}: {low_bytes} bytes at {LOW_BITRATE_BPS} b/s and {high_bytes} bytes at \
+         {HIGH_BITRATE_BPS} b/s, so the session's rate control was not applied"
     );
 }
 
