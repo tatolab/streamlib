@@ -198,7 +198,7 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
     /// it as applied: an added node under the name it took. A running node it sets a value on is
-    /// handed that value, and no node is rebuilt.
+    /// handed that value.
     fn apply_a_stream_graph_operation_live(
         &self,
         graph_operation: streamlib_project_repository::StreamGraphOperation,

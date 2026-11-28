@@ -448,8 +448,7 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Set the input value `input` of `node`, or its member `member` when one is named, to
-    /// `value`, `None` taking it off, and hand the node what its inputs read now: no set
-    /// rebuilds the node.
+    /// `value`, `None` taking it off, and hand the node what its inputs read now.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,

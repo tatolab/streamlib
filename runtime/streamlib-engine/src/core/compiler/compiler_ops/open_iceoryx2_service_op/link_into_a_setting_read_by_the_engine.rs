@@ -4,7 +4,7 @@
 //! A link into a setting is read by the engine, never by the setting's node: a reader of the
 //! link's channel on a thread of its own hands each value the wire carries to the stream's values
 //! carried into settings, which hand it to the node as a value set on the setting is handed,
-//! however the two ends are hosted. No value a wire carries rebuilds the node.
+//! however the two ends are hosted.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

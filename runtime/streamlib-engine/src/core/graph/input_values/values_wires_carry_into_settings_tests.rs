@@ -24,7 +24,10 @@ fn a_burst_of_values_on_one_setting_reads_as_its_last_and_leaves_its_node_to_han
         carried.the_value_its_wire_carried(node, "kernel_size"),
         Some(json!(9))
     );
-    assert_eq!(carried.take_each_node_waiting_for_its_values(), [node]);
+    assert_eq!(
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([node])
+    );
     assert!(carried.take_each_node_waiting_for_its_values().is_empty());
 }
 
@@ -39,7 +42,10 @@ fn a_value_its_wire_carried_already_leaves_nothing_to_hand() {
     carried.carried(node, "kernel_size", json!(5));
     assert!(carried.take_each_node_waiting_for_its_values().is_empty());
     carried.carried(node, "kernel_size", json!(3));
-    assert_eq!(carried.take_each_node_waiting_for_its_values(), [node]);
+    assert_eq!(
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([node])
+    );
 }
 
 #[test]
@@ -51,7 +57,10 @@ fn a_node_forgotten_holds_nothing() {
     carried.carried(another, "kernel_size", json!(6));
     carried.forget_the_node(node);
 
-    assert_eq!(carried.take_each_node_waiting_for_its_values(), [another]);
+    assert_eq!(
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([another])
+    );
     assert_eq!(
         carried.the_value_its_wire_carried(node, "kernel_size"),
         None
@@ -72,7 +81,10 @@ fn a_wire_leaving_a_setting_it_carried_a_value_into_leaves_its_node_to_hand_its_
         carried.the_value_its_wire_carried(node, "kernel_size"),
         None
     );
-    assert_eq!(carried.take_each_node_waiting_for_its_values(), [node]);
+    assert_eq!(
+        carried.take_each_node_waiting_for_its_values(),
+        std::collections::BTreeSet::from([node])
+    );
 
     carried.its_wire_left(node, "kernel_size");
     assert!(

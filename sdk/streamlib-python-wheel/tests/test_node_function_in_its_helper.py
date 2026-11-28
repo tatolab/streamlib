@@ -468,8 +468,7 @@ def test_a_layer_wired_or_unwired_while_playing_gives_the_node_its_slots_and_reb
     stand_in_parent: Any,
 ):
     """Mental-revert: build the slots once at setup, as a class node's are, and the slot a link
-    wired after setup reaches is never held, so no frame reads two layers or its level; or
-    report no live slots in `ready`, and the runtime rebuilds the node for each one."""
+    wired after setup reaches is never held, so no frame reads two layers or its level."""
     from node_function_probes import WHAT_THE_LAYER_STACKING_PROBE_DID
 
     WHAT_THE_LAYER_STACKING_PROBE_DID.clear()
@@ -490,7 +489,6 @@ def test_a_layer_wired_or_unwired_while_playing_gives_the_node_its_slots_and_reb
     )
     assert stand_in_parent.receive_answering_each_escalate() == {
         "rpc": "ready",
-        "takes_its_pin_group_slots_live": True,
     }
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
     wait_until_the_stacking_probe_did(stand_in_parent, ("frame", (1, (2.0,))), since=0)
@@ -568,7 +566,6 @@ def test_a_link_into_a_slot_that_does_not_build_is_refused_and_leaves_the_slots_
     )
     assert stand_in_parent.receive_answering_each_escalate() == {
         "rpc": "ready",
-        "takes_its_pin_group_slots_live": True,
     }
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
     wait_until_the_stacking_probe_did(stand_in_parent, ("weights", (2.0,)), since=0)

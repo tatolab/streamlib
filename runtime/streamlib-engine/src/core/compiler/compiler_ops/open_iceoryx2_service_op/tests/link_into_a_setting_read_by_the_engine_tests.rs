@@ -37,7 +37,10 @@ fn write_a_gain(
 
 /// Each node left to be handed what a wire into its settings carried once one is, or none
 /// within `within`.
-fn the_nodes_waiting_within(graph: &Graph, within: Duration) -> Vec<uuid::Uuid> {
+fn the_nodes_waiting_within(
+    graph: &Graph,
+    within: Duration,
+) -> std::collections::BTreeSet<uuid::Uuid> {
     let deadline = Instant::now() + within;
     loop {
         let waiting = graph
@@ -74,7 +77,7 @@ fn a_link_into_a_setting_read_at_setup_is_read_by_the_engine_until_it_is_closed(
 
     assert_eq!(
         the_nodes_waiting_within(&graph, A_VALUE_IS_HANDED_OVER_WITHIN),
-        [dest_uuid]
+        std::collections::BTreeSet::from([dest_uuid])
     );
     assert_eq!(
         graph
@@ -94,7 +97,7 @@ fn a_link_into_a_setting_read_at_setup_is_read_by_the_engine_until_it_is_closed(
     let _ = write_a_gain(&source_output, 0.75, 2);
     assert_eq!(
         the_nodes_waiting_within(&graph, Duration::from_millis(300)),
-        Vec::<uuid::Uuid>::new(),
+        std::collections::BTreeSet::<uuid::Uuid>::new(),
         "a closed link's reader holds nothing more"
     );
 }

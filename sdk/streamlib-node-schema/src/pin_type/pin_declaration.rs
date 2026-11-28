@@ -194,8 +194,7 @@ pub enum NodeInputMode {
     /// A link only, read each run.
     WireOnly,
     /// A setting: a stored value, or what a Value wire into it carries, read when `read` says.
-    /// The engine reads its wire and hands its node each value, as it hands a stored one; no
-    /// change of either rebuilds its node.
+    /// The engine reads its wire and hands its node each value, as it hands a stored one.
     SettingOnly {
         /// When the node reads it.
         #[serde(default)]
@@ -208,9 +207,8 @@ pub enum NodeInputMode {
 /// carries, such as a node reference or a choice of pin type, and any setting of a node type of
 /// the graph itself — `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable` — which names a
 /// port of its stream or a variable, so fixes types across the graph before any link is judged,
-/// rather than running on a value. A setting read each run takes a wire as one read at setup
-/// does: the engine reads it and hands its node each value it carries. An input of no `mode` is
-/// a port that takes a wire, typed or not.
+/// rather than running on a value. The engine reads a wire into a setting and hands its node
+/// each value it carries. An input of no `mode` is a port that takes a wire, typed or not.
 pub fn an_input_takes_a_wire(
     node_type: &crate::NodeClassImportPath,
     mode: Option<NodeInputMode>,
@@ -256,8 +254,8 @@ impl NodeInputMode {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SettingReadTime {
-    /// Once, when the node is set up; a change of its value or of what its wire carries is
-    /// handed to the node, which rebuilds nothing.
+    /// Once, when the node is set up; a later value, set or carried by its wire, is handed to
+    /// the node while it runs.
     #[default]
     AtSetup,
     /// Each run.

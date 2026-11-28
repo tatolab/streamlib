@@ -266,9 +266,9 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Hand each node a Value wire into one of its settings carried a new value into, or took
-    /// a wire off, what its inputs read now, as a value set on them is handed: no node is
-    /// rebuilt. A node not handed its values is logged and keeps what it read.
-    pub(in crate::core::runtime) fn hand_each_node_what_the_wires_into_its_settings_carried(&self) {
+    /// a wire off, what its inputs read now, as a value set on them is handed. A node not
+    /// handed its values is logged and keeps what it read.
+    fn hand_each_node_what_the_wires_into_its_settings_carried(&self) {
         let node_run_ids = self.compiler.scope_reading(|graph| {
             graph
                 .values_wires_carry_into_settings()

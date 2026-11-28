@@ -4,8 +4,7 @@
 //! Restarting running nodes inside a live edit's compile: a shader node whose place in the
 //! islands the edit changes, a host now fused into another's island or a fused node now
 //! evaluating its own. Each is stopped, its links unwired and its build forgotten, then built
-//! and wired again by the same compile, while every other node keeps running. No input's value
-//! restarts a node.
+//! and wired again by the same compile, while every other node keeps running.
 
 use super::function_node_island::{
     HowALinkIsWired, how_a_link_is_wired, unwire_a_link_from_a_function_node_island_into_its_reader,

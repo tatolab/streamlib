@@ -3,9 +3,8 @@
 
 //! The values Value wires carry into settings, held apart from the graph like the values set
 //! live: each setting a wire feeds reads the value that wire last carried, and each node a wire
-//! carried a new value into, or took a wire off, waits to be handed what its inputs read now. The
-//! node is handed it as it is handed a value set on the setting, so no wire, and no wire taken
-//! off, rebuilds a node.
+//! carried a new value into, or took a wire off, waits to be handed what its inputs read now, as
+//! it is handed a value set on the setting.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -14,9 +13,6 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::core::graph::{Graph, LinkUniqueId};
-
-/// One setting a wire feeds: its node's UUID and its name.
-type WiredSetting = (Uuid, String);
 
 /// The values the Value wires into one stream's settings carry.
 #[derive(Debug, Default)]
@@ -27,8 +23,8 @@ pub(crate) struct ValuesWiresCarryIntoSettings {
 
 #[derive(Debug, Default)]
 struct ValuesHeld {
-    /// The value each wired setting's wire last carried, by setting.
-    carried: HashMap<WiredSetting, Value>,
+    /// The value each wired setting's wire last carried, by node, then by setting.
+    carried: HashMap<Uuid, HashMap<String, Value>>,
     /// Each node a wire carried a new value into, or took a wire off, since it was last handed
     /// what its inputs read.
     nodes_to_hand: BTreeSet<Uuid>,
@@ -40,11 +36,11 @@ impl ValuesWiresCarryIntoSettings {
     /// changes nothing.
     pub(crate) fn carried(&self, node: Uuid, setting: &str, value: Value) {
         let mut held = self.held.lock();
-        let key = (node, setting.to_owned());
-        if held.carried.get(&key) == Some(&value) {
+        let of_the_node = held.carried.entry(node).or_default();
+        if of_the_node.get(setting) == Some(&value) {
             return;
         }
-        held.carried.insert(key, value);
+        of_the_node.insert(setting.to_owned(), value);
         held.nodes_to_hand.insert(node);
         drop(held);
         self.arrival.notify_one();
@@ -53,11 +49,7 @@ impl ValuesWiresCarryIntoSettings {
     /// The value the wire into setting `setting` of `node` last carried; `None` when it has
     /// carried none.
     pub(crate) fn the_value_its_wire_carried(&self, node: Uuid, setting: &str) -> Option<Value> {
-        self.held
-            .lock()
-            .carried
-            .get(&(node, setting.to_owned()))
-            .cloned()
+        self.held.lock().carried.get(&node)?.get(setting).cloned()
     }
 
     /// Wait until a node is left to be handed what its inputs read.
@@ -65,17 +57,15 @@ impl ValuesWiresCarryIntoSettings {
         self.arrival.notified().await;
     }
 
-    /// Take each node left to be handed what its inputs read, in UUID order.
-    pub(crate) fn take_each_node_waiting_for_its_values(&self) -> Vec<Uuid> {
+    /// Take each node left to be handed what its inputs read.
+    pub(crate) fn take_each_node_waiting_for_its_values(&self) -> BTreeSet<Uuid> {
         std::mem::take(&mut self.held.lock().nodes_to_hand)
-            .into_iter()
-            .collect()
     }
 
     /// Forget every value carried into a setting of `node`, as it leaves the graph.
     pub(crate) fn forget_the_node(&self, node: Uuid) {
         let mut held = self.held.lock();
-        held.carried.retain(|(of, _), _| *of != node);
+        held.carried.remove(&node);
         held.nodes_to_hand.remove(&node);
     }
 
@@ -84,8 +74,14 @@ impl ValuesWiresCarryIntoSettings {
     /// carried one.
     pub(super) fn its_wire_left(&self, node: Uuid, setting: &str) {
         let mut held = self.held.lock();
-        if held.carried.remove(&(node, setting.to_owned())).is_none() {
+        let Some(of_the_node) = held.carried.get_mut(&node) else {
             return;
+        };
+        if of_the_node.remove(setting).is_none() {
+            return;
+        }
+        if of_the_node.is_empty() {
+            held.carried.remove(&node);
         }
         held.nodes_to_hand.insert(node);
         drop(held);
