@@ -54,8 +54,8 @@ impl fmt::Display for StreamFailure {
 
 /// The condition of a stream with `load` and `playback`: failed for `failure` when it has one,
 /// its diagnostic first, else degraded while any of `diagnostics_while_loaded`, each of its
-/// nodes', holds, else healthy. A failure a node
-/// already carries as its own diagnostic is answered by that node's alone.
+/// nodes', holds, else healthy. A failure a node already carries as its own diagnostic is
+/// answered by that node's alone.
 pub(crate) fn the_condition_of_a_stream(
     load: StreamLoadOnTheWire,
     playback: StreamPlaybackOnTheWire,

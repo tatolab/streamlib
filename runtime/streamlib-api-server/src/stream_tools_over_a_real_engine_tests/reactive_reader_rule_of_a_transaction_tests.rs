@@ -120,14 +120,6 @@ async fn add_a_reader_fed_by_a_source_and_an_island(
         .expect("the transaction's end feeds the reader a source");
 }
 
-/// The UUID of the node named `name` in `graph`.
-fn the_uuid_of_the_node_named(graph: &Value, name: &str) -> String {
-    the_node_named(graph, name)["id"]
-        .as_str()
-        .expect("the node holds a UUID")
-        .to_string()
-}
-
 /// The removals of the nodes named `names`, in order, as transaction operations on `main`.
 fn the_removals_of(project: &ProjectWithGraphDocuments, names: &[&str]) -> Vec<Value> {
     let document = project.the_graph_document_of("main");

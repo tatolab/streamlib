@@ -77,17 +77,17 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// Bring each of `streams` that places, at any depth, a stream whose document the
-    /// transaction changes, and each of `taking_their_edits_from_the_documents`, whose edits
-    /// place a stream or follow one that does, to the streams it places, inside its batch: a
-    /// stream `named` names to its graph as staged, any other to its live graph as drawn, each
-    /// stream it places as the transaction has staged it; each is recorded in `reconciled`.
-    /// Refused at the first stream that refuses, in that stream's words, the streams before it
-    /// left in `reconciled` to be put back.
+    /// transaction changes, and each of `taking_their_edits_through_their_staged_graph`, whose
+    /// edits place a stream or follow one that does, to the streams it places, inside its batch:
+    /// a stream `named` names, or one taking its edits through its staged graph, to its graph as
+    /// staged, any other to its live graph as drawn, each stream it places as the transaction has
+    /// staged it; each is recorded in `reconciled`. Refused at the first stream that refuses, in
+    /// that stream's words, the streams before it left in `reconciled` to be put back.
     pub(super) fn reconcile_each_placement_in_its_batch(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
         named: &[String],
-        taking_their_edits_from_the_documents: &BTreeSet<String>,
+        taking_their_edits_through_their_staged_graph: &BTreeSet<String>,
         staged_graph_of_each_stream_not_running: &BTreeMap<Uuid, StreamGraphDocument>,
         project_repository: &ProjectRepository,
         reconciled: &mut PlacementsReconciledInTheirBatches,
@@ -98,9 +98,10 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository,
         )?;
         for (stream_id, stream) in streams {
-            let places_a_changed_stream = taking_their_edits_from_the_documents.contains(stream_id)
-                || self
-                    .async_runtime
+            let takes_its_edits_through_its_staged_graph =
+                taking_their_edits_through_their_staged_graph.contains(stream_id);
+            let places_a_changed_stream = || {
+                self.async_runtime
                     .block_on(stream.stream_operations.to_json_async())
                     .is_ok_and(|live_graph| {
                         places_one_of_the_streams(
@@ -112,28 +113,31 @@ impl StreamGraphTransactionExecutor<'_> {
                                 stream_documents_the_edit_changed.holds(project, stream_asset)
                             },
                         )
-                    });
-            if !places_a_changed_stream {
+                    })
+            };
+            if !takes_its_edits_through_its_staged_graph && !places_a_changed_stream() {
                 continue;
             }
-            // A stream the transaction names is brought to its graph as staged, which holds each
-            // edit of its own that places a stream or follows one; any other to its live graph
-            // as drawn, which holds what only it runs.
-            let (graph_document, graph_put_back_to) = if named.contains(stream_id) {
-                (
-                    Some(stream.staged_graph.to_value()),
-                    Some(
-                        self.the_graph_document_of_a_loaded_stream_as_it_stands(
-                            Some(project_repository),
-                            &stream.stream_location,
-                            stream.stream_operations.as_ref(),
-                        )?
-                        .to_value(),
-                    ),
-                )
-            } else {
-                (None, None)
-            };
+            // A stream the transaction names, or one taking its edits through its staged graph,
+            // is brought to its graph as staged, which holds each edit of its own that places a
+            // stream or follows one; any other to its live graph as drawn, which holds what only
+            // it runs.
+            let (graph_document, graph_put_back_to) =
+                if named.contains(stream_id) || takes_its_edits_through_its_staged_graph {
+                    (
+                        Some(stream.staged_graph.to_value()),
+                        Some(
+                            self.the_graph_document_of_a_loaded_stream_as_it_stands(
+                                Some(project_repository),
+                                &stream.stream_location,
+                                stream.stream_operations.as_ref(),
+                            )?
+                            .to_value(),
+                        ),
+                    )
+                } else {
+                    (None, None)
+                };
             let graph_edit_batch = the_open_batch_of(streams, stream_id)
                 .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
             reconciled

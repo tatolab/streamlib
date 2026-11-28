@@ -324,9 +324,9 @@ pub trait RuntimeOperations: Send + Sync {
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
-    /// This stream's graph as `graph` answers it: its running graph, or, while its graph
-    /// document holds edits the running graph did not take, the document's graph over it, each
-    /// part not live yet carrying `live: false`. Every edit and check reads `to_json_async`.
+    /// This stream's graph as `graph` answers it: its running graph, each view node with the
+    /// settings its view's manifest declares among its inputs. Every edit and check reads
+    /// `to_json_async`.
     fn the_graph_as_answered_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
     /// Hold output port `port_name` of the node whose UUID, as `graph` lists it under `id`, is

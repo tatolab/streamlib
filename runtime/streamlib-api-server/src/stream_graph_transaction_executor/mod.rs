@@ -270,9 +270,9 @@ fn refuse_a_link_judged_by_the_node_types_of_its_level(
 }
 
 /// One graph operation applied: the operation its answer reports, as the stream it names draws
-/// it; what it made on that running stream; the project operations it records, in order; the link that
-/// overrides the input value it sets, when one feeds that input; and each link it made without
-/// judging it, with why, as the stream draws it and as the transaction keeps it.
+/// it; what it made on that running stream; the project operations it records, in order; the
+/// link that overrides the input value it sets, when one feeds that input; and each link it made
+/// without judging it, with why, as the stream draws it and as the transaction keeps it.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
     applied_live: Option<OneOperationAppliedLive>,

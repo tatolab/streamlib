@@ -804,6 +804,14 @@ fn the_node_named(graph: &Value, name: &str) -> Value {
         .unwrap_or_else(|| panic!("the graph holds no node `{name}`: {graph}"))
 }
 
+/// The UUID of the node named `name` in `graph`.
+fn the_uuid_of_the_node_named(graph: &Value, name: &str) -> String {
+    the_node_named(graph, name)["id"]
+        .as_str()
+        .expect("the node holds a UUID")
+        .to_string()
+}
+
 /// The names of the nodes the fragment of `fragment_node` places, in order.
 fn the_node_names_a_fragment_places(fragment_node: &Value) -> Vec<String> {
     fragment_node["fragment"]["nodes"]

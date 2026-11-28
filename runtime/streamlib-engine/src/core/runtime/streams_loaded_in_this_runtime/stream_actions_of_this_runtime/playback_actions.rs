@@ -408,8 +408,7 @@ impl Runner {
 
     /// End the playback of `loaded`, which stays held: every instance torn down, its graph
     /// kept to read and edit, and its function-node states forgotten so the next start begins
-    /// fresh. A stream
-    /// whose graph cannot be put back is unloaded, and refused naming why.
+    /// fresh. A stream whose graph cannot be put back is unloaded, and refused naming why.
     pub(super) fn stop_the_playback_of_a_held_stream(
         &self,
         loaded: &Arc<LoadedStreamInThisRuntime>,

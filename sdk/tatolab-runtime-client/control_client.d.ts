@@ -52,7 +52,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   list_streams(params?: ControlOperations["list_streams"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_streams"]["result"]>;
   /**
-   * Export a loaded stream's graph, or every loaded stream's, with each node's and link's state and each part not live yet marked.
+   * Export a loaded stream's graph, or every loaded stream's, with each node's and link's state.
    */
   graph(params?: ControlOperations["graph"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["graph"]["result"]>;
   /**
