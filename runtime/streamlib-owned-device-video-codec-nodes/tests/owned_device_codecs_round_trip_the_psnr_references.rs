@@ -315,14 +315,14 @@ const HIGH_BITRATE_BPS: u32 = 16_000_000;
 
 #[test]
 #[cfg_attr(not(feature = "hardware-tests"), ignore)]
-fn owned_device_h264_encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate() {
-    encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate(Codec::H264);
+fn owned_device_h264_encoder_with_a_bitrate_applies_its_rate_control_from_the_first_frame() {
+    encoder_with_a_bitrate_applies_its_rate_control_from_the_first_frame(Codec::H264);
 }
 
 #[test]
 #[cfg_attr(not(feature = "hardware-tests"), ignore)]
-fn owned_device_h265_encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate() {
-    encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate(Codec::H265);
+fn owned_device_h265_encoder_with_a_bitrate_applies_its_rate_control_from_the_first_frame() {
+    encoder_with_a_bitrate_applies_its_rate_control_from_the_first_frame(Codec::H265);
 }
 
 /// The bytes two seconds of `complex_pattern` code to at `bitrate_bps`, each
@@ -371,7 +371,7 @@ fn bytes_of_two_seconds_at(
     clippy::disallowed_macros,
     reason = "the measured sizes are the run's evidence, printed for whoever ran it"
 )]
-fn encoder_with_a_bitrate_encodes_its_first_frame_at_that_bitrate(codec: Codec) {
+fn encoder_with_a_bitrate_applies_its_rate_control_from_the_first_frame(codec: Codec) {
     let Some(owned_encode_device) =
         owned_device_on_the_runtimes_gpu(VulkanVideoCodecDirection::Encode)
     else {

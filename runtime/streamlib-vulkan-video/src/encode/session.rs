@@ -368,7 +368,7 @@ impl SimpleEncoder {
             self.frame_count = 0;
             self.poc_counter = 0;
             self.encode_order_count = 0;
-            self.rate_control_sent = false;
+            self.session_initialized = false;
 
             // H.264 and H.265 encoders already initialized above (before create_session_parameters)
 

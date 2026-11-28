@@ -63,7 +63,7 @@ impl SimpleEncoder {
                 frame_count: 0,
                 encode_order_count: 0,
                 poc_counter: 0,
-                rate_control_sent: false,
+                session_initialized: false,
                 aligned_width: 0,
                 aligned_height: 0,
                 configured: false,

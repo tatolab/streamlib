@@ -115,8 +115,8 @@ pub struct SimpleEncoder {
     /// POC counter that resets on IDR frames (H.265 requirement).
     pub(crate) poc_counter: u64,
 
-    // Track whether rate control has been sent
-    pub(crate) rate_control_sent: bool,
+    // Whether the GPU has run the session's reset and rate control
+    pub(crate) session_initialized: bool,
 
     // Aligned width/height from driver capabilities
     pub(crate) aligned_width: u32,

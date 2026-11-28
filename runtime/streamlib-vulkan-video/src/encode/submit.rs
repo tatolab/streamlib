@@ -400,15 +400,18 @@ impl SimpleEncoder {
             let needs_layers = rc_mode != vk::VideoEncodeRateControlModeFlagsKHR::DEFAULT
                 && rc_mode != vk::VideoEncodeRateControlModeFlagsKHR::DISABLED;
 
-            let mut begin_rc_info =
+            let mut rate_control_info =
                 vk::VideoEncodeRateControlInfoKHR::builder().rate_control_mode(rc_mode);
 
             if needs_layers {
-                begin_rc_info = begin_rc_info
+                rate_control_info = rate_control_info
                     .layers(std::slice::from_ref(&rate_control_layer))
                     .virtual_buffer_size_in_ms(RATE_CONTROL_VIRTUAL_BUFFER_MS)
                     .initial_virtual_buffer_size_in_ms(RATE_CONTROL_INITIAL_VIRTUAL_BUFFER_MS);
             }
+
+            // Until the GPU has run a reset, every frame records it again.
+            let resets_the_session = !self.session_initialized;
 
             // --- vkCmdBeginVideoCodingKHR ---
             let mut begin_coding_info = vk::VideoBeginCodingInfoKHR::builder()
@@ -417,28 +420,18 @@ impl SimpleEncoder {
                 .reference_slots(&all_slots);
 
             // Per Vulkan spec: the rate control info in BeginVideoCoding must match
-            // the currently configured device state. On the first frame the session
+            // the currently configured device state. Before the reset the session
             // is in DEFAULT mode (we change it via ControlVideoCoding below), so we
-            // must NOT include rate control in Begin. On subsequent frames, include
+            // must NOT include rate control in Begin. Once it has run, include
             // it to match the configured state.
-            if self.rate_control_sent && config.rate_control_mode != RateControlMode::Default {
-                begin_coding_info = begin_coding_info.push_next(&mut begin_rc_info);
+            if !resets_the_session && config.rate_control_mode != RateControlMode::Default {
+                begin_coding_info = begin_coding_info.push_next(&mut rate_control_info);
             }
 
             device.cmd_begin_video_coding_khr(self.command_buffer, &begin_coding_info);
 
-            // --- vkCmdControlVideoCodingKHR (reset + rate control, on first frame) ---
-            if !self.rate_control_sent {
-                let mut control_rc_info =
-                    vk::VideoEncodeRateControlInfoKHR::builder().rate_control_mode(rc_mode);
-
-                if needs_layers {
-                    control_rc_info = control_rc_info
-                        .layers(std::slice::from_ref(&rate_control_layer))
-                        .virtual_buffer_size_in_ms(RATE_CONTROL_VIRTUAL_BUFFER_MS)
-                        .initial_virtual_buffer_size_in_ms(RATE_CONTROL_INITIAL_VIRTUAL_BUFFER_MS);
-                }
-
+            // --- vkCmdControlVideoCodingKHR (reset + rate control) ---
+            if resets_the_session {
                 let mut control_flags = vk::VideoCodingControlFlagsKHR::RESET;
                 if config.rate_control_mode != RateControlMode::Default {
                     control_flags |= vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL;
@@ -450,7 +443,7 @@ impl SimpleEncoder {
                 let mut quality_level_info;
                 let mut control_info = vk::VideoCodingControlInfoKHR::builder()
                     .flags(control_flags)
-                    .push_next(&mut control_rc_info);
+                    .push_next(&mut rate_control_info);
 
                 if self.effective_quality_level > 0 {
                     quality_level_info = vk::VideoEncodeQualityLevelInfoKHR::builder()
@@ -460,7 +453,6 @@ impl SimpleEncoder {
 
                 device.cmd_control_video_coding_khr(self.command_buffer, &control_info);
             }
-            let resets_the_session = !self.rate_control_sent;
 
             // --- Source picture resource (caller's image) ---
             let src_resource = vk::VideoPictureResourceInfoKHR::builder()
@@ -910,10 +902,8 @@ impl SimpleEncoder {
             self.codec_device
                 .submit_to_queue(self.encode_queue, &[submit_info], self.fence)?;
             device.wait_for_fences(&[self.fence], true, u64::MAX)?;
-            // Only a reset the GPU ran leaves the session initialized; until
-            // one has, every frame records it again.
             if resets_the_session {
-                self.rate_control_sent = true;
+                self.session_initialized = true;
             }
 
             // --- Query encode feedback ---
