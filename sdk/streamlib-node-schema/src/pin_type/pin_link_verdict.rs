@@ -104,8 +104,8 @@ pub enum PinLinkRefusal {
         /// The input.
         input_name: String,
     },
-    /// A Stream or a Trigger output enters a setting read at setup, which takes a Value wire
-    /// only, since each change of it rebuilds its node.
+    /// A Stream or a Trigger output enters a setting, which takes a Value wire only, since the
+    /// engine reads each value its wire carries and hands it to the node.
     StreamIntoASetting {
         /// The output end.
         output: PinLinkEndNamed,
@@ -222,10 +222,10 @@ impl fmt::Display for PinLinkRefusal {
                 write!(
                     formatter,
                     "cannot link {output} to setting `{input_name}` of `{node_name}`: the output \
-                     flows as `{flow}`, and a setting takes a `value` wire only, since each \
-                     change of it rebuilds its node. To fix: place a node that samples the \
-                     {flow} into a value between them, or set the setting's value with \
-                     `set_node_input_value`"
+                     flows as `{flow}`, and a setting takes a `value` wire only, since the engine \
+                     hands its node each value the wire carries. To fix: place a node that \
+                     samples the {flow} into a value between them, or set the setting's value \
+                     with `set_node_input_value`"
                 )
             }
             Self::PinTypesDoNotConnect {
@@ -411,9 +411,7 @@ pub fn pin_link_verdict(
         };
     }
     if let Some(output_flow @ (PinFlow::Stream | PinFlow::Trigger)) = output.flow
-        && input
-            .input_mode
-            .is_some_and(NodeInputMode::is_a_setting_read_at_setup)
+        && input.input_mode.is_some_and(NodeInputMode::is_a_setting)
     {
         return PinLinkVerdict {
             outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::StreamIntoASetting {

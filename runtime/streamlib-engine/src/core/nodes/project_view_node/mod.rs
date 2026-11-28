@@ -25,8 +25,8 @@ use crate::core::descriptors::{
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::graph_interface_resolution::{
-    carry_on_every_value_port, what_the_value_port_of_an_interface_node_carries,
-    what_the_value_ports_of_a_constant_carry,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, carry_on_every_value_port,
+    what_the_value_port_of_an_interface_node_carries, what_the_value_ports_of_a_constant_carry,
 };
 use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
 use crate::core::graph::{GraphNode, GraphNodePorts};
@@ -250,12 +250,20 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
 pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
+    /// How the pin type its `value` ports carry is read off its settings, for a `GraphInput` or
+    /// a `Constant`, whose `pin_type` setting chooses it; `None` for a view's node.
+    the_type_its_value_ports_carry: Option<TheTypeItsValuePortsCarry>,
     pin_type_of_each_output: HashMap<String, PinType>,
     current_value_of_each_output: HashMap<String, JsonValue>,
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
 }
+
+/// How the pin type the `value` ports of a `GraphInput` or a `Constant` carry is read off its
+/// settings: the type, `None` when they choose none, or why the settings choose no type.
+type TheTypeItsValuePortsCarry =
+    fn(Option<&JsonValue>) -> std::result::Result<Option<PinType>, String>;
 
 /// One message a [`ValueSourceNode`] is about to publish: on output `port`, the value `value` as
 /// `payload`, and, for a Channels block, the sample the next block of `port` starts at once it
@@ -298,7 +306,7 @@ impl ValueSourceNode {
         node: &GraphNode,
         type_name: &str,
         mut descriptor: NodeDescriptor,
-        carried: impl FnOnce(Option<&JsonValue>) -> std::result::Result<Option<PinType>, String>,
+        carried: TheTypeItsValuePortsCarry,
     ) -> Result<Self> {
         let settings = JsonValue::Object(node.input_values.clone());
         let chosen = carried(Some(&settings)).map_err(|why| {
@@ -308,7 +316,51 @@ impl ValueSourceNode {
             descriptor.inputs.iter_mut().chain(&mut descriptor.outputs),
             chosen.as_ref(),
         );
-        Ok(Self::for_the_node(node, descriptor))
+        Ok(Self {
+            the_type_its_value_ports_carry: Some(carried),
+            ..Self::for_the_node(node, descriptor)
+        })
+    }
+
+    /// Carry on its `value` ports the pin type `input_values` choose, when it reads its type off
+    /// its settings and they choose another than its ports carry: a value its `value` output
+    /// carried before is published again, of the new type, when it is next handed one. Settings
+    /// that choose none leave the ports as they are; settings choosing no type are refused
+    /// naming the node and why, the ports left as they are.
+    fn carry_the_pin_type_its_settings_choose(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<()> {
+        let Some(carried) = self.the_type_its_value_ports_carry else {
+            return Ok(());
+        };
+        let settings = JsonValue::Object(input_values.clone());
+        let Some(chosen) = carried(Some(&settings))
+            .map_err(|why| Error::Configuration(format!("node `{}`: {why}", self.node_name)))?
+        else {
+            return Ok(());
+        };
+        if self
+            .pin_type_of_each_output
+            .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
+            == Some(&chosen)
+        {
+            return Ok(());
+        }
+        carry_on_every_value_port(
+            self.descriptor
+                .inputs
+                .iter_mut()
+                .chain(&mut self.descriptor.outputs),
+            Some(&chosen),
+        );
+        self.pin_type_of_each_output
+            .insert(GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(), chosen);
+        self.current_value_of_each_output
+            .remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        self.next_start_sample_of_each_channels_output
+            .remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        Ok(())
     }
 
     pub(crate) fn for_the_node(node: &GraphNode, descriptor: NodeDescriptor) -> Self {
@@ -323,6 +375,7 @@ impl ValueSourceNode {
         Self {
             node_name: node.display_name.clone(),
             descriptor,
+            the_type_its_value_ports_carry: None,
             pin_type_of_each_output,
             current_value_of_each_output: HashMap::new(),
             next_start_sample_of_each_channels_output: HashMap::new(),
@@ -554,6 +607,7 @@ impl DynGeneratedNode for ValueSourceNode {
         input_values: &serde_json::Map<String, JsonValue>,
         set_live: &[String],
     ) -> Result<()> {
+        self.carry_the_pin_type_its_settings_choose(input_values)?;
         let read_by_an_input_alone =
             self.publish_each_input_value_on_its_output(input_values, set_live)?;
         land_the_unlinked_input_values_in_the_input_mailboxes(

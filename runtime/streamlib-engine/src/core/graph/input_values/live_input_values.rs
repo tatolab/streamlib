@@ -460,8 +460,8 @@ fn the_value_an_unlinked_input_is_handed(
 }
 
 /// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
-/// value, else its saved one, else its declared default. A setting read at setup that a wire
-/// feeds reads instead the value its wire last carried, once it has carried one, and a
+/// value, else its saved one, else its declared default. A setting a wire feeds reads instead
+/// the value its wire last carried, once it has carried one, and a
 /// connection input the node its wire brings. An input that takes no stored value, and an input
 /// with none of these, are left out.
 pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<String, Value> {
@@ -491,32 +491,21 @@ fn the_node_a_connection_wire_brings(node: &GraphNode, port: &PortInfo) -> Optio
         .cloned()
 }
 
-/// The value setting `setting` of `node` in `graph` reads while no wire has carried it one: its
-/// live value, else its saved one, else its declared default; `None` with none of the three.
-pub(crate) fn the_value_a_setting_reads_with_no_wire(
-    graph: &Graph,
-    node: &GraphNode,
-    setting: &str,
-) -> Option<Value> {
-    the_value_an_unlinked_input_is_handed(graph, node, node.input_port(setting)?)
-}
-
-/// The value the wire into `port` of `node` in `graph` last carried that the node is built
-/// with, when `port` is a setting read at setup a link feeds; `None` otherwise, and while its
-/// wire has carried none.
+/// The value the wire into `port` of `node` in `graph` last carried, when `port` is a setting a
+/// link feeds whole; `None` otherwise, and while its wire has carried none.
 fn the_value_a_wire_into_the_setting_carried(
     graph: &Graph,
     node: &GraphNode,
     port: &PortInfo,
 ) -> Option<Value> {
-    if !port.is_a_setting_read_at_setup()
+    if !port.is_a_setting()
         || !WhatTheLinksIntoAnInputFeed::of(graph, &node.id, &port.name).the_whole_input()
     {
         return None;
     }
     graph
         .values_wires_carry_into_settings()
-        .the_value_its_node_is_built_with(node.node_uuid, &port.name)
+        .the_value_its_wire_carried(node.node_uuid, &port.name)
 }
 
 /// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now, under

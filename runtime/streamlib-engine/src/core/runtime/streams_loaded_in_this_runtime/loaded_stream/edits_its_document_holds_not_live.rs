@@ -23,7 +23,7 @@ use crate::core::json_schema::{
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    KeptNodesLeftToRebuild, LinksAReconcileMakes,
+    LinksAReconcileMakes,
 };
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::{
     the_graph_document_json_of_the_stream_at, the_graph_the_document_of_the_stream_at_holds,
@@ -72,7 +72,6 @@ impl LoadedStreamInThisRuntime {
                 self.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
                     graph_document,
                     LinksAReconcileMakes::EachAsASavedGraphsLink,
-                    KeptNodesLeftToRebuild::HandedTheirValuesLive,
                 )
                 .map_err(|refusal| refusal.to_string())
             },

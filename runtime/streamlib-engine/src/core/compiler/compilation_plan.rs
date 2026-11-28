@@ -14,9 +14,6 @@ pub(super) struct CompilationPlan {
     pub(super) nodes_to_remove: Vec<(NodeRunId, WhyTheNodeLeaves)>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
-    /// Each running node to stop and build again, once, so it reads its settings read at setup
-    /// as the graph holds them now.
-    pub(super) nodes_to_rebuild: Vec<NodeRunId>,
     /// Each node whose type choices are judged again against the links they reach, once.
     pub(super) nodes_whose_type_choices_are_judged_again: Vec<NodeRunId>,
     /// What judging again the links those type choices reach found, marked on the graph only

@@ -21,12 +21,8 @@ use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PinDeclaration,
     PinGroupDescriptor, PinType, PortDescriptor,
 };
-use crate::core::execution::ProcessExecution;
-use crate::core::graph::{
-    GraphNodeWithComponents, InputLinkPortRef, LinkUniqueId, NodeRunId,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef,
-};
-use crate::core::nodes::{NODE_REGISTRY, NodeSpec, OutOfProcessLinkWiringEnvelope};
+use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
+use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::{Error, PortDirection};
 
 const FLOAT_SOURCE: &str = "PinGroupFloatSource";
@@ -576,46 +572,4 @@ fn a_pin_following_an_input_of_one_slot_by_its_slots_name_is_refused_at_registra
         .expect_err("each slot would follow slot 0")
         .to_string();
     assert!(words.contains("follows `lanes.0.in`"), "{words}");
-}
-
-/// Give `node` a helper's link wiring whose `ready` carried `takes_its_pin_group_slots_live`.
-fn run_in_a_helper_that_said(
-    compiler: &Compiler,
-    node: &NodeRunId,
-    takes_its_pin_group_slots_live: Option<Value>,
-) {
-    let link_wiring = Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-        ProcessExecution::Reactive,
-    ));
-    link_wiring.note_whether_its_far_side_takes_its_pin_group_slots_live(
-        takes_its_pin_group_slots_live.as_ref(),
-    );
-    compiler.scope(|graph, _tx| {
-        graph
-            .traversal_mut()
-            .v(node)
-            .first_mut()
-            .expect("the node is held")
-            .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(link_wiring));
-    });
-}
-
-/// Mental-revert: without the helper's word read, a node written as one function is counted
-/// with the nodes built for their slots, and a link into its empty slot rebuilds it.
-#[test]
-fn a_node_whose_helper_takes_its_slots_live_is_not_counted_among_those_built_for_them() {
-    register_the_pin_group_fixture_node_types();
-    let compiler = Arc::new(Compiler::new());
-    let built_for_its_slots = a_node_of(&compiler, LAYER_MIXER);
-    let said_nothing = a_node_of(&compiler, LAYER_MIXER);
-    let takes_them_live = a_node_of(&compiler, LAYER_MIXER);
-    run_in_a_helper_that_said(&compiler, &said_nothing, None);
-    run_in_a_helper_that_said(&compiler, &takes_them_live, Some(json!(true)));
-
-    let counted =
-        compiler.scope(|graph, _tx| graph.the_pin_group_slot_counts_of_each_node_built_for_them());
-
-    assert!(counted.contains_key(&built_for_its_slots));
-    assert!(counted.contains_key(&said_nothing));
-    assert!(!counted.contains_key(&takes_them_live), "{counted:?}");
 }

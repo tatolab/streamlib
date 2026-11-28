@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A `GraphInput` whose `pin_type` setting chooses its type: the value it publishes, how it
-//! renders, a change its link refuses and a change that rebuilds it.
+//! renders, a change its link refuses and a change it takes live.
 
 use super::*;
 use crate::core::pin_value_packing::{PackedPinValueRef, unpack_pin_value};
@@ -118,14 +118,14 @@ fn a_graph_input_choosing_a_pin_type_publishes_and_renders_it_and_refuses_one_it
     stream.stop().expect("the stream ends");
 }
 
-/// A change of the type a running `GraphInput` chooses leaves it to rebuild, and once rebuilt
-/// its reader reads values of the new type.
+/// A change of the type a running `GraphInput` chooses is taken live: its reader reads values of
+/// the new type, with nothing rebuilt.
 ///
-/// Mental-revert: without leaving the node to rebuild when the reconcile changes a setting read
-/// at setup, nothing is rebuilt and the node still publishes a Float.
+/// Mental-revert: without the node re-typing its value ports when `pin_type` is handed to it,
+/// it still publishes a Float and the Integer read fails to unpack.
 #[test]
 #[serial]
-fn a_change_of_the_type_a_running_graph_input_chooses_rebuilds_it() {
+fn a_change_of_the_type_a_running_graph_input_chooses_is_taken_live() {
     let project_directory = a_project_on_disk();
     let async_runtime = an_async_runtime();
     let level = Uuid::new_v4();
@@ -143,11 +143,7 @@ fn a_change_of_the_type_a_running_graph_input_chooses_rebuilds_it() {
     set_the_saved_input(&stream, &async_runtime, level, "value", json!(3));
     let integer = json!({ "type": "integer" });
     set_the_saved_input(&stream, &async_runtime, level, "pin_type", integer.clone());
-    let rebuilt = async_runtime
-        .block_on(RuntimeOperations::rebuild_each_node_a_setting_read_at_setup_changed(&*stream))
-        .expect("the GraphInput rebuilds with the new type");
 
-    assert_eq!(rebuilt, vec![level]);
     let (_viewer, mut reader) = a_reader_of_the_value_of(&stream, &async_runtime, level);
     assert_eq!(the_typed_value_read(&mut reader, &integer), json!(3));
     stream.stop().expect("the stream ends");
@@ -206,11 +202,11 @@ fn a_graph_input_renders_the_annotations_it_saves_on_its_value_input_and_refuses
 }
 
 /// A playing `GraphInput` linked into a function node takes a saved change of its `control` and
-/// its `unit` live: neither is refused nor leaves the node to rebuild, `graph` renders both on
-/// its `value` input straight away, and the node goes on publishing its value.
+/// its `unit` live: neither is refused, `graph` renders both on its `value` input straight
+/// away, and the node goes on publishing its value.
 ///
-/// Mental-revert: with the annotation settings read at setup, each change leaves the node to
-/// rebuild, and a rebuild of a node linked to a function node is refused.
+/// Mental-revert: with a change of an annotation refused while the node is linked into a
+/// function node, the set fails.
 #[test]
 #[serial]
 fn a_playing_graph_input_linked_into_a_function_node_takes_a_change_of_its_annotations_live() {
@@ -263,11 +259,7 @@ fn a_playing_graph_input_linked_into_a_function_node_takes_a_change_of_its_annot
 
     set_the_saved_input(&stream, &async_runtime, lines, "control", json!("slider"));
     set_the_saved_input(&stream, &async_runtime, lines, "unit", json!("lines"));
-    let rebuilt = async_runtime
-        .block_on(RuntimeOperations::rebuild_each_node_a_setting_read_at_setup_changed(&*stream))
-        .expect("nothing is left to rebuild");
 
-    assert_eq!(rebuilt, Vec::<Uuid>::new());
     let rendered = the_rendered_node(&stream, lines);
     let value_input = rendered["ports"]["inputs"]
         .as_array()

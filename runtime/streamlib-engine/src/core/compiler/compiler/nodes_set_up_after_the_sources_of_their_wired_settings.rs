@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The nodes a compile builds are let set up in waves, so a node whose setting read at setup a
-//! Value wire feeds is set up after the node that wire comes from: once the source has set up,
+//! The nodes a compile builds are let set up in waves, so a node whose setting a Value wire
+//! feeds is set up after the node that wire comes from: once the source has set up,
 //! the value it wrote, or none, is what the node is built with. A node no wire into a setting
 //! waits on is let set up in the first wave, as every node was before.
 
@@ -10,7 +10,6 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
-use uuid::Uuid;
 
 use crate::core::compiler::compiler_ops::ReaderOfALinkIntoASettingComponent;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
@@ -25,7 +24,7 @@ use crate::core::graph::{
 const LONGEST_WAIT_FOR_THE_SOURCES_OF_WIRES_INTO_SETTINGS: Duration = Duration::from_secs(30);
 
 /// Let each node of `barrier_handles` set up, each delivered the values its unlinked inputs
-/// read already: a node a wire into one of its settings read at setup comes into after the node
+/// read already: a node a wire into one of its settings comes into after the node
 /// that wire comes from has set up, delivered again with each value that wire carried by then
 /// as what it is built with. Nodes whose wires into their settings come from each other set up
 /// together.
@@ -87,31 +86,23 @@ fn let_each_set_up(wave: Vec<(NodeRunId, NodeReadyBarrierHandle)>) -> Vec<NodeRu
         .collect()
 }
 
-/// Hold each value the wires into the settings of `nodes` carried, each reader handing over
-/// what it has not yet, as what those nodes are built with.
+/// Have the reader of each wire into the settings of `nodes` hand over what it carried and has
+/// not handed over yet, so those nodes are built with it.
 pub(super) fn build_each_with_what_the_wires_into_its_settings_carried(
     graph_arc: &RwLock<Graph>,
     nodes: &[NodeRunId],
 ) {
     let graph = graph_arc.read();
-    let mut node_uuids: Vec<Uuid> = Vec::new();
     for node_run_id in nodes {
-        let Some(node) = graph.traversal().v(node_run_id).first() else {
-            continue;
-        };
-        node_uuids.push(node.node_uuid);
         for link in graph.traversal().v(node_run_id).in_e().iter() {
             if let Some(reader) = link.get::<ReaderOfALinkIntoASettingComponent>() {
                 reader.hand_over_what_it_carried();
             }
         }
     }
-    graph
-        .values_wires_carry_into_settings()
-        .build_each_of_the_nodes_with_what_waits(&node_uuids);
 }
 
-/// Each of `barrier_handles`' nodes that a wire into one of its settings read at setup comes
+/// Each of `barrier_handles`' nodes that a wire into one of its settings comes
 /// into from another of them, which is to set up first. Only a link into such a setting carries
 /// the engine's reader.
 fn the_nodes_a_wire_into_a_setting_waits_on_among(

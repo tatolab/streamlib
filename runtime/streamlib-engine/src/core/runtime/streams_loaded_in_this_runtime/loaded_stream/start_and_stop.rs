@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
+use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::context::{
     GpuContext, RuntimeContext, StreamClock, StreamClockReading,
     platform_audio_clock_for_one_stream,
@@ -207,7 +208,7 @@ impl LoadedStreamInThisRuntime {
 
         tracing::info!("[start] Committing pending graph operations");
         self.compiler.commit(&this_streams_runtime_context)?;
-        self.start_the_rebuilds_wires_into_settings_ask_for(&this_streams_runtime_context);
+        self.start_the_hand_over_of_what_wires_into_settings_carry(&this_streams_runtime_context);
 
         if !this_streams_runtime_context.stream_clock.spec().is_real() {
             let earlier_step_coordinator = self.step_coordinator.lock().take();
@@ -230,37 +231,66 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Start the task that rebuilds each node a Value wire into one of its settings read at
-    /// setup carries a new value into, on `runtime_context`'s async runtime, in place of one an
-    /// earlier start left.
-    fn start_the_rebuilds_wires_into_settings_ask_for(&self, runtime_context: &RuntimeContext) {
+    /// Start the task that hands each node what a Value wire into one of its settings carried,
+    /// or what the setting reads once its wire is taken off, on `runtime_context`'s async
+    /// runtime, in place of one an earlier start left.
+    fn start_the_hand_over_of_what_wires_into_settings_carry(
+        &self,
+        runtime_context: &RuntimeContext,
+    ) {
         let carried = self
             .compiler
             .scope(|graph, _tx| Arc::clone(graph.values_wires_carry_into_settings()));
         let this_stream = Weak::clone(&self.this_stream);
-        let rebuilds = runtime_context
+        let hand_over = runtime_context
             .tokio_handle()
             .spawn(polled_in_a_project_log_route_entry(
                 Arc::clone(runtime_context.this_streams_log_route()),
                 async move {
                     loop {
-                        carried.a_value_waits().await;
+                        carried.a_node_waits_for_its_values().await;
                         let Some(stream) = this_stream.upgrade() else {
                             return;
                         };
-                        stream
-                            .rebuild_each_node_a_wire_into_its_settings_changed()
-                            .await;
+                        stream.hand_each_node_what_the_wires_into_its_settings_carried();
                     }
                 },
             ));
         if let Some(earlier) = self
-            .rebuilds_wires_into_settings_ask_for
+            .hand_over_of_what_wires_into_settings_carry
             .lock()
-            .replace(rebuilds)
+            .replace(hand_over)
         {
             earlier.abort();
         }
+    }
+
+    /// Hand each node a Value wire into one of its settings carried a new value into, or took
+    /// a wire off, what its inputs read now, as a value set on them is handed: no node is
+    /// rebuilt. A node not handed its values is logged and keeps what it read.
+    pub(in crate::core::runtime) fn hand_each_node_what_the_wires_into_its_settings_carried(&self) {
+        let node_run_ids = self.compiler.scope_reading(|graph| {
+            graph
+                .values_wires_carry_into_settings()
+                .take_each_node_waiting_for_its_values()
+                .into_iter()
+                .filter_map(|node| graph.node_by_uuid(node).map(|node| node.id.clone()))
+                .collect::<Vec<_>>()
+        });
+        if node_run_ids.is_empty() {
+            return;
+        }
+        self.with_no_other_input_value_change(|| {
+            if let Err(not_handed_over) = deliver_the_unlinked_input_values_of_each_node(
+                self.compiler.graph_lock(),
+                &node_run_ids,
+            ) {
+                tracing::warn!(
+                    %not_handed_over,
+                    "a node was not handed what a wire into one of its settings carried"
+                );
+            }
+        });
     }
 
     /// This stream's view of the engine's GPU context: its own surface store,
@@ -322,8 +352,12 @@ impl LoadedStreamInThisRuntime {
 
         tracing::info!("[stop] Stopping the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopping);
-        if let Some(rebuilds) = self.rebuilds_wires_into_settings_ask_for.lock().take() {
-            rebuilds.abort();
+        if let Some(hand_over) = self
+            .hand_over_of_what_wires_into_settings_carry
+            .lock()
+            .take()
+        {
+            hand_over.abort();
         }
 
         let step_coordinator = self.step_coordinator.lock().take();
@@ -374,7 +408,7 @@ impl LoadedStreamInThisRuntime {
             // through the surface store, so before it closes.
             self.teardown_progress_note()
                 .note_what_the_teardown_is_waiting_on(
-                    "releasing the frames its rebuilt nodes left to their readers",
+                    "releasing the frames its restarted nodes left to their readers",
                 );
             this_streams_runtime_context
                 .gpu
@@ -397,8 +431,6 @@ impl LoadedStreamInThisRuntime {
         *self.runtime_context.lock() = None;
 
         *self.status.lock() = RuntimeStatus::Stopped;
-        // A start builds each node from its saved values, so none waits on a rebuild.
-        self.nodes_a_setting_read_at_setup_rebuilds.lock().clear();
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopped);
         tracing::info!("[stop] The stream `{}` stopped", self.stream_id());
         (node_removal_outcome, nodes_torn_down, links_torn_down)
@@ -695,11 +727,6 @@ impl LoadedStreamInThisRuntime {
         }
 
         *self.status.lock() = RuntimeStatus::Started;
-        self.compiler.scope(|graph, _tx| {
-            graph
-                .values_wires_carry_into_settings()
-                .wake_for_each_value_waiting()
-        });
         let committed = match self.runtime_context.lock().clone() {
             Some(this_streams_runtime_context) => {
                 self.compiler.commit(&this_streams_runtime_context)

@@ -104,13 +104,14 @@ def test_what_init_raises_reaches_the_caller():
         construct_class_node(RefusesAnEvenKernel, field_values={"kernel_size": 4}, pins={})
 
 
-def test_a_live_value_is_assigned_to_its_field_and_a_setting_is_left_for_its_rebuild():
+def test_a_live_value_is_assigned_to_its_field_and_so_is_a_setting():
+    """Mental-revert: leave a setting unassigned, and a set of it while playing reaches nothing."""
     built = construct_class_node(Blur, field_values={}, pins=every_pin_of_blur())
 
     assign_live_field_values(built, {"radius": 2.0, "kernel_size": 7})
 
     assert built.radius == 2.0
-    assert built.kernel_size == 3, "a setting changes only by rebuilding its node"
+    assert built.kernel_size == 7
     with pytest.raises(ValueError, match="declares no field `video`"):
         assign_live_field_values(built, {"video": 1.0})
 

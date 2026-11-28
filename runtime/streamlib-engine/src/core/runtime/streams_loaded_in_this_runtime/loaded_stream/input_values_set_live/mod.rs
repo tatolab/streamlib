@@ -429,16 +429,16 @@ pub(crate) fn hand_back_each(handed_back: impl IntoIterator<Item = UnlinkedInput
 }
 
 /// Whether a value set on input `input` of `set_on` is held on `graph` rather than live: a
-/// setting its type's config schema lists, a setting it reads only when it is set up, an input
-/// choosing the type of one of its ports, which retypes that port, an annotation of a
-/// `GraphInput`'s `value`, which the graph serves and checks that value by, or an input it does
-/// not have.
+/// setting its type's config schema lists, an input choosing the type of one of its ports, which
+/// retypes that port, an annotation of a `GraphInput`'s `value`, which the graph serves and checks
+/// that value by, or an input it does not have. A setting read at setup is set live as any other
+/// input is, its node handed the value and never rebuilt.
 pub(super) fn is_held_on_the_graph(set_on: &GraphNode, input: &str) -> bool {
     (set_on.is_a_graph_input()
             && crate::core::graph::graph_interface_resolution::is_an_annotation_setting_of_a_graph_input(input))
-        || set_on.input_port(input).is_none_or(|port| {
-            port.is_a_setting_read_at_setup() || set_on.a_port_takes_its_type_from(&port.name)
-        })
+        || set_on
+            .input_port(input)
+            .is_none_or(|port| set_on.a_port_takes_its_type_from(&port.name))
 }
 
 /// Refuse `value`, set live on input `input` of `set_on`, a function node run in a helper of its

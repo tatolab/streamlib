@@ -46,11 +46,6 @@ impl StreamATransactionEdits {
             graph_edit_batch,
         })
     }
-
-    /// Whether this stream's batch of graph edits is still open.
-    pub(super) fn holds_an_open_batch(&self) -> bool {
-        matches!(self.graph_edit_batch, GraphEditBatchState::Open(_))
-    }
 }
 
 /// The batch of graph edits open on the stream `stream_id` of `streams`, to apply a graph edit
@@ -77,19 +72,12 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Make each of `operations`, each by the loaded stream it changes, on that running stream,
     /// once the project's graph documents hold it. A running stream that refuses one holds it,
     /// and each later one of that stream, as an edit not live yet, which `graph` draws and its
-    /// diagnostics list until its playback stops and brings it to its document. Each stream
-    /// that took one then rebuilds every node they left to rebuild, whatever they were: a
-    /// reconcile an operation goes through leaves its rebuild to this caller. A rebuild it
-    /// refuses holds each operation the stream took as not live.
+    /// diagnostics list until its playback stops and brings it to its document.
     pub(super) fn make_live_what_the_documents_now_hold(
         &self,
         operations: Vec<(String, StreamGraphOperation)>,
     ) {
         let mut refusal_of_each_stream_that_refused: HashMap<String, String> = HashMap::new();
-        let mut made_live_on_each_stream: BTreeMap<
-            String,
-            (Arc<dyn RuntimeOperations>, Vec<StreamGraphOperation>),
-        > = BTreeMap::new();
         for (stream_id, operation) in operations {
             let stream_operations = match self
                 .operations_on_the_loaded_streams
@@ -128,30 +116,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 stream_operations
                     .hold_an_edit_its_document_holds_not_live(&held_if_refused, &refusal);
                 refusal_of_each_stream_that_refused.insert(stream_id, refusal);
-                continue;
-            }
-            made_live_on_each_stream
-                .entry(stream_id)
-                .or_insert_with(|| (Arc::clone(&stream_operations), Vec::new()))
-                .1
-                .push(held_if_refused);
-        }
-        for (stream_id, (stream_operations, made_live)) in made_live_on_each_stream {
-            let Err(refusal) = self
-                .async_runtime
-                .block_on(stream_operations.rebuild_each_node_a_setting_read_at_setup_changed())
-            else {
-                continue;
-            };
-            let refusal = refusal.to_string();
-            tracing::warn!(
-                stream = %stream_id,
-                %refusal,
-                "the project's graph documents hold a setting its running node did not build \
-                 with; the stream holds it not live until its playback stops"
-            );
-            for operation in &made_live {
-                stream_operations.hold_an_edit_its_document_holds_not_live(operation, &refusal);
             }
         }
     }
@@ -371,9 +335,7 @@ impl StreamGraphTransactionExecutor<'_> {
         // own the documents would have handed it once they hold it.
         made_live_once_the_documents_hold_them
             .retain(|(stream_id, _)| !placements_reconciled.holds_a_named_stream(stream_id));
-        if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut streams).and_then(|()| {
-            self.rebuild_each_node_a_setting_read_at_setup_changed(&streams, &mut Vec::new())
-        }) {
+        if let Err(refusal) = close_the_graph_edits_of_each_stream(&mut streams) {
             self.put_back_what_the_refused_transaction_ran(
                 &streams,
                 applied_live,
@@ -585,67 +547,6 @@ impl StreamGraphTransactionExecutor<'_> {
                     "could not reverse a refused graph transaction on its running stream"
                 );
             }
-        }
-        // A rebuild commits holding the stream's one writer, which a batch the transaction still
-        // holds open keeps: a stream whose batch is open rebuilds once the transaction takes it
-        // back and reverses what it applied, as every refusal does.
-        for (stream_id, stream) in streams {
-            if stream.holds_an_open_batch() {
-                continue;
-            }
-            self.rebuild_each_node_a_reversal_put_its_settings_back_on(
-                stream_id,
-                stream.stream_operations.as_ref(),
-            );
-        }
-    }
-
-    /// Rebuild, on each of `streams`, every running node a value set on one of its settings
-    /// read at setup has left to rebuild, once; each node rebuilt, under its stream. Refused in
-    /// the node's own words when one does not build with the values set, for the caller to
-    /// reverse the transaction, which builds it again from the values it had.
-    pub(super) fn rebuild_each_node_a_setting_read_at_setup_changed(
-        &self,
-        streams: &BTreeMap<String, StreamATransactionEdits>,
-        nodes_rebuilt: &mut Vec<GraphTransactionRebuiltNode>,
-    ) -> Result<(), GraphRequestRefusal> {
-        for (stream_id, stream) in streams {
-            let rebuilt = self.async_runtime.block_on(
-                stream
-                    .stream_operations
-                    .rebuild_each_node_a_setting_read_at_setup_changed(),
-            )?;
-            for node in rebuilt {
-                let rebuilt_node = GraphTransactionRebuiltNode {
-                    stream: stream_id.clone(),
-                    node: node.to_string(),
-                };
-                if !nodes_rebuilt.contains(&rebuilt_node) {
-                    nodes_rebuilt.push(rebuilt_node);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Rebuild each node of the running stream `stream_operations` serves whose settings read
-    /// at setup a reversal put back, logging a node its earlier values no longer build, which
-    /// reads `Error` with `components.failed_because`.
-    fn rebuild_each_node_a_reversal_put_its_settings_back_on(
-        &self,
-        stream_id: &str,
-        stream_operations: &dyn RuntimeOperations,
-    ) {
-        if let Err(not_rebuilt) = self
-            .async_runtime
-            .block_on(stream_operations.rebuild_each_node_a_setting_read_at_setup_changed())
-        {
-            tracing::error!(
-                stream = %stream_id,
-                %not_rebuilt,
-                "a node whose settings a refused graph transaction put back did not build with \
-                 them either"
-            );
         }
     }
 

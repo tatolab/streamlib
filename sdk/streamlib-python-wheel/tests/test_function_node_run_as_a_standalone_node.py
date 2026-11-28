@@ -518,7 +518,7 @@ def test_an_island_raising_as_the_pool_sets_up_leaves_the_other_carries_written(
 
 
 def test_the_pool_writes_an_island_carried_into_a_setting_again_only_once_its_value_changes():
-    """Each value the engine reads into a setting may rebuild its node, so the pool writes an
+    """The engine hands a setting's node each value it reads into it, so the pool writes an
     island into a setting only when what it carries changed; an island into any other input is
     written at each evaluation.
 

@@ -87,7 +87,6 @@ fn reconcile(stream: &LoadedStreamInThisRuntime, graph_document: Value) -> Resul
         .block_on(stream.reconcile_the_live_graph_to_the_graph_document(
             graph_document,
             LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
             &StreamDocumentsAnEditStaged::default(),
         ))
 }
@@ -212,7 +211,6 @@ fn reconcile_making(
         .block_on(stream.reconcile_the_live_graph_to_the_graph_document(
             graph_document,
             links_it_makes,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
             &StreamDocumentsAnEditStaged::default(),
         ))
 }

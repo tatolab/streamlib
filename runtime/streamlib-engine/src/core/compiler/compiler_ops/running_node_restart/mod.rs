@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Restarting running nodes inside a live edit's compile: a node whose setting read at setup the
-//! edit changes, and a shader node whose place in the islands the edit changes, a host now fused
-//! into another's island or a fused node now evaluating its own. Each is stopped, its links
-//! unwired and its build forgotten, then built and wired again by the same compile, while every
-//! other node keeps running.
+//! Restarting running nodes inside a live edit's compile: a shader node whose place in the
+//! islands the edit changes, a host now fused into another's island or a fused node now
+//! evaluating its own. Each is stopped, its links unwired and its build forgotten, then built
+//! and wired again by the same compile, while every other node keeps running. No input's value
+//! restarts a node.
 
 use super::function_node_island::{
     HowALinkIsWired, how_a_link_is_wired, unwire_a_link_from_a_function_node_island_into_its_reader,
@@ -16,8 +16,7 @@ use super::open_iceoryx2_service_op::{
 use super::shader_node_island::{
     ShaderNodeFusedIntoTheIslandOfAnotherComponent, ShaderNodeIslandHostedHereComponent,
 };
-use crate::core::descriptors::NodeKind;
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, HelperProcessRestartsComponent,
     LinkState, LinkStateComponent, LinkUniqueId, NodeInstanceComponent, NodeMetrics,
@@ -38,128 +37,6 @@ impl RunningNodesALiveEditRestarts {
     pub(crate) fn is_empty(&self) -> bool {
         self.nodes.is_empty() && self.links.is_empty()
     }
-
-    /// The nodes and links either restarts, each once, in sorted order.
-    pub(crate) fn joined_with(mut self, other: Self) -> Self {
-        self.nodes.extend(other.nodes);
-        self.nodes.sort();
-        self.nodes.dedup();
-        self.links.extend(other.links);
-        self.links.sort();
-        self.links.dedup();
-        self
-    }
-}
-
-/// The running nodes of `nodes_to_rebuild` the compile restarts so each reads its settings read
-/// at setup as the graph holds them now, with every link into or out of them that the edit does
-/// not add or remove and whose two ends still carry types that connect; one whose ends differ
-/// stays unwired. A node the same edit adds or removes is built or taken out instead, so it
-/// is not restarted.
-///
-/// A link into it from a function node island it evaluates itself is restarted with it, the
-/// island fed to it again as it sets up, and so is a channel into it from a function node the
-/// pool or a helper of its own evaluates. Refused by name, changing nothing, for a function or
-/// shader node, which reads no setting at setup, and for a node one of whose other links joins a
-/// function node otherwise: a link out of it into an island another node evaluates, whose place
-/// in that island is read once, when that node starts, or into a function node run in a process
-/// of its own.
-pub(crate) fn the_running_nodes_a_rebuild_restarts(
-    graph: &Graph,
-    nodes_to_rebuild: &[NodeRunId],
-    nodes_to_add: &[NodeRunId],
-    nodes_to_remove: &[NodeRunId],
-    links_changed: &[LinkUniqueId],
-) -> Result<RunningNodesALiveEditRestarts> {
-    let name_of = |node_id: &NodeRunId| {
-        graph
-            .traversal()
-            .v(node_id)
-            .first()
-            .map_or_else(|| node_id.to_string(), |node| node.display_name.clone())
-    };
-    let kind_of = |node_id: &NodeRunId| {
-        graph
-            .traversal()
-            .v(node_id)
-            .first()
-            .and_then(|node| node.node_kind())
-    };
-    let mut restarted = RunningNodesALiveEditRestarts::default();
-    for node_id in nodes_to_rebuild {
-        if nodes_to_add.contains(node_id)
-            || nodes_to_remove.contains(node_id)
-            || !graph.traversal().v(node_id).exists()
-        {
-            continue;
-        }
-        if let Some(kind @ (NodeKind::Function { .. } | NodeKind::Shader)) = kind_of(node_id) {
-            return Err(Error::Configuration(format!(
-                "`{}` is a {} node, which reads no setting at setup, so no edit rebuilds it",
-                name_of(node_id),
-                kind.name(),
-            )));
-        }
-        let links_of_the_node: Vec<(LinkUniqueId, NodeRunId, NodeRunId)> = graph
-            .traversal()
-            .v(node_id)
-            .in_e()
-            .iter()
-            .chain(graph.traversal().v(node_id).out_e().iter())
-            .map(|link| {
-                (
-                    link.id.clone(),
-                    link.source().node_run_id().clone(),
-                    link.to_port().node_run_id().clone(),
-                )
-            })
-            .collect();
-        for (link_id, source_id, reader_id) in links_of_the_node {
-            if links_changed.contains(&link_id)
-                || graph.the_pin_types_of_the_link_differ(&link_id)
-                || nodes_to_remove.contains(&source_id)
-                || nodes_to_remove.contains(&reader_id)
-            {
-                continue;
-            }
-            let other_end = if source_id == *node_id {
-                &reader_id
-            } else {
-                &source_id
-            };
-            if matches!(kind_of(other_end), Some(NodeKind::Function { .. }))
-                && !is_rewired_with_the_node_it_feeds(graph, &link_id, &reader_id, node_id)
-            {
-                return Err(Error::Configuration(format!(
-                    "`{}` is rebuilt to read a setting read at setup, and its link `{link_id}` \
-                     joins function node `{}`, whose place in an island is read once, when its \
-                     nodes start. To fix: stop the stream, make the edit, and run it again",
-                    name_of(node_id),
-                    name_of(other_end),
-                )));
-            }
-            restarted.links.push(link_id);
-        }
-        restarted.nodes.push(node_id.clone());
-    }
-    Ok(restarted.joined_with(RunningNodesALiveEditRestarts::default()))
-}
-
-/// Whether link `link_id`, which joins a function node, is wired again with its reader `reader_id`
-/// when `restarted` restarts: `restarted` reads it, as an island it evaluates itself or as a
-/// channel from a function node the pool or a helper of its own evaluates.
-fn is_rewired_with_the_node_it_feeds(
-    graph: &Graph,
-    link_id: &LinkUniqueId,
-    reader_id: &NodeRunId,
-    restarted: &NodeRunId,
-) -> bool {
-    reader_id == restarted
-        && matches!(
-            how_a_link_is_wired(graph, link_id),
-            Ok(HowALinkIsWired::ThroughAChannel
-                | HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead)
-        )
 }
 
 /// Close the channel of each link of the nodes a live edit restarts the way it was wired before

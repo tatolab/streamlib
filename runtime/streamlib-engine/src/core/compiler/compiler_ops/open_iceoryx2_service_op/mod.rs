@@ -77,7 +77,7 @@ pub(crate) fn open_iceoryx2_service(
         .first()
         .map(|link| (link.source().clone(), link.to_port().clone()))
         .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?;
-    if graph.is_a_setting_read_at_setup(to_port.node_run_id(), to_port.port_name()) {
+    if graph.is_a_setting_whose_wire_the_engine_reads(to_port.node_run_id(), to_port.port_name()) {
         return open_a_link_into_a_setting_read_by_the_engine(
             graph,
             link_id,

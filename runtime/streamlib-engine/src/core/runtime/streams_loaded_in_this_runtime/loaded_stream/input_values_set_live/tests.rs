@@ -537,7 +537,6 @@ fn the_saved_values_of(node_run_id: &NodeRunId, pins: Value) -> SavedValuesOfAKe
         node_run_id: node_run_id.clone(),
         input_values: pins.as_object().unwrap().clone(),
         studio: serde_json::Map::new(),
-        handed_over_now: true,
     }
 }
 

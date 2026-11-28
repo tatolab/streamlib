@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -10,10 +10,7 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
 use super::nodes::{GraphNode, NodeRunId};
-use super::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
-    PendingDeletionComponent,
-};
+use super::{GraphEdgeWithComponents, PendingDeletionComponent};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -113,24 +110,6 @@ impl Graph {
             .is_some_and(|node_index| {
                 super::nodes::reshape_the_pin_group_slots_of(&mut self.digraph, node_index)
             })
-    }
-
-    /// How many slots each pin group holds now, by node, of each node declaring one that is
-    /// built for the slots it holds: a node whose helper takes its slots while it plays, a node
-    /// written as one function, is left out, since a change in their count rebuilds nothing.
-    pub(crate) fn the_pin_group_slot_counts_of_each_node_built_for_them(
-        &self,
-    ) -> HashMap<NodeRunId, Vec<usize>> {
-        self.digraph
-            .node_weights()
-            .filter(|node| !node.pin_groups().is_empty())
-            .filter(|node| {
-                !node
-                    .get::<OutOfProcessLinkWiringComponent>()
-                    .is_some_and(|wiring| wiring.0.its_far_side_takes_its_pin_group_slots_live())
-            })
-            .map(|node| (node.id.clone(), node.slot_counts_held()))
-            .collect()
     }
 
     /// Grow the pin group of the node `node_run_id` holding port `port_name` of `direction` to
@@ -256,16 +235,21 @@ impl Graph {
         &self.values_wires_carry_into_settings
     }
 
-    /// Whether input `input` of the node `node_run_id` is a setting its node reads at setup:
-    /// one its port says is, or one its type's config schema lists of a function node that runs
-    /// as a node of its own, which is built with those settings and handed no other; `false`
-    /// when this graph holds no such node or input.
-    pub(crate) fn is_a_setting_read_at_setup(&self, node_run_id: &NodeRunId, input: &str) -> bool {
+    /// Whether input `input` of the node `node_run_id` is a setting, whose wire the engine reads
+    /// in its node's place and whose values it hands the node as it hands a value set on it: one
+    /// its port says is, read at setup or each run, or one its type's config schema lists of a
+    /// function node that runs as a node of its own; `false` when this graph holds no such node
+    /// or input.
+    pub(crate) fn is_a_setting_whose_wire_the_engine_reads(
+        &self,
+        node_run_id: &NodeRunId,
+        input: &str,
+    ) -> bool {
         self.traversal()
             .v(node_run_id)
             .first()
             .is_some_and(|node| match node.input_port(input) {
-                Some(port) => port.is_a_setting_read_at_setup(),
+                Some(port) => port.is_a_setting(),
                 None => self.is_a_schema_setting_of_a_function_node_run_on_its_own(
                     node,
                     node_run_id,

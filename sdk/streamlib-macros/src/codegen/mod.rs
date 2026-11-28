@@ -302,7 +302,6 @@ fn generate_node_impl_from_schema(
     let members_read_from_the_schema =
         generated_node_members_read_from_the_schema(schema, &descriptor_impl);
     let settings_taken_from_the_input_values = settings.settings_taken_from_the_input_values();
-    let setup_marked = settings.setup_marked();
 
     quote! {
         #node_inherent_impl
@@ -332,7 +331,6 @@ fn generate_node_impl_from_schema(
                 &mut self,
                 ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
             ) -> __streamlib_sdk::error::Result<()> {
-                #setup_marked
                 <Self as #node_trait>::setup(self, ctx)
             }
 

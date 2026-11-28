@@ -5,8 +5,8 @@
 
 The engine builds a node for the slots it holds: a group that follows its wires for each slot a
 link or an island reaches, its empty slot drawn and never built, and a group whose count is set
-for as many slots as its Integer input named after it holds, 1 until one is set. A change in
-either rebuilds the node, so the count read here holds for the node's life.
+for as many slots as its Integer input named after it holds, 1 until one is set. Nothing
+rebuilds a class node when either changes, so the count read here holds for the node's life.
 """
 
 from __future__ import annotations

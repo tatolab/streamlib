@@ -273,41 +273,14 @@ fn two_edits_the_documents_hold_made_live_on(
     [carried, renamed]
 }
 
-/// A stream that took edits the documents hold rebuilds the nodes they left to rebuild once,
-/// though none of them is a value set: a reconcile an edit goes through leaves its rebuild to
-/// its caller.
+/// A stream that takes the edits the documents hold holds none of them as not live.
 ///
-/// Mental-revert: rebuilding only a stream that took a value set leaves a node such an edit
-/// left to rebuild neither handed its values nor rebuilt.
+/// Mental-revert: holding an edit the stream took as not live draws it as waiting on a stop.
 #[test]
-fn a_stream_taking_edits_the_documents_hold_rebuilds_once_though_none_sets_a_value() {
+fn a_stream_taking_the_edits_the_documents_hold_holds_none_of_them_not_live() {
     let runtime = crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime::new();
 
     two_edits_the_documents_hold_made_live_on(&runtime);
 
-    assert_eq!(runtime.recorded_rebuilds_and_the_armed_refusal.lock().0, 1);
     assert!(runtime.recorded_edits_held_not_live.lock().is_empty());
-}
-
-/// A rebuild the stream refuses after taking edits the documents hold holds each of them as
-/// not live, with the refusal.
-#[test]
-fn a_refused_rebuild_after_edits_the_documents_hold_holds_each_of_them_not_live() {
-    let refusal = "`blur` blurs nothing with a kernel of size 0";
-    let runtime =
-        crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime::refusing_each_rebuild(refusal);
-
-    let made_live = two_edits_the_documents_hold_made_live_on(&runtime);
-
-    let held = runtime.recorded_edits_held_not_live.lock().clone();
-    assert_eq!(
-        held.iter()
-            .map(|(edit, _)| edit.clone())
-            .collect::<Vec<_>>(),
-        made_live.to_vec()
-    );
-    assert!(
-        held.iter().all(|(_, why)| why.contains(refusal)),
-        "{held:?}"
-    );
 }

@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use super::*;
 use crate::core::graph::LinkUniqueId;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    KeptNodesLeftToRebuild, LinksAReconcileMakes,
+    LinksAReconcileMakes,
 };
 
 /// Every record a [`GraphInputTestRecordsRecorder`] has read.
@@ -144,7 +144,6 @@ fn a_graph_input_whose_lifetime_a_reconcile_makes_kept_keeps_its_live_value_acro
         .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
             the_fader_of_lifetime("kept"),
             LinksAReconcileMakes::EachAsASavedGraphsLink,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .expect("the reconcile changes the lifetime");
 

@@ -23,7 +23,7 @@ use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
-    KeptNodesLeftToRebuild, LinksAReconcileMakes,
+    LinksAReconcileMakes,
 };
 use crate::core::runtime::{GraphEditBatch, LoadedStreamInThisRuntime, Runner, RuntimeOperations};
 use crate::core::runtime::a_project_on_disk_for_a_test::the_view_type_of_the_test_project_at;
@@ -312,7 +312,6 @@ fn a_reconcile_taking_out_a_reactive_readers_only_source_sets_the_kept_island_li
                 &[(("switch", "result"), ("reader", "in1"))],
             ),
             LinksAReconcileMakes::EachAsASavedGraphsLink,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .expect("the reconcile sets the island link aside");
 
@@ -598,7 +597,6 @@ fn a_reconcile_listing_the_island_link_first_sets_nothing_aside_on_a_stopped_str
                 ],
             ),
             LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
-            KeptNodesLeftToRebuild::HandedTheirValuesLive,
         )
         .expect("the reconcile feeds the reader a source");
 

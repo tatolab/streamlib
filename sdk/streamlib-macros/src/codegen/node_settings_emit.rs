@@ -2,15 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! What `#[node(settings = …)]` adds to a node: its settings on the `Node` it builds, taken from
-//! the values its inputs hold until it is set up, and each of them declared as one of its inputs.
+//! the values its inputs hold each time it is handed them, and each of them declared as one of
+//! its inputs.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Path;
-
-/// The field holding whether the node was set up, after which a value set on one of its settings
-/// rebuilds it rather than reaching it.
-const SET_UP_FIELD: &str = "__streamlib_settings_were_read_at_setup";
 
 /// What a node declaring `settings = …` is emitted with; empty for a node that declares none.
 pub(super) struct NodeSettingsEmitted<'parsed> {
@@ -24,10 +21,6 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
 
     pub(super) fn declares_settings(&self) -> bool {
         self.settings_type.is_some()
-    }
-
-    fn set_up_field() -> syn::Ident {
-        syn::Ident::new(SET_UP_FIELD, proc_macro2::Span::call_site())
     }
 
     /// The generated module's alias of the settings type and its `node` constructor, or, for a
@@ -90,37 +83,32 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
         }
     }
 
-    /// The `Node` fields holding the settings and whether the node was set up.
+    /// The `Node` field holding the settings.
     pub(super) fn struct_fields(&self, member_visibility: &TokenStream) -> TokenStream {
         let Some(settings_type) = self.settings_type else {
             return quote! {};
         };
-        let set_up_field = Self::set_up_field();
         quote! {
             #member_visibility settings: #settings_type,
-            #set_up_field: bool,
         }
     }
 
-    /// The initializers of [`Self::struct_fields`]: the settings' defaults, not set up yet.
+    /// The initializer of [`Self::struct_fields`]: the settings' defaults.
     pub(super) fn struct_field_initializers(&self) -> TokenStream {
         if !self.declares_settings() {
             return quote! {};
         }
-        let set_up_field = Self::set_up_field();
         quote! {
             settings: ::std::default::Default::default(),
-            #set_up_field: false,
         }
     }
 
-    /// The `GeneratedNode` method taking the settings the input values hold, until the node is
-    /// set up.
+    /// The `GeneratedNode` method taking the settings the input values hold, each time the node
+    /// is handed them, before its setup or while it runs.
     pub(super) fn settings_taken_from_the_input_values(&self) -> TokenStream {
         let Some(settings_type) = self.settings_type else {
             return quote! {};
         };
-        let set_up_field = Self::set_up_field();
         quote! {
             fn take_the_settings_the_input_values_hold(
                 &mut self,
@@ -129,9 +117,6 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
                     __streamlib_sdk::serde_json::Value,
                 >,
             ) -> __streamlib_sdk::error::Result<()> {
-                if self.#set_up_field {
-                    return Ok(());
-                }
                 self.settings =
                     <#settings_type as __streamlib_sdk::descriptors::NodeSettings>
                         ::read_from_the_input_values(input_values)
@@ -144,16 +129,6 @@ impl<'parsed> NodeSettingsEmitted<'parsed> {
                 Ok(())
             }
         }
-    }
-
-    /// The statement `__generated_setup` opens with: the node is set up, so its settings stay
-    /// those it was set up with.
-    pub(super) fn setup_marked(&self) -> TokenStream {
-        if !self.declares_settings() {
-            return quote! {};
-        }
-        let set_up_field = Self::set_up_field();
-        quote! { self.#set_up_field = true; }
     }
 
     /// The descriptor's config schema; none for a node declaring settings, which takes no config.

@@ -694,19 +694,17 @@ fn the_graph_of_a_stream_holding_a_graph_input_saving(
 }
 
 /// A reload keeping a running stream whose document now gives its Graph Input another type and
-/// a value of it leaves no node waiting on a rebuild nobody runs: the stream holds the new type
-/// and value, its Input not left to rebuild.
+/// a value of it hands the running Input the new type and value.
 ///
-/// Mental-revert: leaving every kept node a setting read at setup leaves to rebuild unhanded,
-/// as a transaction's reconcile does, keeps the running Input built for its Float, waiting on a
-/// rebuild the reload never runs.
+/// Mental-revert: leaving a kept node whose setting changed unhanded keeps the running Input
+/// holding its Float.
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 #[serial]
-fn a_reload_retyping_a_running_graph_input_leaves_no_node_waiting_on_a_rebuild() {
+fn a_reload_retyping_a_running_graph_input_hands_it_the_new_type_and_value() {
     let state_directory = tempfile::tempdir().unwrap();
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
     let project =
@@ -733,10 +731,6 @@ fn a_reload_retyping_a_running_graph_input_leaves_no_node_waiting_on_a_rebuild()
         .into_iter()
         .find(|node| node.display_name == "level")
         .expect("the stream holds its Input");
-    assert!(
-        !reloaded.is_left_to_rebuild(&level.node_run_id),
-        "the Input is left waiting on a rebuild nobody runs"
-    );
     assert_eq!(
         (
             level.input_values.get("pin_type"),

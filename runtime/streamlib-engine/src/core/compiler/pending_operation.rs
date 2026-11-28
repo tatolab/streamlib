@@ -16,10 +16,6 @@ pub(crate) enum PendingOperation {
     /// Unwire and remove a link that is currently wired.
     RemoveLink(LinkUniqueId),
 
-    /// Stop a running node and build it again, its links wired again, so it reads each setting
-    /// read at setup as the graph holds it now.
-    RebuildNode(NodeRunId),
-
     /// Judge again each link the type choices of a node reach, since one of its inputs changed:
     /// a link whose two ends no longer connect is unwired and kept, carrying nothing, and one
     /// that connects again is wired again. Neither node is rebuilt. A link that is a call inside
@@ -44,7 +40,6 @@ impl std::fmt::Display for PendingOperation {
             PendingOperation::RemoveNode(id, _) => write!(f, "RemoveNode({})", id),
             PendingOperation::AddLink(id) => write!(f, "AddLink({})", id),
             PendingOperation::RemoveLink(id) => write!(f, "RemoveLink({})", id),
-            PendingOperation::RebuildNode(id) => write!(f, "RebuildNode({})", id),
             PendingOperation::JudgeTheLinksTheTypeChoicesOfTheNodeReach(id) => {
                 write!(f, "JudgeTheLinksTheTypeChoicesOfTheNodeReach({id})")
             }

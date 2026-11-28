@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A node type for tests that reads three settings once, at setup, and records each setup it
-//! runs: what a test of a node rebuilt to take a setting read at setup runs; and a node type
+//! A node type for tests that reads three settings at setup and records each setup it runs and
+//! each set of values it is handed after: what a test of a node handed an input live runs; and a
+//! node type
 //! whose Integer output, which flows as a value, a test writes, to wire into one of them, with
 //! a setting read at setup of its own that another source's wire may feed; a node type like the
 //! first whose pin group of Integer layers follows its wires; and one whose pin group of Integer
@@ -33,6 +34,9 @@ pub const A_KERNEL_SIZE_IT_IS_NOT_HANDED: i64 = -1;
 
 /// Each setup the fixture node ran, by node: the settings it read.
 static SETUPS_RUN: Mutex<Vec<(Uuid, Map<String, Value>)>> = Mutex::new(Vec::new());
+
+/// Each set of values the fixture node was handed, by node, in the order handed.
+static VALUES_HANDED: Mutex<Vec<(Uuid, Map<String, Value>)>> = Mutex::new(Vec::new());
 
 /// Each setup and teardown the fixture node ran, by node, in the order run.
 static SETUPS_AND_TEARDOWNS_RUN: Mutex<Vec<(Uuid, WhatANodeRan)>> = Mutex::new(Vec::new());
@@ -166,6 +170,9 @@ impl DynGeneratedNode for NodeReadingItsSettingsAtSetup {
                 "a kernel of size {A_KERNEL_SIZE_IT_IS_NOT_HANDED} is not taken"
             )));
         }
+        VALUES_HANDED
+            .lock()
+            .push((self.node_uuid, input_values.clone()));
         self.settings = input_values.clone();
         Ok(())
     }
@@ -401,6 +408,17 @@ pub fn the_node_type_reading_its_settings_at_setup() -> NodeClassImportPath {
 pub fn forget_every_setup_run() {
     SETUPS_RUN.lock().clear();
     SETUPS_AND_TEARDOWNS_RUN.lock().clear();
+    VALUES_HANDED.lock().clear();
+}
+
+/// The values the node `node` was last handed, if it was handed any.
+pub fn the_values_last_handed_to(node: Uuid) -> Option<Map<String, Value>> {
+    VALUES_HANDED
+        .lock()
+        .iter()
+        .rev()
+        .find(|(handed, _)| *handed == node)
+        .map(|(_, values)| values.clone())
 }
 
 /// Each setup and teardown a node of the type ran, by node, in the order run.

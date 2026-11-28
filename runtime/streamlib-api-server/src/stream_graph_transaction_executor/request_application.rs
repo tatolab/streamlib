@@ -277,17 +277,6 @@ impl StreamGraphTransactionExecutor<'_> {
             );
             return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
         }
-        let mut nodes_rebuilt: Vec<GraphTransactionRebuiltNode> = Vec::new();
-        if let Err(refusal) = self
-            .rebuild_each_node_a_setting_read_at_setup_changed(&staged.streams, &mut nodes_rebuilt)
-        {
-            self.put_back_what_the_refused_transaction_ran(
-                &staged.streams,
-                applied_live,
-                placements_reconciled,
-            );
-            return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
-        }
         let WhatTheTransactionHasStaged {
             streams,
             what_the_answer_names_of_each_added_node,
@@ -357,7 +346,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 what_the_answer_names_of_each_added_node: &what_the_answer_names_of_each_added_node,
                 overridden_by_links,
                 why_each_link_was_made_unjudged,
-                nodes_rebuilt,
                 saved_values_retyped,
             },
         ))
@@ -707,8 +695,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 .staged_graph
                 .apply(&applied);
             if let Err(why) = staged {
-                // Its rebuild is left to the refusal, which takes the open batch back first: a
-                // rebuild waits for the stream's one writer, which the batch holds.
                 self.reverse_one_operation_applied_live(
                     stream_id,
                     stream_operations.as_ref(),
