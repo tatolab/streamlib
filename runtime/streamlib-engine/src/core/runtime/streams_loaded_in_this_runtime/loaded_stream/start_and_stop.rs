@@ -270,45 +270,42 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Hand each node a Value wire into one of its settings carried a new value into, or took
-    /// a wire off, what its inputs read now, as a value set on them is handed: a function node
-    /// read inside an island through each island evaluating it, any other node on its own, so
-    /// one that refuses is logged, keeps what it read, and leaves every other node handed its
-    /// values.
+    /// a wire off, what its inputs read now, as a value set on them is handed, each node on its
+    /// own: a function node read inside an island through each island evaluating it, so one
+    /// that refuses, or whose island does, is logged, keeps what it read, and leaves every other
+    /// node handed its values.
     fn hand_each_node_what_the_wires_into_its_settings_carried(&self) {
-        let (read_inside_an_island, handed_on_their_own): (Vec<NodeRunId>, Vec<NodeRunId>) =
-            self.compiler.scope_reading(|graph| {
-                graph
-                    .values_wires_carry_into_settings()
-                    .take_each_node_waiting_for_its_values()
-                    .into_iter()
-                    .filter_map(|node| graph.node_by_uuid(node).map(|node| node.id.clone()))
-                    .partition(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))
-            });
-        if read_inside_an_island.is_empty() && handed_on_their_own.is_empty() {
+        let nodes: Vec<(NodeRunId, bool)> = self.compiler.scope_reading(|graph| {
+            graph
+                .values_wires_carry_into_settings()
+                .take_each_node_waiting_for_its_values()
+                .into_iter()
+                .filter_map(|node| graph.node_by_uuid(node).map(|node| node.id.clone()))
+                .map(|node_id| {
+                    let read_inside_an_island =
+                        runs_inside_the_read_of_each_node_it_feeds(graph, &node_id);
+                    (node_id, read_inside_an_island)
+                })
+                .collect()
+        });
+        if nodes.is_empty() {
             return;
         }
         let graph_lock = self.compiler.graph_lock();
         self.with_no_other_input_value_change(|| {
-            if !read_inside_an_island.is_empty()
-                && let Err(not_handed_over) =
+            for (node_id, read_inside_an_island) in &nodes {
+                let node_id = std::slice::from_ref(node_id);
+                let handed_over = if *read_inside_an_island {
                     hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
                         &mut graph_lock.write(),
-                        &read_inside_an_island,
+                        node_id,
                     )
-            {
-                tracing::warn!(
-                    %not_handed_over,
-                    "an island was not handed what a wire into a setting of a node it evaluates \
-                     carried"
-                );
-            }
-            for node_id in &handed_on_their_own {
-                if let Err(not_handed_over) = deliver_the_unlinked_input_values_of_each_node(
-                    graph_lock,
-                    std::slice::from_ref(node_id),
-                ) {
+                } else {
+                    deliver_the_unlinked_input_values_of_each_node(graph_lock, node_id)
+                };
+                if let Err(not_handed_over) = handed_over {
                     tracing::warn!(
-                        node = %node_id,
+                        node = %node_id[0],
                         %not_handed_over,
                         "a node was not handed what a wire into one of its settings carried"
                     );
