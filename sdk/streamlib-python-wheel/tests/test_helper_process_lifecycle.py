@@ -72,11 +72,13 @@ def test_a_node_that_cannot_set_itself_up_reports_the_failure(stand_in_parent):
     lifecycle_thread.join(timeout=5.0)
 
 
-def test_a_class_not_under_bare_node_is_refused_at_setup_naming_its_replacement(stand_in_parent):
+def test_a_class_an_older_tatolab_stream_declared_is_refused_at_setup_naming_the_node_function(
+    stand_in_parent,
+):
     """A class an older `tatolab-stream` declared with `@node.process` describes, and nothing
-    builds it from fields and pins: its setup fails naming bare `@node`.
+    runs it: its setup fails naming the node written as one function.
 
-    Mental-revert: building it with no members again constructs it with nothing bound.
+    Mental-revert: building it as a class again constructs it with nothing bound.
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -87,7 +89,7 @@ def test_a_class_not_under_bare_node_is_refused_at_setup_naming_its_replacement(
     stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
-    assert "is not a class under bare `@node`" in refusal["error"]
+    assert "is not a node written as one function" in refusal["error"]
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"

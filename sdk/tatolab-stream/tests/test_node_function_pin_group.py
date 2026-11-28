@@ -1,10 +1,11 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A class node declares a `PinGroup[Slot]`: one slot of pins and values the engine repeats, built as a tuple of slots, and each mistake refused by name."""
+"""A node function declares a `PinGroup[Slot]`: one slot of pins and values the engine repeats, built as a tuple of slots, and each mistake refused by name."""
 
 from __future__ import annotations
 
+import inspect
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,17 +20,11 @@ from tatolab.stream import (
     NumberRange,
     OutputPin,
     PinGroup,
-    SettingOnly,
     Texture,
     Vector2,
     node,
 )
-from tatolab.stream._class_node_construction import (
-    assign_live_field_values,
-    build_pin_group_slot,
-    class_node_pin_groups,
-    construct_class_node,
-)
+from tatolab.stream._class_node_construction import build_pin_group_slot
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -48,17 +43,13 @@ class Layer:
 
 
 @node.meta(description="Lays each layer over the one below it.")
-@node
-class Stack:
-    layers: Annotated[PinGroup[Layer], Description("The layers, the bottom one first.")]
-    result: OutputPin[Texture]
-
-    def __init__(self) -> None:
-        self.kernel_source = _a_kernel_sampling(len(self.layers))
-
-    def process(self) -> None:
-        for layer in self.layers:
-            layer.picture.read()
+@node(execution="reactive")
+def Stack(
+    *,
+    layers: Annotated[PinGroup[Layer], Description("The layers, the bottom one first.")],
+    result: OutputPin[Texture],
+) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -67,11 +58,8 @@ class Delayed[Value: float]:
     delayed: OutputPin[Value]
 
 
-@node
-class Delay:
-    lines: PinGroup[Delayed]
-
-    def process(self) -> None: ...
+@node(execution="reactive")
+def Delay(*, lines: PinGroup[Delayed]) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -79,17 +67,8 @@ class Unpacked:
     element: OutputPin[float]
 
 
-@node
-class Unpack:
-    pack: InputPin[list[float]]
-    elements: PinGroup[Unpacked]
-
-    def process(self) -> None: ...
-
-
-@dataclass(frozen=True)
-class Band:
-    gain: Annotated[float, SettingOnly()] = 1.0
+@node(execution="reactive")
+def Unpack(*, pack: InputPin[list[float]], elements: PinGroup[Unpacked]) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -142,13 +121,8 @@ class Counted:
 _factory_calls = iter(range(100))
 
 
-def _a_kernel_sampling(layer_count: int) -> str:
-    """Slang for `layer_count` layers, one texture binding each, as a compositor builds it at setup."""
-    return "\n".join(f"Texture2D layer_{layer};" for layer in range(layer_count))
-
-
-def _the_group_of(node_class: type) -> dict[str, Any]:
-    (pin_group,) = getattr(node_class, NODE_DECLARATION_PIN_GROUPS_STAMP)
+def _the_group_of(node_function: Any) -> dict[str, Any]:
+    (pin_group,) = getattr(node_function, NODE_DECLARATION_PIN_GROUPS_STAMP)
     return pin_group
 
 
@@ -188,8 +162,8 @@ def test_a_slots_output_follows_the_input_of_its_own_slot() -> None:
 
 
 def test_a_group_holding_an_input_follows_its_wires_and_one_holding_only_outputs_has_its_count_set() -> None:
-    (layers,) = class_node_pin_groups(Stack)
-    (elements,) = class_node_pin_groups(Unpack)
+    (layers,) = Stack.pin_groups
+    (elements,) = Unpack.pin_groups
 
     assert layers.follows_its_wires
     assert not elements.follows_its_wires
@@ -207,23 +181,24 @@ def test_a_group_holding_an_input_follows_its_wires_and_one_holding_only_outputs
     assert elements.slot_ports(2) == ([], ["elements.0.element", "elements.1.element"])
 
 
-def _a_class_node(**annotations: Any) -> type:
-    """A class node of `annotations`, each given as the object it is, so a slot named in a test resolves."""
+def _a_node_function(**annotations: Any) -> Any:
+    """A node function taking `annotations`, each given as the object it is, so a slot named in a
+    test resolves."""
 
-    def process(self: object) -> None: ...
+    def Stacked(**_: Any) -> None: ...
 
-    return node(type("Stacked", (), {"__annotations__": annotations, "process": process}))
-
-
-def test_a_group_whose_slot_holds_only_settings_has_its_count_set() -> None:
-    equalizer = _a_class_node(bands=PinGroup[Band], audio=InputPin[Texture])
-
-    (bands,) = class_node_pin_groups(equalizer)
-    assert not bands.follows_its_wires
+    Stacked.__signature__ = inspect.Signature(  # pyright: ignore[reportFunctionMemberAccess]
+        [
+            inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=annotation)
+            for name, annotation in annotations.items()
+        ]
+    )
+    Stacked.__annotations__ = dict(annotations)
+    return node(execution="reactive")(Stacked)
 
 
 def test_a_slot_member_ports_name_their_slot_and_an_output_follows_its_slots_input() -> None:
-    (lanes,) = class_node_pin_groups(_a_class_node(lanes=PinGroup[Passed]))
+    (lanes,) = _a_node_function(lanes=PinGroup[Passed]).pin_groups
     picture, passed = lanes.members_of_slot(3)
 
     assert (picture.port, passed.port) == ("lanes.3.picture", "lanes.3.passed")
@@ -235,8 +210,8 @@ def test_a_slot_member_ports_name_their_slot_and_an_output_follows_its_slots_inp
     assert passed_in_the_declaration["pin_declaration"]["pin_type"]["input_port_name"] == "picture"
 
 
-def test_a_node_is_built_holding_its_slots_in_order_and_reads_their_count_in_init() -> None:
-    (layers,) = class_node_pin_groups(Stack)
+def test_a_slot_is_built_holding_its_values_and_its_pins() -> None:
+    (layers,) = Stack.pin_groups
     slots = [
         build_pin_group_slot(
             Stack,
@@ -247,39 +222,15 @@ def test_a_node_is_built_holding_its_slots_in_order_and_reads_their_count_in_ini
         for slot in range(3)
     ]
 
-    stack = construct_class_node(
-        Stack, field_values={}, pins={"result": "result"}, pin_groups={"layers": slots}
-    )
-
-    assert [layer.picture for layer in stack.layers] == [
+    assert [layer.picture for layer in slots] == [
         "picture of slot 0",
         "picture of slot 1",
         "picture of slot 2",
     ]
-    assert [layer.opacity for layer in stack.layers] == [1.0, 0.5, 1.0]
-    assert stack.layers[0].position == Vector2(0.0, 0.0)
-    assert stack.kernel_source == "Texture2D layer_0;\nTexture2D layer_1;\nTexture2D layer_2;"
-
-
-def test_a_value_set_on_a_slots_field_gives_its_group_that_slot_holding_it() -> None:
-    (layers,) = class_node_pin_groups(Stack)
-    slots = [
-        build_pin_group_slot(Stack, layers, field_values={}, pins={"picture": slot})
-        for slot in range(2)
-    ]
-    stack = construct_class_node(Stack, field_values={}, pins={"result": "r"}, pin_groups={"layers": slots})
-
-    assign_live_field_values(stack, {"layers.1.opacity": 0.25})
-
-    assert [layer.opacity for layer in stack.layers] == [1.0, 0.25]
-    assert stack.layers[1].picture == 1
-    with pytest.raises(ValueError, match="declares no field `layers.2.opacity`"):
-        assign_live_field_values(stack, {"layers.2.opacity": 0.25})
-
-
-def test_a_node_built_with_no_slots_for_a_group_is_refused() -> None:
-    with pytest.raises(ValueError, match="no slots for its pin group `layers`"):
-        construct_class_node(Stack, field_values={}, pins={"result": "r"})
+    assert [layer.opacity for layer in slots] == [1.0, 0.5, 1.0]
+    assert slots[0].position == Vector2(0.0, 0.0)
+    with pytest.raises(ValueError, match="no object for its pin `picture`"):
+        build_pin_group_slot(Stack, layers, field_values={}, pins={})
 
 
 def _refusal_of(declare: Any) -> NodeDeclarationRefusal:
@@ -289,14 +240,14 @@ def _refusal_of(declare: Any) -> NodeDeclarationRefusal:
 
 
 def test_a_slot_member_with_no_pin_type_is_refused_naming_the_group_and_the_member() -> None:
-    refusal = _refusal_of(lambda: _a_class_node(layers=PinGroup[Untyped]))
+    refusal = _refusal_of(lambda: _a_node_function(layers=PinGroup[Untyped]))
     assert refusal.finding_code == "pin_has_no_type"
     assert (refusal.node, refusal.pin) == ("Stacked", "layers.picture")
     assert "`Stacked`'s pin group `layers`:" in str(refusal)
 
 
 def test_a_slot_member_typed_as_no_pin_type_is_refused() -> None:
-    refusal = _refusal_of(lambda: _a_class_node(layers=PinGroup[Odd]))
+    refusal = _refusal_of(lambda: _a_node_function(layers=PinGroup[Odd]))
     assert refusal.finding_code == "attribute_not_a_pin"
     assert refusal.pin == "layers.thing"
 
@@ -312,8 +263,8 @@ def test_a_slot_member_typed_as_no_pin_type_is_refused() -> None:
     ],
 )
 def test_a_slot_that_is_no_frozen_dataclass_of_pins_is_refused(slot: Any, finding_code: Any) -> None:
-    def declare() -> type:
-        return _a_class_node(layers=PinGroup[slot], audio=InputPin[Texture])
+    def declare() -> Any:
+        return _a_node_function(layers=PinGroup[slot], audio=InputPin[Texture])
 
     if finding_code is None:
         declare()
@@ -322,21 +273,21 @@ def test_a_slot_that_is_no_frozen_dataclass_of_pins_is_refused(slot: Any, findin
 
 
 def test_a_bare_pin_group_a_group_given_a_value_and_a_group_in_a_slot_are_refused() -> None:
-    def bare() -> type:
-        return _a_class_node(layers=PinGroup, audio=InputPin[Texture])
+    def bare() -> Any:
+        return _a_node_function(layers=PinGroup, audio=InputPin[Texture])
 
-    def given_a_value() -> type:
-        @node
-        class Stacked:
-            layers: PinGroup[Layer] = ()  # pyright: ignore[reportAssignmentType]
-            audio: InputPin[Texture]
-
-            def process(self) -> None: ...
+    def given_a_value() -> Any:
+        @node(execution="reactive")
+        def Stacked(
+            *,
+            layers: PinGroup[Layer] = (),  # pyright: ignore[reportArgumentType]
+            audio: InputPin[Texture],
+        ) -> None: ...
 
         return Stacked
 
-    def nested() -> type:
-        return _a_class_node(layers=PinGroup[Nested], audio=InputPin[Texture])
+    def nested() -> Any:
+        return _a_node_function(layers=PinGroup[Nested], audio=InputPin[Texture])
 
     assert _refusal_of(bare).finding_code == "pin_group_slot_not_a_frozen_dataclass"
     assert _refusal_of(given_a_value).finding_code == "pin_has_a_value"
@@ -346,7 +297,7 @@ def test_a_bare_pin_group_a_group_given_a_value_and_a_group_in_a_slot_are_refuse
 
 def test_a_slot_field_left_out_of_its_init_is_refused() -> None:
     """Fail-without-fix: the slot reads, and setup fails building `Derived(opacity=1.0)`."""
-    refusal = _refusal_of(lambda: _a_class_node(layers=PinGroup[Derived], audio=InputPin[Texture]))
+    refusal = _refusal_of(lambda: _a_node_function(layers=PinGroup[Derived], audio=InputPin[Texture]))
     assert (refusal.finding_code, refusal.pin) == (
         "pin_group_slot_not_a_frozen_dataclass",
         "layers.opacity",
@@ -356,8 +307,8 @@ def test_a_slot_field_left_out_of_its_init_is_refused() -> None:
 def test_a_slot_fields_factory_gives_its_port_and_its_member_one_default() -> None:
     """Fail-without-fix: call the factory for each, and the port's default is `[0.0]` while the
     slot is built with `[1.0]`."""
-    stacked = _a_class_node(layers=PinGroup[Counted], audio=InputPin[Texture])
-    (pin_group,) = class_node_pin_groups(stacked)
+    stacked = _a_node_function(layers=PinGroup[Counted], audio=InputPin[Texture])
+    (pin_group,) = stacked.pin_groups
     (weights_port,) = [port for port in pin_group.declared["inputs"] if port["name"] == "weights"]
     (weights_member,) = [member for member in pin_group.members if member.port == "weights"]
     assert weights_port["pin_default"] == weights_member.default
@@ -367,27 +318,21 @@ def test_a_conversion_declaring_a_pin_group_is_refused() -> None:
     """Fail-without-fix: the conversion check reads only the node's own ports, so the slots'
     inputs that take a wire pass unseen."""
 
-    def converts_with_layers() -> type:
+    def converts_with_layers() -> Any:
         @node.meta(conversion=True)
-        @node
-        class Stacked:
-            layers: PinGroup[Layer]
-            audio: InputPin[Texture]
-            mixed: OutputPin[Texture]
-
-            def process(self) -> None: ...
+        @node(execution="reactive")
+        def Stacked(
+            *, layers: PinGroup[Layer], audio: InputPin[Texture], mixed: OutputPin[Texture]
+        ) -> None: ...
 
         return Stacked
 
-    def layers_under_meta() -> type:
-        @node
+    def layers_under_meta() -> Any:
+        @node(execution="reactive")
         @node.meta(conversion=True)
-        class Stacked:
-            layers: PinGroup[Layer]
-            audio: InputPin[Texture]
-            mixed: OutputPin[Texture]
-
-            def process(self) -> None: ...
+        def Stacked(
+            *, layers: PinGroup[Layer], audio: InputPin[Texture], mixed: OutputPin[Texture]
+        ) -> None: ...
 
         return Stacked
 

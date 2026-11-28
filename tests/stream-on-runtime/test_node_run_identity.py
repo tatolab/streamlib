@@ -53,8 +53,7 @@ from tatolab.stream import node
 
 
 @node(execution="continuous", interval_ms=1)
-class ZeroArgumentProcess:
-    def process(self, ctx) -> None: ...
+def ZeroArgumentProcess() -> None: ...
 '''
 
 MakeTatolabProject = Callable[..., Path]

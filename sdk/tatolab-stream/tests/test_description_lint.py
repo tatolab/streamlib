@@ -23,21 +23,22 @@ PACKAGE_NAME = "description_lint_fixture_nodes"
 PARTLY_DESCRIBED_NODES_SOURCE = '''
 from typing import Annotated
 
-from tatolab.stream import Description, InputPin, OutputPin, StreamDelivery, Texture, node
+from tatolab.stream import Description, Input, InputPin, OutputPin, StreamDelivery, Texture, node
 
 
 @node.meta(description="Blurs each frame.")
-@node
-class Blur:
-    """A docstring the lint never counts as a description."""
-
-    radius: Annotated[int, Description("The radius in pixels.")] = 3
-    sigma: float = 1.0
+@node(execution="reactive")
+def Blur(
+    *,
+    radius: Input[Annotated[int, Description("The radius in pixels.")]] = Input(3),
+    sigma: Input[float] = Input(1.0),
     video_in: InputPin[
         Annotated[Texture, StreamDelivery("newest"), Description("Frames to blur.")]
-    ]
-    mask: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-    video: OutputPin[Annotated[Texture, Description("<b>Blurred</b> frames.")]]
+    ],
+    mask: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    video: OutputPin[Annotated[Texture, Description("<b>Blurred</b> frames.")]],
+) -> None:
+    """A docstring the lint never counts as a description."""
 
 
 @node

@@ -368,7 +368,7 @@ def test_a_node_asleep_in_its_callback_still_runs_its_teardown(
 
     Fail-without-fix: with the old pair of five-second reply deadlines the
     sleeping callback misses `stopped`, the helper is marked gone, and its
-    `teardown()` is skipped outright — so `SLEEPER_TORE_DOWN` never arrives.
+    scope is never closed — so `SLEEPER_TORE_DOWN` never arrives.
     """
     tatolabd = start_tatolabd_running_stream(one_probe_sleeping_through_its_own_shutdown)
     tatolabd.await_marker("ASLEEP_IN_PROCESS")
@@ -377,11 +377,8 @@ def test_a_node_asleep_in_its_callback_still_runs_its_teardown(
     tatolabd.await_clean_exit()
     ended_in = time.monotonic() - interrupted_at
 
-    assert tatolabd.marker_payloads("SLEEPER_STOPPED"), (
-        f"`stop()` did not run after the interrupt:\n{tatolabd.recent_stderr()}"
-    )
     assert tatolabd.marker_payloads("SLEEPER_TORE_DOWN"), (
-        f"`teardown()` did not run after the interrupt:\n{tatolabd.recent_stderr()}"
+        f"the node's scope was not closed after the interrupt:\n{tatolabd.recent_stderr()}"
     )
     assert "MARKER:SLEPT_THE_WHOLE_WAY" not in tatolabd.stderr_text, (
         f"the callback returned on its own, so nothing interrupted it:\n{tatolabd.recent_stderr()}"
@@ -392,18 +389,19 @@ def test_a_node_asleep_in_its_callback_still_runs_its_teardown(
     )
 
 
-def test_a_node_interrupted_while_still_setting_up_still_tears_down(
+def test_a_node_interrupted_while_still_setting_up_ends_within_the_ladders_budget(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """The route onto the ladder the engine's `stop()` hook never reaches.
 
-    A helper still inside `setup()` has never had `stop()` called on it, so the
-    commands whose replies the ladder waits for are only on the wire because
-    the ladder asks for them itself.
+    A helper still running its node's body at setup has never had `stop()` called on it, so
+    the commands whose replies the ladder waits for are only on the wire because the ladder
+    asks for them itself. A body interrupted before it returned started no scope, so nothing
+    of the node is left to close; that the helper still runs its `teardown` is held by the
+    wheel's own tests.
 
-    Fail-without-fix: leave the ask in `stop()` alone and this helper is
-    SIGINT'd, answers its refusal, and is then killed with its group — its
-    `teardown()` never asked for and never run.
+    Fail-without-fix: leave the ask in `stop()` alone and this helper is SIGINT'd, answers its
+    refusal, and is then killed with its group, which waits out the registration budget.
     """
     tatolabd = start_tatolabd_running_stream(one_probe_sleeping_through_its_own_setup)
     tatolabd.await_marker("ASLEEP_IN_SETUP")
@@ -412,11 +410,8 @@ def test_a_node_interrupted_while_still_setting_up_still_tears_down(
     tatolabd.await_clean_exit()
     ended_in = time.monotonic() - interrupted_at
 
-    assert tatolabd.marker_payloads("INTERRUPTED_SETUP_TORE_DOWN"), (
-        f"an interrupted `setup()` was never given its `teardown()`:\n{tatolabd.recent_stderr()}"
-    )
     assert "MARKER:SLEPT_THE_WHOLE_SETUP" not in tatolabd.stderr_text, (
-        f"`setup()` returned on its own, so nothing interrupted it:\n{tatolabd.recent_stderr()}"
+        f"the body returned on its own, so nothing interrupted it:\n{tatolabd.recent_stderr()}"
     )
     assert ended_in < LADDER_BUDGET_SECONDS, (
         f"tatolabd took {ended_in:.1f}s to end, which is the registration budget rather than "

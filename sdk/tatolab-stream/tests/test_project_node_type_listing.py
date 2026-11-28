@@ -58,11 +58,13 @@ INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
 
 @node.meta(category="Robot/Arms", description=INVERSE_KINEMATICS_DESCRIPTION)
 @node(execution="continuous")
-class InverseKinematics:
+def InverseKinematics(
+    *,
+    target: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("The target pose.")]],
+    Joint_Angles: OutputPin[joint_angles_type()],
+) -> None:
     """A docstring, which the listing never reads."""
-
-    target: InputPin[Annotated[Texture, StreamDelivery("newest"), Description("The target pose.")]]
-    Joint_Angles: OutputPin[joint_angles_type()]
+    return None
 
 
 class Split(NamedTuple):
@@ -126,9 +128,12 @@ DEPENDENCY_NODE_SOURCE = (
 from tatolab import stream
 
 
-@stream.node
-class Gripper:
-    grip: stream.InputPin[float]
+@stream.node(execution="reactive")
+def Gripper(
+    *,
+    grip: stream.InputPin[float],
+) -> None:
+    return None
 '''
     + RAISES_AT_IMPORT
 )
@@ -155,8 +160,11 @@ from tatolab.stream import OutputPin, Texture, node
 
 
 @node(execution="continuous")
-class ImageFile:
-    video: OutputPin[Texture]
+def ImageFile(
+    *,
+    video: OutputPin[Texture],
+) -> None:
+    return None
 '''
     + RAISES_AT_IMPORT
 )
@@ -318,7 +326,7 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
 
 NODE_META_AS_WRITTEN = '@node.meta(category="Effects/Stylize", description="Tints a frame.")'
 KIND_DECORATOR_AND_DECLARATION_BY_KIND = {
-    "process": ("@node", "class Tint:\n    video: InputPin[Texture]"),
+    "process": ("@node(execution='reactive')", "def Tint(*, video: InputPin[Texture]) -> None: ..."),
     "function": ("@node", "def Tint(amount: float = 1.0) -> float:\n    return amount"),
     "shader": (
         '@node.shader("float4 Tint(ImageInput image) { return image.pixel; }")',
@@ -364,6 +372,14 @@ RETIRED_FORMS_SOURCE = "\n".join(
         "@node.function",
         "def half(value: float = 0.0) -> float:",
         "    return value / 2",
+        "",
+        "@node",
+        "class Ticker:",
+        "    pass",
+        "",
+        "@node(execution='reactive')",
+        "class Tinter:",
+        "    pass",
         RAISES_AT_IMPORT,
     ]
 )
@@ -374,7 +390,8 @@ def test_a_node_in_a_retired_form_is_no_node_type_and_is_read_as_retired_where_i
 ):
     """Each retired decorator and import is found at its place, in order, and lists nothing.
 
-    Mental-revert: listing the old forms again names `Camera` and `half` as node types.
+    Mental-revert: listing the old forms again names `Camera`, `half`, `Ticker` and `Tinter` as
+    node types.
     """
     read = read_node_types_and_graph_generators_from_module_sources(
         [("nodes.old", "nodes/old.py", RETIRED_FORMS_SOURCE)]
@@ -389,15 +406,22 @@ def test_a_node_in_a_retired_form_is_no_node_type_and_is_read_as_retired_where_i
         (None, 1, 1),
         ("nodes.old:Camera", 4, 1),
         ("nodes.old:half", 8, 1),
+        ("nodes.old:Ticker", 12, 1),
+        ("nodes.old:Tinter", 16, 1),
     ]
     assert [each["words"].split(" is ")[0] for each in retired] == [
         "`tatolab.stream.Image`",
         "`tatolab.stream.Output`",
         "`Camera`",
         "`half`",
+        "`Ticker`",
+        "`Tinter`",
     ]
     assert "`@node.process`, which is retired" in retired[2]["words"]
     assert "`@node.function`, which is retired" in retired[3]["words"]
+    for class_under_node in retired[4:]:
+        assert "declared with a class under `@node`" in class_under_node["words"]
+        assert "keyword-only parameters are its typed pins" in class_under_node["words"]
 
 
 def test_a_function_under_bare_node_is_listed_as_a_function_node_returning_one_output() -> None:
@@ -505,20 +529,20 @@ def test_a_named_tuple_a_bare_node_function_returns_is_listed_as_one_output_per_
     assert [port["name"] for port in outputs_by_node_type["nodes.limits:Tally"]] == ["result"]
 
 
-def test_a_class_under_bare_node_is_listed_with_its_fields_and_pins_and_no_state() -> None:
+def test_a_node_function_is_listed_with_its_value_inputs_and_pins() -> None:
     module_source = "\n".join(
         [
-            "from typing import Annotated, ClassVar",
-            "from tatolab.stream import Description, InputPin, OutputPin, SettingOnly, Texture, node",
+            "from typing import Annotated",
+            "from tatolab.stream import Description, Input, InputPin, OutputPin, Texture, node",
             "",
             '@node.meta(description="Blurs each picture.")',
             "@node(execution='reactive')",
-            "class Blur:",
-            "    video: Annotated[InputPin[Texture], Description('The pictures.')]",
-            "    radius: Annotated[float, SettingOnly()] = 4.0",
-            "    result: OutputPin[Texture]",
-            "    frames: ClassVar[int] = 0",
-            "    _kernel: list[float]",
+            "def Blur(",
+            "    *,",
+            "    video: Annotated[InputPin[Texture], Description('The pictures.')],",
+            "    radius: Input[float] = Input(4.0),",
+            "    result: OutputPin[Texture],",
+            ") -> None: ...",
             RAISES_AT_IMPORT,
         ]
     )
@@ -545,11 +569,13 @@ def test_a_pin_typed_by_a_type_parameter_is_listed_with_its_description() -> Non
             "from typing import Annotated",
             "from tatolab.stream import Description, InputPin, OutputPin, Texture, node",
             "",
-            "@node",
-            "class HandsOn[Frame: Texture, Unbound]:",
-            "    picture_in: InputPin[Annotated[Frame, Description('The pictures.')]]",
-            "    other: InputPin[Unbound]",
-            "    picture_out: OutputPin[Frame]",
+            "@node(execution='reactive')",
+            "def HandsOn[Frame: Texture, Unbound](",
+            "    *,",
+            "    picture_in: InputPin[Annotated[Frame, Description('The pictures.')]],",
+            "    other: InputPin[Unbound],",
+            "    picture_out: OutputPin[Frame],",
+            ") -> None: ...",
             RAISES_AT_IMPORT,
         ]
     )

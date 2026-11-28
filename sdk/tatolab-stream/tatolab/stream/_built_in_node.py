@@ -37,7 +37,7 @@ class BuiltInNode:
         super().__init_subclass__(**keyword_arguments)
         if not _declares_a_field_or_pin(cls):
             return
-        input_ports, output_ports = read_class_node_ports(cls, constructed_in_python=False)
+        input_ports, output_ports = read_class_node_ports(cls)
         setattr(cls, NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports)
         setattr(cls, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
 

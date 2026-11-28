@@ -1,14 +1,13 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The fields of a running class node under bare `@node`, or the value inputs of a node function, each holding its input's current value.
+"""The value inputs of a running node function, each holding its input's current value.
 
 A field holds the value its wire gave last while a wire feeds it, and the value set on it
 otherwise: its stored value from the `setup` command, then each one `set_input_values` hands
 over. A field of a slot a node function's pin group holds from a later time on takes the value
 last handed over for it. A value arrives in its stored JSON form and is held in its Python
-form, a `Color` for a Color, an `Asset` for an Asset. A setting is assigned before `__init__()`
-and again at each change, as any field is.
+form, a `Color` for a Color, an `Asset` for an Asset.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping
 from typing import Any, Optional
 
-from tatolab.stream._class_node_construction import assign_live_field_values
 from tatolab.stream._class_node_declaration import NO_DEFAULT, ClassNodeMember
 from tatolab.stream._node_context_protocols import LinkInputDataReader, NodeLinkDataAccess
 
@@ -30,7 +28,8 @@ __all__ = ["ClassNodeFields"]
 
 
 class ClassNodeFields:
-    """The value each field of one class node holds, followed from its wire or its set value."""
+    """The value each value input of one node function holds, followed from its wire or its set
+    value."""
 
     def __init__(
         self,
@@ -40,10 +39,10 @@ class ClassNodeFields:
         inputs: LinkInputDataReader,
         node_id: str,
         stored_input_values: "Optional[dict[str, Any]]",
-        assign_field_values: "Callable[[Any, Mapping[str, object]], None]" = assign_live_field_values,
+        assign_field_values: "Callable[[Any, Mapping[str, object]], None]",
     ) -> None:
-        """`assign_field_values` gives a running node each new value, by its port's name; a class
-        node's fields are assigned, and a node function's inputs written to its scope."""
+        """`assign_field_values` gives a running node each new value, by its port's name, written
+        to its scope."""
         self._assign_field_values = assign_field_values
         self._link_data_access = link_data_access
         self._inputs = inputs

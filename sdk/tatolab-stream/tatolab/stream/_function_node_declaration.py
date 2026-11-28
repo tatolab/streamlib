@@ -170,8 +170,8 @@ def declare_function_node(
 def _refuse_what_is_not_a_plain_module_level_function(function: object, decorator: str) -> None:
     if isinstance(function, type):
         raise TypeError(
-            f"{decorator} takes a function, and {function.__name__} is a class, which bare "
-            f"`@node` reads as a class node."
+            f"{decorator} takes a function, and {function.__name__} is a class. To fix: write "
+            f"it as a `def`."
         )
     if not inspect.isfunction(function):
         raise TypeError(
@@ -192,7 +192,8 @@ def _refuse_what_is_not_a_plain_module_level_function(function: object, decorato
     if inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(function):
         raise TypeError(
             f"{name} is `async def`; a function node computes its outputs and returns. "
-            f"To fix: make it a plain `def`, or a class node if it waits on I/O."
+            f"To fix: make it a plain `def`, or a node written as one function under "
+            f"`@node(...)` if it waits on I/O."
         )
     if inspect.isgeneratorfunction(function):
         raise TypeError(
@@ -487,7 +488,7 @@ class _FunctionNodeSignatureReading:
             raise TypeError(
                 f"{self._function_name} returns `None`, so it has no output and computes "
                 f"nothing a graph can read. To fix: return the value it computes, or make it "
-                f"a class node if its work is a side effect."
+                f"a node written as one function under `@node(...)` if its work is a side effect."
             )
         if typing.get_origin(return_annotation) is Stateful:
             output_annotation, returned_state_record_class = typing.get_args(return_annotation)

@@ -30,7 +30,7 @@ __all__ = [
 _TAKE_NOW = "take `now: Time` and compute from it"
 _KEEP_IT_IN_STATE = "keep what carries between calls in `State[...]`"
 _STEP_A_SEED_IN_STATE = "keep a seed in `State[...]` and step it in the body, or take the value as an input"
-_MAKE_IT_A_CLASS_NODE = "make it a class node under bare `@node`, which may do I/O"
+_WRITE_IT_UNDER_NODE_CALLED = "write it as one function under `@node(...)`, which may do I/O"
 _PASS_IT_IN = "pass it in as an input, or make it immutable (a tuple, or an array with `setflags(write=False)`)"
 
 # Dotted name a call resolves to -> (what calling it does, the fix). An entry
@@ -45,10 +45,10 @@ SIDE_EFFECTING_CALLABLES: "dict[str, tuple[str, str]]" = {
     "numpy.random": ("draws from a random source", _STEP_A_SEED_IN_STATE),
     "secrets": ("draws from a random source", _STEP_A_SEED_IN_STATE),
     "os.urandom": ("draws from a random source", _STEP_A_SEED_IN_STATE),
-    "io.open": ("opens a file", _MAKE_IT_A_CLASS_NODE),
-    "os.open": ("opens a file", _MAKE_IT_A_CLASS_NODE),
-    "socket": ("opens a socket", _MAKE_IT_A_CLASS_NODE),
-    "threading": ("starts or coordinates a thread", _MAKE_IT_A_CLASS_NODE),
+    "io.open": ("opens a file", _WRITE_IT_UNDER_NODE_CALLED),
+    "os.open": ("opens a file", _WRITE_IT_UNDER_NODE_CALLED),
+    "socket": ("opens a socket", _WRITE_IT_UNDER_NODE_CALLED),
+    "threading": ("starts or coordinates a thread", _WRITE_IT_UNDER_NODE_CALLED),
 }
 
 # The module a C implementation reports -> the module it is reached through.

@@ -125,10 +125,7 @@ def test_the_projects_own_node_classes_are_described_as_its_own(project_director
 
         @node.meta(description="never imports")
         @node(execution="continuous", interval_ms=20)
-        class Broken:
-            frames_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None: ...
+        def Broken(*, frames_to_downstream: OutputPin[EncodedVideo]) -> None: ...
         """,
     )
     imports_directory = project_directory / "imports" / "borrowed"

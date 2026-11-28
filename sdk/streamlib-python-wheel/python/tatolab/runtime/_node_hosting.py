@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Turning a declared node class into a running node object.
+"""Turning a declared node into a running node object.
 
 The engine calls into this module rather than constructing the object itself: building a node
-from its fields and pins is Python's job. App code never calls anything here.
+from its value inputs and pins is Python's job. App code never calls anything here.
 """
 
 from __future__ import annotations
@@ -16,36 +16,14 @@ from tatolab.runtime._node_the_wheel_hosts import NODE_THE_WHEEL_BUILDS_TAKES_IT
 
 if TYPE_CHECKING:
     from tatolab.stream._class_node_declaration import ClassNodeMember, ClassNodePinGroup
-    from tatolab.stream._node_context_protocols import (
-        LinkInputDataReader,
-        LinkOutputDataWriter,
-        NodeLinkDataAccess,
-    )
-
-    from tatolab.runtime._class_node_fields import ClassNodeFields
 
 __all__ = [
-    "class_node_members_of",
     "class_node_pin_groups_of",
     "is_a_node_function",
-    "construct_class_node_from_its_fields_and_pins",
     "the_members_of_each_slot_built",
     "the_slots_its_pin_groups_are_built_with",
     "construct_node_instance",
 ]
-
-
-def class_node_members_of(node_class: type) -> "Optional[tuple[ClassNodeMember, ...]]":
-    """The field or pin behind each port of `node_class` when it is a class under bare `@node`; `None` for any other node.
-
-    Read through the `tatolab-stream` of the project's venv, which may predate class nodes
-    built from their fields and pins; a node declared by one that does is never such a class.
-    """
-    try:
-        from tatolab.stream._class_node_construction import class_node_members
-    except ImportError:
-        return None
-    return class_node_members(node_class)
 
 
 def is_a_node_function(node: object) -> bool:
@@ -61,21 +39,15 @@ def is_a_node_function(node: object) -> bool:
     return isinstance(node, NodeFunction)
 
 
-def class_node_pin_groups_of(node_class: type) -> "tuple[ClassNodePinGroup, ...]":
-    """The `PinGroup`s of `node_class` when it is a class under bare `@node` or a node function;
-    none for any other node, and for a node declared by a `tatolab-stream` that predates pin
-    groups."""
+def class_node_pin_groups_of(node_class: object) -> "tuple[ClassNodePinGroup, ...]":
+    """The `PinGroup`s of `node_class` when it is a node function; none for any other node."""
     if is_a_node_function(node_class):
         return getattr(node_class, "pin_groups", ())
-    try:
-        from tatolab.stream._class_node_construction import class_node_pin_groups
-    except ImportError:
-        return ()
-    return class_node_pin_groups(node_class)
+    return ()
 
 
 def the_slots_its_pin_groups_are_built_with(
-    node_class: type, port_wiring: "dict[str, Any]"
+    node_class: object, port_wiring: "dict[str, Any]"
 ) -> "tuple[dict[str, int], list[str], list[str]]":
     """How many slots each `PinGroup` of `node_class` is built with, by its name, read off the
     `ports` of its `setup` command, and the input and output ports of those slots; nothing for a
@@ -104,77 +76,11 @@ def the_members_of_each_slot_built(
     }
 
 
-def construct_class_node_from_its_fields_and_pins(
-    node_class: type,
-    members: "tuple[ClassNodeMember, ...]",
-    fields: "ClassNodeFields",
-    *,
-    link_data_access: "NodeLinkDataAccess",
-    inputs: "LinkInputDataReader",
-    outputs: "LinkOutputDataWriter",
-    node_id: str,
-    members_of_each_slot: "Optional[dict[str, list[tuple[ClassNodeMember, ...]]]]" = None,
-) -> Any:
-    """Build a class under bare `@node`: every field holding the value `fields` builds it with, every pin bound, every pin group holding the slots `members_of_each_slot` names, then `__init__()`."""
-    from tatolab.stream._class_node_construction import construct_class_node
-
-    from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
-
-    def bound(each: "tuple[ClassNodeMember, ...]") -> "dict[str, Any]":
-        return bind_the_pins_of_a_class_node(
-            each, link_data_access=link_data_access, inputs=inputs, outputs=outputs, node_id=node_id
-        )
-
-    values_to_build_with = fields.values_to_build_with()
-    if not members_of_each_slot:
-        return construct_class_node(node_class, field_values=values_to_build_with, pins=bound(members))
-    from tatolab.stream._class_node_construction import build_pin_group_slot, class_node_pin_groups
-
-    pin_groups = {pin_group.name: pin_group for pin_group in class_node_pin_groups(node_class)}
-    slot_ports = {
-        member.port
-        for slots in members_of_each_slot.values()
-        for slot_members in slots
-        for member in slot_members
-    }
-    slots_of_each_group: "dict[str, list[Any]]" = {}
-    for name, slots in members_of_each_slot.items():
-        pin_group = pin_groups[name]
-        slots_of_each_group[name] = []
-        for slot, slot_members in enumerate(slots):
-            # Each port of the slot by its name in the slot, `opacity` for `layers.0.opacity`.
-            in_the_slot = {
-                slot_member.port: member.port
-                for slot_member, member in zip(slot_members, pin_group.members)
-            }
-            pins = bound(slot_members)
-            slots_of_each_group[name].append(
-                build_pin_group_slot(
-                    node_class,
-                    pin_group,
-                    field_values={
-                        in_the_slot[port]: value
-                        for port, value in values_to_build_with.items()
-                        if port in in_the_slot
-                    },
-                    pins={in_the_slot[port]: pin for port, pin in pins.items()},
-                )
-            )
-    return construct_class_node(
-        node_class,
-        field_values={
-            port: value for port, value in values_to_build_with.items() if port not in slot_ports
-        },
-        pins=bound(members),
-        pin_groups=slots_of_each_group,
-    )
-
-
 def construct_node_instance(node_class: type, configuration: Optional[Any]) -> Any:
     """Build a node the wheel builds itself: the function node pool, or a function node run as a
     standalone node, which alone is built from `configuration`.
 
-    An author's node is a class under bare `@node`, built from its fields and pins instead.
+    An author's node is written as one function, built from its value inputs and pins instead.
     """
     if getattr(node_class, NODE_THE_WHEEL_BUILDS_TAKES_ITS_CONFIG, False):
         return node_class(_as_configuration_mapping(node_class, configuration))

@@ -87,10 +87,23 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
 
 
 @pytest.fixture
-def hooks_the_interrupt_probes_reached():
-    """The probes' shared record, emptied around each test that reads it."""
+def hooks_the_interrupt_probes_reached(monkeypatch):
+    """The probes' shared record, emptied around each test that reads it, which also records
+    each `stop` and `teardown` the helper calls on a node function."""
     from helper_process_probes import HOOKS_THE_INTERRUPT_PROBES_REACHED
+    from tatolab.runtime._node_function_running import NodeFunctionRunning
 
+    def recorded(hook_name: str):
+        hook = getattr(NodeFunctionRunning, hook_name)
+
+        def record_then_call(running, ctx):
+            HOOKS_THE_INTERRUPT_PROBES_REACHED.append(hook_name)
+            return hook(running, ctx)
+
+        return record_then_call
+
+    monkeypatch.setattr(NodeFunctionRunning, "stop", recorded("stop"))
+    monkeypatch.setattr(NodeFunctionRunning, "teardown", recorded("teardown"))
     HOOKS_THE_INTERRUPT_PROBES_REACHED.clear()
     yield HOOKS_THE_INTERRUPT_PROBES_REACHED
     HOOKS_THE_INTERRUPT_PROBES_REACHED.clear()
@@ -139,10 +152,9 @@ def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
 def test_an_interrupted_setup_is_answered_and_still_gets_its_teardown(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
-    """The plan reads literally — any callback interrupted at shutdown, `setup()`
-    included, is followed by `teardown()`. A `setup()` that raises on its own
-    keeps its own no-teardown rule, which lives in the parent: it never sends
-    the command.
+    """The plan reads literally — any callback interrupted at shutdown, the body run at
+    setup included, is followed by `teardown`. A body that raises on its own keeps its own
+    no-teardown rule, which lives in the parent: it never sends the command.
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -166,8 +178,8 @@ def test_an_interrupted_setup_is_answered_and_still_gets_its_teardown(
 def test_a_parent_gone_after_an_interrupted_setup_still_leaves_its_teardown_run(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
-    """A parent that goes away can no longer send the `teardown` an interrupted
-    `setup()` is owed, so the helper runs it on reading the end of the channel."""
+    """A parent that goes away can no longer send the `teardown` an interrupted body is
+    owed, so the helper runs it on reading the end of the channel."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -180,17 +192,17 @@ def test_a_parent_gone_after_an_interrupted_setup_still_leaves_its_teardown_run(
 
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
-    assert hooks_the_interrupt_probes_reached == ["setup-interrupted", "teardown"]
+    assert hooks_the_interrupt_probes_reached == ["setup-interrupted", "stop", "teardown"]
 
 
 def test_a_parent_gone_after_a_setup_that_raised_leaves_no_teardown_run(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
-    """A `setup()` that raised on its own keeps its no-teardown rule when the
-    parent goes away before sending anything else.
+    """A body that raised on its own keeps its no-teardown rule when the parent goes
+    away before sending anything else.
 
-    Fail-without-fix: the end of the channel ran `stop()` and `teardown()` on a
-    node that never set up.
+    Fail-without-fix: the end of the channel ran `stop` and `teardown` on a node that
+    never set up.
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()

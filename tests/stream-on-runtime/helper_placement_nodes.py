@@ -16,11 +16,11 @@ from tatolab.stream import (
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     State,
     Stateful,
     StreamDelivery,
     Trigger,
+    computed,
     log,
     node,
 )
@@ -199,26 +199,34 @@ def DiesAbruptlyProbe(
     return each_frame
 
 
+class ReportsItsClose:
+    """A value of a node's scope that reports `marker_name` when the scope closes it."""
+
+    def __init__(self, marker_name: str) -> None:
+        self._marker_name = marker_name
+
+    def close(self) -> None:
+        report(self._marker_name)
+
+
 @node(execution="continuous", interval_ms=10)
-class SleepsThroughItsOwnShutdownProbe:
-    """Parks in `process()` far past the ladder's one-second budget.
+def SleepsThroughItsOwnShutdownProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Parks in its frame far past the ladder's one-second budget.
 
-    The bag it had in flight is lost to the interrupt, and `stop()` and
-    `teardown()` still run — which is what the markers below are for.
+    The bag it had in flight is lost to the interrupt, and its scope is still closed, which is
+    what `SLEEPER_TORE_DOWN` is for.
     """
+    computed(lambda: ReportsItsClose("SLEEPER_TORE_DOWN"))
 
-    frames_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
         time.sleep(30)
         report("SLEPT_THE_WHOLE_WAY")
 
-    def stop(self, ctx) -> None:
-        report("SLEEPER_STOPPED")
-
-    def teardown(self, ctx) -> None:
-        report("SLEEPER_TORE_DOWN")
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=50)
@@ -247,18 +255,11 @@ def ForksAWorkerThatOutlivesItProbe(
 
 
 @node(execution="manual")
-class SleepsThroughItsOwnSetupProbe:
-
-    frames_to_downstream: OutputPin[Trigger]
-
-    def setup(self, ctx) -> None:
-        report("ASLEEP_IN_SETUP", {"pid": os.getpid()})
-        time.sleep(120)
-        report("SLEPT_THE_WHOLE_SETUP")
-
-    def teardown(self, ctx) -> None:
-        report("INTERRUPTED_SETUP_TORE_DOWN")
-
+def SleepsThroughItsOwnSetupProbe(*, frames_to_downstream: OutputPin[Trigger]) -> None:
+    """Parks in its body, which runs at setup, far past the registration budget."""
+    report("ASLEEP_IN_SETUP", {"pid": os.getpid()})
+    time.sleep(120)
+    report("SLEPT_THE_WHOLE_SETUP")
 
 
 #: How many reads of the function node island a sink makes before it reports them.
@@ -401,17 +402,24 @@ def LevelScaledByItsGain(level: float = 1.0, gain: float = 0.25) -> float:  # no
     return level * gain
 
 
+class BuiltWithALevel:
+    """A value built from one `level`, which reports its build with the pid it is built in."""
+
+    def __init__(self, level: float) -> None:
+        report("BUILT_WITH_LEVEL", {"sink_pid": os.getpid(), "level": float(level)})
+
+
 @node(execution="continuous", interval_ms=10)
-class ReportsTheLevelItIsBuiltWith:
-    """Reports `level`, a setting read at setup, each time it is built, with its own pid."""
+def ReportsTheLevelItIsBuiltWith(
+    *, level: Input[float] = Input(0.1)
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Builds a value from `level`, reporting each build with its own pid."""
+    built = computed(lambda: BuiltWithALevel(level.get()))
 
-    level: Annotated[float, SettingOnly()] = 0.1
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        built.get()
 
-    def __init__(self) -> None:
-        report("BUILT_WITH_LEVEL", {"sink_pid": os.getpid(), "level": float(self.level)})
-
-    def process(self, ctx) -> None:
-        pass
+    return each_frame
 
 
 @node

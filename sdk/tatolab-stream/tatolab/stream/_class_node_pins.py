@@ -1,15 +1,14 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`InputPin[T]`, `OutputPin[T]` and `PinGroup[S]`: how a class node under bare `@node` declares a stream, a trigger, an output and a slot that repeats.
+"""`InputPin[T]`, `OutputPin[T]` and `PinGroup[S]`: how a node written as one function declares a stream, a trigger, an output and a slot that repeats.
 
-A class node declares each of them as an annotation with no value, `video: InputPin[Texture]`,
-and each value input as an annotated field with a default, `radius: float = 4.0`. The form
-states the flow: an `InputPin` streams, or fires for a Trigger, and a field is a value. Each is
-read by bare `@node` at decoration and is never constructed: on a running node the attribute
-holds the object its helper bound, which reads or writes through the pin's port, and in a test
-whatever stand-in the test hands `construct_class_node`. A `PinGroup` holds the slots its
-node was built with.
+A node function declares each of them as the annotation of a keyword-only parameter, `video:
+InputPin[Texture]`, and each value input as `radius: Input[float] = Input(4.0)`. The form states
+the flow: an `InputPin` streams, or fires for a Trigger, and an `Input` is a value. Each is read
+by `@node(...)` at decoration and is never constructed: on a running node the parameter holds
+the object its helper bound, which reads or writes through the pin's port, and in a test
+whatever stand-in the test hands the body. A `PinGroup` holds the slots its node was built with.
 """
 
 from __future__ import annotations

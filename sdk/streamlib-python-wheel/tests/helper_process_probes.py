@@ -14,10 +14,10 @@ from tatolab.stream import (
     OutputPin,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
     Texture,
     TexturePixelFormats,
+    computed,
     node,
 )
 from tatolab.stream._node_declaration import (
@@ -79,8 +79,8 @@ def WritesOnceInSetupProbe(
 class OuterProbe:
 
     @node(execution="manual")
-    class InnerProbe:
-        frames_to_downstream: OutputPin[EncodedVideo]
+    def InnerProbe(*, frames_to_downstream: OutputPin[EncodedVideo]) -> None:
+        """A node function inside a class, whose qualname has two segments."""
 
 
 @node(execution="manual")
@@ -130,69 +130,53 @@ HOOKS_THE_INTERRUPT_PROBES_REACHED: list[str] = []
 
 
 @node(execution="continuous", interval_ms=0)
-class InterruptedInProcessProbe:
-    """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
-    shutdown ladder delivers one to a callback that outran its budget."""
+def InterruptedInProcessProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Takes a `KeyboardInterrupt` inside its first frame, the way the parent's shutdown ladder
+    delivers one to a callback that outran its budget."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
+    already_took_the_interrupt = [False]
 
-    def __init__(self) -> None:
-        self._already_took_the_interrupt = False
-
-    def process(self, ctx) -> None:
-        if not self._already_took_the_interrupt:
-            self._already_took_the_interrupt = True
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        if not already_took_the_interrupt[0]:
+            already_took_the_interrupt[0] = True
             HOOKS_THE_INTERRUPT_PROBES_REACHED.append("process-interrupted")
             raise KeyboardInterrupt
         time.sleep(0.005)
 
-    def stop(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("stop")
-
-    def teardown(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
+    return each_frame
 
 
-@node(execution="manual")
+@built_from_its_config_as_the_wheel_builds_a_promoted_function_node(
+    output_ports=("frames_to_downstream",)
+)
 class RaisesInStartProbe:
     """Sets up, then raises out of `start()`, which must fail its node."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
+    def __init__(self, config: "dict[str, Any]") -> None:
+        pass
 
     def start(self, ctx) -> None:
         raise FileNotFoundError('could not read "lower_third.riv"')
 
 
 @node(execution="manual")
-class InterruptedInSetupProbe:
-    """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
-    raises on its own, this one is still owed its `teardown()`."""
+def InterruptedInSetupProbe(*, frames_to_downstream: OutputPin[EncodedVideo]) -> None:
+    """Takes a `KeyboardInterrupt` inside its body. Unlike a body that raises on its own, this
+    one is still owed its `teardown`."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def setup(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-interrupted")
-        raise KeyboardInterrupt
-
-    def teardown(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
+    HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-interrupted")
+    raise KeyboardInterrupt
 
 
 @node(execution="manual")
-class RaisesInSetupProbe:
-    """A `setup()` that raises on its own, which keeps the no-teardown rule."""
+def RaisesInSetupProbe(*, frames_to_downstream: OutputPin[EncodedVideo]) -> None:
+    """A body that raises on its own, which keeps the no-teardown rule."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def setup(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-raised")
-        raise RuntimeError("this probe refuses to set up")
-
-    def stop(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("stop")
-
-    def teardown(self, ctx) -> None:
-        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
+    HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-raised")
+    raise RuntimeError("this probe refuses to set up")
 
 
 WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
@@ -260,20 +244,32 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 
 
+class HeldUntilClosed:
+    """Holds `held` until the node's scope closes it."""
+
+    def __init__(self, held: Any) -> None:
+        self.held = held
+
+    def close(self) -> None:
+        self.held = None
+
+
 @node(execution="manual")
-class ReleasesAStructureInTeardownProbe:
-    """Builds an acceleration structure in `setup` and lets go of it in
-    `teardown`, so the structure's release is owed while teardown answers."""
+def ReleasesAStructureInTeardownProbe(
+    *,
+    frames_to_downstream: OutputPin[EncodedVideo],
+    ctx: RuntimeContextFullAccess,
+) -> None:
+    """Builds an acceleration structure in a computed value and lets go of it when the node's
+    scope closes, so the structure's release is owed while teardown answers."""
 
-    frames_to_downstream: OutputPin[EncodedVideo]
-
-    def setup(self, ctx) -> None:
-        self._structure = ctx.gpu_full_access.build_triangles_blas(
-            [0.0] * 9, [0, 1, 2], label="released-in-teardown"
+    computed(
+        lambda: HeldUntilClosed(
+            ctx.gpu_full_access.build_triangles_blas(
+                [0.0] * 9, [0, 1, 2], label="released-in-teardown"
+            )
         )
-
-    def teardown(self, ctx) -> None:
-        self._structure = None
+    )
 
 
 @node
@@ -359,18 +355,18 @@ WHAT_THE_FIELDS_PROBE_SAW: "list[tuple[str, float, Any, int]]" = []
 
 
 @node(execution="continuous", interval_ms=5)
-class FieldsProbe:
-    """Records, at `__init__` and at each `process()`, what its fields hold."""
+def FieldsProbe(
+    *,
+    gain: Input[float] = Input(1.0),
+    tint: Input[Color] = Input(Color(0.0, 0.0, 0.0)),
+    width: Input[int] = Input(4),
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Records, at each frame, what its value inputs hold."""
 
-    gain: float = 1.0
-    tint: Color = Color(0.0, 0.0, 0.0)
-    width: Annotated[int, SettingOnly()] = 4
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        WHAT_THE_FIELDS_PROBE_SAW.append(("process", gain.get(), tint.get(), width.get()))
 
-    def __init__(self) -> None:
-        WHAT_THE_FIELDS_PROBE_SAW.append(("init", self.gain, self.tint, self.width))
-
-    def process(self, ctx) -> None:
-        WHAT_THE_FIELDS_PROBE_SAW.append(("process", self.gain, self.tint, self.width))
+    return each_frame
 
 
 class DeclaredByAnOlderTatolabStreamProbe:

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Oscillator, Solid Color and Image File are class nodes of fields and pins, built as their helper builds them.
+"""Oscillator, Solid Color and Image File are each written as one function, its body run with its inputs and pins.
 
 Oscillator's pitch follows its field from the next block on. Solid Color fills its picture
 again only when its colour or size changes. Image File publishes each asset chosen once, on an
@@ -16,8 +16,9 @@ from typing import Any
 import numpy
 import pytest
 from tatolab.stream import Asset, Color
-from tatolab.stream._class_node_construction import class_node_members, construct_class_node
 
+from core_nodes import image_file as image_file_module
+from core_nodes import solid_color as solid_color_module
 from core_nodes.image_file import ImageFile
 from core_nodes.oscillator import Oscillator
 from core_nodes.solid_color import SolidColor
@@ -37,10 +38,33 @@ class RecordingOutputPin:
         self.writes.append((value, timestamp_ns, keywords))
 
 
-def the_pin_declaration_of(node_class: type, port: str) -> "dict[str, Any]":
-    members = class_node_members(node_class)
-    assert members is not None
-    return next(member.pin_declaration for member in members if member.port == port)
+class HeldInput:
+    """A value input holding the value it was last set to, read with `get()` as a node's is."""
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def get(self) -> Any:
+        return self.value
+
+
+def the_pin_declaration_of(node: Any, port: str) -> "dict[str, Any]":
+    return next(member.pin_declaration for member in node.members if member.port == port)
+
+
+def the_body_of(node: Any, values: "dict[str, Any]", pins: "dict[str, Any]") -> "tuple[Any, dict[str, HeldInput]]":
+    """The per-frame function `node`'s body returns, each value input holding its value in
+    `values` or its default, and each of its held inputs by its port."""
+    inputs = {
+        member.port: HeldInput(values.get(member.port, member.default))
+        for member in node.members
+        if member.form == "field"
+    }
+    arguments = {
+        member.attribute: inputs[member.port] if member.form == "field" else pins[member.port]
+        for member in node.members
+    }
+    return node.__wrapped__(**arguments), inputs
 
 
 class OscillatorClock:
@@ -48,16 +72,14 @@ class OscillatorClock:
         self.time = 0
 
 
-def test_an_oscillator_declares_its_pitch_as_a_wired_value_and_its_shape_as_settings():
+def test_an_oscillator_declares_its_pitch_and_its_shape_as_live_value_inputs():
     frequency = the_pin_declaration_of(Oscillator, "frequency")
     assert frequency["flow"] == "value"
     assert frequency["former_names"] == ["frequency_hz"]
     assert frequency["annotations"]["unit"] == "Hz"
-    for setting in ("sample_rate", "channels", "block_size"):
-        member = next(
-            member for member in class_node_members(Oscillator) or () if member.port == setting
-        )
-        assert member.a_setting, setting
+    for value_input in ("sample_rate", "channels", "block_size"):
+        member = next(member for member in Oscillator.members if member.port == value_input)
+        assert member.form == "field" and not member.a_setting, value_input
     assert the_pin_declaration_of(Oscillator, "audio")["pin_type"] == {
         "kind": "is",
         "pin_type": {"type": "audio"},
@@ -66,18 +88,18 @@ def test_an_oscillator_declares_its_pitch_as_a_wired_value_and_its_shape_as_sett
 
 def test_an_oscillators_pitch_changes_from_the_next_block_without_a_click():
     audio = RecordingOutputPin("audio")
-    oscillator: Any = construct_class_node(
+    each_frame, inputs = the_body_of(
         Oscillator,
-        field_values={"frequency": 480.0, "sample_rate": 48_000, "channels": 1, "block_size": 100},
-        pins={"audio": audio},
+        {"frequency": 480.0, "sample_rate": 48_000, "channels": 1, "block_size": 100},
+        {"audio": audio},
     )
     clock = OscillatorClock()
-    oscillator.process(clock)
+    each_frame(clock)
     clock.time = 100 * 1_000_000_000 // 48_000 + 1
-    oscillator.process(clock)
-    oscillator.frequency = 960.0
+    each_frame(clock)
+    inputs["frequency"].value = 960.0
     clock.time = 200 * 1_000_000_000 // 48_000 + 1
-    oscillator.process(clock)
+    each_frame(clock)
 
     assert len(audio.writes) == 2
     first, second = (numpy.asarray(write[0])[0] for write in audio.writes)
@@ -94,21 +116,21 @@ def test_an_oscillators_rate_set_while_it_plays_starts_a_run_at_that_rate():
     """Mental-revert: count the samples owed since the anchor at the new rate, and halving the
     rate after a block owes none until the old count is reached, so the tone falls silent."""
     audio = RecordingOutputPin("audio")
-    oscillator: Any = construct_class_node(
+    each_frame, inputs = the_body_of(
         Oscillator,
-        field_values={"frequency": 480.0, "sample_rate": 48_000, "channels": 1, "block_size": 100},
-        pins={"audio": audio},
+        {"frequency": 480.0, "sample_rate": 48_000, "channels": 1, "block_size": 100},
+        {"audio": audio},
     )
     clock = OscillatorClock()
-    oscillator.process(clock)
+    each_frame(clock)
     clock.time = 1_000 * 1_000_000_000 // 48_000 + 1
-    oscillator.process(clock)
+    each_frame(clock)
     assert len(audio.writes) == 10
 
-    oscillator.sample_rate = 24_000
-    oscillator.process(clock)
+    inputs["sample_rate"].value = 24_000
+    each_frame(clock)
     clock.time += 100 * 1_000_000_000 // 24_000 + 1
-    oscillator.process(clock)
+    each_frame(clock)
 
     assert len(audio.writes) == 11
     assert audio.writes[-1][2]["sample_rate"] == 24_000
@@ -124,23 +146,23 @@ class SolidColorContext:
 def test_a_solid_color_fills_its_picture_again_only_when_its_colour_or_size_changes(monkeypatch):
     filled: "list[tuple[int, int, Color]]" = []
 
-    def filled_frame(self: Any, ctx: Any) -> "tuple[int, int, Color]":
-        frame = (self.width, self.height, self.color)
+    def filled_frame(
+        _ring: Any, _ctx: Any, width: int, height: int, color: Color
+    ) -> "tuple[int, int, Color]":
+        frame = (width, height, color)
         filled.append(frame)
         return frame
 
-    monkeypatch.setattr(SolidColor, "_filled_frame", filled_frame)
-    monkeypatch.setattr("core_nodes.solid_color.NodeOutputTextureRing", lambda *_a, **_k: None)
+    monkeypatch.setattr(solid_color_module, "filled_frame_of", filled_frame)
+    monkeypatch.setattr(solid_color_module, "NodeOutputTextureRing", lambda *_a, **_k: None)
     image = RecordingOutputPin("image")
-    solid_color: Any = construct_class_node(
-        SolidColor, field_values={"width": 4, "height": 2}, pins={"image": image}
-    )
+    each_frame, inputs = the_body_of(SolidColor, {"width": 4, "height": 2}, {"image": image})
     context = SolidColorContext()
 
-    solid_color.process(context)
-    solid_color.process(context)
-    solid_color.color = Color(1.0, 0.0, 0.0)
-    solid_color.process(context)
+    each_frame(context)
+    each_frame(context)
+    inputs["color"].value = Color(1.0, 0.0, 0.0)
+    each_frame(context)
 
     assert filled == [(4, 2, Color(0.0, 0.0, 0.0, 1.0)), (4, 2, Color(1.0, 0.0, 0.0))]
     assert [write[0] for write in image.writes] == [filled[0], filled[0], filled[1]]
@@ -175,16 +197,16 @@ class ImageFileContext:
         return f"/assets/{asset}.png"
 
 
-def an_image_file_publishing_through(monkeypatch, image: RecordingOutputPin) -> Any:
+def an_image_file_publishing_through(
+    monkeypatch, image: RecordingOutputPin
+) -> "tuple[Any, dict[str, HeldInput]]":
     monkeypatch.setattr(
-        ImageFile,
-        "_publish",
-        lambda self, asset, ctx: self.image.write(
-            ctx.asset_content_path(asset.asset, asset.from_project)
-        ),
+        image_file_module,
+        "picture_of_the_image_asset",
+        lambda _ring, asset, ctx: ctx.asset_content_path(asset.asset, asset.from_project),
     )
-    monkeypatch.setattr("core_nodes.image_file.NodeOutputTextureRing", lambda *_a, **_k: None)
-    return construct_class_node(ImageFile, field_values={}, pins={"image": image})
+    monkeypatch.setattr(image_file_module, "NodeOutputTextureRing", lambda *_a, **_k: None)
+    return the_body_of(ImageFile, {}, {"image": image})
 
 
 def test_an_image_file_states_one_format_and_keeps_its_picture_for_a_reader_linked_late():
@@ -200,10 +222,10 @@ def test_an_image_file_states_one_format_and_keeps_its_picture_for_a_reader_link
 
 
 def test_an_image_file_naming_no_asset_reports_itself_not_ready_naming_its_input(monkeypatch):
-    image_file = an_image_file_publishing_through(monkeypatch, RecordingOutputPin("image"))
+    each_frame, _ = an_image_file_publishing_through(monkeypatch, RecordingOutputPin("image"))
     context = ImageFileContext()
 
-    image_file.process(context)
+    each_frame(context)
 
     assert context.not_ready_because is not None
     assert "set its `asset` input" in context.not_ready_because
@@ -214,24 +236,24 @@ def test_an_image_file_tries_an_unreadable_asset_at_each_look_and_publishes_each
     monkeypatch,
 ):
     image = RecordingOutputPin("image")
-    image_file = an_image_file_publishing_through(monkeypatch, image)
+    each_frame, inputs = an_image_file_publishing_through(monkeypatch, image)
     context = ImageFileContext()
-    image_file.asset = Asset(AN_ASSET)
+    inputs["asset"].value = Asset(AN_ASSET)
 
-    image_file.process(context)
-    image_file.process(context)
+    each_frame(context)
+    each_frame(context)
     assert context.not_ready_because == (
         f"ImageFile cannot read its image asset: asset {AN_ASSET} is not readable yet"
     )
     assert len(context.paths_asked_for) == 2, "the publish is tried again at the next look"
 
     context.readable = True
-    image_file.process(context)
-    image_file.process(context)
+    each_frame(context)
+    each_frame(context)
     assert context.not_ready_because is None
     assert [write[0] for write in image.writes] == [f"/assets/{AN_ASSET}.png"]
 
-    image_file.asset = Asset(ANOTHER_ASSET, from_project=AN_ASSET)
-    image_file.process(context)
+    inputs["asset"].value = Asset(ANOTHER_ASSET, from_project=AN_ASSET)
+    each_frame(context)
     assert context.paths_asked_for[-1] == (ANOTHER_ASSET, AN_ASSET)
     assert len(image.writes) == 2

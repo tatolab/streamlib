@@ -425,7 +425,7 @@ class _StreamPinType:
     def __init__(self) -> None:
         raise TypeError(
             f"`{type(self).__name__}` names a pin type and holds no value, so it is never "
-            f"constructed. Write it as a class node's pin, `InputPin[{type(self).__name__}]`."
+            f"constructed. Write it as a pin, `InputPin[{type(self).__name__}]`."
         )
 
 
@@ -478,7 +478,7 @@ class PinTypeSpelling:
 
 
 _SETTING_TYPE_NOT_TAKEN = "a function node takes no setting yet"
-_A_CHOICE_ONLY_A_CLASS_FIELD_DECLARES = "only a class node's field chooses a pin's type"
+_A_CHOICE_ONLY_A_NODE_FUNCTION_INPUT_DECLARES = "only an input of a node written as one function chooses a pin's type"
 
 PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("bool", "boolean"),
@@ -514,7 +514,7 @@ PIN_TYPE_SPELLINGS: Final[tuple[PinTypeSpelling, ...]] = (
     PinTypeSpelling("named_pin_type", "named"),
     PinTypeSpelling("connection_type", "connection"),
     PinTypeSpelling("NodeReference", "node_reference", _SETTING_TYPE_NOT_TAKEN),
-    PinTypeSpelling("PinTypeChoice", "pin_type_choice", _A_CHOICE_ONLY_A_CLASS_FIELD_DECLARES),
+    PinTypeSpelling("PinTypeChoice", "pin_type_choice", _A_CHOICE_ONLY_A_NODE_FUNCTION_INPUT_DECLARES),
 )
 
 _SPELLING_BY_WRITTEN_FORM: Final[dict[str, PinTypeSpelling]] = {

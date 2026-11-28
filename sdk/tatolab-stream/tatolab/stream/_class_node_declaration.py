@@ -1,19 +1,18 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Bare `@node` on a class, or `@node(...)` on a function: each value input, each `InputPin` a stream or trigger, each `OutputPin` an output.
+"""`@node(...)` on a function, a built-in node's typed class, and a pin group's slot: each value
+input, each `InputPin` a stream or trigger, each `OutputPin` an output.
 
-A field is a public annotated attribute with its default, `radius: float = 4.0`, and reads as a
-value: `SettingOnly()` beside its type makes it a setting read at setup, `WireOnly()` one that
+A node function's keyword-only parameters are its ports: each value input `radius: Input[float] =
+Input(4.0)`, each pin `video: InputPin[Texture]`, and the runtime context `ctx:
+RuntimeContextFullAccess`, found by its type, which is no port. A built-in node's class and a
+slot's dataclass are read the same way, one reader for each: a field is a public annotated
+attribute with its default, `radius: float = 4.0`, `WireOnly()` beside its type makes it one that
 takes only a wire, and `InputValueLifetime(...)` states how long its value lasts. A pin is an
 annotation with no value, `video: InputPin[Texture]`, and how a Stream input reads its messages
-is `StreamDelivery` inside it. Every pin and field goes through `read_pin_declaration`, as a
+is `StreamDelivery` inside it. Every pin and field goes through `read_pin_declaration`, as a pure
 function's parameters do, so a mistake is a `NodeDeclarationRefusal` with its finding code.
-State the node keeps is `_private` or a `ClassVar`, and `__init__` takes no parameters.
-
-A function's keyword-only parameters are read the same way, one reader for both: each value input
-`radius: Input[float] = Input(4.0)`, each pin `video: InputPin[Texture]`, and the runtime context
-`ctx: RuntimeContextFullAccess`, found by its type, which is no port.
 """
 
 from __future__ import annotations
@@ -60,8 +59,6 @@ __all__ = [
     "ClassNodeMember",
     "ClassNodePinGroup",
     "read_class_node_ports",
-    "read_class_node_ports_and_members",
-    "read_class_node_ports_members_and_pin_groups",
     "read_node_function_ports_and_members",
 ]
 
@@ -103,45 +100,18 @@ _DIRECTION_OF_EACH_PIN_FORM: Final[dict[type, PinDirection]] = {
 }
 
 
-def read_class_node_ports(
-    node_class: type, *, constructed_in_python: bool = True
-) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
-    """The input and output ports `node_class`'s fields and pins declare, as the engine reads them.
+def read_class_node_ports(node_class: type) -> tuple[list[DeclaredPort], list[DeclaredPort]]:
+    """The input and output ports a built-in node's typed class declares, as the engine reads them.
 
-    Refuses, as a `NodeDeclarationRefusal`, an `__init__` that takes a parameter when the class
-    is `constructed_in_python`, and each field or pin `read_pin_declaration` refuses. A built-in node, which the runtime implements, is never
-    constructed in Python, so its `__init__` is not read, and its fields say what the runtime
-    declares: a setting with no default, which a graph must set, a `PinTypeChoice` setting, a
-    pin typed `Annotated[object, PinTypeFromSetting("...")]`, a setting read each run, and a field
-    `PublishedOnAnOutput()`, which declares an output of its name as well.
+    A built-in node, which the runtime implements, is never constructed in Python, and its fields
+    say what the runtime declares: a setting with no default, which a graph must set, a
+    `PinTypeChoice` setting, a pin typed `Annotated[object, PinTypeFromSetting("...")]`, a setting
+    read each run, and a field `PublishedOnAnOutput()`, which declares an output of its name as
+    well. Each field or pin `read_pin_declaration` refuses is refused as a
+    `NodeDeclarationRefusal`.
     """
-    input_ports, output_ports, _, _ = read_class_node_ports_members_and_pin_groups(
-        node_class, constructed_in_python=constructed_in_python
-    )
+    input_ports, output_ports, _ = _ClassNodeReading(node_class, of_the_runtimes_own_node=True).ports()
     return input_ports, output_ports
-
-
-def read_class_node_ports_and_members(
-    node_class: type, *, constructed_in_python: bool = True
-) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
-    """The ports `read_class_node_ports` reads, and the field or pin that declares each, in
-    declaration order; refused as `read_class_node_ports` refuses."""
-    input_ports, output_ports, members, _ = read_class_node_ports_members_and_pin_groups(
-        node_class, constructed_in_python=constructed_in_python
-    )
-    return input_ports, output_ports, members
-
-
-def read_class_node_ports_members_and_pin_groups(
-    node_class: type, *, constructed_in_python: bool = True
-) -> tuple[
-    list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...], tuple[ClassNodePinGroup, ...]
-]:
-    """What `read_class_node_ports_and_members` reads, and each `PinGroup` the class declares,
-    in declaration order."""
-    reading = _ClassNodeReading(node_class, of_the_runtimes_own_node=not constructed_in_python)
-    input_ports, output_ports, members = reading.ports(constructed_in_python=constructed_in_python)
-    return input_ports, output_ports, members, tuple(reading.pin_groups)
 
 
 def read_node_function_ports_and_members(
@@ -159,7 +129,7 @@ def read_node_function_ports_and_members(
     `NodeDeclarationRefusal`, as a class's fields, pins and groups are, and for a parameter that
     is not keyword-only, not typed, or neither an `Input`, a pin, a group nor the context."""
     reading = _NodeFunctionReading(function)
-    input_ports, output_ports, members = reading.ports(constructed_in_python=True)
+    input_ports, output_ports, members = reading.ports()
     return (
         input_ports,
         output_ports,
@@ -185,11 +155,8 @@ class _ClassNodeReading:
         self.pin_groups: list[ClassNodePinGroup] = []
         """Each `PinGroup` the class declares, in declaration order, once `ports` has read them."""
 
-    def ports(
-        self, *, constructed_in_python: bool
-    ) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
-        if constructed_in_python:
-            self._refuse_an_init_taking_parameters()
+    def ports(self) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
+        self._refuse_what_its_signature_takes()
         input_ports: list[DeclaredPort] = []
         output_ports: list[DeclaredPort] = []
         members: list[ClassNodeMember] = []
@@ -254,31 +221,9 @@ class _ClassNodeReading:
     ) -> NodeDeclarationRefusal:
         return NodeDeclarationRefusal(words, finding_code=finding_code, node=self._node, pin=pin)
 
-    def _refuse_an_init_taking_parameters(self) -> None:
-        if self._node_class.__init__ is object.__init__:
-            return
-        parameters = [
-            name
-            for name in inspect.signature(self._node_class.__init__).parameters
-            if name != "self"
-        ]
-        if not parameters:
-            return
-        if "config" in parameters:
-            raise self._refusal(
-                f"`{self._node}.__init__` takes `config`, and a class under bare `@node` takes "
-                f"each setting as a field of its own, with its default. To fix: write each key "
-                f"of the config class as a field, `radius: Annotated[float, SettingOnly()] = "
-                f"4.0`, and drop `config`.",
-                "class_takes_a_config",
-            )
-        raise self._refusal(
-            f"`{self._node}.__init__` takes {', '.join(f'`{name}`' for name in parameters)}, and "
-            f"the runtime constructs a class node with no arguments. To fix: declare each value "
-            f"the node reads as a field with its default, and keep state the node builds in "
-            f"`_private` attributes.",
-            "init_takes_parameters",
-        )
+    def _refuse_what_its_signature_takes(self) -> None:
+        """Refuse what the node's signature takes that the runtime cannot hand it; a class's
+        signature is never called."""
 
     def _resolved_annotations(self) -> dict[str, Any]:
         type_parameters = {
@@ -369,7 +314,7 @@ class _ClassNodeReading:
         ) -> tuple[list[DeclaredPort], list[DeclaredPort], tuple[ClassNodeMember, ...]]:
             return _ClassNodeReading(
                 slot_class, of_the_runtimes_own_node=self._of_the_runtimes_own_node
-            ).ports(constructed_in_python=False)
+            ).ports()
 
         return read_a_pin_group(
             node=self._node,
@@ -469,8 +414,7 @@ class _ClassNodeReading:
         if only_the_runtimes:
             raise self._refusal(
                 f"`{self._node}`'s field `{attribute_name}` carries `{only_the_runtimes[0]!r}`, "
-                f"which only the runtime's own nodes declare. To fix: drop it; a class node's "
-                f"setting is `SettingOnly()`, read at setup.",
+                f"which only the runtime's own nodes declare. To fix: drop it.",
                 "pin_annotation_not_taken",
                 pin=attribute_name,
             )
@@ -493,8 +437,7 @@ class _ClassNodeReading:
             if refusal.finding_code != "pin_type_unknown":
                 raise
             raise self._refusal(
-                f"{refusal} A class node's public annotated attribute is a field or a pin; state "
-                f"the node keeps is `_{attribute_name}`, or a `ClassVar[...]`.",
+                f"{refusal} A public annotated attribute is a field or a pin.",
                 "attribute_not_a_pin",
                 pin=attribute_name,
             ) from refusal
@@ -630,7 +573,7 @@ class _NodeFunctionReading(_ClassNodeReading):
         self.full_access_context_parameter: Optional[str] = None
         """The parameter the runtime context is handed in, once `ports` has read them."""
 
-    def _refuse_an_init_taking_parameters(self) -> None:
+    def _refuse_what_its_signature_takes(self) -> None:
         for parameter in self._parameters.values():
             if parameter.kind is not inspect.Parameter.KEYWORD_ONLY:
                 raise self._refusal(
@@ -791,8 +734,8 @@ class _NodeFunctionReading(_ClassNodeReading):
                 raise self._refusal(
                     f"`{self._node}`'s pin group `{attribute_name}` holds `{member.attribute}`, "
                     f"which chooses a pin type, and every input of a node function is live. To "
-                    f"fix: declare the node as a class under bare `@node` while a slot value "
-                    f"chooses its pin types.",
+                    f"fix: give the slot's pins a type of their own, or a type parameter of the "
+                    f"node.",
                     "pin_type_choice_on_a_node_function",
                     pin=slot_member,
                 )

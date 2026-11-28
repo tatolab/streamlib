@@ -15,9 +15,9 @@ from tatolab.stream import (
     EncodedVideo,
     GraphInput,
     GraphOutput,
+    Input,
     NodeDeclarationRefusal,
     PinTypeChoice,
-    SettingOnly,
     StreamBuilder,
     node,
 )
@@ -179,36 +179,22 @@ def test_a_graph_inputs_fields_declare_the_settings_and_the_value_the_runtime_de
     ] == {"pin_type": set_by_pin_type, "flow": "value"}
 
 
-class _AnAuthorsSettingWithNoDefault:
-    radius: Annotated[float, SettingOnly()]
+def _an_authors_published_input(
+    *, level: Input[Annotated[float, PublishedOnAnOutput()]] = Input(0.0)
+) -> None: ...
 
 
-class _AnAuthorsSettingReadEachRun:
-    level: Annotated[float, SettingOnly(read="each_run")] = 0.0
+def test_what_only_the_runtimes_own_nodes_declare_is_refused_on_an_authors_node() -> None:
+    with pytest.raises(NodeDeclarationRefusal, match="which only the runtime's own nodes declare"):
+        node(execution="reactive")(_an_authors_published_input)
 
 
-class _AnAuthorsPublishedField:
-    level: Annotated[float, PublishedOnAnOutput()] = 0.0
-
-
-@pytest.mark.parametrize(
-    ("node_class", "words"),
-    [
-        (_AnAuthorsSettingWithNoDefault, "has no default"),
-        (_AnAuthorsSettingReadEachRun, "which only the runtime's own nodes declare"),
-        (_AnAuthorsPublishedField, "which only the runtime's own nodes declare"),
-    ],
-)
-def test_what_only_the_runtimes_own_nodes_declare_is_refused_on_an_authors_class(
-    node_class: type, words: str
+@node(execution="reactive")
+def Tone(
+    *,
+    shape: Input[Literal["sine", "square"]] = Input("sine"),
 ) -> None:
-    with pytest.raises(NodeDeclarationRefusal, match=words):
-        read_class_node_ports(node_class)
-
-
-@node
-class Tone:
-    shape: Annotated[Literal["sine", "square"], SettingOnly()] = "sine"
+    return None
 
 
 def test_a_typed_nodes_menu_refuses_a_name_that_is_none_of_its_options() -> None:

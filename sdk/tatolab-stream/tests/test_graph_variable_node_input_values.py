@@ -11,6 +11,7 @@ import pytest
 
 from tatolab.stream import (
     GetVariable,
+    Input,
     InputPin,
     NodeDeclarationRefusal,
     NodeReference,
@@ -75,17 +76,19 @@ def test_a_variable_nodes_value_pin_is_named_by_a_link() -> None:
 def test_an_authors_class_node_typing_a_pin_object_or_a_field_a_node_reference_is_refused() -> None:
     with pytest.raises(NodeDeclarationRefusal, match="`object`"):
 
-        @node
-        class Passes:
-            value: InputPin[object]
-
-            def process(self) -> None: ...
+        @node(execution="reactive")
+        def Passes(
+            *,
+            value: InputPin[object],
+        ) -> None:
+            return None
 
     with pytest.raises(NodeDeclarationRefusal, match="`NodeReference`"):
 
-        @node
-        class Names:
-            target: NodeReference | None = None
-
-            def process(self) -> None: ...
+        @node(execution="reactive")
+        def Names(
+            *,
+            target: Input[NodeReference | None] = Input(None),
+        ) -> None:
+            return None
 

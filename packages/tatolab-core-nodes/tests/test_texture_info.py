@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from tatolab.stream import Vector2
-from tatolab.stream._class_node_construction import class_node_members, construct_class_node
 from tatolab.stream.stream_facts import ImageStreamFacts, ImageStreamFrameRate, PacketsStreamFacts
 
 from core_nodes.texture_info import TextureInfo
@@ -50,10 +49,12 @@ def a_frame(width: int, height: int, texture_format: str = "rgba8_unorm") -> Any
 
 
 def a_texture_info() -> "tuple[Any, PictureInputPin, dict[str, RecordingOutputPin]]":
+    """Texture Info's per-frame function, its body run with a picture input and recording
+    outputs."""
     picture = PictureInputPin()
     outputs = {name: RecordingOutputPin() for name in OUTPUTS}
-    node: Any = construct_class_node(TextureInfo, field_values={}, pins={"picture": picture, **outputs})
-    return node, picture, outputs
+    each_frame = TextureInfo.__wrapped__(picture=picture, **outputs)
+    return each_frame, picture, outputs
 
 
 A_CONTEXT = SimpleNamespace()
@@ -64,7 +65,7 @@ def the_writes(outputs: "dict[str, RecordingOutputPin]") -> "dict[str, list[Any]
 
 
 def test_texture_info_takes_a_texture_and_gives_typed_values():
-    declared = {member.port: member.pin_declaration for member in class_node_members(TextureInfo) or ()}
+    declared = {member.port: member.pin_declaration for member in TextureInfo.members}
     assert declared["picture"]["pin_type"] == {"kind": "is", "pin_type": {"type": "texture"}}
     assert {name: declared[name]["pin_type"]["pin_type"] for name in OUTPUTS} == {
         "width": {"type": "integer"},
@@ -80,7 +81,7 @@ def test_the_first_picture_writes_its_size_format_and_stated_frame_rate():
     node, picture, outputs = a_texture_info()
     picture.next_frame = a_frame(1280, 720)
     picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(30_000, 1_001))
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     assert the_writes(outputs) == {
         "width": [1280],
         "height": [720],
@@ -94,7 +95,7 @@ def test_a_picture_with_the_same_facts_writes_nothing_again():
     node, picture, outputs = a_texture_info()
     for _ in range(3):
         picture.next_frame = a_frame(640, 480)
-        node.process(A_CONTEXT)
+        node(A_CONTEXT)
     assert the_writes(outputs) == {
         "width": [640],
         "height": [480],
@@ -108,9 +109,9 @@ def test_a_change_of_size_writes_the_size_again_and_nothing_else():
     node, picture, outputs = a_texture_info()
     picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(60))
     picture.next_frame = a_frame(1920, 1080)
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     picture.next_frame = a_frame(1280, 720)
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     assert the_writes(outputs) == {
         "width": [1920, 1280],
         "height": [1080, 720],
@@ -123,9 +124,9 @@ def test_a_change_of_size_writes_the_size_again_and_nothing_else():
 def test_a_change_of_format_writes_only_the_format_again():
     node, picture, outputs = a_texture_info()
     picture.next_frame = a_frame(320, 240)
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     picture.next_frame = a_frame(320, 240, "rgba16_float")
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     assert outputs["pixel_format"].writes == ["rgba8_unorm", "rgba16_float"]
     assert outputs["width"].writes == [320]
 
@@ -135,22 +136,22 @@ def test_no_frame_rate_is_written_while_the_stream_states_none():
     for stream_facts in (None, ImageStreamFacts(), PacketsStreamFacts(rfc6381_codec="avc1.64001f")):
         picture.stream_facts = stream_facts
         picture.next_frame = a_frame(320, 240)
-        node.process(A_CONTEXT)
+        node(A_CONTEXT)
     assert outputs["frame_rate"].writes == []
 
 
 def test_a_frame_rate_stated_later_is_written_when_it_arrives():
     node, picture, outputs = a_texture_info()
     picture.next_frame = a_frame(320, 240)
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     picture.stream_facts = ImageStreamFacts(frame_rate=ImageStreamFrameRate(25))
     picture.next_frame = a_frame(320, 240)
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     assert outputs["frame_rate"].writes == [25.0]
 
 
 def test_a_look_with_no_picture_waiting_writes_nothing():
     node, _, outputs = a_texture_info()
-    node.process(A_CONTEXT)
+    node(A_CONTEXT)
     assert all(writes == [] for writes in the_writes(outputs).values())
 

@@ -39,13 +39,14 @@ def words_refusing_a_function_pin_of(
     written_form = row.python_forms[0]
     typed = f"{pin_named} is typed `{written_form}`, {_with_its_article(row.label)}"
     class_node = (
-        f"declare a class node with "
+        f"declare a node written as one function, `@node(...)`, taking "
         f"`{pin_name}: {'InputPin' if direction == 'input' else 'OutputPin'}[{written_form}]`"
     )
     if "value" not in row.flows:
         return (
             f"{typed}, which a function under bare `@node` does not take: it holds no stored "
-            f"value, so only a class node's pin carries it. To fix: {class_node}."
+            f"value, so only a pin of a node written as one function carries it. To fix: "
+            f"{class_node}."
         )
     if direction == "input":
         return (
@@ -72,18 +73,18 @@ def words_refusing_a_type_parameter_limited_to(
     return (
         f"{pin_named} is typed by a type parameter {limit} `{written_form}`, "
         f"{_with_its_article(row.label)}, which flows only as {flows}, and a function reads the "
-        f"newest message on each input, so it would drop the rest. To fix: declare a class "
-        f"node with `{pin_name}: InputPin[{written_form}]`."
+        f"newest message on each input, so it would drop the rest. To fix: declare a node "
+        f"written as one function, `@node(...)`, taking `{pin_name}: InputPin[{written_form}]`."
     )
 
 
 def words_refusing_an_input_declaration_annotation_on(pin_named: str, entry: object) -> str:
-    """The words refusing `entry`, an annotation saying how a class node's input is served, on
+    """The words refusing `entry`, an annotation saying how a node's input is served, on
     the pin `pin_named` names, which does not take it."""
     if isinstance(entry, StreamDelivery):
-        takes_it = "a class node's Stream input takes, inside `InputPin[Annotated[T, ...]]`"
+        takes_it = "a Stream input takes, inside `InputPin[Annotated[T, ...]]`"
     else:
-        takes_it = "a class node's field takes"
+        takes_it = "a value input of a node written as one function takes"
     return (
         f"{pin_named} carries `{entry!r}`, which only {takes_it}. To fix: drop it, or declare "
         f"the input that way."

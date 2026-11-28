@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 
 from tatolab.stream import (
     Asset,
     AssetMedia,
     ColorInfo,
     FlowsAsValue,
+    Input,
     TextureToWrite,
     NodeOutputTextureRing,
     OutputPin,
@@ -89,7 +90,13 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
     description="Show a picture from the project's assets. Pick a PNG or JPEG you imported in its `asset` input.",
 )
 @node(execution="continuous", interval_ms=IMAGE_FILE_INTERVAL_BETWEEN_LOOKS_MS)
-class ImageFile:
+def ImageFile(
+    *,
+    asset: Input[Annotated[Asset, AssetMedia("image")] | None] = Input(None),
+    image: OutputPin[
+        Annotated[Texture, TexturePixelFormats(IMAGE_FILE_TEXTURE_FORMAT), FlowsAsValue()]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Publishes the project image asset its `asset` names, once for each asset chosen.
 
     Its output flows as a value, so the runtime sends the picture again to a reader linked
@@ -97,48 +104,46 @@ class ImageFile:
     chosen cannot be read, the node reports itself not ready, saying why, and tries the publish
     again at each look until one succeeds.
     """
+    output_texture_ring = NodeOutputTextureRing(
+        IMAGE_FILE_TEXTURE_FORMAT, ["texture_binding"], depth=IMAGE_FILE_OUTPUT_RING_DEPTH
+    )
+    asset_published: "Asset | None" = None
 
-    asset: Annotated[Asset, AssetMedia("image")] | None = None
-    image: OutputPin[
-        Annotated[Texture, TexturePixelFormats(IMAGE_FILE_TEXTURE_FORMAT), FlowsAsValue()]
-    ]
-
-    def __init__(self) -> None:
-        self._output_texture_ring = NodeOutputTextureRing(
-            IMAGE_FILE_TEXTURE_FORMAT, ["texture_binding"], depth=IMAGE_FILE_OUTPUT_RING_DEPTH
-        )
-        self._asset_published: "Asset | None" = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        asset = self.asset
-        if asset is None:
-            self._asset_published = None
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal asset_published
+        chosen = asset.get()
+        if chosen is None:
+            asset_published = None
             ctx.report_not_ready(
                 "ImageFile names no image asset. To fix: set its `asset` input to a PNG or JPEG "
                 "imported into the project"
             )
             return
-        if asset == self._asset_published:
+        if chosen == asset_published:
             return
         try:
-            self._publish(asset, ctx)
+            image.write(picture_of_the_image_asset(output_texture_ring, chosen, ctx))
         except Exception as failure:
             ctx.report_not_ready(f"ImageFile cannot read its image asset: {failure}")
             return
         ctx.report_ready()
-        self._asset_published = asset
+        asset_published = chosen
 
-    def _publish(self, asset: Asset, ctx: RuntimeContextLimitedAccess) -> None:
-        pixels = decoded_rgba_pixels_of_the_image_file(
-            ctx.asset_content_path(asset.asset, asset.from_project)
-        )
-        height, width = pixels.shape[0], pixels.shape[1]
-        slot = self._output_texture_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, width, height
-        )
-        slot.lock(read_only=False)
-        try:
-            slot.as_numpy()[:height, :width] = pixels
-        finally:
-            slot.unlock()
-        self.image.write(TextureToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR))
+    return each_frame
+
+
+def picture_of_the_image_asset(
+    output_texture_ring: NodeOutputTextureRing, asset: Asset, ctx: RuntimeContextLimitedAccess
+) -> TextureToWrite:
+    """The image `asset` holds, decoded into the next texture of `output_texture_ring`."""
+    pixels = decoded_rgba_pixels_of_the_image_file(
+        ctx.asset_content_path(asset.asset, asset.from_project)
+    )
+    height, width = pixels.shape[0], pixels.shape[1]
+    slot = output_texture_ring.next_texture_for_this_frame(ctx.gpu_limited_access, width, height)
+    slot.lock(read_only=False)
+    try:
+        slot.as_numpy()[:height, :width] = pixels
+    finally:
+        slot.unlock()
+    return TextureToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR)

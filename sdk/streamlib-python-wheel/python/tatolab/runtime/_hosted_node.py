@@ -20,10 +20,8 @@ from tatolab.runtime._engine import (
     open_runtime_context_full_access_for_helper_process,
 )
 from tatolab.runtime._node_hosting import (
-    class_node_members_of,
     is_a_node_function,
     class_node_pin_groups_of,
-    construct_class_node_from_its_fields_and_pins,
     construct_node_instance,
     the_members_of_each_slot_built,
 )
@@ -148,8 +146,8 @@ class HostedNode:
         self.full_access_context = full_access_context
         self.limited_access_context = limited_access_context
         self.fields = fields
-        """The fields of a class under bare `@node`, or the value inputs of a node function, which
-        follow their values; `None` for any other node."""
+        """The value inputs of a node function, which follow their values; `None` for any other
+        node."""
         self.a_node_function = a_node_function
         """Whether the node is written as one function, whose value inputs are written to its
         scope."""
@@ -158,7 +156,7 @@ class HostedNode:
         }
 
     def call_hook(self, hook_name: str, context: Any) -> "Optional[Exception]":
-        """Call `hook_name` if the class defined one, logging and answering what
+        """Call `hook_name` if the node defined one, logging and answering what
         it raised.
 
         A hook raising here is not fatal to the helper — the node keeps
@@ -210,10 +208,10 @@ def construct_hosted_node(
     """Build the user's object and the two contexts its hooks receive.
 
     The bridge's escalate round trip is what the GPU surface crosses to the
-    parent on — without it, `ctx.gpu_limited_access` refuses by name. A class
-    under bare `@node` is built from `stored_input_values`, each field holding
+    parent on — without it, `ctx.gpu_limited_access` refuses by name. A node
+    function is built from `stored_input_values`, each value input holding
     its value, each pin bound and each pin group holding the slots
-    `slot_counts` says before its `__init__()` runs.
+    `slot_counts` says before its body runs.
     """
     full_access_context = open_runtime_context_full_access_for_helper_process(
         link_data_access,
@@ -235,56 +233,16 @@ def construct_hosted_node(
             stored_input_values=stored_input_values,
             slot_counts=slot_counts or {},
         )
-    members = class_node_members_of(node_class)
-    if members is None:
-        if not is_a_node_the_wheel_builds_itself(node_class):
-            raise TypeError(
-                f"`{node_class.__module__}:{node_class.__qualname__}` is not a class under bare "
-                f"`@node`, so nothing builds it from its fields and pins. To fix: declare it with "
-                f"bare `@node`, its fields and pins typed, through a `tatolab-stream` that "
-                f"declares them."
-            )
-        return HostedNode(
-            construct_node_instance(node_class, configuration),
-            full_access_context,
-            limited_access_context,
+    if not is_a_node_the_wheel_builds_itself(node_class):
+        raise TypeError(
+            f"`{node_class.__module__}:{node_class.__qualname__}` is not a node written as one "
+            f"function, so nothing runs it. To fix: declare it with `@node(...)` on a `def`, "
+            f"through a `tatolab-stream` that declares one."
         )
-    # Imported only for a class node: it reads the class node surface of a `tatolab-stream`
-    # new enough to declare one.
-    from tatolab.runtime._class_node_fields import ClassNodeFields
-
-    members_of_each_slot = the_members_of_each_slot_built(
-        class_node_pin_groups_of(node_class), slot_counts or {}
-    )
-    fields = ClassNodeFields(
-        (
-            *members,
-            *(
-                member
-                for slots in members_of_each_slot.values()
-                for slot_members in slots
-                for member in slot_members
-            ),
-        ),
-        link_data_access=link_data_access,
-        inputs=link_input_data_reader_of(full_access_context),
-        node_id=node_run_id,
-        stored_input_values=stored_input_values,
-    )
     return HostedNode(
-        construct_class_node_from_its_fields_and_pins(
-            node_class,
-            members,
-            fields,
-            link_data_access=link_data_access,
-            inputs=link_input_data_reader_of(full_access_context),
-            outputs=link_output_data_writer_of(full_access_context),
-            node_id=node_run_id,
-            members_of_each_slot=members_of_each_slot,
-        ),
+        construct_node_instance(node_class, configuration),
         full_access_context,
         limited_access_context,
-        fields,
     )
 
 

@@ -110,7 +110,8 @@ def words_refusing_a_bundle_only_a_pin_carries(
         )
     return (
         f"{pin_named} is typed {held_how}, and a function's body is handed values. To fix: "
-        f"declare a class node with `{pin_name}: InputPin[{class_name}]`, or "
+        f"declare a node written as one function, `@node(...)`, taking `{pin_name}: "
+        f"InputPin[{class_name}]`, or "
         f"`OutputPin[{class_name}]` for an output."
     )
 

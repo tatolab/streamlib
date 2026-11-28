@@ -263,6 +263,22 @@ def test_an_answer_delivered_before_the_channel_closes_is_still_its_callers(
     assert slot.message == answer
 
 
+def receive_answering_how_its_builds_stand(stand_in_parent, timeout_seconds: float = 5.0):
+    """The next frame that is not a log nor the helper telling how its node's computed values
+    build, each of which is answered `ok`; `None` if none arrives inside the deadline."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        frame = stand_in_parent.receive(max(deadline - time.monotonic(), 0.0))
+        if frame is None:
+            return None
+        if frame.get("op") == "set_computed_value_builds":
+            stand_in_parent.send(
+                {"rpc": "escalate_response", "request_id": frame["request_id"], "result": "ok"}
+            )
+        elif frame.get("op") != "log":
+            return frame
+
+
 @pytest.mark.linux_only_capability(reason="MoltenVK has no VK_KHR_ray_tracing_pipeline")
 def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
     stand_in_parent, monkeypatch
@@ -283,7 +299,13 @@ def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "ports": {}})
-    register = stand_in_parent.receive()
+    # The structure is built off the frame thread once the body returns, so the setup may be
+    # answered before the structure's register asks, and how the build stands is told too.
+    register = receive_answering_how_its_builds_stand(stand_in_parent)
+    answered_ready_first = register == {"rpc": "ready"}
+    if answered_ready_first:
+        register = receive_answering_how_its_builds_stand(stand_in_parent)
+    assert register is not None, "the structure's register never arrived"
     assert register["op"] == "register_acceleration_structure_blas"
     stand_in_parent.send(
         {
@@ -293,15 +315,16 @@ def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
             "handle_id": "blas-released-in-teardown",
         }
     )
-    assert stand_in_parent.receive() == {"rpc": "ready"}
+    if not answered_ready_first:
+        assert receive_answering_how_its_builds_stand(stand_in_parent) == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    release = stand_in_parent.receive()
+    release = receive_answering_how_its_builds_stand(stand_in_parent)
     assert release is not None and release.get("op") == "release_handle", (
         f"teardown answered before the structure's release went out: {release}"
     )
     assert release["handle_id"] == "blas-released-in-teardown"
-    assert stand_in_parent.receive(timeout_seconds=0.3) is None, (
+    assert receive_answering_how_its_builds_stand(stand_in_parent, timeout_seconds=0.3) is None, (
         "teardown was answered while its release was still unanswered"
     )
     stand_in_parent.send(
@@ -312,7 +335,7 @@ def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
             "handle_id": "blas-released-in-teardown",
         }
     )
-    assert stand_in_parent.receive() == {"rpc": "done"}
+    assert receive_answering_how_its_builds_stand(stand_in_parent) == {"rpc": "done"}
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
 

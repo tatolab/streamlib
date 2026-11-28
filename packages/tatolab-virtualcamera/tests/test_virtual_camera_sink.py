@@ -13,7 +13,6 @@ import importlib.metadata
 
 import pytest
 from tatolab.stream import ColorInfo, StreamBuilder, run_graph_generator, graph_generator
-from tatolab.stream._class_node_construction import class_node_members
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -89,15 +88,12 @@ def test_a_stream_names_the_sink_by_the_type_the_module_publishes():
     ]
 
 
-def test_its_settings_are_the_camera_name_and_the_door_each_read_at_setup():
+def test_its_value_inputs_are_the_camera_name_and_the_door():
     settings = {
-        member.port: member
-        for member in class_node_members(VirtualCameraSink) or ()
-        if member.form == "field"
+        member.port: member for member in VirtualCameraSink.members if member.form == "field"
     }
 
     assert set(settings) == {"name", "door"}
-    assert all(member.a_setting for member in settings.values())
     assert settings["name"].default is None
     assert settings["name"].pin_declaration["may_be_unset"] is True
     assert settings["door"].default == "auto"

@@ -22,15 +22,23 @@ from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 SECONDS_A_DESCRIBE_HAS_TO_ANSWER = 60.0
 
 NODES_EVERY_RUNNABLE_TATOLAB_STREAM_DECLARES = '''
-from tatolab.stream import InputPin, OutputPin, Texture, node
+from typing import Callable
+
+from tatolab.stream import InputPin, OutputPin, RuntimeContextLimitedAccess, Texture, node
 
 
-@node
-class PictureRelay:
-    picture_from_upstream: InputPin[Texture]
-    picture_to_downstream: OutputPin[Texture]
+@node(execution="reactive")
+def PictureRelay(
+    *,
+    picture_from_upstream: InputPin[Texture],
+    picture_to_downstream: OutputPin[Texture],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        picture = picture_from_upstream.read()
+        if picture is not None:
+            picture_to_downstream.write(picture)
 
-    def process(self, ctx) -> None: ...
+    return each_frame
 
 
 @node
@@ -40,7 +48,7 @@ def remap(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:
 '''
 
 
-def test_the_lent_bootstrap_describes_a_class_node_and_a_function_node(tmp_path: Path):
+def test_the_lent_bootstrap_describes_a_node_function_and_a_pure_function(tmp_path: Path):
     lend_directory = runtime_unit_lend_directory()
     (tmp_path / "nodes_of_the_project.py").write_text(
         textwrap.dedent(NODES_EVERY_RUNNABLE_TATOLAB_STREAM_DECLARES)

@@ -60,8 +60,9 @@ from tatolab.stream import (
 
 
 @node.meta(category="Audio/Relays", description="Relays each audio window as a frame.")
-@node(scheduling="high")
-class WindowedRelay:
+@node(execution="reactive", scheduling="high")
+def WindowedRelay(
+    *,
     audio_from_upstream: InputPin[
         Annotated[
             Audio,
@@ -71,32 +72,26 @@ class WindowedRelay:
             ),
             Description("windows from upstream"),
         ]
-    ]
-
-    frames_to_downstream: OutputPin[Annotated[EncodedVideo, Description("frames to downstream")]]
-
-    def process(self, ctx) -> None: ...
+    ],
+    frames_to_downstream: OutputPin[Annotated[EncodedVideo, Description("frames to downstream")]],
+) -> None: ...
 
 
 @node.meta(description="ticks on its own")
 @node(execution="continuous", interval_ms=20)
-class Ticker:
-    ticks_to_downstream: OutputPin[EncodedVideo]
-
-    def process(self, ctx) -> None: ...
+def Ticker(*, ticks_to_downstream: OutputPin[EncodedVideo]) -> None: ...
 
 
 @node.meta(description="captures on its own")
 @node(execution="manual", paced_by_real_time=True)
-class LiveCapture:
-    frames_to_downstream: OutputPin[EncodedVideo]
+def LiveCapture(*, frames_to_downstream: OutputPin[EncodedVideo]) -> None: ...
 
 
 class Unstamped:
     def process(self, ctx) -> None: ...
 
 
-def not_a_class() -> None: ...
+def not_a_node() -> None: ...
 '''
 
 
@@ -364,10 +359,9 @@ def test_a_module_that_logs_at_import_is_described_with_its_records_on_stderr(
 
 
         @node(execution="reactive")
-        class LoggingAtImport:
-            frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-            def process(self, ctx) -> None: ...
+        def LoggingAtImport(
+            *, frames_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
+        ) -> None: ...
         """,
     )
 
@@ -383,31 +377,32 @@ def test_a_module_that_logs_at_import_is_described_with_its_records_on_stderr(
     assert "INFO module imported phase='import'" in described.stderr
 
 
-def test_an_unstamped_class_is_refused_naming_it(project_directory: Path):
+def test_a_class_is_refused_naming_the_node_written_as_one_function(project_directory: Path):
     described = describe(project_directory, "described_nodes:Unstamped")
 
     assert described.returncode == 1
     assert refused_import_paths_in(described_document(described)) == ["described_nodes:Unstamped"]
     assert (
-        "cannot describe described_nodes:Unstamped: the class `Unstamped` carries no "
-        "`@node` declaration"
+        "cannot describe described_nodes:Unstamped: it names the class `Unstamped`, and a node "
+        "is written as one function under `@node(...)`: `@node(execution=\"reactive\")` on a "
+        "`def` whose keyword-only parameters are its typed pins and inputs"
     ) in described.stderr
 
 
 def test_a_missing_attribute_and_a_function_are_refused(project_directory: Path):
     described = describe(
-        project_directory, "described_nodes:NoSuchNode", "described_nodes:not_a_class"
+        project_directory, "described_nodes:NoSuchNode", "described_nodes:not_a_node"
     )
 
     assert described.returncode == 1
     assert refused_import_paths_in(described_document(described)) == [
         "described_nodes:NoSuchNode",
-        "described_nodes:not_a_class",
+        "described_nodes:not_a_node",
     ]
     assert "cannot describe described_nodes:NoSuchNode: " in described.stderr
     assert "has no attribute 'NoSuchNode'" in described.stderr
     assert (
-        "cannot describe described_nodes:not_a_class: it names a function, not a class"
+        "cannot describe described_nodes:not_a_node: it names a function no `@node` declares"
         in described.stderr
     )
 
@@ -459,11 +454,8 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
 
 
         @node(execution="manual")
-        class Noisy:
-            noise_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None:
-                print("never called")
+        def Noisy(*, noise_to_downstream: OutputPin[EncodedVideo]) -> None:
+            print("never called")
         """,
     )
 
@@ -504,10 +496,7 @@ def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_runnin
 
 
         @node(execution="manual")
-        class Lingering:
-            nothing_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None: ...
+        def Lingering(*, nothing_to_downstream: OutputPin[EncodedVideo]) -> None: ...
         """,
     )
     started = time.monotonic()
@@ -628,7 +617,7 @@ def test_several_paths_in_one_call_are_described_and_refused_in_order(project_di
     ]
 
 
-def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_described(
+def test_a_class_stamped_by_hand_is_refused_and_the_rest_described(
     project_directory: Path,
 ):
     write_project_module(
@@ -653,8 +642,8 @@ def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_des
         for described_node_type in document["described_node_types"]
     ] == ["described_nodes:Ticker"]
     assert (
-        "cannot describe hand_stamped_nodes:HandStamped: the class `HandStamped` carries no "
-        "`__tatolab_node_kind__`"
+        "cannot describe hand_stamped_nodes:HandStamped: it names the class `HandStamped`, and "
+        "a node is written as one function under `@node(...)`"
     ) in described.stderr
 
 
@@ -814,10 +803,7 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
             )
         )
         @node(execution="manual")
-        class ShadowProbe:
-            nothing_to_downstream: OutputPin[EncodedVideo]
-
-            def process(self, ctx) -> None: ...
+        def ShadowProbe(*, nothing_to_downstream: OutputPin[EncodedVideo]) -> None: ...
         """,
     )
 

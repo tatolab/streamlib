@@ -64,18 +64,14 @@ def BrightnessReader(
 class FrameFilters:
     """A namespace, so a node's qualname differs from its short name."""
 
-    @node
-    class FrameDarkener:
+    @node(execution="reactive")
+    def FrameDarkener(
+        *,
+        video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+        video_to_downstream: OutputPin[EncodedVideo],
+    ) -> None:
         """Darkens each frame it reads."""
-
-        video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-        video_to_downstream: OutputPin[EncodedVideo]
-
-        def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-            frame = self.video_from_upstream.read()
-            if frame is not None:
-                self.video_to_downstream.write(frame.payload, starts_group=frame.starts_group)
+        return None
 
 
 @node(execution="reactive")

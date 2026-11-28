@@ -97,9 +97,9 @@ def the_one_type_a_class_type_parameter_binds(
         raise refusal(
             f"{pin_named} is typed `{name}`"
             + (" | None" if optional else "")
-            + f", and a class node's pin typed by a type parameter carries the one pin type "
-            f"the parameter is bound to. To fix: bind it to one type, `class "
-            f"{node}[{name}: Texture]`, and type the pin `{name}`.",
+            + f", and a node function's pin typed by a type parameter carries the one pin type "
+            f"the parameter is bound to. To fix: bind it to one type, `def "
+            f"{node}[{name}: Texture](...)`, and type the pin `{name}`.",
             "pin_type_not_read_yet",
         )
     for entry in metadata:

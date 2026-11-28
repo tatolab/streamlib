@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import json
 import traceback
 from typing import Any
@@ -39,6 +41,16 @@ from tatolab.runtime._helper_process_environment_variables import ENTRYPOINT_ENV
 from tatolab.runtime._node_hosting import is_a_node_function
 from tatolab.runtime._parent_process_bridge import HelperProcessProtocolError
 
+import tatolab.stream._retired_declarations as _retired_declarations_of_the_installed_sdk
+
+# A `tatolab-stream` older than the one-function form's own words says it this shortly.
+_A_NODE_WRITTEN_AS_ONE_FUNCTION: str = getattr(
+    _retired_declarations_of_the_installed_sdk,
+    "A_NODE_WRITTEN_AS_ONE_FUNCTION",
+    "`@node(execution=\"reactive\")` on a `def` whose keyword-only parameters are its typed "
+    "pins and inputs, its body returning `each_frame`",
+)
+
 
 def load_node_class(import_path: str) -> type:
     """Import the class `import_path` names, as `module:qualname`, led by an import's folder
@@ -72,8 +84,7 @@ def load_node_class(import_path: str) -> type:
 
 
 
-#: Each key of a described class node type the class's own `@node` stamp fills, in wire order,
-#: and of a node function, which `@node(...)` stamps as it stamps a class.
+#: Each key of a described node function type its `@node(...)` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("kind", NODE_DECLARATION_KIND_STAMP),
@@ -172,17 +183,20 @@ def _describe_the_node_class_its_imported_module_defines(
         described_keys_and_their_stamps = DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
         the_decorator_that_stamps_them = "@node"
         what_it_names = "function"
-    elif isinstance(resolved, type):
-        described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
-        the_decorator_that_stamps_them = "@node"
-        what_it_names = "class"
     elif is_a_node_function(resolved):
         described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
         the_decorator_that_stamps_them = "@node(...)"
         what_it_names = "function"
+    elif isinstance(resolved, type):
+        raise NodeClassNotDescribable(
+            f"it names the class `{resolved.__qualname__}`, and a node is written as one "
+            f"function under `@node(...)`: {_A_NODE_WRITTEN_AS_ONE_FUNCTION}"
+        )
+    elif inspect.isfunction(resolved):
+        raise NodeClassNotDescribable("it names a function no `@node` declares")
     else:
         raise NodeClassNotDescribable(
-            f"it names a {type(resolved).__name__}, not a class or a function under `@node`"
+            f"it names a {type(resolved).__name__}, not a function under `@node`"
         )
     if getattr(resolved, NODE_DECLARATION_DECLARED_STAMP, False) is not True:
         raise NodeClassNotDescribable(

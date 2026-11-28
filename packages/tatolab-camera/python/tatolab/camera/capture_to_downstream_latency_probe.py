@@ -11,11 +11,12 @@ captured.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     Description,
     Texture,
+    Input,
     InputPin,
     NumberRange,
     RuntimeContextLimitedAccess,
@@ -28,55 +29,57 @@ from tatolab.stream.clock import monotonic_now_ns
 from ._duration_samples import DurationSamplesInOneReportingWindow
 
 @node.meta(description="Logs the frame rate and capture-to-read latency of the frames it receives")
-@node
-class CaptureToDownstreamLatencyProbe:
-    """Video frames in; a report every `frames_between_reports` frames.
-
-    Its label and its count follow their values from the next frame on.
-    """
-
-    camera_label: Annotated[str, Description("Names the camera under test in every report.")] = (
-        "camera"
-    )
-    frames_between_reports: Annotated[
-        int, NumberRange(minimum=1), Description("How many frames one report summarises.")
-    ] = 600
+@node(execution="reactive")
+def CaptureToDownstreamLatencyProbe(
+    *,
+    camera_label: Input[
+        Annotated[str, Description("Names the camera under test in every report.")]
+    ] = Input("camera"),
+    frames_between_reports: Input[
+        Annotated[int, NumberRange(minimum=1), Description("How many frames one report summarises.")]
+    ] = Input(600),
     video_from_upstream: InputPin[
         Annotated[
             Texture, StreamDelivery("ordered"), Description("Frames from the camera under test")
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Video frames in; a report every `frames_between_reports` frames.
 
-    def __init__(self) -> None:
-        self._capture_to_read = DurationSamplesInOneReportingWindow()
-        self._capture_interval = DurationSamplesInOneReportingWindow()
-        self._frames_read = 0
-        self._window_first_read_ns: "int | None" = None
-        self._previous_capture_ns: "int | None" = None
+    Its label and its count follow their values from the next frame on.
+    """
+    capture_to_read = DurationSamplesInOneReportingWindow()
+    capture_interval = DurationSamplesInOneReportingWindow()
+    frames_read = 0
+    window_first_read_ns: "int | None" = None
+    previous_capture_ns: "int | None" = None
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        del ctx
-        while (frame := self.video_from_upstream.read()) is not None:
-            read_ns = monotonic_now_ns()
-            self._capture_to_read.add(read_ns - frame.timestamp_ns)
-            if self._previous_capture_ns is not None:
-                self._capture_interval.add(frame.timestamp_ns - self._previous_capture_ns)
-            self._previous_capture_ns = frame.timestamp_ns
-            if self._window_first_read_ns is None:
-                self._window_first_read_ns = read_ns
-            self._frames_read += 1
-            if self._frames_read % self.frames_between_reports == 0:
-                self._report(frame, read_ns)
-
-    def _report(self, frame: Texture, read_ns: int) -> None:
-        window_first_read_ns = self._window_first_read_ns or read_ns
-        window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
-        frames_per_second = (self.frames_between_reports - 1) / window_seconds
+    def report(frame: Texture, read_ns: int, frames_in_a_report: int) -> None:
+        window_seconds = max(read_ns - (window_first_read_ns or read_ns), 1) / 1_000_000_000
+        frames_per_second = (frames_in_a_report - 1) / window_seconds
         log.info(
-            f"CaptureToDownstreamLatencyProbe[{self.camera_label}]: "
-            f"{frame.width}x{frame.height} frames_read={self._frames_read} "
+            f"CaptureToDownstreamLatencyProbe[{camera_label.get()}]: "
+            f"{frame.width}x{frame.height} frames_read={frames_read} "
             f"fps={frames_per_second:.2f} "
-            f"capture_to_read_ms {self._capture_to_read.summary_in_milliseconds()} | "
-            f"capture_interval_ms {self._capture_interval.summary_in_milliseconds()}"
+            f"capture_to_read_ms {capture_to_read.summary_in_milliseconds()} | "
+            f"capture_interval_ms {capture_interval.summary_in_milliseconds()}"
         )
-        self._window_first_read_ns = None
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal frames_read, window_first_read_ns, previous_capture_ns
+        del ctx
+        while (frame := video_from_upstream.read()) is not None:
+            read_ns = monotonic_now_ns()
+            capture_to_read.add(read_ns - frame.timestamp_ns)
+            if previous_capture_ns is not None:
+                capture_interval.add(frame.timestamp_ns - previous_capture_ns)
+            previous_capture_ns = frame.timestamp_ns
+            if window_first_read_ns is None:
+                window_first_read_ns = read_ns
+            frames_read += 1
+            frames_in_a_report = frames_between_reports.get()
+            if frames_read % frames_in_a_report == 0:
+                report(frame, read_ns, frames_in_a_report)
+                window_first_read_ns = None
+
+    return each_frame
