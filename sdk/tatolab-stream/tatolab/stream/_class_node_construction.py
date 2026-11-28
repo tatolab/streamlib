@@ -155,7 +155,7 @@ def assign_live_field_values(node_instance: object, field_values: Mapping[str, o
             slots_given.setdefault((pin_group.attribute, slot), {})[member.attribute] = value
     # Every group's slots are built before anything is assigned, so a slot that refuses its
     # values leaves the node as it was.
-    groups_given: dict[str, list[object]] = {}
+    groups_given: dict[str, list[Any]] = {}
     for (attribute, slot), values in slots_given.items():
         slots = groups_given.setdefault(attribute, list(getattr(node_instance, attribute)))
         slots[slot] = dataclasses.replace(slots[slot], **values)
