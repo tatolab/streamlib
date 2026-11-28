@@ -12,7 +12,7 @@ use serde_json::Value;
 use streamlib_node_schema::NodeValueLifetime;
 use streamlib_node_schema::pin_type::{
     BuiltInPinTypeName, DeclaredPinType, NamedPinTypeImportPath, NodeInputMode, PinAnnotationName,
-    PinAnnotations, PinFlow, PinType, SettingReadTime,
+    PinAnnotations, PinFlow, PinType,
 };
 
 use super::{
@@ -407,15 +407,15 @@ pub struct NodeTypeInputDescribed {
     /// node type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<NodeTypeInputMode>,
-    /// Whether a link may end at it: `false` on a setting read each run, a setting of a type no
-    /// message carries, every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or
+    /// Whether a link may end at it: `false` on an input handed to its node of a type no
+    /// message carries, every such input of a `GraphInput`, `GraphOutput`, `SetVariable` or
     /// `GetVariable`, and each legacy field of a node type not yet typed, which is no port.
     #[serde(default = "an_input_takes_a_wire_unless_it_says_not")]
     pub takes_a_wire: bool,
-    /// When the node reads a setting: once at setup, a change rebuilding the node, or each run.
-    /// Absent on an input that takes a wire.
+    /// When its node reads an input the engine hands it: always each run, as every input is
+    /// live. Absent on an input that takes a wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<SettingReadTime>,
+    pub read: Option<NodeTypeInputReadTime>,
     /// The value it reads while nothing feeds it and no value is set, null for an input that
     /// reads nothing by default; absent when it declares none.
     #[serde(
@@ -448,19 +448,39 @@ pub enum NodeTypeInputMode {
     WireOrValue,
     /// A link only, read each run.
     WireOnly,
-    /// A setting: a stored value, read when its `read` says; one read at setup also takes a
-    /// link from an output that flows as a value, each change of either rebuilding its node.
-    SettingOnly,
+    /// A value the engine hands its node each run: a stored value, or what a Value wire into
+    /// it carries.
+    #[serde(rename = "setting_only")]
+    HandedToItsNode,
+}
+
+/// When a node reads an input the engine hands it, under the name contract 4 publishes, which
+/// contract 5 drops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "json-schema", schemars(rename = "SettingReadTime"))]
+#[serde(rename_all = "snake_case")]
+pub enum NodeTypeInputReadTime {
+    /// Once, at setup: no runtime answers it since every input is live.
+    AtSetup,
+    /// Each run.
+    EachRun,
 }
 
 impl NodeTypeInputMode {
-    /// The mode `mode` names, and when a setting of it is read.
-    pub fn of(mode: NodeInputMode) -> (Self, Option<SettingReadTime>) {
+    /// The mode `mode` names.
+    pub fn of(mode: NodeInputMode) -> Self {
         match mode {
-            NodeInputMode::WireOrValue => (Self::WireOrValue, None),
-            NodeInputMode::WireOnly => (Self::WireOnly, None),
-            NodeInputMode::SettingOnly { read } => (Self::SettingOnly, Some(read)),
+            NodeInputMode::WireOrValue => Self::WireOrValue,
+            NodeInputMode::WireOnly => Self::WireOnly,
+            NodeInputMode::HandedToItsNode => Self::HandedToItsNode,
         }
+    }
+
+    /// When an input of this mode is read, as contract 4 names it: each run for an input the
+    /// engine hands its node, and nothing for any other.
+    pub fn read_time(self) -> Option<NodeTypeInputReadTime> {
+        matches!(self, Self::HandedToItsNode).then_some(NodeTypeInputReadTime::EachRun)
     }
 }
 

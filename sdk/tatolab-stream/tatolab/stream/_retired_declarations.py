@@ -113,6 +113,13 @@ RETIRED_IMPORTS: Final = (
     RetiredImport(name="Output", replaced_by=f"`OutputPin[...]`, a parameter of {A_NODE_WRITTEN_AS_ONE_FUNCTION}"),
     RetiredImport(name="PortFamily", replaced_by=_A_PIN_TYPED_BY_WHAT_IT_CARRIES),
     RetiredImport(name="Image", replaced_by="`Texture`, the pin type of a picture"),
+    RetiredImport(
+        name="SettingOnly",
+        replaced_by=(
+            "`Input[...]`, a value input every node reads live; a value built from it once is "
+            "a `computed(lambda: ...)` that builds again when it changes"
+        ),
+    ),
     RetiredImport(name="Array", replaced_by="`Tensor`, the pin type of an array of numbers"),
     RetiredImport(
         name="Channels",

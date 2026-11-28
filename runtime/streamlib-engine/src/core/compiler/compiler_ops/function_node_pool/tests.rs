@@ -19,7 +19,7 @@ use crate::core::compiler::compiler_ops::shader_node_island::{
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
 use crate::core::descriptors::{PinDeclaration, PinType};
 use crate::core::nodes::HowANodeOfADescribedTypeRuns;
-use crate::core::test_support::{MockInputOnlyNode, make_in1_a_setting_read_at_setup};
+use crate::core::test_support::{MockInputOnlyNode, make_in1_an_input_handed_to_its_node};
 
 pub(crate) fn a_graph_resolving_the_pool_and_three_function_node_types() -> Graph {
     let graph = a_graph_resolving_three_function_node_types();
@@ -719,7 +719,7 @@ fn an_island_into_a_setting_read_at_setup_is_carried_through_the_pool_written_at
     let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
     let reading_a_setting = a_helper_reader_before_its_setup(&mut graph);
-    make_in1_a_setting_read_at_setup(&mut graph, reading_a_setting.as_str());
+    make_in1_an_input_handed_to_its_node(&mut graph, reading_a_setting.as_str());
     let reading_each_run = a_helper_reader_before_its_setup(&mut graph);
     let into_the_setting = link(&mut graph, (&lfo, "result"), (&reading_a_setting, "in1"));
     let into_a_read = link(&mut graph, (&lfo, "result"), (&reading_each_run, "in1"));

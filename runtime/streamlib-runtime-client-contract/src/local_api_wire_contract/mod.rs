@@ -64,7 +64,7 @@ pub use node_type_wire_types::{
     DescribeNodeTypesToolResult, GraphGeneratorListed, ListNodeTypesToolResult,
     ListPinTypesToolResult, NamedPinTypeListed, NamedPinTypeReadFromSource, NodeTypeCategoryFrom,
     NodeTypeDescribedFrom, NodeTypeDescribedOrWhyNot, NodeTypeDescription, NodeTypeInputDescribed,
-    NodeTypeInputMode, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed,
+    NodeTypeInputMode, NodeTypeInputReadTime, NodeTypeKind, NodeTypeListed, NodeTypeNotDescribed,
     NodeTypePinGroupDescribed, NodeTypePinGroupSlots, NodeTypePortDescribed, NodeTypePortPin,
     NodeTypeSourceListed, NodeTypeSourceListedOrigin, PinTypeConversionListed, PinTypeListed,
     SetNodeTypeGroupToolResult,

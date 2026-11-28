@@ -411,7 +411,9 @@ pub fn pin_link_verdict(
         };
     }
     if let Some(output_flow @ (PinFlow::Stream | PinFlow::Trigger)) = output.flow
-        && input.input_mode.is_some_and(NodeInputMode::is_a_setting)
+        && input
+            .input_mode
+            .is_some_and(NodeInputMode::is_handed_to_its_node)
     {
         return PinLinkVerdict {
             outcome: PinLinkOutcome::Refused(Box::new(PinLinkRefusal::StreamIntoASetting {

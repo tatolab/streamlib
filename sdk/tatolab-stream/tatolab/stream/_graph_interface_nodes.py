@@ -12,7 +12,7 @@ from ._built_in_node import BuiltInNode
 from ._class_node_pins import InputPin
 from ._description import Description
 from ._formerly_named import FormerlyNamed
-from ._input_declaration_annotations import PublishedOnAnOutput, SettingOnly
+from ._input_declaration_annotations import PublishedOnAnOutput, HandedToItsNode
 from ._pin_type_choice import PinTypeChoice, PinTypeFromSetting
 
 __all__ = [
@@ -28,7 +28,7 @@ class GraphOutput(BuiltInNode):
 
     type: ClassVar[str] = "tatolab.stream:GraphOutput"
 
-    port: Annotated[str, SettingOnly(), Description("The Output's name, cast as every exposed name is")]
+    port: Annotated[str, HandedToItsNode(), Description("The Output's name, cast as every exposed name is")]
     pin_type: Annotated[
         PinTypeChoice | None,
         Description("The type of what leaves the Output; unset, the type of the port linked into it"),
@@ -53,34 +53,34 @@ class GraphInput(BuiltInNode):
 
     type: ClassVar[str] = "tatolab.stream:GraphInput"
 
-    port: Annotated[str, SettingOnly(), Description("The Input's name, cast as every exposed name is")]
+    port: Annotated[str, HandedToItsNode(), Description("The Input's name, cast as every exposed name is")]
     pin_type: Annotated[
         PinTypeChoice | None,
         Description("The type of what enters the Input; unset, the type of the first port linked to it"),
     ] = None
     range: Annotated[
         list[float] | None,
-        SettingOnly(read="each_run"),
+        HandedToItsNode(),
         Description("`[lowest, highest]`, the span a control moves the Input's number in"),
     ] = None
     step: Annotated[
         float | None,
-        SettingOnly(read="each_run"),
+        HandedToItsNode(),
         Description("The step a control moves the Input's number by"),
     ] = None
     unit: Annotated[
         str | None,
-        SettingOnly(read="each_run"),
+        HandedToItsNode(),
         Description("The unit the Input's number is in, such as `Hz`"),
     ] = None
     meaning: Annotated[
         str | None,
-        SettingOnly(read="each_run"),
+        HandedToItsNode(),
         Description("What the Input's value stands for, such as `frequency`"),
     ] = None
     control: Annotated[
         str | None,
-        SettingOnly(read="each_run"),
+        HandedToItsNode(),
         Description(
             "The control that sets the Input's value, such as `dial`: one of the Studio's, or "
             "a module's qualified name"
@@ -88,7 +88,7 @@ class GraphInput(BuiltInNode):
     ] = None
     lifetime: Annotated[
         Literal["kept", "reset"],
-        SettingOnly(),
+        HandedToItsNode(),
         Description(
             "How long a value a client sets lasts: kept through Stop and a restart, or reset "
             "at Stop"
@@ -98,7 +98,7 @@ class GraphInput(BuiltInNode):
         object | None,
         PinTypeFromSetting("pin_type"),
         FormerlyNamed("default"),
-        SettingOnly(read="each_run"),
+        HandedToItsNode(),
         PublishedOnAnOutput(),
         Description(
             "What the Input's readers see until a client sets it, of the type `pin_type` "

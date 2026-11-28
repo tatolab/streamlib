@@ -118,7 +118,7 @@ fn each_config_field_is_an_input_taking_no_wire_with_its_default_and_an_exact_ty
             "name": "gain", "description": "How loud.", "required": false,
             "delivery_profile": null,
             "pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value",
-            "input_mode": {"mode": "setting_only", "read": "at_setup"},
+            "input_mode": {"mode": "setting_only"},
             "default_value": 0.5,
         })
     );

@@ -345,7 +345,7 @@ export const CONTROL_CONTRACT_SCHEMAS = frozenThroughout(
     BundlePinValue: {"type":"object","additionalProperties":true},
     NodeReferenceInConfig: {"type":"object","additionalProperties":false,"properties":{"node":{"type":"string"}},"required":["node"]},
     PinDeclaration: {"type":"object","additionalProperties":false,"properties":{"pin_type":{"$ref":"#/components/schemas/DeclaredPinType"},"flow":{"$ref":"#/components/schemas/PinFlow"},"annotations":{"$ref":"#/components/schemas/PinAnnotations"},"former_names":{"type":"array","items":{"type":"string"}},"may_be_unset":{"type":"boolean"}},"required":["pin_type","flow"]},
-    NodeInputMode: {"oneOf":[{"type":"object","properties":{"mode":{"type":"string","const":"wire_or_value"}},"required":["mode"],"additionalProperties":false},{"type":"object","properties":{"mode":{"type":"string","const":"wire_only"}},"required":["mode"],"additionalProperties":false},{"type":"object","additionalProperties":false,"properties":{"read":{"$ref":"#/components/schemas/SettingReadTime"},"mode":{"type":"string","const":"setting_only"}},"required":["mode"]}]},
+    NodeInputMode: {"oneOf":[{"type":"object","properties":{"mode":{"type":"string","const":"wire_or_value"}},"required":["mode"]},{"type":"object","properties":{"mode":{"type":"string","const":"wire_only"}},"required":["mode"]},{"type":"object","properties":{"mode":{"type":"string","const":"setting_only"}},"required":["mode"]}]},
   },
   operations: {
     discover: { params: {"$ref":"#/components/schemas/DiscoverRequest"}, result: {"$ref":"#/components/schemas/DiscoverResult"} },

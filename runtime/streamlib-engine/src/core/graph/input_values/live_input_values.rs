@@ -276,7 +276,7 @@ pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeVa
 /// input does not state that it takes a wire or a value, only an input whose type travels as a
 /// control message; on a port that names no pin type, any input of a function node.
 pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &PortInfo) -> bool {
-    if port.is_a_setting() {
+    if port.is_handed_to_its_node() {
         return true;
     }
     match &port.pin {
@@ -498,7 +498,7 @@ fn the_value_a_wire_into_the_setting_carried(
     node: &GraphNode,
     port: &PortInfo,
 ) -> Option<Value> {
-    if !port.is_a_setting()
+    if !port.is_handed_to_its_node()
         || !WhatTheLinksIntoAnInputFeed::of(graph, &node.id, &port.name).the_whole_input()
     {
         return None;

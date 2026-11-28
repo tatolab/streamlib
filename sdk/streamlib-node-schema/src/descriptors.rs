@@ -111,9 +111,10 @@ impl PortDescriptor {
         self.pin_declaration.clone()
     }
 
-    /// Whether this input is a setting, read at setup or each run.
-    pub fn is_a_setting(&self) -> bool {
-        self.input_mode.is_some_and(NodeInputMode::is_a_setting)
+    /// Whether the engine hands this input's value to its node, rather than delivering it.
+    pub fn is_handed_to_its_node(&self) -> bool {
+        self.input_mode
+            .is_some_and(NodeInputMode::is_handed_to_its_node)
     }
 
     /// Whether the port's pin flows as a Value: an output port so declared keeps its last
@@ -355,7 +356,7 @@ impl NodeDescriptor {
             let Some(setting) = self
                 .inputs
                 .iter()
-                .find(|input| input.name == *config_key && input.is_a_setting())
+                .find(|input| input.name == *config_key && input.is_handed_to_its_node())
             else {
                 return Some(format!(
                     "output {:?} runs at the frame rate its node's setting {config_key:?} holds, \

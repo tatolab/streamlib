@@ -15,7 +15,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     wire_a_link_from_a_function_node_island_into_its_reader,
 };
 use crate::core::graph::{FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode};
-use crate::core::test_support::make_in1_a_setting_read_at_setup;
+use crate::core::test_support::make_in1_an_input_handed_to_its_node;
 
 const NOTHING_REMOVED: WhatTheCompileCarryingAPromotionRemoves<'static> =
     WhatTheCompileCarryingAPromotionRemoves {
@@ -598,7 +598,7 @@ fn a_stateful_node_is_evaluated_at_setup_only_when_it_feeds_a_setting() {
         let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
         let reader = a_helper_reader_before_its_setup(&mut graph);
         if feeds_a_setting {
-            make_in1_a_setting_read_at_setup(&mut graph, reader.as_str());
+            make_in1_an_input_handed_to_its_node(&mut graph, reader.as_str());
         }
         link(&mut graph, (&counter, "result"), (&reader, "in1"));
         let added = every_node_of(&graph);

@@ -7,7 +7,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::NodeTypeInputMod
 use super::NodeTypePortsDescribedOnTheWire;
 use crate::core::descriptors::{
     FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeKind, PinDeclaration, PinType, PortDescriptor, SettingReadTime,
+    NodeKind, PinDeclaration, PinType, PortDescriptor,
 };
 
 /// A node type of `node_kind` with one String input, `label`, that carries Records.
@@ -81,7 +81,7 @@ fn an_input_whose_pin_type_takes_no_wire_is_described_as_a_setting() {
 
     assert_eq!(
         described.inputs[0].mode,
-        Some(NodeTypeInputMode::SettingOnly)
+        Some(NodeTypeInputMode::HandedToItsNode)
     );
     assert!(described.inputs[0].value_json_schema.is_some());
     assert!(!described.inputs[0].takes_a_wire);
@@ -103,18 +103,8 @@ fn each_input_says_whether_it_takes_a_wire_as_the_link_check_rules() {
         "",
     )
     .with_input(an_input("amount", NodeInputMode::WireOrValue))
-    .with_input(an_input(
-        "radius",
-        NodeInputMode::SettingOnly {
-            read: SettingReadTime::AtSetup,
-        },
-    ))
-    .with_input(an_input(
-        "gain",
-        NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun,
-        },
-    ));
+    .with_input(an_input("radius", NodeInputMode::HandedToItsNode))
+    .with_input(an_input("gain", NodeInputMode::HandedToItsNode));
 
     let takes_a_wire: Vec<(String, bool)> = NodeTypePortsDescribedOnTheWire::of(&descriptor)
         .inputs

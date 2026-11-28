@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode, PinType,
-    PortDescriptor, SettingReadTime, VectorComponentCount,
+    PortDescriptor, VectorComponentCount,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_PIN_TYPE_SETTING;
@@ -84,11 +84,8 @@ fn the_node_type_of_a_constant() -> Result<NodeDescriptor> {
                     .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
             ),
         ),
-        the_value_port_of_a_constant("The value the Constant holds.", Vec::new()).with_input_mode(
-            NodeInputMode::SettingOnly {
-                read: SettingReadTime::EachRun,
-            },
-        ),
+        the_value_port_of_a_constant("The value the Constant holds.", Vec::new())
+            .with_input_mode(NodeInputMode::HandedToItsNode),
     ];
     descriptor.outputs = vec![the_value_port_of_a_constant(
         "The value the Constant holds.",

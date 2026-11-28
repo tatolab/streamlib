@@ -28,9 +28,7 @@ fn a_setting_read_at_setup_set_while_its_node_runs_is_set_live_and_handed_to_it(
         .iter_mut()
         .find(|port| port.name == "gain")
         .expect("the level meter has an input `gain`");
-    gain.input_mode = Some(crate::core::descriptors::NodeInputMode::SettingOnly {
-        read: crate::core::descriptors::SettingReadTime::AtSetup,
-    });
+    gain.input_mode = Some(crate::core::descriptors::NodeInputMode::HandedToItsNode);
     let node = the_uuid_of(&graph, &level_meter);
     let graph = RwLock::new(graph);
 

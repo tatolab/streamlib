@@ -27,7 +27,7 @@ use crate::core::graph::{
     NodeReadyBarrierHandle, NodeRunId, OutOfProcessLinkWiringComponent,
 };
 use crate::core::nodes::OutOfProcessLinkWiringEnvelope;
-use crate::core::test_support::make_in1_a_setting_read_at_setup;
+use crate::core::test_support::make_in1_an_input_handed_to_its_node;
 use crate::iceoryx2::Iceoryx2Node;
 
 /// The compile of a link from a function node into a setting read at setup carries it through
@@ -41,7 +41,7 @@ fn a_function_node_into_a_setting_is_read_out_of_the_pool_and_its_reader_waits_o
     let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
     let reader = a_helper_reader_before_its_setup(&mut graph);
-    make_in1_a_setting_read_at_setup(&mut graph, reader.as_str());
+    make_in1_an_input_handed_to_its_node(&mut graph, reader.as_str());
     let into_the_setting = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
     let mut nodes_to_add = vec![lfo, reader.clone()];
     let mut links_to_add = vec![into_the_setting];

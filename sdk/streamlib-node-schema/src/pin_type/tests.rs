@@ -303,15 +303,24 @@ fn a_declaration_writes_its_defaults_as_nothing() {
     assert_eq!(read, declaration);
 }
 
+/// An input the engine hands its node is written as contract 4's `setting_only`, and the `read`
+/// a `tatolab-stream` released before every input was live stamps beside it is ignored.
+///
+/// Mental-revert: refusing a field the mode does not name refuses every node a released SDK
+/// declares with a setting.
 #[test]
-fn an_input_mode_is_tagged_and_a_setting_is_read_at_setup_unless_it_says_otherwise() {
-    let setting: NodeInputMode =
-        serde_json::from_value(json!({ "mode": "setting_only" })).expect("reads");
+fn an_input_mode_is_tagged_and_a_read_time_beside_it_is_ignored() {
+    for stamped in [
+        json!({ "mode": "setting_only" }),
+        json!({ "mode": "setting_only", "read": "at_setup" }),
+        json!({ "mode": "setting_only", "read": "each_run" }),
+    ] {
+        let handed: NodeInputMode = serde_json::from_value(stamped).expect("reads");
+        assert_eq!(handed, NodeInputMode::HandedToItsNode);
+    }
     assert_eq!(
-        setting,
-        NodeInputMode::SettingOnly {
-            read: SettingReadTime::AtSetup
-        }
+        serde_json::to_value(NodeInputMode::HandedToItsNode).expect("writes"),
+        json!({ "mode": "setting_only" })
     );
     assert_eq!(
         serde_json::to_value(NodeInputMode::WireOnly).expect("writes"),

@@ -11,9 +11,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::descriptors::{
-    DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict, SettingReadTime,
-};
+use crate::core::descriptors::{DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict};
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::nodes::{ConfigFieldDescribedAsASetting, the_config_fields_described_as_settings};
 
@@ -285,7 +283,7 @@ pub struct PortDescriptorOutput {
     #[serde(flatten)]
     pub pin: Option<PortDeclaredPinOutput>,
     /// Whether the input takes a wire, a stored value, or both, tagged by
-    /// `mode`: `{"mode": "setting_only", "read": "at_setup"}` on a setting, and
+    /// `mode`: `{"mode": "setting_only"}` on an input handed to its node, and
     /// the mode an input port declares. Absent on an input port that declares
     /// none, and on an output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -319,9 +317,7 @@ impl PortDescriptorOutput {
                 flow: pin_type.default_flow(),
                 pin_type: DeclaredPinType::Is { pin_type },
             }),
-            input_mode: Some(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup,
-            }),
+            input_mode: Some(NodeInputMode::HandedToItsNode),
             default_value: setting.default_value,
             annotations: setting.annotations,
         }
@@ -805,7 +801,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             input_mode: port.input_mode,
             default_value: port
                 .input_mode
-                .filter(|input_mode| input_mode.is_a_setting())
+                .filter(|input_mode| input_mode.is_handed_to_its_node())
                 .and(port.pin_default.clone()),
             annotations,
         }

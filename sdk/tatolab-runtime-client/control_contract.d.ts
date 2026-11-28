@@ -5200,14 +5200,14 @@ export interface NodeTypeInputDescribed {
    */
   mode?: NodeTypeInputMode | null;
   /**
-   * Whether a link may end at it: `false` on a setting read each run, a setting of a type no
-   * message carries, every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or
+   * Whether a link may end at it: `false` on an input handed to its node of a type no
+   * message carries, every such input of a `GraphInput`, `GraphOutput`, `SetVariable` or
    * `GetVariable`, and each legacy field of a node type not yet typed, which is no port.
    */
   takes_a_wire?: boolean;
   /**
-   * When the node reads a setting: once at setup, a change rebuilding the node, or each run.
-   * Absent on an input that takes a wire.
+   * When its node reads an input the engine hands it: always each run, as every input is
+   * live. Absent on an input that takes a wire.
    */
   read?: SettingReadTime | null;
   /**
@@ -5233,7 +5233,8 @@ export interface NodeTypeInputDescribed {
 export type NodeTypeInputMode = "wire_or_value" | "wire_only" | "setting_only";
 
 /**
- * When a node reads a setting.
+ * When a node reads an input the engine hands it, under the name contract 4 publishes, which
+ * contract 5 drops.
  */
 export type SettingReadTime = "at_setup" | "each_run";
 
@@ -6412,16 +6413,16 @@ export interface CallOperationRequest {
 
 /**
  * Whether an input takes a wire, a stored value, or both.
+ * 
+ * The variant the engine hands its value to serializes as contract 4's `setting_only`, and a
+ * `read` beside it, which a `tatolab-stream` released before every input was live still
+ * stamps, is ignored: every input is read each run.
  */
 export type NodeInputMode = {
   mode: "wire_or_value";
 } | {
   mode: "wire_only";
 } | {
-  /**
-   * When the node reads it.
-   */
-  read?: SettingReadTime;
   mode: "setting_only";
 };
 
@@ -7517,7 +7518,7 @@ export interface ControlOperations {
   /**
    * Describe the inputs and outputs of the node types named, each with its pin type.
    *
-   * Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, a setting with when it is `read`: `at_setup` or `each_run`; either takes a link from an output that flows as a `value`, and each change is handed to the running node), `takes_a_wire`, whether a link may end at it: false for a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.
+   * Describe each node type named in `node_types`, as `list_node_types` names it, from the best description the runtime has, in the order named. A described node type carries the source fields `list_node_types` gives it, `described_from`, its whole `documentation`, `category`, `kind`, `declared_at` (its path relative to its source's root and its line; absent on a built-in), and its `inputs` and `outputs`. Each port has its `name`, `documentation`, `pin_type` (the type, or how it is found: `is`, `one_of`, `any`, `same_as_input` or `set_by_input`) and `flow` (`value`, `stream` or `trigger`), and the `annotations` it states. Each input also has its `mode` (`wire_or_value`, `wire_only` or `setting_only`, an input the engine hands its node, always `read` `each_run`; either takes a link from an output that flows as a `value`, and each change is handed to the running node), `takes_a_wire`, whether a link may end at it: false for a setting of a type no message carries, such as a node reference or a pin type choice, and every setting of a `GraphInput`, `GraphOutput`, `SetVariable` or `GetVariable`, its `default_value`, its `lifetime` (`kept` or `reset`), and the JSON Schema a value set on it with `set_node_input_value` must satisfy as `value_json_schema`, its range folded in. A port of a node type not yet typed has no `pin_type` or `flow`, and its settings are listed after its ports as `setting_only` inputs. A project node type the runtime has not described in an interpreter is described from source, which reads no pin type. A node type that cannot be described carries `not_described_because`, a refusal with the runtime's words and, where the runtime serves one, the call that checks the project's code; the rest still describe. Refused whole, with `node_type_not_found` and the call to `list_node_types`, for a node type the project does not offer.
    *
    * Since contract version 3, stable.
    */
@@ -7714,7 +7715,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 4;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 8;
+export declare const CONTROL_CONTRACT_REVISION: 9;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

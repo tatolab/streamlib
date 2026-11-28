@@ -17,7 +17,7 @@ use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     DeclaredPinType, FreePinConversion, NodeClassImportPath, NodeClassShortName, NodeDescriptor,
     NodeInputMode, PacketsStreamFacts, PinDeclaration, PinFlow, PinLinkOutcome, PinType,
-    PortDescriptor, SettingReadTime,
+    PortDescriptor,
 };
 use crate::core::graph::{
     GraphEdgeWithComponents, InputLinkPortRef, LinkPinTypesDifferComponent, LinkUniqueId,
@@ -115,11 +115,8 @@ fn register_the_fixture_node_types() {
             a_node_type(class_name, vec![a_port("value", pin_type)], Vec::new())
         };
         let a_type_choice = || {
-            a_port("kind", is(PinType::a_choice_of_any())).with_input_mode(
-                NodeInputMode::SettingOnly {
-                    read: SettingReadTime::AtSetup,
-                },
-            )
+            a_port("kind", is(PinType::a_choice_of_any()))
+                .with_input_mode(NodeInputMode::HandedToItsNode)
         };
         let chosen_by = |class_name, kind: PortDescriptor| {
             a_node_type(
@@ -212,9 +209,7 @@ fn register_the_fixture_node_types() {
                             among_the_bundles_its_stream_declares: false,
                         }),
                     )
-                    .with_input_mode(NodeInputMode::SettingOnly {
-                        read: SettingReadTime::AtSetup,
-                    })
+                    .with_input_mode(NodeInputMode::HandedToItsNode)
                     .with_pin_default(json!(a_note())),
                 ],
                 vec![PortDescriptor::new(

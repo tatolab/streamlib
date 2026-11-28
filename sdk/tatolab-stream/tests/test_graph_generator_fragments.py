@@ -109,7 +109,7 @@ INVERT_TWICE_FRAGMENT: dict[str, Any] = {
         {"name": "strength", "description": "",
          "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}},
                              "flow": "value"},
-         "input_mode": {"mode": "setting_only", "read": "at_setup"},
+         "input_mode": {"mode": "setting_only"},
          "pin_default": 4},
     ],
 }

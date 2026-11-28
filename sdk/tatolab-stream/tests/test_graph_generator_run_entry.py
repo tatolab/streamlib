@@ -118,7 +118,7 @@ def test_a_generator_run_answers_the_fragment_node_it_is_stored_as(
                     {"name": "port", "description": "",
                      "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "string"}},
                                          "flow": "value"},
-                     "input_mode": {"mode": "setting_only", "read": "at_setup"},
+                     "input_mode": {"mode": "setting_only"},
                      "pin_default": "video"},
                 ],
             },
@@ -136,7 +136,7 @@ def test_each_typed_setting_a_generator_promotes_is_declared_with_its_descriptio
         {"name": "passes", "description": "How many times the picture is blurred.",
          "pin_declaration": {"pin_type": {"kind": "is", "pin_type": {"type": "integer"}},
                              "flow": "value"},
-         "input_mode": {"mode": "setting_only", "read": "at_setup"},
+         "input_mode": {"mode": "setting_only"},
          "pin_default": 3},
     ], "an untyped setting, `label`, is declared as no input"
 

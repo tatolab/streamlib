@@ -166,7 +166,7 @@ impl GraphNode {
         &self.upstream_stream_facts_by_inbound_link
     }
 
-    /// The values this node's port facts read: each it holds, each setting it reads at setup
+    /// The values this node's port facts read: each it holds, and each input it is handed
     /// holding the value set on it or else its default.
     pub(crate) fn the_values_its_port_facts_read(&self) -> serde_json::Value {
         crate::core::graph::the_values_port_facts_read(&self.ports.inputs, &self.input_values)

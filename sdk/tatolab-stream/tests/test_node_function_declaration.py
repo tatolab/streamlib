@@ -24,13 +24,13 @@ from tatolab.stream import (
     PinTypeFromSetting,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     Tensor,
     Texture,
     Trigger,
     WireOnly,
     node,
 )
+from tatolab.stream._input_declaration_annotations import HandedToItsNode
 from tatolab.stream._function_node_declaration import FunctionNode
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_DESCRIPTION_STAMP,
@@ -168,18 +168,35 @@ def test_an_input_defaulting_to_a_plain_value_is_refused() -> None:
     assert "Input(1.0)" in str(refused)
 
 
-def setting_only_inside_its_input(*, level: Input[Annotated[float, SettingOnly()]] = Input(1.0)) -> None: ...
+def handed_to_its_node_inside_its_input(
+    *, level: Input[Annotated[float, HandedToItsNode()]] = Input(1.0)
+) -> None: ...
 
 
-def setting_only_around_its_input(*, level: Annotated[Input[float], SettingOnly()] = Input(1.0)) -> None: ...
+def handed_to_its_node_around_its_input(
+    *, level: Annotated[Input[float], HandedToItsNode()] = Input(1.0)
+) -> None: ...
 
 
-@pytest.mark.parametrize("gain", [setting_only_inside_its_input, setting_only_around_its_input])
-def test_an_input_read_at_setup_is_refused_inside_or_around_its_input(gain: Callable[..., Any]) -> None:
-    """Mental-revert: look for `SettingOnly` only inside `Input[...]`, and the one written around it
-    declares a setting whose set rebuilds the node."""
+@pytest.mark.parametrize(
+    "gain", [handed_to_its_node_inside_its_input, handed_to_its_node_around_its_input]
+)
+def test_an_input_only_the_runtimes_own_nodes_declare_is_refused_inside_or_around_its_input(
+    gain: Callable[..., Any],
+) -> None:
+    """Mental-revert: look for `HandedToItsNode` only inside `Input[...]`, and the one written
+    around it declares an input the engine hands the node in place of a live value input."""
     refused = refusal_of(declared_with_keywords(gain))
     assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "level")
+
+
+def test_setting_only_is_retired_naming_the_live_value_input_that_replaces_it() -> None:
+    """Mental-revert: export `SettingOnly` again, and an author declares a setting no node reads
+    live."""
+    with pytest.raises(ImportError) as refused:
+        from tatolab.stream import SettingOnly  # noqa: F401  # pyright: ignore[reportAttributeAccessIssue]
+    assert "`tatolab.stream.SettingOnly` is retired" in str(refused.value)
+    assert "`Input[...]`" in str(refused.value)
 
 
 def convert(
@@ -254,14 +271,17 @@ def test_a_pin_group_is_declared_with_each_field_of_its_slot() -> None:
 @dataclasses.dataclass(frozen=True)
 class LayerHoldingASetting:
     picture: InputPin[Texture]
-    blend: Annotated[float, SettingOnly()] = 1.0
+    blend: Annotated[float, HandedToItsNode()] = 1.0
 
 
-def test_a_slot_holding_a_setting_is_refused() -> None:
+def test_a_slot_holding_an_input_only_the_runtimes_own_nodes_declare_is_refused() -> None:
+    """Mental-revert: let a slot carry `HandedToItsNode`, and a node function's pin group holds an
+    input the engine hands the node in place of a live value."""
+
     def stack(*, layers: PinGroup[LayerHoldingASetting]) -> None: ...
 
     refused = refusal_of(declared_with_keywords(stack))
-    assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "layers.blend")
+    assert (refused.finding_code, refused.pin) == ("pin_annotation_not_taken", "layers.blend")
 
 
 def test_a_pin_group_given_a_value_is_refused() -> None:

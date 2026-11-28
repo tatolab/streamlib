@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use crate::descriptors::PortDescriptor;
-use crate::pin_type::{IntegerSize, NodeInputMode, PinDeclaration, PinType, SettingReadTime};
+use crate::pin_type::{IntegerSize, NodeInputMode, PinDeclaration, PinType};
 
 /// The pin type a value input holding a value of this Rust type is declared with.
 #[diagnostic::on_unimplemented(
@@ -130,9 +130,7 @@ pub fn the_input_taking_no_wire(
             ..PinDeclaration::exactly(pin_type)
         },
     )
-    .with_input_mode(NodeInputMode::SettingOnly {
-        read: SettingReadTime::EachRun,
-    });
+    .with_input_mode(NodeInputMode::HandedToItsNode);
     let mut value_input = if may_be_unset {
         value_input
     } else {

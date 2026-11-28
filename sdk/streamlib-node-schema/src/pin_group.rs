@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use crate::descriptors::PortDescriptor;
 use crate::pin_type::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinNumberRange, PinType,
-    SettingReadTime,
 };
 
 /// The separator between a pin group's name, a slot's index and a pin's name in the name of a
@@ -103,11 +102,11 @@ impl PinGroupDescriptor {
     /// How many slots the group has on a node: following its wires when a slot holds an input
     /// that is no setting, else set by the node's input named after the group.
     pub fn slot_count(&self) -> PinGroupSlotCount {
-        if self
-            .inputs
-            .iter()
-            .any(|input| !input.input_mode.is_some_and(NodeInputMode::is_a_setting))
-        {
+        if self.inputs.iter().any(|input| {
+            !input
+                .input_mode
+                .is_some_and(NodeInputMode::is_handed_to_its_node)
+        }) {
             PinGroupSlotCount::FollowsItsWires
         } else {
             PinGroupSlotCount::SetByItsInput
@@ -184,9 +183,7 @@ impl PinGroupDescriptor {
                     ..PinDeclaration::exactly(pin_type)
                 },
             )
-            .with_input_mode(NodeInputMode::SettingOnly {
-                read: SettingReadTime::AtSetup,
-            })
+            .with_input_mode(NodeInputMode::HandedToItsNode)
             .with_pin_default(serde_json::json!(1)),
         )
     }

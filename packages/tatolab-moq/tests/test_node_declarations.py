@@ -139,7 +139,7 @@ def test_a_receive_writes_the_type_its_choice_holds_a_moq_record_by_default():
 
 
 def test_each_node_is_one_function_whose_every_input_is_live():
-    """Mental-revert: keep an input `SettingOnly()`, and a set of it rebuilds the node."""
+    """Mental-revert: declare an input the engine hands the node, and it is no live value input."""
     for node_function in (MoqGateway, MoqTrack, MoqTrackSend, MoqTrackReceive):
         assert not isinstance(node_function, type)
         for port in getattr(node_function, NODE_DECLARATION_INPUT_PORTS_STAMP):

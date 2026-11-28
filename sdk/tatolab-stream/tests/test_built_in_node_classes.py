@@ -60,7 +60,7 @@ def test_no_class_is_published_for_a_removed_record_conversion(removed_class_nam
     assert removed_class_name not in tatolab.stream.__all__
 
 
-def test_a_typed_built_ins_settings_are_fields_read_at_setup_with_their_defaults():
+def test_a_typed_built_ins_settings_are_fields_handed_to_their_node_with_their_defaults():
     pins = TypedNodePins.of(tatolab.stream.TensorToAudio, "TensorToAudio")
     assert pins is not None
     assert pins.stored_input_values(
@@ -72,7 +72,7 @@ def test_a_typed_built_ins_settings_are_fields_read_at_setup_with_their_defaults
         port["name"]: port
         for port in getattr(tatolab.stream.TensorToTexture, "__tatolab_node_input_ports__")
     }
-    assert inputs["format"]["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
+    assert inputs["format"]["input_mode"] == {"mode": "setting_only"}
     assert inputs["format"]["pin_declaration"]["pin_type"]["pin_type"]["type"] == "menu"
 
 

@@ -4,16 +4,14 @@
 use super::graph_interface_node_types::{
     the_node_type_of_a_graph_input, the_node_type_of_a_graph_output,
 };
-use crate::core::descriptors::{
-    DeclaredPinType, NodeDescriptor, NodeInputMode, PinType, SettingReadTime,
-};
+use crate::core::descriptors::{DeclaredPinType, NodeDescriptor, NodeInputMode, PinType};
 
-/// The names of the settings `descriptor` declares read `read`.
-fn the_setting_names(descriptor: &NodeDescriptor, read: SettingReadTime) -> Vec<&str> {
+/// The names of the inputs `descriptor` declares that the engine hands its node.
+fn the_names_handed_to_its_node(descriptor: &NodeDescriptor) -> Vec<&str> {
     descriptor
         .inputs
         .iter()
-        .filter(|input| input.input_mode == Some(NodeInputMode::SettingOnly { read }))
+        .filter(|input| input.input_mode == Some(NodeInputMode::HandedToItsNode))
         .map(|input| input.name.as_str())
         .collect()
 }
@@ -34,12 +32,10 @@ fn the_declared_type_of(descriptor: &NodeDescriptor, input: &str) -> DeclaredPin
 fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin_type_chooses() {
     let descriptor = the_node_type_of_a_graph_input().expect("the GraphInput type builds");
     assert_eq!(
-        the_setting_names(&descriptor, SettingReadTime::AtSetup),
-        ["port", "pin_type", "lifetime"]
-    );
-    assert_eq!(
-        the_setting_names(&descriptor, SettingReadTime::EachRun),
-        ["range", "step", "unit", "meaning", "control", "value"]
+        the_names_handed_to_its_node(&descriptor),
+        [
+            "port", "pin_type", "range", "step", "unit", "meaning", "control", "lifetime", "value"
+        ]
     );
     assert_eq!(
         the_declared_type_of(&descriptor, "pin_type"),
@@ -52,12 +48,7 @@ fn a_graph_input_declares_each_setting_as_an_input_and_its_value_of_the_type_pin
         .iter()
         .find(|port| port.name == "value")
         .expect("a GraphInput has a `value` input");
-    assert_eq!(
-        value.input_mode,
-        Some(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun
-        })
-    );
+    assert_eq!(value.input_mode, Some(NodeInputMode::HandedToItsNode));
     let value_declared = value.declared_pin().expect("`value` declares a pin");
     assert_eq!(value_declared.former_names, ["default"]);
     assert!(
@@ -99,7 +90,7 @@ fn the_output_value_type(descriptor: &NodeDescriptor) -> DeclaredPinType {
 fn a_graph_output_declares_its_settings_and_a_value_that_takes_a_wire() {
     let descriptor = the_node_type_of_a_graph_output().expect("the GraphOutput type builds");
     assert_eq!(
-        the_setting_names(&descriptor, SettingReadTime::AtSetup),
+        the_names_handed_to_its_node(&descriptor),
         ["port", "pin_type"]
     );
     let value = descriptor
@@ -110,7 +101,7 @@ fn a_graph_output_declares_its_settings_and_a_value_that_takes_a_wire() {
     assert!(
         !value
             .input_mode
-            .is_some_and(NodeInputMode::is_a_setting_read_each_run)
+            .is_some_and(NodeInputMode::is_handed_to_its_node)
     );
     assert!(descriptor.outputs.is_empty());
     assert_eq!(

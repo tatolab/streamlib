@@ -233,10 +233,10 @@ impl PortInfo {
         )
     }
 
-    /// Whether this input is a setting, read at setup or each run.
-    pub(crate) fn is_a_setting(&self) -> bool {
+    /// Whether the engine hands this input's value to its node, rather than delivering it.
+    pub(crate) fn is_handed_to_its_node(&self) -> bool {
         self.input_mode
-            .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting)
+            .is_some_and(crate::core::descriptors::NodeInputMode::is_handed_to_its_node)
     }
 
     /// Whether this port is a Connection, whose wire brings a node and carries no data.
@@ -251,20 +251,6 @@ impl PortInfo {
         self.pin
             .as_ref()
             .is_some_and(|pin| pin.flow == crate::core::descriptors::PinFlow::Trigger)
-    }
-
-    /// Whether this input is a setting a node reads each run, whose value is set live apart
-    /// from the graph.
-    pub fn is_a_setting_read_each_run(&self) -> bool {
-        self.input_mode
-            .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_each_run)
-    }
-
-    /// Whether this input is a setting a node reads once, when it is set up; a value set on it
-    /// while the node runs is handed to the node.
-    pub fn is_a_setting_read_at_setup(&self) -> bool {
-        self.input_mode
-            .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_at_setup)
     }
 
     /// This port as it is typed while its node holds `input_values`, beside `inputs`, its node's

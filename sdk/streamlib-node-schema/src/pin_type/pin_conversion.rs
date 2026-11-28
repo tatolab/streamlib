@@ -198,7 +198,7 @@ impl NodeDescriptor {
         let mut wired_inputs: Vec<&PortDescriptor> = self
             .inputs
             .iter()
-            .filter(|input| !input.is_a_setting())
+            .filter(|input| !input.is_handed_to_its_node())
             .collect();
         // Beside other inputs, a value input, which holds a value of its own until a wire
         // carries one, is read by the node's builds, and is not what the conversion converts.

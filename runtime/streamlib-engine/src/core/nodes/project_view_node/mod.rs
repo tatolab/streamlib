@@ -20,7 +20,7 @@ use streamlib_project_repository::{
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    NodeValueLifetime, PinDeclaration, PinFlow, PinType, PortDescriptor, SettingReadTime,
+    NodeValueLifetime, PinDeclaration, PinFlow, PinType, PortDescriptor,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -114,9 +114,7 @@ fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> Port
     };
     the_port_a_view_declares(port)
         .with_pin_declaration(pin_declaration)
-        .with_input_mode(NodeInputMode::SettingOnly {
-            read: SettingReadTime::EachRun,
-        })
+        .with_input_mode(NodeInputMode::HandedToItsNode)
         .with_lifetime(NodeValueLifetime::Reset)
 }
 
@@ -143,7 +141,7 @@ fn is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(
         && ports
             .inputs
             .iter()
-            .any(|port| port.name == input && port.is_a_setting())
+            .any(|port| port.name == input && port.is_handed_to_its_node())
 }
 
 /// A port of exactly `pin_type`, read as a value; an output so declared keeps its last message

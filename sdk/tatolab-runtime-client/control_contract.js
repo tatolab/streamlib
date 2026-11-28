@@ -5,7 +5,7 @@
 
 export const CONTROL_CONTRACT_VERSION = 4;
 
-export const CONTROL_CONTRACT_REVISION = 8;
+export const CONTROL_CONTRACT_REVISION = 9;
 
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
