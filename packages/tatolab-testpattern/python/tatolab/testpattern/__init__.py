@@ -16,14 +16,14 @@ import ctypes
 import dataclasses
 import struct
 from importlib import resources
-from typing import Annotated
+from typing import Annotated, Callable
 
 from tatolab.stream import (
     ColorInfo,
-    ComputeKernel,
     Description,
     GpuContextFullAccess,
     GpuSurfaceHandle,
+    Input,
     TextureToWrite,
     NodeOutputTextureRing,
     NumberRange,
@@ -32,6 +32,7 @@ from tatolab.stream import (
     RuntimeContextLimitedAccess,
     Texture,
     TexturePixelFormats,
+    computed,
     log,
     monotonic_now_ns,
     node,
@@ -208,84 +209,83 @@ def _upload_overlay_into_a_texture(
     ),
 )
 @node(execution="continuous", interval_ms=33)
-class TestPatternSource:
-    """The sample stream's animation at about 30 frames a second, as RGBA pictures.
-
-    The frame size is read each frame, so a change takes effect from the next frame on.
-    """
-
-    __test__ = False
-
-    width: Annotated[
-        int,
-        NumberRange(minimum=1, maximum=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS),
-        Description("Frame width in pixels."),
-    ] = 1280
-    height: Annotated[
-        int,
-        NumberRange(minimum=1, maximum=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS),
-        Description("Frame height in pixels."),
-    ] = 720
+def TestPatternSource(
+    *,
+    width: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1, maximum=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS),
+            Description("Frame width in pixels."),
+        ]
+    ] = Input(1280),
+    height: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1, maximum=LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS),
+            Description("Frame height in pixels."),
+        ]
+    ] = Input(720),
     video: OutputPin[
         Annotated[
             Texture,
             TexturePixelFormats(_TEST_PATTERN_FRAME_TEXTURE_FORMAT),
             Description("Test-pattern video frames"),
         ]
-    ]
+    ],
+    ctx: RuntimeContextFullAccess,
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """The sample stream's animation at about 30 frames a second, as RGBA pictures.
 
-    def __init__(self) -> None:
-        self._frame_ring = NodeOutputTextureRing(
-            _TEST_PATTERN_FRAME_TEXTURE_FORMAT, _TEST_PATTERN_FRAME_TEXTURE_USAGE
-        )
-        self._compute_kernel: "ComputeKernel | None" = None
-        self._potato_sprite_texture: "GpuSurfaceHandle | None" = None
-        self._caption_panel_texture: "GpuSurfaceHandle | None" = None
-        # Advances only on a published frame, so frame N's picture never depends on a dropped one.
-        self._next_frame_index = 0
-        self._consecutive_dropped_frames = 0
+    The frame size is read each frame, so a change takes effect from the next frame on.
+    """
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        gpu_full_access = ctx.gpu_full_access
-        self._compute_kernel = ctx.gpu_limited_access.create_compute_kernel(
-            source=compute_kernel_slang_rendering_a_test_pattern_frame(),
-            push_constant_size=_PUSH_CONSTANT_BLOCK_STRUCT.size,
-            bindings={
-                _POTATO_SPRITE_BINDING_NAME: "sampled_texture",
-                _CAPTION_PANEL_BINDING_NAME: "sampled_texture",
-                _TEST_PATTERN_FRAME_BINDING_NAME: "storage_image",
-            },
-        )
-        self._potato_sprite_texture = _upload_overlay_into_a_texture(
-            gpu_full_access, POTATO_SPRITE
-        )
-        self._caption_panel_texture = _upload_overlay_into_a_texture(
-            gpu_full_access, SAMPLE_STREAM_CAPTION_PANEL
-        )
-        log.info(
-            f"TestPatternSource: rendering {self.width}x{self.height} on the GPU"
-        )
+    frame_ring = NodeOutputTextureRing(
+        _TEST_PATTERN_FRAME_TEXTURE_FORMAT, _TEST_PATTERN_FRAME_TEXTURE_USAGE
+    )
+    compute_kernel = ctx.gpu_limited_access.create_compute_kernel(
+        source=compute_kernel_slang_rendering_a_test_pattern_frame(),
+        push_constant_size=_PUSH_CONSTANT_BLOCK_STRUCT.size,
+        bindings={
+            _POTATO_SPRITE_BINDING_NAME: "sampled_texture",
+            _CAPTION_PANEL_BINDING_NAME: "sampled_texture",
+            _TEST_PATTERN_FRAME_BINDING_NAME: "storage_image",
+        },
+    )
+    # Each overlay is closed with the node's scope, releasing its GPU surface when the node stops.
+    potato_sprite_texture = computed(
+        lambda: _upload_overlay_into_a_texture(ctx.gpu_full_access, POTATO_SPRITE)
+    )
+    caption_panel_texture = computed(
+        lambda: _upload_overlay_into_a_texture(ctx.gpu_full_access, SAMPLE_STREAM_CAPTION_PANEL)
+    )
+    # Advances only on a published frame, so frame N's picture never depends on a dropped one.
+    next_frame_index = 0
+    consecutive_dropped_frames = 0
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if (
-            self._compute_kernel is None
-            or self._potato_sprite_texture is None
-            or self._caption_panel_texture is None
-        ):
-            return
-        frame_width, frame_height = self.width, self.height
+    def note_a_frame_the_output_pool_refused(refusal: RuntimeError) -> None:
+        nonlocal consecutive_dropped_frames
+        consecutive_dropped_frames += 1
+        if (consecutive_dropped_frames - 1) % DROPPED_FRAMES_BETWEEN_REPORTS == 0:
+            log.warn(
+                f"TestPatternSource: dropped frame {next_frame_index}, "
+                f"{consecutive_dropped_frames} in a row: {refusal}"
+            )
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal next_frame_index, consecutive_dropped_frames
+        frame_width, frame_height = width.get(), height.get()
         try:
-            frame_texture = self._frame_ring.next_texture_for_this_frame(
+            frame_texture = frame_ring.next_texture_for_this_frame(
                 ctx.gpu_limited_access, frame_width, frame_height
             )
         except RuntimeError as refusal:
-            self._note_a_frame_the_output_pool_refused(refusal)
+            note_a_frame_the_output_pool_refused(refusal)
             return
-        self._consecutive_dropped_frames = 0
-        self._compute_kernel.dispatch(
+        consecutive_dropped_frames = 0
+        compute_kernel.dispatch(
             bindings={
-                _POTATO_SPRITE_BINDING_NAME: self._potato_sprite_texture,
-                _CAPTION_PANEL_BINDING_NAME: self._caption_panel_texture,
+                _POTATO_SPRITE_BINDING_NAME: potato_sprite_texture.get(),
+                _CAPTION_PANEL_BINDING_NAME: caption_panel_texture.get(),
                 _TEST_PATTERN_FRAME_BINDING_NAME: frame_texture,
             },
             group_count=(
@@ -294,29 +294,14 @@ class TestPatternSource:
                 1,
             ),
             push_constants=pack_push_constants_for_frame(
-                self._next_frame_index, frame_width, frame_height
+                next_frame_index, frame_width, frame_height
             ),
         )
-        self._next_frame_index += 1
-        timestamp_ns = monotonic_now_ns()
-        self.video.write(
+        next_frame_index += 1
+        video.write(
             TextureToWrite.of_texture(frame_texture, TEST_PATTERN_FRAME_COLOUR),
-            timestamp_ns=timestamp_ns,
+            timestamp_ns=monotonic_now_ns(),
         )
 
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        for overlay_texture in (self._potato_sprite_texture, self._caption_panel_texture):
-            if overlay_texture is not None:
-                overlay_texture.close()
-        self._potato_sprite_texture = None
-        self._caption_panel_texture = None
-        self._compute_kernel = None
-
-    def _note_a_frame_the_output_pool_refused(self, refusal: RuntimeError) -> None:
-        self._consecutive_dropped_frames += 1
-        if (self._consecutive_dropped_frames - 1) % DROPPED_FRAMES_BETWEEN_REPORTS == 0:
-            log.warn(
-                f"TestPatternSource: dropped frame {self._next_frame_index}, "
-                f"{self._consecutive_dropped_frames} in a row: {refusal}"
-            )
+    log.info("TestPatternSource: rendering on the GPU")
+    return each_frame

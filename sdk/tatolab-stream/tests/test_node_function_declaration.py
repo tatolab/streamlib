@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""`@node(...)` on a function declares a node written as one function, its ports read by the one
-reader a class's fields and pins are read by, and refuses each mistake as a
-`NodeDeclarationRefusal` with its own finding code."""
+"""`@node(...)` on a function declares a node written as one function, and refuses each mistake
+as a `NodeDeclarationRefusal` with its own finding code; a class under `@node` is refused as the
+retired form, with the function that replaces it."""
 
 from __future__ import annotations
 
@@ -43,16 +43,6 @@ from tatolab.stream._node_declaration import (
 from tatolab.stream._node_function import InputReadOffItsDeclaration, NodeFunction
 
 
-@node(execution="continuous", interval_ms=10)
-class TintAsAClass:
-    video: Annotated[InputPin[Texture], Description("The pictures to tint.")]
-    flash: InputPin[Trigger]
-    amount: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.5
-    mode: Literal["add", "multiply"] = "add"
-    wet: Annotated[float, WireOnly()] = 1.0
-    result: OutputPin[Texture]
-
-
 @node.meta(description="Tints each picture.")
 @node(execution="continuous", interval_ms=10)
 def tint(
@@ -68,15 +58,20 @@ def tint(
     return lambda frame_ctx: None
 
 
-def test_a_node_function_declares_the_ports_a_class_of_the_same_fields_and_pins_declares() -> None:
-    """Mental-revert: read a function's parameters with a reader of their own and a pin's
-    description, a value's range or a wire-only mode drifts from the class's."""
-    assert getattr(tint, NODE_DECLARATION_INPUT_PORTS_STAMP) == getattr(
-        TintAsAClass, NODE_DECLARATION_INPUT_PORTS_STAMP
-    )
-    assert getattr(tint, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == getattr(
-        TintAsAClass, NODE_DECLARATION_OUTPUT_PORTS_STAMP
-    )
+def test_a_node_function_declares_each_parameter_as_its_port() -> None:
+    assert [port["name"] for port in getattr(tint, NODE_DECLARATION_INPUT_PORTS_STAMP)] == [
+        "video",
+        "flash",
+        "amount",
+        "mode",
+        "wet",
+    ]
+    (amount,) = [
+        port for port in getattr(tint, NODE_DECLARATION_INPUT_PORTS_STAMP) if port["name"] == "amount"
+    ]
+    assert amount["pin_declaration"]["annotations"]["range"] == {"minimum": 0.0, "maximum": 1.0}
+    assert amount["pin_default"] == 0.5
+    assert [port["name"] for port in getattr(tint, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == ["result"]
     assert getattr(tint, NODE_DECLARATION_KIND_STAMP) == "process"
     assert getattr(tint, NODE_DECLARATION_EXECUTION_STAMP) == {"mode": "continuous", "interval_ms": 10}
     assert getattr(tint, NODE_DECLARATION_PIN_GROUPS_STAMP) == []
@@ -149,7 +144,7 @@ def test_an_untyped_parameter_is_refused() -> None:
     assert (refused.finding_code, refused.pin) == ("node_function_parameter_not_typed", "level")
 
 
-def test_a_value_typed_as_a_class_field_is_refused_naming_input() -> None:
+def test_a_value_typed_with_no_input_is_refused_naming_input() -> None:
     def gain(*, level: float = 1.0) -> None: ...
 
     refused = refusal_of(declared_with_keywords(gain))
@@ -195,9 +190,9 @@ def convert(
 
 
 def test_an_input_choosing_a_pin_type_is_live_and_its_output_takes_the_type_it_holds() -> None:
-    """Mental-revert: read a `PinTypeChoice` input as a class's field is, and the node function
-    declares a setting read at setup, whose set rebuilds the node; refuse it, and no node
-    function chooses a pin's type."""
+    """Mental-revert: read a `PinTypeChoice` input as a setting, and the node function declares a
+    setting read at setup, whose set rebuilds the node; refuse it, and no node function chooses
+    a pin's type."""
     declared = declared_with_keywords(convert)()
     (content_type,) = getattr(declared, NODE_DECLARATION_INPUT_PORTS_STAMP)
     (result,) = getattr(declared, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
@@ -211,8 +206,8 @@ def test_an_input_choosing_a_pin_type_is_live_and_its_output_takes_the_type_it_h
 
 
 def test_a_parameter_named_private_is_refused() -> None:
-    """Mental-revert: skip a `_` parameter as a class's private state is skipped, and the body is
-    handed the bare `Input(2.0)` its declaration wrote."""
+    """Mental-revert: skip a `_` parameter as private state, and the body is handed the bare
+    `Input(2.0)` its declaration wrote."""
 
     def gain(*, level: Input[float] = Input(1.0), _hidden: Input[float] = Input(2.0)) -> None: ...
 
@@ -241,21 +236,16 @@ class PlacedLayer:
     opacity: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 1.0
 
 
-def test_a_pin_group_is_declared_as_a_class_declares_it() -> None:
+def test_a_pin_group_is_declared_with_each_field_of_its_slot() -> None:
     """Mental-revert: refuse a `PinGroup` parameter, or stamp no group, and the node function
     declares no layers to wire."""
 
     @node(execution="reactive")
     def stack(*, layers: Annotated[PinGroup[PlacedLayer], Description("Each layer.")]) -> None: ...
 
-    @node(execution="reactive")
-    class StackAsAClass:
-        layers: Annotated[PinGroup[PlacedLayer], Description("Each layer.")]
-
     assert isinstance(stack, NodeFunction)
-    assert getattr(stack, NODE_DECLARATION_PIN_GROUPS_STAMP) == getattr(
-        StackAsAClass, NODE_DECLARATION_PIN_GROUPS_STAMP
-    )
+    (declared,) = getattr(stack, NODE_DECLARATION_PIN_GROUPS_STAMP)
+    assert declared["name"] == "layers"
     (layers,) = stack.pin_groups
     assert (layers.attribute, layers.name, layers.slot_class) == ("layers", "layers", PlacedLayer)
     assert [member.port for member in layers.members] == ["picture", "opacity"]
@@ -274,14 +264,14 @@ def test_a_slot_holding_a_setting_is_refused() -> None:
     assert (refused.finding_code, refused.pin) == ("setting_on_a_node_function", "layers.blend")
 
 
-def test_a_pin_group_given_a_value_is_refused_as_a_class_group_is() -> None:
+def test_a_pin_group_given_a_value_is_refused() -> None:
     def stack(*, layers: PinGroup[Layer] = ()) -> None: ...  # pyright: ignore[reportArgumentType]
 
     refused = refusal_of(declared_with_keywords(stack))
     assert (refused.finding_code, refused.pin) == ("pin_has_a_value", "layers")
 
 
-def test_a_pin_given_a_value_is_refused_as_a_class_pin_is() -> None:
+def test_a_pin_given_a_value_is_refused() -> None:
     def gain(*, video: InputPin[Texture] = 1) -> None: ...  # pyright: ignore[reportArgumentType]
 
     refused = refusal_of(declared_with_keywords(gain))
@@ -296,3 +286,21 @@ def test_a_stream_adds_a_node_function_by_its_import_path_with_its_values() -> N
 
     (added,) = stream_builder._compiled_graph()["nodes"]  # pyright: ignore[reportPrivateUsage]
     assert (added["type"], added["input_values"]) == (f"{__name__}:tint", {"amount": 0.25})
+
+
+def test_a_class_under_node_is_refused_showing_the_node_written_as_one_function() -> None:
+    """Mental-revert: read a class's fields and pins as its ports, and a node in the retired form
+    loads, with no word of the form that replaced it."""
+
+    class Gain:
+        video: InputPin[Texture]
+        level: float = 1.0
+
+        def process(self, ctx: RuntimeContextLimitedAccess) -> None: ...
+
+    for declare in (lambda: node(Gain), lambda: node(execution="reactive")(Gain)):
+        refused = refusal_of(declare)
+        assert (refused.finding_code, refused.node) == ("declaration_retired", "Gain")
+        assert "`Gain` is declared with a class under `@node`, which is retired" in str(refused)
+        for function_form in ("on a `def`", "Input[float] = Input(4.0)", "each_frame", "computed("):
+            assert function_form in str(refused)

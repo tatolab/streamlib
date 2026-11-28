@@ -12,6 +12,7 @@ import pytest
 
 from tatolab.stream import (
     Connection,
+    Input,
     InputPin,
     NodeDeclarationRefusal,
     OutputPin,
@@ -37,27 +38,25 @@ class GatewayConnection(Connection):
 
 
 @node(execution="manual")
-class Gateway:
+def Gateway(
+    *,
+    connection: OutputPin[GatewayConnection],
+) -> None:
     """Gives itself out on `connection`."""
-
-    connection: OutputPin[GatewayConnection]
-
-    def process(self, ctx: Any) -> None:
-        del ctx
+    return None
 
 
 @node(execution="manual")
-class Send:
+def Send(
+    *,
+    gateway: Input[GatewayConnection | None] = Input(None),
+    track: Input[SoleReferrer[GatewayConnection] | None] = Input(None),
+) -> None:
     """Takes a gateway on `gateway`, and on `track` one no other send takes."""
-
-    gateway: GatewayConnection | None = None
-    track: SoleReferrer[GatewayConnection] | None = None
-
-    def process(self, ctx: Any) -> None:
-        del ctx
+    return None
 
 
-def the_pin_type_of(ports_stamp: str, node_class: type, port_name: str) -> object:
+def the_pin_type_of(ports_stamp: str, node_class: object, port_name: str) -> object:
     (port,) = [port for port in getattr(node_class, ports_stamp) if port["name"] == port_name]
     return port["pin_declaration"]["pin_type"]
 
@@ -137,29 +136,29 @@ def _a_function_node_giving_one_out() -> None:
 
 def _an_input_pin_of_one() -> None:
     @node(execution="manual")
-    class ReadsOne:
-        gateway: InputPin[GatewayConnection]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def ReadsOne(
+        *,
+        gateway: InputPin[GatewayConnection],
+    ) -> None:
+        return None
 
 
 def _a_list_of_them() -> None:
     @node(execution="manual")
-    class HoldsMany:
-        gateways: list[GatewayConnection] = []  # noqa: RUF012
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def HoldsMany(
+        *,
+        gateways: Input[list[GatewayConnection]] = Input([]),
+    ) -> None:
+        return None
 
 
 def _a_bundle_member_of_one() -> None:
     @node(execution="manual")
-    class HoldsABundle:
-        holder: InputPin[HoldsAGateway]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def HoldsABundle(
+        *,
+        holder: InputPin[HoldsAGateway],
+    ) -> None:
+        return None
 
 
 @pytest.mark.parametrize(

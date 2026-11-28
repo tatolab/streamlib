@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, NamedTuple
+from typing import Annotated, Any, Callable, NamedTuple
 
 from tatolab.stream import (
     Description,
@@ -33,53 +33,56 @@ class _TextureInfoValues(NamedTuple):
     category="Math",
     description="Read a picture's width, height and size, its pixel format, and its frame rate when the picture states one, as values to wire into another node.",
 )
-@node
-class TextureInfo:
-    """Hands on the values of each picture it reads. It writes an output only when its value
-    has changed since it was last written; each output flows as a value, so the runtime sends
-    its last write to a reader that connected after it."""
-
-    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-    width: OutputPin[Annotated[int, Description("The picture's width in pixels")]]
-    height: OutputPin[Annotated[int, Description("The picture's height in pixels")]]
-    size: OutputPin[Annotated[Vector2, Description("The picture's width and height in pixels")]]
+@node(execution="reactive")
+def TextureInfo(
+    *,
+    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    width: OutputPin[Annotated[int, Description("The picture's width in pixels")]],
+    height: OutputPin[Annotated[int, Description("The picture's height in pixels")]],
+    size: OutputPin[Annotated[Vector2, Description("The picture's width and height in pixels")]],
     pixel_format: OutputPin[
         Annotated[str, Description("The picture's texture format, such as rgba8_unorm")]
-    ]
+    ],
     frame_rate: OutputPin[
         Annotated[
             float,
             Description("Frames a second, written only when the stream feeding the picture states it"),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Hands on the values of each picture it reads. It writes an output only when its value
+    has changed since it was last written; each output flows as a value, so the runtime sends
+    its last write to a reader that connected after it."""
+    values_written: "_TextureInfoValues | None" = None
 
-    def __init__(self) -> None:
-        self._values_written: "_TextureInfoValues | None" = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = self.picture.read()
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal values_written
+        frame = picture.read()
         if frame is None:
             return
         values = _TextureInfoValues(
-            frame.width, frame.height, frame.format, self._frame_rate_the_stream_states()
+            frame.width, frame.height, frame.format, _frame_rate_the_stream_states(picture)
         )
-        written = self._values_written
+        written = values_written
 
         if values.width != (written and written.width):
-            self.width.write(values.width)
+            width.write(values.width)
         if values.height != (written and written.height):
-            self.height.write(values.height)
+            height.write(values.height)
         if values[:2] != (written and written[:2]):
-            self.size.write(Vector2(float(values.width), float(values.height)))
+            size.write(Vector2(float(values.width), float(values.height)))
         if values.pixel_format != (written and written.pixel_format):
-            self.pixel_format.write(values.pixel_format)
+            pixel_format.write(values.pixel_format)
         if values.frame_rate is not None and values.frame_rate != (written and written.frame_rate):
-            self.frame_rate.write(values.frame_rate)
-        self._values_written = values
+            frame_rate.write(values.frame_rate)
+        values_written = values
 
-    def _frame_rate_the_stream_states(self) -> "float | None":
-        stream_facts = self.picture.upstream_stream_facts()
-        if not isinstance(stream_facts, ImageStreamFacts) or stream_facts.frame_rate is None:
-            return None
-        rate = stream_facts.frame_rate
-        return rate.numerator / rate.denominator if rate.denominator else None
+    return each_frame
+
+
+def _frame_rate_the_stream_states(picture: Any) -> "float | None":
+    stream_facts = picture.upstream_stream_facts()
+    if not isinstance(stream_facts, ImageStreamFacts) or stream_facts.frame_rate is None:
+        return None
+    rate = stream_facts.frame_rate
+    return rate.numerator / rate.denominator if rate.denominator else None

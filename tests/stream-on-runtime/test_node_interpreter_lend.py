@@ -129,7 +129,7 @@ def test_a_type_whose_module_raises_at_import_is_refused_quoting_the_interpreter
     assert "lend_raising_nodes" not in sys.modules
 
 
-def test_an_unstamped_class_is_refused_by_name(
+def test_a_class_is_refused_by_name_showing_the_node_written_as_one_function(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
     write_project_module(
@@ -149,7 +149,10 @@ def test_an_unstamped_class_is_refused_by_name(
     )
 
     assert "lend_unstamped_nodes:NotANode" in refusal
-    assert "carries no `@node` declaration" in refusal
+    assert (
+        "it names the class `NotANode`, and a node is written as one function under `@node(...)`"
+        in refusal
+    )
 
 
 def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what_it_is(

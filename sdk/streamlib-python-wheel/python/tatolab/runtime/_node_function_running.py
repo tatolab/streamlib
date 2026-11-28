@@ -373,7 +373,7 @@ class _SlotsOfAPinGroup:
         field its value set, else a copy of its default."""
         return tuple(
             build_pin_group_slot(
-                self._node_function,  # pyright: ignore[reportArgumentType]
+                self._node_function,
                 self._pin_group,
                 field_values=self._field_values_of_slot(slot),
                 pins=self._pins_of_each_slot[slot],

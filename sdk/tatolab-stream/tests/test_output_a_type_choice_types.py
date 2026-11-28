@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A module's class node types an output by a `PinTypeChoice` field: the output's union is what
-the field may choose, and the output carries the type it chooses."""
+"""A module's node function types an output by a `PinTypeChoice` input: the output's union is what
+the input may choose, and the output carries the type it chooses."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from tatolab.stream import (
     EncodedAudio,
     EncodedCodecs,
     EncodedVideo,
+    Input,
     InputPin,
     NodeDeclarationRefusal,
     OutputPin,
@@ -52,15 +53,15 @@ OPUS = Annotated[EncodedAudio, EncodedCodecs("opus")]
 
 
 @node(execution="manual")
-class Receive:
-    content_type: PinTypeChoice = PinTypeChoice(Note)
+def Receive(
+    *,
+    content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
     content: OutputPin[
         Annotated[H264 | OPUS | Note, PinTypeFromSetting("content_type"), Description("What arrives")]
-    ]
-    pictures_or_sound: InputPin[Texture | Note]
-
-    def process(self, ctx: Any) -> None:
-        del ctx
+    ],
+    pictures_or_sound: InputPin[Texture | Note],
+) -> None:
+    return None
 
 
 def the_port(ports_stamp: str, port_name: str) -> "dict[str, Any]":
@@ -93,7 +94,7 @@ def test_the_setting_may_choose_each_type_of_the_union_and_defaults_to_one():
         },
     }
     assert choice["pin_default"] == {"type": "named", "named_pin_type": NOTE}
-    assert choice["input_mode"] == {"mode": "setting_only", "read": "at_setup"}
+    assert choice["input_mode"] == {"mode": "wire_or_value"}
 
 
 def test_an_input_of_several_types_takes_a_named_type():
@@ -106,93 +107,93 @@ def test_an_input_of_several_types_takes_a_named_type():
 
 def _a_default_none_of_the_union_chooses() -> None:
     @node(execution="manual")
-    class ChoosesSound:
-        content_type: PinTypeChoice = PinTypeChoice(Audio)
-        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def ChoosesSound(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Audio)),
+        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _a_choice_holding_no_default() -> None:
     @node(execution="manual")
-    class ChoosesNothingByDefault:
-        content_type: PinTypeChoice | None = None
-        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def ChoosesNothingByDefault(
+        *,
+        content_type: Input[PinTypeChoice | None] = Input(None),
+        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _a_choice_no_output_names() -> None:
     @node(execution="manual")
-    class ChoosesNothing:
-        content_type: PinTypeChoice = PinTypeChoice(Note)
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def ChoosesNothing(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
+    ) -> None:
+        return None
 
 
 def _an_output_naming_no_choice() -> None:
     @node(execution="manual")
-    class NamesNoChoice:
-        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def NamesNoChoice(
+        *,
+        content: OutputPin[Annotated[H264 | OPUS, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _two_outputs_naming_one_choice() -> None:
     @node(execution="manual")
-    class TwoOutputs:
-        content_type: PinTypeChoice = PinTypeChoice(Note)
-        content: OutputPin[Annotated[H264 | Note, PinTypeFromSetting("content_type")]]
-        copy: OutputPin[Annotated[H264 | Note, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def TwoOutputs(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
+        content: OutputPin[Annotated[H264 | Note, PinTypeFromSetting("content_type")]],
+        copy: OutputPin[Annotated[H264 | Note, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _an_input_pin_a_setting_types() -> None:
     @node(execution="manual")
-    class TypesAnInput:
-        content_type: PinTypeChoice = PinTypeChoice(Note)
-        content: InputPin[Annotated[H264 | Note, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def TypesAnInput(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
+        content: InputPin[Annotated[H264 | Note, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _one_type_a_setting_types() -> None:
     @node(execution="manual")
-    class OneType:
-        content_type: PinTypeChoice = PinTypeChoice(Note)
-        content: OutputPin[Annotated[Note, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def OneType(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
+        content: OutputPin[Annotated[Note, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _a_value_among_the_types() -> None:
     @node(execution="manual")
-    class ChoosesANumber:
-        content_type: PinTypeChoice = PinTypeChoice(Note)
-        content: OutputPin[Annotated[float | Note, PinTypeFromSetting("content_type")]]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+    def ChoosesANumber(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
+        content: OutputPin[Annotated[float | Note, PinTypeFromSetting("content_type")]],
+    ) -> None:
+        return None
 
 
 def _a_narrowing_on_the_whole_union() -> None:
     @node(execution="manual")
-    class NarrowsTheUnion:
-        content_type: PinTypeChoice = PinTypeChoice(Note)
+    def NarrowsTheUnion(
+        *,
+        content_type: Input[PinTypeChoice] = Input(PinTypeChoice(Note)),
         content: OutputPin[
             Annotated[EncodedVideo | Note, EncodedCodecs("h264"), PinTypeFromSetting("content_type")]
-        ]
-
-        def process(self, ctx: Any) -> None:
-            del ctx
+        ],
+    ) -> None:
+        return None
 
 
 @pytest.mark.parametrize(

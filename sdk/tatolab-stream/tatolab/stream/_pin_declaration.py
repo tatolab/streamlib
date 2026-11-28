@@ -273,7 +273,7 @@ class _PinReading:
             if self._form != "function" and not self._a_union_input_pin(written_type):
                 raise self._refusal(
                     f"{self._pin_named} is typed {_name_of(written_type)}, which its link finds "
-                    f"the type of, and a class node's field or pin states one pin type. To fix: "
+                    f"the type of, and a node function's input or pin states one pin type. To fix: "
                     f"type it as one of {_spellings_read_today()}.",
                     "pin_type_not_read_yet",
                 )

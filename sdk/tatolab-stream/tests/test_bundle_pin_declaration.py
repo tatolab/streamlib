@@ -16,6 +16,7 @@ from tatolab.stream import (
     Audio,
     Color,
     Description,
+    Input,
     InputPin,
     NodeDeclarationRefusal,
     NumberRange,
@@ -24,7 +25,6 @@ from tatolab.stream import (
     Texture,
     node,
 )
-from tatolab.stream._class_node_declaration import read_class_node_ports_and_members
 from tatolab.stream._contract_pin_types import PinType
 from tatolab.stream._function_node_declaration import NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
 from tatolab.stream._pin_declaration import NO_DEFAULT, read_pin_declaration
@@ -156,22 +156,25 @@ def test_a_list_of_a_dataclass_is_one_list_pin_whose_elements_are_bundles() -> N
     assert signature_input["bundle_class"] == f"{__name__}:Dot"
 
 
-def test_a_class_node_reads_a_bundle_as_a_field_an_input_pin_and_an_output_pin() -> None:
-    class Mixer:
-        tone: Tone = Tone(220.0)
-        incoming: InputPin[Tone]
-        outgoing: OutputPin[Tone]
+def test_a_node_function_reads_a_bundle_as_an_input_an_input_pin_and_an_output_pin() -> None:
+    @node(execution="reactive")
+    def Mixer(
+        *,
+        tone: Input[Tone] = Input(Tone(220.0)),
+        incoming: InputPin[Tone],
+        outgoing: OutputPin[Tone],
+    ) -> None: ...
 
-        def process(self, ctx: Any) -> None: ...
-
-    input_ports, output_ports, members = read_class_node_ports_and_members(Mixer)
+    input_ports = getattr(Mixer, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    output_ports = getattr(Mixer, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    members = Mixer.members
     by_name = {port["name"]: port for port in (*input_ports, *output_ports)}
 
     assert [(name, port["pin_declaration"]["flow"]) for name, port in by_name.items()] == [
         ("tone", "value"),
         ("incoming", "stream"),
         ("outgoing", "value"),
-    ], "a field is read as a value, an `InputPin` message by message"
+    ], "an input is read as a value, an `InputPin` message by message"
     for port in by_name.values():
         assert the_one_pin_type(port) == {"type": "bundle", "name": "Tone", "members": TONE_MEMBERS}
     assert [member.bundle_class for member in members] == [Tone, Tone, Tone]

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A class node's input pin hands a gateway each message with its payload's bytes as they were
+"""A node function's input pin hands a gateway each message with its payload's bytes as they were
 sent, whichever of the pin's types it carries, and a pin that carries a value refuses that read."""
 
 from __future__ import annotations
@@ -11,17 +11,15 @@ from typing import Annotated, Any, cast
 import pytest
 
 from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
-from tatolab.runtime._node_hosting import class_node_members_of
 from tatolab.stream import Audio, EncodedVideo, InputPin, StreamDelivery, node
 
 
 @node(execution="manual")
-class Gateway:
-    content: InputPin[Annotated[EncodedVideo | Audio, StreamDelivery("ordered")]]
-    level: InputPin[Annotated[float, StreamDelivery("newest")]]
-
-    def process(self, ctx: Any) -> None:
-        del ctx
+def Gateway(
+    *,
+    content: InputPin[Annotated[EncodedVideo | Audio, StreamDelivery("ordered")]],
+    level: InputPin[Annotated[float, StreamDelivery("newest")]],
+) -> None: ...
 
 
 class InputsReadByName:
@@ -36,10 +34,8 @@ class InputsReadByName:
 
 
 def the_pins_of_a_gateway(inputs: InputsReadByName) -> "dict[str, Any]":
-    members = class_node_members_of(Gateway)
-    assert members is not None
     return bind_the_pins_of_a_class_node(
-        members,
+        Gateway.members,
         link_data_access=cast(Any, None),
         inputs=cast(Any, inputs),
         outputs=cast(Any, None),

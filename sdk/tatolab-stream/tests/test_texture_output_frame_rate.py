@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """A Texture output states the frame rate its stream runs at, fixed or read from one of its
-node's settings, and a frame rate anywhere else is refused with what to write."""
+node's value inputs, and a frame rate anywhere else is refused with what to write."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ import pytest
 from tatolab.stream import (
     FrameRate,
     FrameRateFromSetting,
+    Input,
     InputPin,
     NodeDeclarationRefusal,
     OutputPin,
-    SettingOnly,
     Texture,
     node,
 )
@@ -27,22 +27,22 @@ def output_port(declared: Any, name: str) -> dict[str, Any]:
     return next(port for port in getattr(declared, NODE_DECLARATION_OUTPUT_PORTS_STAMP) if port["name"] == name)
 
 
-def refusal_of(node_class: type) -> NodeDeclarationRefusal:
+def refusal_of(node_function: Any) -> NodeDeclarationRefusal:
     with pytest.raises(NodeDeclarationRefusal) as refused:
-        node(node_class)
+        node(execution="reactive")(node_function)
     return refused.value
 
 
 def test_a_texture_output_states_a_fixed_frame_rate_or_one_a_setting_holds() -> None:
-    @node
-    class Camera:
-        frames_per_second: Annotated[int, SettingOnly()] = 30
-        video: OutputPin[Annotated[Texture, FrameRate(30000, 1001)]]
-        preview: OutputPin[Annotated[Texture, FrameRateFromSetting("frames_per_second")]]
-        still: OutputPin[Texture]
-
-        def process(self) -> None:
-            pass
+    @node(execution="reactive")
+    def Camera(
+        *,
+        frames_per_second: Input[int] = Input(30),
+        video: OutputPin[Annotated[Texture, FrameRate(30000, 1001)]],
+        preview: OutputPin[Annotated[Texture, FrameRateFromSetting("frames_per_second")]],
+        still: OutputPin[Texture],
+    ) -> None:
+        return None
 
     assert output_port(Camera, "video")["pin_declaration"]["annotations"] == {
         "frame_rate": {"stated": {"numerator": 30000, "denominator": 1001}}
@@ -53,29 +53,19 @@ def test_a_texture_output_states_a_fixed_frame_rate_or_one_a_setting_holds() -> 
     assert "annotations" not in output_port(Camera, "still")["pin_declaration"]
 
 
-class FrameRateOnAnInput:
-    video: InputPin[Annotated[Texture, FrameRate(30)]]
-
-    def process(self) -> None:
-        pass
+def FrameRateOnAnInput(*, video: InputPin[Annotated[Texture, FrameRate(30)]]) -> None: ...
 
 
-class FrameRateOnAFloat:
-    level: OutputPin[Annotated[float, FrameRateFromSetting("rate")]]
-
-    def process(self) -> None:
-        pass
+def FrameRateOnAFloat(*, level: OutputPin[Annotated[float, FrameRateFromSetting("rate")]]) -> None: ...
 
 
-class TwoFrameRates:
-    video: OutputPin[Annotated[Texture, FrameRate(30), FrameRateFromSetting("rate")]]
-
-    def process(self) -> None:
-        pass
+def TwoFrameRates(
+    *, video: OutputPin[Annotated[Texture, FrameRate(30), FrameRateFromSetting("rate")]]
+) -> None: ...
 
 
 @pytest.mark.parametrize(
-    ("node_class", "finding_code", "fix"),
+    ("node_function", "finding_code", "fix"),
     [
         (FrameRateOnAnInput, "pin_annotation_not_taken", "state it on the Texture output that sends the frames"),
         (FrameRateOnAFloat, "pin_annotation_not_taken", "`OutputPin[Annotated[Texture, FrameRateFromSetting(...)]]`"),
@@ -83,9 +73,9 @@ class TwoFrameRates:
     ],
 )
 def test_a_frame_rate_anywhere_but_on_one_texture_output_is_refused_with_what_to_write(
-    node_class: type, finding_code: str, fix: str
+    node_function: Any, finding_code: str, fix: str
 ) -> None:
-    refusal = refusal_of(node_class)
+    refusal = refusal_of(node_function)
 
     assert refusal.finding_code == finding_code
     assert fix in str(refusal)

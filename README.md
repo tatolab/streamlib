@@ -274,39 +274,44 @@ gateway on the same relay; a link's two ends are always in one stream.
 
 What a node declares:
 
-- **Pins**, each with its pin type. On a function node a parameter is an input and the return
-  annotation the output. On a class node an `InputPin[...]` or `OutputPin[...]` class attribute
-  is a pin, named by the attribute. A pin type is a picture (`Texture`), sound (`Audio`), a
-  `Tensor`, encoded media, a number, a string, a bool or a bundle of named members, and a read
-  returns that type. A class node's input names its [delivery](#how-it-works),
-  `StreamDelivery("newest")` or `StreamDelivery("ordered")`, inside its `Annotated[...]`.
-- **Its settings**, as inputs too: a plain annotated class attribute, or a parameter with a
-  default, is an input whose value the graph document's `input_values` holds. `NumberRange`,
-  `NumberStep` and `Description` in its `Annotated[...]` say what it takes.
-- **When a class node runs**, with `@node(execution=…)`: `reactive` (the default once it has an
-  input), `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source
-  has nothing to react to, so it must name one. `scheduling` asks for `realtime`, `high` or
-  `normal` priority.
+- **Pins**, each with its pin type. A node is one function under `@node(execution=…)`, and each
+  keyword-only parameter annotated `InputPin[...]` or `OutputPin[...]` is a pin, named by the
+  parameter; on a pure function under bare `@node` a parameter is an input and the return
+  annotation the output. A pin type is a picture (`Texture`), sound (`Audio`), a `Tensor`,
+  encoded media, a number, a string, a bool or a bundle of named members, and a read returns
+  that type. An input pin names its [delivery](#how-it-works), `StreamDelivery("newest")` or
+  `StreamDelivery("ordered")`, inside its `Annotated[...]`.
+- **Its value inputs**: a parameter annotated `Input[...]` with an `Input(default)` is an input
+  whose value the graph document's `input_values` holds, read with `.get()` each frame.
+  `NumberRange`, `NumberStep` and `Description` in its `Annotated[...]` say what it takes.
+- **When it runs**, with `@node(execution=…)`: `reactive`, `manual` (driven by a callback it
+  owns), or `continuous` with `interval_ms`. `scheduling` asks for `realtime`, `high` or
+  `normal` priority. Its body runs once when the node starts and returns `each_frame`, the
+  function each frame calls, or `None` for a manual node; an object with a `close()` that a
+  `computed(lambda: ...)` builds is closed when the node stops.
 - **What describes it**, with `@node.meta(category=…, description=…)` above `@node`: the
   group an editor files it under, or a path into a group inside one such as `Effects/Stylize`,
   and its description. A node that declares no category has none.
 
 ```python
 @node.meta(description="Counts the pictures it sees")
-@node
-class FrameTally:
-    report_every_frames: Annotated[int, NumberRange(minimum=1)] = 30
-    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-    tally: OutputPin[Tally]
-
-    def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
+@node(execution="reactive")
+def FrameTally(
+    *,
+    report_every_frames: Input[Annotated[int, NumberRange(minimum=1)]] = Input(30),
+    picture: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+    tally: OutputPin[Tally],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    def each_frame(runtime_context: RuntimeContextLimitedAccess) -> None:
         ...
+
+    return each_frame
 ```
 
 `examples/every-pin-kind` declares one node of each kind of pin.
 
-A node class lives in a module of its own, which the graph document names as `module:ClassName`:
-its process imports the class by that name.
+A node lives in a module of its own, which the graph document names as `module:FunctionName`:
+its process imports the node by that name.
 
 A project may hold several graph documents, and a load of the project loads each one as its own
 stream; a document that is gone unloads and forgets its stream. `--dir DIR` names another project
@@ -384,9 +389,9 @@ input, and set live on a node of one of the project's Tato Studio views it is a 
 publishes on its output of that name. Every tool about one stream names it with `stream`, and
 `connect` links two ports of that one stream. Beside them the runtime serves the live graph and
 the stream actions under way as resources, and four prompts whose every step is a tool call. An agent can write a
-node class into a module of the project, or `uv add` a package that ships one, then add it by
-its `module:ClassName` path and connect it into the running stream. The runtime never imports it:
-the class runs in its own process, started from the stream's venv, like every other Python node.
+node into a module of the project, or `uv add` a package that ships one, then add it by
+its `module:FunctionName` path and connect it into the running stream. The runtime never imports it:
+the node runs in its own process, started from the stream's venv, like every other Python node.
 
 **Control is reachable only on its machine.** A runtime opens no network port for it. Whoever can
 open its local socket — only processes running as your user — can observe and rewire it.

@@ -16,7 +16,6 @@ from tatolab.stream import (
     InputPin,
     NodeDeclarationRefusal,
     OutputPin,
-    SettingOnly,
     node,
 )
 from tatolab.stream._node_declaration import (
@@ -31,18 +30,24 @@ def _slang_passing_the_image_on(function_name: str) -> str:
 
 @node.meta(description="Encodes pictures as H.264.", conversion=True)
 @node(execution="manual")
-class H264EncoderStatingItsMetaAbove:
-    bitrate_bps: Annotated[int, SettingOnly()] = 4_000_000
-    video: InputPin[Texture]
-    encoded_video: OutputPin[EncodedVideo]
+def H264EncoderStatingItsMetaAbove(
+    *,
+    bitrate_bps: Input[int] = Input(4_000_000),
+    video: InputPin[Texture],
+    encoded_video: OutputPin[EncodedVideo],
+) -> None:
+    return None
 
 
 @node(execution="manual")
 @node.meta(conversion=True)
-class H264EncoderStatingItsMetaBelow:
-    bitrate_bps: Annotated[int, SettingOnly()] = 4_000_000
-    video: InputPin[Texture]
-    encoded_video: OutputPin[EncodedVideo]
+def H264EncoderStatingItsMetaBelow(
+    *,
+    bitrate_bps: Input[int] = Input(4_000_000),
+    video: InputPin[Texture],
+    encoded_video: OutputPin[EncodedVideo],
+) -> None:
+    return None
 
 
 @node.meta(conversion=True)
@@ -156,24 +161,10 @@ def test_a_node_function_with_two_streams_in_is_refused():
         ) -> None: ...
 
 
-def test_a_class_with_a_second_input_taking_a_wire_is_refused_naming_it_and_the_fix():
-    with pytest.raises(NodeDeclarationRefusal) as refused:
-
-        @node.meta(conversion=True)
-        @node(execution="manual")
-        class H264Encoder:
-            video: InputPin[Texture]
-            bitrate_bps: int = 4_000_000
-            encoded_video: OutputPin[EncodedVideo]
-
-    assert str(refused.value) == (
-        "`H264Encoder` states `conversion=True` and has two inputs that take a wire, `video` and "
-        "`bitrate_bps`. To fix: mark `bitrate_bps` as `SettingOnly()`, or leave "
-        "`conversion=True` out."
-    )
-    assert refused.value.finding_code == "conversion_not_one_input_to_one_output"
-    assert refused.value.node == "H264Encoder"
-    assert refused.value.pin == "bitrate_bps"
+def test_a_value_input_beside_the_stream_is_not_counted():
+    """Mental-revert: count a value input as an input taking a wire, and an encoder with a bitrate
+    is no conversion."""
+    assert getattr(H264EncoderStatingItsMetaAbove, NODE_DECLARATION_CONVERSION_STAMP) is True
 
 
 @pytest.mark.parametrize(
@@ -199,24 +190,6 @@ def test_a_conversion_whose_wired_input_states_no_one_pin_type_is_refused(
     assert refused.value.pin == pin
 
 
-def test_a_class_whose_field_comes_before_its_stream_is_refused_naming_the_field_to_mark():
-    with pytest.raises(NodeDeclarationRefusal) as refused:
-
-        @node.meta(conversion=True)
-        @node(execution="manual")
-        class H264Encoder:
-            bitrate_bps: int = 4_000_000
-            video: InputPin[Texture]
-            encoded_video: OutputPin[EncodedVideo]
-
-    assert str(refused.value) == (
-        "`H264Encoder` states `conversion=True` and has two inputs that take a wire, `video` and "
-        "`bitrate_bps`. To fix: mark `bitrate_bps` as `SettingOnly()`, or leave "
-        "`conversion=True` out."
-    )
-    assert refused.value.pin == "bitrate_bps"
-
-
 @pytest.mark.parametrize(
     ("declared", "declared_by"),
     [
@@ -229,15 +202,18 @@ def test_each_kind_stamps_the_decorator_that_read_its_ports(declared: Any, decla
     assert getattr(declared, NODE_DECLARATION_DECLARED_BY_STAMP) == declared_by
 
 
-def test_a_class_with_two_streams_in_is_refused_with_no_setting_to_mark():
+def test_a_node_function_with_two_streams_in_is_refused_keeping_one():
     with pytest.raises(NodeDeclarationRefusal, match="keep one input that takes a wire"):
 
         @node.meta(conversion=True)
         @node(execution="manual")
-        class Mixer:
-            video: InputPin[Texture]
-            overlay: InputPin[Texture]
-            result: OutputPin[Texture]
+        def Mixer(
+            *,
+            video: InputPin[Texture],
+            overlay: InputPin[Texture],
+            result: OutputPin[Texture],
+        ) -> None:
+            return None
 
 
 def test_a_function_with_two_inputs_is_refused_saying_each_takes_a_wire():
@@ -246,8 +222,9 @@ def test_a_function_with_two_inputs_is_refused_saying_each_takes_a_wire():
 
     assert str(refused.value) == (
         "`LevelAsText` states `conversion=True` and has two inputs that take a wire, `level` and "
-        "`places`. To fix: drop `places`, as every input of a function node takes a wire and a "
-        "setting is a class node's field marked `SettingOnly()`, or leave `conversion=True` out."
+        "`places`. To fix: drop `places`, as every input of a function node takes a wire, or "
+        "write it as one function under `@node(...)`, whose value inputs beside its stream a "
+        "conversion does not count, or leave `conversion=True` out."
     )
 
 
@@ -264,20 +241,25 @@ def test_a_node_with_no_input_taking_a_wire_is_refused():
 
         @node.meta(conversion=True)
         @node(execution="continuous", interval_ms=33)
-        class Bars:
-            width: Annotated[int, SettingOnly()] = 320
-            bars: OutputPin[Texture]
+        def Bars(
+            *,
+            bars: OutputPin[Texture],
+        ) -> None:
+            return None
 
 
 def test_a_node_with_two_outputs_is_refused_naming_them():
     with pytest.raises(NodeDeclarationRefusal) as refused:
 
         @node.meta(conversion=True)
-        @node
-        class Split:
-            video: InputPin[Texture]
-            left: OutputPin[Texture]
-            right: OutputPin[Texture]
+        @node(execution="reactive")
+        def Split(
+            *,
+            video: InputPin[Texture],
+            left: OutputPin[Texture],
+            right: OutputPin[Texture],
+        ) -> None:
+            return None
 
     assert str(refused.value) == (
         "`Split` states `conversion=True` and has two outputs, `left` and `right`. To fix: keep "

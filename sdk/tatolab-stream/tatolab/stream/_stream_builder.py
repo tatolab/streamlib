@@ -587,8 +587,8 @@ def _refuse_a_member_name_that_is_not_a_string(member_name: object) -> None:
 
 def _not_a_node_refusal(node_class: object) -> str:
     return (
-        f"{node_class!r} is not a node: decorate the class or the function with bare "
-        f"`@node`, and pass it itself rather than an instance of it or a call of it"
+        f"{node_class!r} is not a node: write it as one function under `@node(...)`, or a pure "
+        f"function under bare `@node`, and pass the function itself rather than a call of it"
     )
 
 

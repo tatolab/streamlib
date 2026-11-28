@@ -222,7 +222,7 @@ async fn a_project_file_save_carrying_a_stale_hash_is_refused_over_the_socket() 
     );
 }
 
-/// `create_node_file` writes the runtime's node template, its class named after the file, as
+/// `create_node_file` writes the runtime's node template, its node named after the file, as
 /// one commit that `undo` takes out, and refuses a path that already holds a file or names no
 /// importable module.
 #[tokio::test]
@@ -246,7 +246,7 @@ async fn a_node_file_created_from_the_template_names_its_node_type_and_undoes() 
     let content = std::fs::read_to_string(&node_file).unwrap();
     assert!(content.contains("@node.meta(description="), "{content}");
     assert!(
-        content.contains("@node\nclass EdgeGlow[Frame: Texture]:\n"),
+        content.contains("@node(execution=\"reactive\")\ndef EdgeGlow[Frame: Texture](\n"),
         "{content}"
     );
 

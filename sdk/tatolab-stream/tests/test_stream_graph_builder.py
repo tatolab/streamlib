@@ -30,16 +30,17 @@ from typing import Annotated
 
 from tatolab.stream import (
     EncodedVideo,
+    Input,
     InputPin,
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
     OutputPin,
-    StreamDelivery,
     StreamBuilder,
-    run_graph_generator,
-    node,
+    StreamDelivery,
     graph_generator,
+    node,
+    run_graph_generator,
 )
 from tatolab.stream._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
@@ -307,11 +308,13 @@ def test_a_native_marker_is_the_type_its_class_carries() -> None:
 
 
 def test_a_node_class_defined_inside_a_function_is_refused_naming_stream_add() -> None:
-    @node
-    class FunctionLocalFilter:
-        video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]]
-
-        video_to_downstream: OutputPin[EncodedVideo]
+    @node(execution="reactive")
+    def FunctionLocalFilter(
+        *,
+        video_from_upstream: InputPin[Annotated[EncodedVideo, StreamDelivery("newest")]],
+        video_to_downstream: OutputPin[EncodedVideo],
+    ) -> None:
+        return None
 
     with pytest.raises(ValueError) as refusal:
         StreamBuilder("rig").add(FunctionLocalFilter)
@@ -407,7 +410,7 @@ def test_a_function_node_is_added_by_its_import_path_under_its_cast_name() -> No
 
 
 def test_an_undecorated_function_is_refused_naming_bare_node() -> None:
-    with pytest.raises(TypeError, match="decorate the class or the function with bare `@node`"):
+    with pytest.raises(TypeError, match="a pure function under bare `@node`"):
         StreamBuilder("rig").add(input_values_holding_itself)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
 
@@ -416,15 +419,8 @@ def test_an_undecorated_class_is_refused_naming_node() -> None:
         StreamBuilder("rig").add(UndecoratedFilter)
 
     message = str(refusal.value)
-    assert "is not a node: decorate the class or the function with bare `@node`" in message
-    assert "pass it itself rather than an instance of it" in message
-
-
-def test_an_instance_is_refused_naming_the_class_itself() -> None:
-    with pytest.raises(
-        TypeError, match="pass it itself rather than an instance"
-    ):
-        StreamBuilder("rig").add(FrameFilters.FrameDarkener())  # pyright: ignore[reportCallIssue, reportArgumentType]
+    assert "is not a node: write it as one function under `@node(...)`" in message
+    assert "pass the function itself rather than a call of it" in message
 
 
 @pytest.mark.parametrize(

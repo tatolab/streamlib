@@ -239,7 +239,7 @@ def test_a_parameter_typed_texture_directly_is_refused_naming_the_type_parameter
             f"stored value, so a function under bare `@node` takes it only through a type "
             f"parameter bound to it, whose value its body hands on unread. To fix: "
             f"`def {function.__name__}[Carried: Texture](frame: Carried, ...) -> Carried`, or "
-            f"declare a class node with "
+            f"declare a node written as one function, `@node(...)`, taking "
             f"`frame: InputPin[Texture]`."
         )
 
@@ -256,7 +256,7 @@ def test_an_output_typed_texture_directly_is_refused_naming_the_input_it_would_h
         "`MakesAPicture`'s output `result` is typed `Texture`, a Texture, which holds no stored "
         "value, so a function's output carries it only as the type linked into the input it "
         "hands on. To fix: type that input and this output by one type parameter bound to it, "
-        "`[Carried: Texture]`, or declare a class node with "
+        "`[Carried: Texture]`, or declare a node written as one function, `@node(...)`, taking "
         "`result: OutputPin[Texture]`."
     )
 
@@ -307,7 +307,7 @@ def test_a_bound_of_a_type_that_flows_as_no_value_is_refused(
     assert refusal.pin == pin
     assert str(refusal) == (
         f"{words}, and a function reads the newest message on each input, so it would drop the "
-        f"rest. To fix: declare a class node with `{pin}: InputPin[{carried}]`."
+        f"rest. To fix: declare a node written as one function, `@node(...)`, taking `{pin}: InputPin[{carried}]`."
     )
 
 

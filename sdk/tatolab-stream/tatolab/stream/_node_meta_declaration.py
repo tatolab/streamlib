@@ -109,10 +109,8 @@ def the_conversion_a_node_states(
     `input_ports` and `output_ports` those ports as the engine reads them. A conversion is
     declared under bare `@node` or `@node.shader`, whose pins state the types the link verdict
     reads, and has exactly one input that takes a wire and exactly one output, each stating
-    exactly one pin type a wire carries; every other input is a setting, or a value input of a
-    node written as one function (`a_node_function`), and it declares no pin group, whose slots
-    add ports. A class node's field is not one: it is marked `SettingOnly()` instead, the form
-    the class nodes still written keep until they are functions.
+    exactly one pin type a wire carries; every other input is a value input of a node written
+    as one function (`a_node_function`), and it declares no pin group, whose slots add ports.
     """
     if not declared_meta.get("conversion", False):
         return False
@@ -204,28 +202,26 @@ def _refuse_more_than_one_input_taking_a_wire(
 ) -> NoReturn:
     """Refuse `node`, of `kind`, for the two or more `wired_inputs` it has, naming the fix.
 
-    A class node's field takes a wire until it is marked `SettingOnly()`: its streams are
-    named first and its fields after them, and the fields are the ones to mark, whatever
-    order they are declared in. Every input of a function or shader node takes a wire.
+    A node function's streams are named first and its value inputs after them; a value input
+    beside a stream is not counted, so one is named only where the node has no stream. Every
+    input of a function or shader node takes a wire.
     """
     if kind == PROCESS_NODE_KIND:
         fields = [port["name"] for port in wired_inputs if "pin_default" in port]
         streams = [port["name"] for port in wired_inputs if "pin_default" not in port]
         named = [*streams, *fields]
-        if len(streams) > 1:
-            to_fix = "keep one input that takes a wire, a field marked `SettingOnly()` for each setting"
-            pin = streams[1]
-        else:
-            to_mark = fields if streams else fields[1:]
-            to_fix = f"mark {_listed(to_mark)} as `SettingOnly()`"
-            pin = to_mark[0]
+        to_fix = (
+            "keep one input that takes a wire, the `InputPin` of what it converts, beside which "
+            "each value input is read by its builds"
+        )
     else:
         named = [port["name"] for port in wired_inputs]
         to_fix = (
-            f"drop {_listed(named[1:])}, as every input of a {kind} node takes a wire and a "
-            f"setting is a class node's field marked `SettingOnly()`"
+            f"drop {_listed(named[1:])}, as every input of a {kind} node takes a wire, or write "
+            f"it as one function under `@node(...)`, whose value inputs beside its stream a "
+            f"conversion does not count"
         )
-        pin = named[1]
+    pin = named[1]
     _refuse_the_shape(
         node,
         f"{_counted(named, 'input')} that take a wire, {_listed(named)}",

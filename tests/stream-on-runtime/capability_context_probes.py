@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Probes for the capability-typed contexts, run from where hooks really run.
+"""Probes for the capability-typed contexts, run from where a node function really runs.
 
-Full-access hooks (`setup` / `teardown` / `start` / `stop`) get
-`RuntimeContextFullAccess`; limited hooks (`process` / `on_pause` / `on_resume`)
-get `RuntimeContextLimitedAccess` with no `gpu_full_access` at all.
+A node function's body gets `RuntimeContextFullAccess`; its per-frame function gets
+`RuntimeContextLimitedAccess` with no `gpu_full_access` at all.
 
 Each probe runs in its own helper process and reports one
 `MARKER:PROBE_RESULT` JSON line over the child→parent log forwarding. Types
@@ -25,6 +24,7 @@ from tatolab.stream import (
     EncodedVideo,
     GpuContextFullAccess,
     GpuContextLimitedAccess,
+    Input,
     InputPin,
     OutputPin,
     RuntimeContextFullAccess,
@@ -99,22 +99,20 @@ def ProcessContextProbe() -> Callable[[RuntimeContextLimitedAccess], None]:
 
 
 # ---------------------------------------------------------------------------
-# A node's fields and ctx.time
+# A node's value inputs and ctx.time
 # ---------------------------------------------------------------------------
 
 
 @node(execution="manual")
-class FieldsProbe:
-    """Reports the values its fields held when `__init__` ran."""
+def FieldsProbe(*, gain: Input[float] = Input(0.0), label: Input[str] = Input("")) -> None:
+    """Reports the values its inputs held when its first build ran."""
 
-    gain: float = 0.0
-    label: str = ""
+    def report_what_its_inputs_hold() -> bool:
+        held = {"gain": gain.get(), "label": label.get()}
+        _report(lambda: {"inputs_at_its_first_build": held})
+        return True
 
-    def __init__(self) -> None:
-        self._fields_in_init = {"gain": self.gain, "label": self.label}
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: {"fields_in_init": self._fields_in_init})
+    computed(report_what_its_inputs_hold)
 
 
 @node(execution="manual")

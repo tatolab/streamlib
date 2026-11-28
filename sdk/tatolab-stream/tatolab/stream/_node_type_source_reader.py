@@ -4,7 +4,7 @@
 """Read the node types and graph generators a module declares from its source, never running it.
 
 A module is parsed with `ast` and its decorators are matched against the names it imports
-from `tatolab.stream`: bare `@node` classes, bare `@node` and `@node.shader` functions,
+from `tatolab.stream`: `@node(...)`, bare `@node` and `@node.shader` functions,
 `X = node.rust_function(...)` assignments and `@graph_generator` functions, each node's
 `@node.meta` beside its kind decorator, and `@named_pin_type` classes, each a pin type of the
 module named by its import path. A port is listed where the declaration states it in source,
@@ -75,7 +75,6 @@ _STATEFUL_RETURN = "Stateful"
 _OPTIONAL_ANNOTATION = "Optional"
 _INPUT_PIN_ANNOTATION = "InputPin"
 _OUTPUT_PIN_ANNOTATION = "OutputPin"
-_CLASS_VARIABLE_ANNOTATION = "ClassVar"
 _ANNOTATED_ANNOTATION = "Annotated"
 _NODE_FUNCTION_INPUT_ANNOTATION = "Input"
 _SINGLE_OUTPUT_PORT_NAME = "result"
@@ -249,11 +248,7 @@ class _ModuleDeclarationReading:
         for statement in statements:
             if isinstance(statement, ast.ClassDef):
                 qualname = f"{qualname_prefix}{statement.name}"
-                if (
-                    not self._note_a_retired_form(statement, qualname)
-                    and self._decorated_with(statement, TYPED_NODE_DECORATOR) is not None
-                ):
-                    self.node_types.append(self._typed_class_node_type(statement, qualname))
+                self._note_a_retired_form(statement, qualname)
                 named_pin_type = self._decorated_with(statement, NAMED_PIN_TYPE_DECORATOR)
                 if named_pin_type is not None:
                     self.named_pin_types.append(
@@ -304,6 +299,8 @@ class _ModuleDeclarationReading:
         in a retired form does not load, so it is no node type."""
         noted = False
         for sdk_name, retired in _RETIRED_DECLARATIONS_BY_DECORATOR.items():
+            if retired.on_a_class_only and not isinstance(declaration, ast.ClassDef):
+                continue
             decorator = self._decorated_with(declaration, sdk_name)
             if decorator is None:
                 continue
@@ -362,46 +359,17 @@ class _ModuleDeclarationReading:
             return None
         return f"{sdk_name}.{rest}" if rest else sdk_name
 
-    def _typed_class_node_type(self, node_class: ast.ClassDef, qualname: str) -> dict[str, Any]:
-        """A class under bare `@node`: each public annotated attribute a field, an `InputPin`
-        or an `OutputPin`, in the order written; `_private` and `ClassVar` ones are state."""
-        inputs: list[dict[str, Any]] = []
-        outputs: list[dict[str, Any]] = []
-        for statement in node_class.body:
-            if not isinstance(statement, ast.AnnAssign) or not isinstance(statement.target, ast.Name):
-                continue
-            attribute_name = statement.target.id
-            pin_form, type_annotation = _class_node_pin_form_and_its_type(statement.annotation)
-            if attribute_name.startswith("_") or pin_form == _CLASS_VARIABLE_ANNOTATION:
-                continue
-            port: dict[str, Any] = {
-                "name": _port_name_as_cast(attribute_name),
-                "description": self._described_text_of(statement.annotation)
-                or self._described_text_of(type_annotation),
-                "annotation": ast.unparse(statement.annotation),
-            }
-            if pin_form == _OUTPUT_PIN_ANNOTATION:
-                outputs.append(port)
-                continue
-            if pin_form is None and statement.value is not None:
-                port.update(_default_as_listed(statement.value, literal_key="pin_default"))
-            inputs.append(port)
-        return self._node_type(
-            qualname, "process", declaration=node_class, inputs=inputs, outputs=outputs
-        )
-
     def _node_function_type(
         self, function: ast.FunctionDef | ast.AsyncFunctionDef, qualname: str
     ) -> dict[str, Any]:
         """A function under `@node(...)`: each keyword-only parameter an `Input`, an `InputPin`
-        or an `OutputPin`, in the order written, an `Input`'s type and default listed as a class
-        field's are; the runtime context is no port."""
+        or an `OutputPin`, in the order written, an `Input`'s type and its default listed; the runtime context is no port."""
         inputs: list[dict[str, Any]] = []
         outputs: list[dict[str, Any]] = []
         for parameter, default in zip(function.args.kwonlyargs, function.args.kw_defaults):
             if parameter.annotation is None:
                 continue
-            pin_form, type_annotation = _class_node_pin_form_and_its_type(parameter.annotation)
+            pin_form, type_annotation = _pin_form_and_its_type(parameter.annotation)
             if pin_form is None:
                 pin_form, type_annotation = _node_function_input_and_its_type(parameter.annotation)
                 if pin_form is None:
@@ -841,12 +809,12 @@ def _annotated_type_name(annotation: Optional[ast.expr]) -> Optional[str]:
     return None if dotted_name is None else dotted_name.rsplit(".", 1)[-1]
 
 
-def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:
-    """The form a class node's attribute annotation writes, `InputPin`, `OutputPin` or `ClassVar`,
-    and the type inside it; `None` and the annotation itself for a field."""
+def _pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[str], ast.expr]:
+    """The pin form a node function's parameter annotation writes, `InputPin` or `OutputPin`, and
+    the type inside it; `None` and the annotation itself for any other parameter."""
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
         try:
-            return _class_node_pin_form_and_its_type(ast.parse(annotation.value, mode="eval").body)
+            return _pin_form_and_its_type(ast.parse(annotation.value, mode="eval").body)
         except SyntaxError:
             return None, annotation
     written = annotation
@@ -855,7 +823,7 @@ def _class_node_pin_form_and_its_type(annotation: ast.expr) -> tuple[Optional[st
         if arguments:
             written = arguments[0]
     form = _annotated_type_name(written)
-    if form in (_INPUT_PIN_ANNOTATION, _OUTPUT_PIN_ANNOTATION, _CLASS_VARIABLE_ANNOTATION):
+    if form in (_INPUT_PIN_ANNOTATION, _OUTPUT_PIN_ANNOTATION):
         arguments = _subscript_arguments(written) if isinstance(written, ast.Subscript) else []
         return form, arguments[0] if arguments else written
     return None, annotation

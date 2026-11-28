@@ -6,19 +6,19 @@
 from __future__ import annotations
 
 import math
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 import numpy
 from tatolab.stream import (
     Audio,
     Description,
     FormerlyNamed,
+    Input,
     NumberRange,
     NumberUnit,
     OutputPin,
     PinMeaning,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     log,
     node,
 )
@@ -55,98 +55,98 @@ def one_cycle_of_the_waveform(waveform: str, phases_in_cycles: numpy.ndarray) ->
     description="A steady tone: a sine, square, saw or triangle wave at the pitch you set. Wire it into the Audio Video Preview, or to a Speaker, to hear it.",
 )
 @node(execution="continuous", interval_ms=5)
-class Oscillator:
+def Oscillator(
+    *,
+    frequency: Input[
+        Annotated[
+            float,
+            NumberUnit("Hz"),
+            PinMeaning("frequency"),
+            NumberRange(minimum=0.0),
+            FormerlyNamed("frequency_hz"),
+        ]
+    ] = Input(220.0),
+    waveform: Input[Literal["sine", "square", "saw", "triangle"]] = Input("sine"),
+    amplitude: Input[Annotated[float, NumberRange(minimum=0.0, maximum=1.0)]] = Input(0.2),
+    sample_rate: Input[Annotated[int, NumberUnit("Hz"), NumberRange(minimum=1)]] = Input(48_000),
+    channels: Input[Annotated[int, NumberRange(minimum=1)]] = Input(2),
+    block_size: Input[Annotated[int, NumberRange(minimum=1)]] = Input(512),
+    audio: OutputPin[Annotated[Audio, Description("The tone, the same on every channel")]],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """A phase-continuous tone, paced by the stream's clock.
 
-    The tick is shorter than any block: each `process()` emits however many
-    whole blocks elapsed time owes, so the tone stays locked to real time. Its
-    pitch, waveform and loudness follow their inputs from the next block on,
-    and so do its channels and block size; a change of its rate starts a new
-    run at that rate from the tick it is seen on.
+    The tick is shorter than any block: each frame emits however many whole blocks elapsed
+    time owes, so the tone stays locked to real time. Its pitch, waveform and loudness follow
+    their inputs from the next block on, and so do its channels and block size; a change of its
+    rate starts a new run at that rate from the tick it is seen on.
     """
+    run_anchor_timestamp_ns: "int | None" = None
+    # The stream-wide index of this run's first sample. A new run carries the samples it
+    # skipped, so the index keeps counting real time.
+    start_sample_of_this_run = 0
+    samples_emitted_in_this_run = 0
+    next_phase_in_cycles = 0.0
+    # The rate this run counts its samples at; none until the first frame reads it.
+    sample_rate_of_this_run: "int | None" = None
 
-    frequency: Annotated[
-        float,
-        NumberUnit("Hz"),
-        PinMeaning("frequency"),
-        NumberRange(minimum=0.0),
-        FormerlyNamed("frequency_hz"),
-    ] = 220.0
-    waveform: Literal["sine", "square", "saw", "triangle"] = "sine"
-    amplitude: Annotated[float, NumberRange(minimum=0.0, maximum=1.0)] = 0.2
-    sample_rate: Annotated[int, SettingOnly(), NumberUnit("Hz"), NumberRange(minimum=1)] = 48_000
-    channels: Annotated[int, SettingOnly(), NumberRange(minimum=1)] = 2
-    block_size: Annotated[int, SettingOnly(), NumberRange(minimum=1)] = 512
-    audio: OutputPin[Annotated[Audio, Description("The tone, the same on every channel")]]
-
-    def __init__(self) -> None:
-        self.run_anchor_timestamp_ns: int | None = None
-        # The stream-wide index of this run's first sample. A new run carries
-        # the samples it skipped, so the index keeps counting real time.
-        self.start_sample_of_this_run = 0
-        self.samples_emitted_in_this_run = 0
-        self.next_phase_in_cycles = 0.0
-        # The rate this run counts its samples at.
-        self.sample_rate_of_this_run = self.sample_rate
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        nonlocal run_anchor_timestamp_ns, start_sample_of_this_run, samples_emitted_in_this_run
+        nonlocal sample_rate_of_this_run
         now_ns = ctx.time
-        if self.run_anchor_timestamp_ns is None:
-            self.run_anchor_timestamp_ns = now_ns
-        if self.sample_rate != self.sample_rate_of_this_run:
+        if run_anchor_timestamp_ns is None:
+            run_anchor_timestamp_ns = now_ns
+        if sample_rate.get() != sample_rate_of_this_run:
             # Counted at the old rate, the samples owed would leave a backlog or a silence.
-            self.start_sample_of_this_run += self.samples_emitted_in_this_run
-            self.run_anchor_timestamp_ns = now_ns
-            self.samples_emitted_in_this_run = 0
-            self.sample_rate_of_this_run = self.sample_rate
+            start_sample_of_this_run += samples_emitted_in_this_run
+            run_anchor_timestamp_ns = now_ns
+            samples_emitted_in_this_run = 0
+            sample_rate_of_this_run = sample_rate.get()
 
-        samples_owed = (
-            (now_ns - self.run_anchor_timestamp_ns) * self.sample_rate
-        ) // NANOSECONDS_PER_SECOND
-        if samples_owed - self.samples_emitted_in_this_run > max(
-            MAXIMUM_BLOCKS_OF_CATCH_UP * self.block_size,
-            self.sample_rate * LEAST_CATCH_UP_MS // 1000,
+        rate, block = sample_rate.get(), block_size.get()
+        samples_owed = ((now_ns - run_anchor_timestamp_ns) * rate) // NANOSECONDS_PER_SECOND
+        if samples_owed - samples_emitted_in_this_run > max(
+            MAXIMUM_BLOCKS_OF_CATCH_UP * block, rate * LEAST_CATCH_UP_MS // 1000
         ):
             log.warn(
                 "fell far enough behind real time to start a new run; the gap is "
                 "left in the timestamps rather than filled with invented samples",
-                samples_behind=samples_owed - self.samples_emitted_in_this_run,
+                samples_behind=samples_owed - samples_emitted_in_this_run,
             )
-            self.start_sample_of_this_run += samples_owed
-            self.run_anchor_timestamp_ns = now_ns
-            self.samples_emitted_in_this_run = 0
+            start_sample_of_this_run += samples_owed
+            run_anchor_timestamp_ns = now_ns
+            samples_emitted_in_this_run = 0
             samples_owed = 0
 
-        while self.samples_emitted_in_this_run + self.block_size <= samples_owed:
-            self._publish_one_block()
+        while samples_emitted_in_this_run + block <= samples_owed:
+            publish_one_block(run_anchor_timestamp_ns, rate, block)
 
-    def _publish_one_block(self) -> None:
-        assert self.run_anchor_timestamp_ns is not None
-        # The anchor plus the emitted-sample offset in integer arithmetic, never
-        # an accumulated per-block delta, which drifts at 44.1 kHz-family rates.
-        first_sample_timestamp_ns = (
-            self.run_anchor_timestamp_ns
-            + (self.samples_emitted_in_this_run * NANOSECONDS_PER_SECOND) // self.sample_rate
-        )
-        self.audio.write(
-            self._next_planar_samples(),
+    def publish_one_block(anchor_ns: int, rate: int, block: int) -> None:
+        nonlocal samples_emitted_in_this_run
+        # The anchor plus the emitted-sample offset in integer arithmetic, never an accumulated
+        # per-block delta, which drifts at 44.1 kHz-family rates.
+        first_sample_timestamp_ns = anchor_ns + (
+            samples_emitted_in_this_run * NANOSECONDS_PER_SECOND
+        ) // rate
+        audio.write(
+            next_planar_samples(rate, block),
             first_sample_timestamp_ns,
-            start_sample=self.start_sample_of_this_run + self.samples_emitted_in_this_run,
-            sample_rate=self.sample_rate,
+            start_sample=start_sample_of_this_run + samples_emitted_in_this_run,
+            sample_rate=rate,
         )
-        self.samples_emitted_in_this_run += self.block_size
+        samples_emitted_in_this_run += block
 
-    def _next_planar_samples(self) -> numpy.ndarray:
+    def next_planar_samples(rate: int, block: int) -> numpy.ndarray:
         """The next block, `[channel][sample]`, every channel the same tone."""
-        phase_step_in_cycles = self.frequency / self.sample_rate
-        phases = self.next_phase_in_cycles + phase_step_in_cycles * numpy.arange(
-            self.block_size, dtype=numpy.float64
+        nonlocal next_phase_in_cycles
+        phase_step_in_cycles = frequency.get() / rate
+        phases = next_phase_in_cycles + phase_step_in_cycles * numpy.arange(
+            block, dtype=numpy.float64
         )
         # Carried across blocks and wrapped, so the tone never clicks at a block edge.
-        self.next_phase_in_cycles = (
-            self.next_phase_in_cycles + phase_step_in_cycles * self.block_size
-        ) % 1.0
-        one_channel = (self.amplitude * one_cycle_of_the_waveform(self.waveform, phases)).astype(
-            numpy.float32
-        )
-        return numpy.ascontiguousarray(numpy.broadcast_to(one_channel, (self.channels, self.block_size)))
+        next_phase_in_cycles = (next_phase_in_cycles + phase_step_in_cycles * block) % 1.0
+        one_channel = (
+            amplitude.get() * one_cycle_of_the_waveform(waveform.get(), phases)
+        ).astype(numpy.float32)
+        return numpy.ascontiguousarray(numpy.broadcast_to(one_channel, (channels.get(), block)))
+
+    return each_frame

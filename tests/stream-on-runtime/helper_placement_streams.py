@@ -392,8 +392,8 @@ def python_level_source_through_a_gate_into_a_native_converter(stream_builder: S
 
 
 @graph_generator
-def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: StreamBuilder) -> None:
-    """A typed function node built with `gain` 0.5 into `level`, a setting a Python class reads at setup."""
+def typed_level_into_a_value_input_a_computed_value_reads(stream_builder: StreamBuilder) -> None:
+    """A typed function node built with `gain` 0.5 into `level`, a value input a computed value reads."""
     scaled = stream_builder.add(
         LevelScaledByItsGain, name="scaled", input_values={"gain": 0.5}
     )
@@ -402,9 +402,9 @@ def typed_level_into_a_setting_a_python_class_reads_at_setup(stream_builder: Str
 
 
 @graph_generator
-def held_level_into_a_setting_and_read_by_a_python_sink(stream_builder: StreamBuilder) -> None:
-    """A stateful function node holding its `level` input, into a setting a Python class reads
-    at setup and into a second Python class; stateful, so it runs in a process of its own."""
+def held_level_into_a_computed_value_and_a_python_sink(stream_builder: StreamBuilder) -> None:
+    """A stateful function node holding its `level` input, into a value input a computed value
+    reads and into a second Python node; stateful, so it runs in a process of its own."""
     held = stream_builder.add(HoldsItsLevelCountingItsCalls, name="held")
     reader = stream_builder.add(ReportsTheLevelItIsBuiltWith, name="reader")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")

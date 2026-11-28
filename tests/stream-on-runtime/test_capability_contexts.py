@@ -94,20 +94,22 @@ def test_process_receives_the_limited_context_without_gpu_full_access(
 
 
 # ---------------------------------------------------------------------------
-# A node's fields and ctx.time
+# A node's value inputs and ctx.time
 # ---------------------------------------------------------------------------
 
 
-def test_a_nodes_fields_hold_the_values_it_was_added_with_when_init_runs(
+def test_a_nodes_value_inputs_hold_the_values_it_was_added_with_at_its_first_build(
     start_tatolabd_running_stream,
 ):
     observation = run_probe(start_tatolabd_running_stream, "probe_with_input_values")
-    assert observation["fields_in_init"] == {"gain": 2.5, "label": "left"}
+    assert observation["inputs_at_its_first_build"] == {"gain": 2.5, "label": "left"}
 
 
-def test_a_nodes_fields_hold_their_defaults_when_nothing_was_passed(start_tatolabd_running_stream):
+def test_a_nodes_value_inputs_hold_their_defaults_when_nothing_was_passed(
+    start_tatolabd_running_stream,
+):
     observation = run_probe(start_tatolabd_running_stream, "FieldsProbe")
-    assert observation["fields_in_init"] == {"gain": 0.0, "label": ""}
+    assert observation["inputs_at_its_first_build"] == {"gain": 0.0, "label": ""}
 
 
 def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_tatolabd_running_stream):
@@ -176,20 +178,22 @@ def test_an_output_pin_still_writes_from_a_worker_thread_the_node_started(
 
 
 # ---------------------------------------------------------------------------
-# Hook arity: the ctx parameter is required
+# Per-frame arity: the ctx parameter is required
 # ---------------------------------------------------------------------------
 
 
-def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(start_tatolabd_running_stream):
-    """Hooks require the ctx parameter; a zero-arg `process` must TypeError by
-    name in the log, never be silently invoked without a context."""
+def test_a_zero_argument_per_frame_function_fails_loudly_with_a_type_error(
+    start_tatolabd_running_stream,
+):
+    """A per-frame function takes the ctx parameter; one taking none must TypeError by name in
+    the log, never be silently invoked without a context."""
     tatolabd = start_tatolabd_running_stream(capability_context_streams.zero_argument_process)
     tatolabd.await_stderr_containing("process() raised")
     tatolabd.await_stderr_containing("TypeError")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     assert "MARKER:HOOK_BODY_RAN" not in tatolabd.stderr_text + tatolabd.stdout_text, (
-        "the zero-arg hook body ran — the host invoked it without a context"
+        "the zero-arg per-frame body ran — the host invoked it without a context"
     )
 
 

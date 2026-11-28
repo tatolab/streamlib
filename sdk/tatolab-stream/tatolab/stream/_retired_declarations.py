@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Final, Optional
 
 __all__ = [
+    "A_NODE_WRITTEN_AS_ONE_FUNCTION",
     "RETIRED_DECLARATION_FINDING_CODE",
     "RETIRED_DECLARATIONS",
     "RETIRED_IMPORTS",
@@ -42,6 +43,10 @@ class RetiredDeclaration:
     replaced_by: str
     """What replaces it, said as the fix in the refusal's words."""
 
+    on_a_class_only: bool = False
+    """Whether only the decorator on a class is retired: `@node` on a class is, on a function
+    it is not."""
+
 
 @dataclass(frozen=True, slots=True)
 class RetiredImport:
@@ -63,11 +68,16 @@ class RetiredImportRefusal(ImportError):
         """The retired name the import named."""
 
 
-_A_CLASS_NODE_OF_TYPED_PINS: Final = (
-    "bare `@node` on a class whose fields are its typed pins: `video: InputPin[Texture]` for a "
-    "stream it reads, `result: OutputPin[Texture]` for one it writes, and `radius: float = 4.0` "
-    "for a value it takes"
+A_NODE_WRITTEN_AS_ONE_FUNCTION: Final = (
+    "`@node(execution=\"reactive\")` on a `def` whose keyword-only parameters are its typed "
+    "pins and inputs: `video: InputPin[Texture]` for a stream it reads, `result: "
+    "OutputPin[Texture]` for one it writes, `radius: Input[float] = Input(4.0)` for a value it "
+    "takes, and `ctx: RuntimeContextFullAccess` for its context. Its body runs once when the "
+    "node starts, doing what `setup` did, and returns `each_frame`, a `def each_frame(ctx): ...` "
+    "the node calls in place of `process`; an object with a `close()` that a "
+    "`computed(lambda: ...)` builds is closed when the node stops, in place of `teardown`"
 )
+"""The node form that replaces every retired one, said as the fix in a refusal's words."""
 
 RETIRED_DECLARATIONS: Final = (
     RetiredDeclaration(
@@ -79,10 +89,16 @@ RETIRED_DECLARATIONS: Final = (
         ),
     ),
     RetiredDeclaration(
+        decorator="tatolab.stream.node",
+        spelling="@node",
+        replaced_by=A_NODE_WRITTEN_AS_ONE_FUNCTION,
+        on_a_class_only=True,
+    ),
+    RetiredDeclaration(
         decorator="tatolab.stream.node.process",
         spelling="@node.process",
         replaced_by=(
-            f"{_A_CLASS_NODE_OF_TYPED_PINS}; `execution`, `interval_ms`, `scheduling` and "
+            f"{A_NODE_WRITTEN_AS_ONE_FUNCTION}; `execution`, `interval_ms`, `scheduling` and "
             f"`paced_by_real_time` go on `@node(...)`"
         ),
     ),
@@ -94,7 +110,7 @@ _A_PIN_TYPED_BY_WHAT_IT_CARRIES: Final = (
 )
 
 RETIRED_IMPORTS: Final = (
-    RetiredImport(name="Output", replaced_by=f"`OutputPin[...]`, as {_A_CLASS_NODE_OF_TYPED_PINS}"),
+    RetiredImport(name="Output", replaced_by=f"`OutputPin[...]`, a parameter of {A_NODE_WRITTEN_AS_ONE_FUNCTION}"),
     RetiredImport(name="PortFamily", replaced_by=_A_PIN_TYPED_BY_WHAT_IT_CARRIES),
     RetiredImport(name="Image", replaced_by="`Texture`, the pin type of a picture"),
     RetiredImport(name="Array", replaced_by="`Tensor`, the pin type of an array of numbers"),
@@ -158,10 +174,8 @@ def the_words_refusing_a_retired_declaration(
     """What refuses `node_type` declared in the `retired` form, with the fix; `None` for a node
     the form was not yet applied to."""
     declared = "A node" if node_type is None else f"`{node_type}`"
-    return (
-        f"{declared} is declared with `{retired.spelling}`, which is retired. "
-        f"To fix: {retired.replaced_by}."
-    )
+    form = f"a class under `{retired.spelling}`" if retired.on_a_class_only else f"`{retired.spelling}`"
+    return f"{declared} is declared with {form}, which is retired. To fix: {retired.replaced_by}."
 
 
 def the_words_refusing_a_retired_import(retired: RetiredImport) -> str:

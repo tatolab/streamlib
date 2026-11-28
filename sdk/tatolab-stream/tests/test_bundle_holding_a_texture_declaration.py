@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A frozen dataclass with a Texture field is one bundle pin a class node's `InputPin` and
-`OutputPin` carry, as a stream; a field, a function's pin and a List of bundles refuse it by
+"""A frozen dataclass with a Texture field is one bundle pin a node function's `InputPin` and
+`OutputPin` carry, as a stream; a value input, a pure function's pin and a List of bundles refuse it by
 name, as it holds no stored value."""
 
 from __future__ import annotations
@@ -12,8 +12,11 @@ from typing import Any
 
 import pytest
 
-from tatolab.stream import InputPin, NodeDeclarationRefusal, OutputPin, Rectangle, Texture
-from tatolab.stream._class_node_declaration import read_class_node_ports_and_members
+from tatolab.stream import InputPin, NodeDeclarationRefusal, OutputPin, Rectangle, Texture, node
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 from tatolab.stream._pin_declaration import PinForm, read_pin_declaration
 
 
@@ -37,15 +40,14 @@ FRAMED = {
 }
 
 
-class Crop:
-    framed: InputPin[Framed]
-    cropped: OutputPin[Framed]
-
-    def process(self, ctx: Any) -> None: ...
+@node(execution="reactive")
+def Crop(*, framed: InputPin[Framed], cropped: OutputPin[Framed]) -> None: ...
 
 
-def test_a_class_node_carries_a_bundle_holding_a_texture_on_one_input_and_one_output_pin() -> None:
-    input_ports, output_ports, members = read_class_node_ports_and_members(Crop)
+def test_a_node_function_carries_a_bundle_holding_a_texture_on_one_input_and_one_output_pin() -> None:
+    input_ports = getattr(Crop, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    output_ports = getattr(Crop, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    members = Crop.members
     by_name = {port["name"]: port for port in (*input_ports, *output_ports)}
 
     assert list(by_name) == ["framed", "cropped"], "the dataclass is one pin, not one per field"
@@ -74,7 +76,7 @@ def test_a_field_refuses_a_bundle_holding_a_texture_with_an_input_pin_as_the_fix
     )
 
 
-def test_a_function_refuses_a_bundle_holding_a_texture_with_a_class_node_as_the_fix() -> None:
+def test_a_pure_function_refuses_a_bundle_holding_a_texture_with_a_node_function_as_the_fix() -> None:
     refusal = refusal_of(Framed, form="function")
 
     assert refusal.finding_code == "pin_type_not_read_yet"

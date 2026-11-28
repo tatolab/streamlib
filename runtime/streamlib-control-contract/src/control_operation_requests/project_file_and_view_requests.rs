@@ -87,7 +87,7 @@ pub struct CreateNodeFileRequest {
     /// The new Python file, `/`-separated and relative to the project directory, such as
     /// `nodes/edge_glow.py`.
     #[schemars(
-        description = "The new Python file, `/`-separated and relative to the project directory, such as `nodes/edge_glow.py`: each folder and the file's name a Python identifier, the class named after the file (`EdgeGlow`). Refused where a file already is, outside the project, inside `.tatolab/` or `imports/`, or through a symbolic link."
+        description = "The new Python file, `/`-separated and relative to the project directory, such as `nodes/edge_glow.py`: each folder and the file's name a Python identifier, the node function named after the file (`EdgeGlow`). Refused where a file already is, outside the project, inside `.tatolab/` or `imports/`, or through a symbolic link."
     )]
     pub path: String,
     /// Who the change is by, as history records it and undo follows it.

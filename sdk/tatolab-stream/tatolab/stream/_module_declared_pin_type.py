@@ -46,9 +46,10 @@ def the_pin_type_of_a_module_declared_type(
     if not read_where_a_connection_goes:
         written = connection.import_path.rpartition(":")[2]
         raise refusal(
-            f"{pin_named} is typed `{written}`, a Connection, which a class node under bare "
-            f"`@node` gives out on an output pin, `connection: OutputPin[{written}]`, and takes on "
-            f"a field of its own, `hub: {written} | None = None`; a wire of it brings a node and "
+            f"{pin_named} is typed `{written}`, a Connection, which a node written as one "
+            f"function gives out on an output pin, `connection: OutputPin[{written}]`, and takes "
+            f"on an input of its own, `hub: Input[{written} | None] = Input(None)`; a wire of it "
+            f"brings a node and "
             f"carries no data, so nothing would reach it here. To fix: declare it one of those two "
             f"ways.",
             "pin_type_not_read_yet",

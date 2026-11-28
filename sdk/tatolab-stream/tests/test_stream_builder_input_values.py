@@ -18,8 +18,9 @@ from stream_graph_builder_nodes import TintedLevel
 from stream_graph_builder_streams import StandInMarker
 from tatolab.stream import (
     Color,
-    MakeBundle,
+    Input,
     InputPin,
+    MakeBundle,
     OutputPin,
     PinGroup,
     PinTypeChoice,
@@ -198,15 +199,14 @@ class _Layer:
     opacity: float = 1.0
 
 
-@node
-class _LayeredOver:
+@node(execution="reactive")
+def _LayeredOver(
+    *,
+    layers: PinGroup[_Layer],
+    result: OutputPin[Texture],
+) -> None:
     """Lays each layer's picture over the one below it."""
-
-    layers: PinGroup[_Layer]
-    result: OutputPin[Texture]
-
-    def process(self, ctx: Any) -> None:
-        pass
+    return None
 
 
 def test_a_slot_port_of_a_pin_group_takes_a_value_of_its_fields_type_and_a_link_in_any_slot() -> None:

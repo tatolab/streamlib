@@ -4,25 +4,27 @@
 //! A new node file's starting content, rendered from the template the SDK carries beside the
 //! new project scaffold.
 
-/// The node file template, a class under bare `@node` in the current `tatolab.stream` idiom.
+/// The node file template, a node written as one function in the current `tatolab.stream` idiom.
 const NEW_NODE_FILE_TEMPLATE: &str =
     include_str!("../../../sdk/tatolab-stream/node_file_template/new_node.py");
 
-/// The template's class statement, its class renamed on render after the file's name.
-const NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT: &str = "class NewNode[Frame: Texture]:";
+/// The template's function statement, its node renamed on render after the file's name.
+const NEW_NODE_FILE_TEMPLATE_FUNCTION_STATEMENT: &str = "def NewNode[Frame: Texture](";
 
-/// The template's type parameter, which the node's class cannot be named either.
+/// The template's type parameter, which the node cannot be named either.
 const NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER: &str = "Frame";
 
 /// The repository's licence header the template carries, which a person's file never does.
 const NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER: &str =
     "# Copyright (c) 2025 Tatolab LLC\n# SPDX-License-Identifier: GPL-3.0-only\n\n";
 
-/// The names the template imports, in the order it imports them, which the node's class
+/// The names the template imports, in the order it imports them, which the node
 /// cannot take.
 const NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS: &[&str] = &[
     "Annotated",
+    "Callable",
     "Description",
+    "Input",
     "InputPin",
     "NumberRange",
     "OutputPin",
@@ -34,7 +36,7 @@ const NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS: &[&str] = &[
 
 const PYTHON_SOURCE_FILE_SUFFIX: &str = ".py";
 
-/// Python's hard keywords, none of which names a module or a class.
+/// Python's hard keywords, none of which names a module or a function.
 const PYTHON_KEYWORDS: &[&str] = &[
     "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
     "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
@@ -45,7 +47,7 @@ const PYTHON_KEYWORDS: &[&str] = &[
 /// A new node file rendered for one path of a project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NewNodeFileRenderedFromTheTemplate {
-    /// The node type the file declares, `<module>:<class>`, as `add_node` takes it.
+    /// The node type the file declares, `<module>:<function>`, as `add_node` takes it.
     pub(crate) node_type: String,
     /// The file's content.
     pub(crate) content: String,
@@ -61,7 +63,7 @@ fn is_a_python_identifier(name: &str) -> bool {
 }
 
 /// `invert` → `Invert`, `edge_glow` → `EdgeGlow`.
-fn class_name_for_a_module_named(module_file_stem: &str) -> String {
+fn node_name_for_a_module_named(module_file_stem: &str) -> String {
     module_file_stem
         .split('_')
         .filter(|word| !word.is_empty())
@@ -75,9 +77,9 @@ fn class_name_for_a_module_named(module_file_stem: &str) -> String {
         .collect()
 }
 
-/// The template rendered for a new Python file at `path_in_project`, its class named after the
-/// file: `nodes/edge_glow.py` declares `nodes.edge_glow:EdgeGlow`. Refused, with why, for a path
-/// that is not an importable Python module whose name gives a class name.
+/// The template rendered for a new Python file at `path_in_project`, its node function named
+/// after the file: `nodes/edge_glow.py` declares `nodes.edge_glow:EdgeGlow`. Refused, with why,
+/// for a path that is not an importable Python module whose name gives a node name.
 pub(crate) fn render_the_new_node_file_template_for(
     path_in_project: &str,
 ) -> Result<NewNodeFileRenderedFromTheTemplate, String> {
@@ -100,13 +102,13 @@ pub(crate) fn render_the_new_node_file_template_for(
             "`{path_in_project}` is a module Python reserves, never a node file"
         ));
     }
-    let class_name = class_name_for_a_module_named(module_file_stem);
-    if !is_a_python_identifier(&class_name)
-        || NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS.contains(&class_name.as_str())
-        || class_name == NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER
+    let node_name = node_name_for_a_module_named(module_file_stem);
+    if !is_a_python_identifier(&node_name)
+        || NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS.contains(&node_name.as_str())
+        || node_name == NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER
     {
         return Err(format!(
-            "`{path_in_project}` would name its node `{class_name}`, which the file cannot \
+            "`{path_in_project}` would name its node `{node_name}`, which the file cannot \
              declare; choose another file name"
         ));
     }
@@ -114,11 +116,11 @@ pub(crate) fn render_the_new_node_file_template_for(
         .strip_prefix(NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER)
         .unwrap_or(NEW_NODE_FILE_TEMPLATE)
         .replace(
-            NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT,
-            &format!("class {class_name}[{NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER}: Texture]:"),
+            NEW_NODE_FILE_TEMPLATE_FUNCTION_STATEMENT,
+            &format!("def {node_name}[{NEW_NODE_FILE_TEMPLATE_TYPE_PARAMETER}: Texture]("),
         );
     Ok(NewNodeFileRenderedFromTheTemplate {
-        node_type: format!("{}:{class_name}", module_path_segments.join(".")),
+        node_type: format!("{}:{node_name}", module_path_segments.join(".")),
         content,
     })
 }
@@ -128,18 +130,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_template_carries_the_header_and_the_class_statement_its_render_replaces() {
+    fn the_template_carries_the_header_and_the_function_statement_its_render_replaces() {
         assert!(NEW_NODE_FILE_TEMPLATE.starts_with(NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER));
         assert_eq!(
             NEW_NODE_FILE_TEMPLATE
-                .matches(NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT)
+                .matches(NEW_NODE_FILE_TEMPLATE_FUNCTION_STATEMENT)
                 .count(),
             1
         );
     }
 
     #[test]
-    fn the_template_imports_exactly_the_names_its_class_cannot_take() {
+    fn the_template_imports_exactly_the_names_its_node_cannot_take() {
         let (imports, _) = NEW_NODE_FILE_TEMPLATE
             .strip_prefix(NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER)
             .and_then(|template| template.split_once("\n\n\n"))
@@ -158,21 +160,17 @@ mod tests {
     }
 
     #[test]
-    fn a_node_file_is_rendered_with_its_class_named_after_the_file_and_no_licence_header() {
+    fn a_node_file_is_rendered_with_its_node_named_after_the_file_and_no_licence_header() {
         let rendered = render_the_new_node_file_template_for("nodes/edge_glow.py").unwrap();
 
         assert_eq!(rendered.node_type, "nodes.edge_glow:EdgeGlow");
-        assert!(
-            rendered
-                .content
-                .contains("class EdgeGlow[Frame: Texture]:\n")
-        );
+        assert!(rendered.content.contains("def EdgeGlow[Frame: Texture](\n"));
         assert!(!rendered.content.contains("NewNode"));
         assert!(!rendered.content.contains("SPDX-License-Identifier"));
         assert!(
             rendered
                 .content
-                .starts_with("from typing import Annotated\n")
+                .starts_with("from typing import Annotated, Callable\n")
         );
     }
 
@@ -187,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn a_path_that_is_no_importable_module_or_names_no_usable_class_is_refused() {
+    fn a_path_that_is_no_importable_module_or_names_no_usable_node_is_refused() {
         for refused_path in [
             "nodes/invert.txt",
             "nodes/invert",

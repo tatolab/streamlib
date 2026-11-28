@@ -3,7 +3,7 @@
 
 """The node file template `create_node_file` writes, held to the current `tatolab.stream` idiom.
 
-The runtime renders it by dropping the licence header and renaming `NewNode` in its class
+The runtime renders it by dropping the licence header and renaming `NewNode` in its function
 statement after the file; the render's own refusals are the runtime's, and tested there.
 """
 
@@ -24,14 +24,14 @@ from tatolab.stream.description_lint import lint_the_descriptions_of_a_node_type
 
 NODE_FILE_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "node_file_template" / "new_node.py"
 TEMPLATE_LICENCE_HEADER = "# Copyright (c) 2025 Tatolab LLC\n# SPDX-License-Identifier: GPL-3.0-only\n\n"
-TEMPLATE_CLASS_STATEMENT = "class NewNode[Frame: Texture]:"
+TEMPLATE_FUNCTION_STATEMENT = "def NewNode[Frame: Texture]("
 
 
 def a_project_holding_the_template_rendered_at_nodes_edge_glow(project_directory: Path) -> Path:
     template = NODE_FILE_TEMPLATE_PATH.read_text(encoding="utf-8")
     assert template.startswith(TEMPLATE_LICENCE_HEADER)
     rendered = template.removeprefix(TEMPLATE_LICENCE_HEADER).replace(
-        TEMPLATE_CLASS_STATEMENT, "class EdgeGlow[Frame: Texture]:"
+        TEMPLATE_FUNCTION_STATEMENT, "def EdgeGlow[Frame: Texture]("
     )
     node_file = project_directory / "nodes" / "edge_glow.py"
     node_file.parent.mkdir(parents=True)

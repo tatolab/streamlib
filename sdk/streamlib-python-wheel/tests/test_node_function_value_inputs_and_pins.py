@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A class node under bare `@node` reads and writes through its pins, and each field holds its input's current value.
+"""A node function reads and writes through its pins, and each value input holds its current value.
 
-The node is built on a real data plane, as its helper builds it: every field holding its set
-value and every pin bound before `__init__()`. A field a wire feeds holds the newest value the
-wire gave, and its set value again once the wire is gone; a value set live reaches the next
-`process()` of a running helper, and a setting keeps the value it was built with.
+The node is built on a real data plane, as its helper builds it: every value input holding its
+set value and every pin bound before its body runs. A value input a wire feeds holds the newest
+value the wire gave, and its set value again once the wire is gone; a value set live reaches the
+next frame of a running helper.
 """
 
 from __future__ import annotations
@@ -22,13 +22,11 @@ import pytest
 from tatolab.runtime._node_the_wheel_hosts import link_input_data_reader_of, link_output_data_writer_of
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
+from tatolab.runtime._class_node_bound_pins import bind_the_pins_of_a_class_node
 from tatolab.runtime._class_node_fields import ClassNodeFields
-from tatolab.runtime._node_hosting import (
-    class_node_members_of,
-    construct_class_node_from_its_fields_and_pins,
-)
+from tatolab.runtime._node_function_running import NodeFunctionRunning
 from tatolab.runtime._node_interpreter_bootstrap import ParentProcessBridge, load_node_class
-from tatolab.stream import Audio, Color, node
+from tatolab.stream import Audio, Color, Input, node
 from tatolab.stream._class_node_pins import InputPin, OutputPin
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -44,24 +42,31 @@ pytestmark = pytest.mark.usefixtures(
 )
 
 
+# What `LevelTinter`'s value inputs held at its last frame, by name.
+WHAT_THE_TINTER_HELD: "dict[str, Any]" = {}
+
+
 @node(execution="continuous", interval_ms=5)
-class LevelTinter:
+def LevelTinter(
+    *,
+    gain: Input[float] = Input(1.0),
+    tint: Input[Color] = Input(Color(1.0, 0.5, 0.25)),
+    level: InputPin[float],
+    sound: InputPin[Audio],
+    reset: InputPin[Trigger],
+    tinted: OutputPin[Color],
+) -> Any:
     """Writes its tint scaled by the level it reads and by its gain."""
 
-    gain: float = 1.0
-    tint: Color = Color(1.0, 0.5, 0.25)
-    level: InputPin[float]
-    sound: InputPin[Audio]
-    reset: InputPin[Trigger]
-    tinted: OutputPin[Color]
+    def each_frame(ctx: Any) -> None:
+        held_gain, held_tint = gain.get(), tint.get()
+        WHAT_THE_TINTER_HELD.update(gain=held_gain, tint=held_tint)
+        read = level.read()
+        if read is not None:
+            scale = read * held_gain
+            tinted.write(Color(held_tint.red * scale, held_tint.green * scale, held_tint.blue * scale))
 
-    def process(self, ctx: Any) -> None:
-        level = self.level.read()
-        if level is not None:
-            scale = level * self.gain
-            self.tinted.write(
-                Color(self.tint.red * scale, self.tint.green * scale, self.tint.blue * scale)
-            )
+    return each_frame
 
 
 _links_opened = itertools.count()
@@ -99,7 +104,8 @@ def _wiring_of_one_link_end(direction: str, port_name: str, link_id: str) -> "di
 
 
 class LevelTinterOnARealDataPlane:
-    """A `LevelTinter` built as its helper builds it, a source wired into each named input and a reader wired from `tinted`."""
+    """A `LevelTinter` built and set up as its helper builds it, a source wired into each named
+    input and a reader wired from `tinted`."""
 
     def __init__(self, stored_input_values: "dict[str, Any]") -> None:
         self.data_plane = _engine.open_node_link_data_access_for_helper_process()
@@ -128,24 +134,41 @@ class LevelTinterOnARealDataPlane:
         )
         self.link_id_by_input_port: "dict[str, str]" = {}
         self._blocks_written = 0
-        members = class_node_members_of(LevelTinter)
-        assert members is not None
+        inputs = link_input_data_reader_of(self.ctx)
+        outputs = link_output_data_writer_of(self.ctx)
+
+        def bind(members: Any) -> "dict[str, Any]":
+            return bind_the_pins_of_a_class_node(
+                members,
+                link_data_access=self.data_plane,
+                inputs=inputs,
+                outputs=outputs,
+                node_id="tinter-1",
+            )
+
         self.fields = ClassNodeFields(
-            members,
+            LevelTinter.members,
             link_data_access=self.data_plane,
-            inputs=link_input_data_reader_of(self.ctx),
+            inputs=inputs,
             node_id="tinter-1",
             stored_input_values=stored_input_values,
+            assign_field_values=NodeFunctionRunning.write_inputs,
         )
-        self.node: Any = construct_class_node_from_its_fields_and_pins(
+        self.pins = bind(LevelTinter.members)
+        self.node = NodeFunctionRunning(
             LevelTinter,
-            members,
-            self.fields,
-            link_data_access=self.data_plane,
-            inputs=link_input_data_reader_of(self.ctx),
-            outputs=link_output_data_writer_of(self.ctx),
-            node_id="tinter-1",
+            values_to_build_with=self.fields.values_to_build_with(),
+            pins=self.pins,
+            bind_pins=bind,
+            slot_counts={},
         )
+        self.node.setup(self.ctx)
+
+    def what_its_inputs_hold(self) -> "dict[str, Any]":
+        """What the node's value inputs hold at a frame run now."""
+        WHAT_THE_TINTER_HELD.clear()
+        self.node.process(self.ctx)
+        return dict(WHAT_THE_TINTER_HELD)
 
     def wire_a_source_into(self, input_port: str) -> None:
         link_id = f"L-into-{input_port}-{next(_links_opened)}"
@@ -180,7 +203,7 @@ class LevelTinterOnARealDataPlane:
         )
 
 
-def test_a_class_node_reads_through_its_input_pin_and_writes_through_its_output_pin():
+def test_a_node_function_reads_through_its_input_pin_and_writes_through_its_output_pin():
     tinter = LevelTinterOnARealDataPlane(
         {"gain": 2.0, "tint": {"red": 1.0, "green": 0.5, "blue": 0.25, "alpha": 1.0}}
     )
@@ -200,37 +223,37 @@ def test_each_read_type_names_its_pin_type_and_a_fire_reads_as_true():
     tinter.wire_a_source_into("sound")
     tinter.write_samples("sound", [[0.0, 0.5], [0.25, -0.25]], sample_rate=48_000)
 
-    block = tinter.node.sound.read()
+    block = tinter.pins["sound"].read()
 
     assert block is not None
     assert block.pin_type == "audio"
     assert (block.channel_count, block.samples_per_channel, block.sample_rate) == (2, 2, 48_000)
-    assert tinter.node.reset.read() is None
+    assert tinter.pins["reset"].read() is None
     _engine.queue_a_fire_of_each_trigger_input(link_data_access=tinter.data_plane, fired=["reset"])
-    assert tinter.node.reset.read() is True
+    assert tinter.pins["reset"].read() is True
 
 
-def test_a_field_holds_its_wires_newest_value_and_its_set_value_again_once_the_wire_is_gone():
+def test_a_value_input_holds_its_wires_newest_value_and_its_set_value_again_once_the_wire_is_gone():
     tinter = LevelTinterOnARealDataPlane({"gain": 2.0})
-    assert tinter.node.gain == 2.0
+    assert tinter.what_its_inputs_hold()["gain"] == 2.0
 
     tinter.wire_a_source_into("gain")
     tinter.fields.take_each_new_value_a_wire_gives(tinter.node)
-    assert tinter.node.gain == 2.0, "a wire that gave nothing yet leaves the set value"
+    assert tinter.what_its_inputs_hold()["gain"] == 2.0, "a wire that gave nothing yet leaves the set value"
 
     tinter.write_control_value("gain", 3.0)
     tinter.fields.take_each_new_value_a_wire_gives(tinter.node)
-    assert tinter.node.gain == 3.0
+    assert tinter.what_its_inputs_hold()["gain"] == 3.0
 
     tinter.fields.take_set_values(tinter.node, {"gain": 5.0})
-    assert tinter.node.gain == 3.0, "a value set while a wire feeds the field waits for the wire to go"
+    assert tinter.what_its_inputs_hold()["gain"] == 3.0, "a value set while a wire feeds the input waits for the wire to go"
 
     tinter.unwire_the_source_of("gain")
     tinter.fields.hand_back_the_set_value_of(tinter.node, "gain")
-    assert tinter.node.gain == 5.0
+    assert tinter.what_its_inputs_hold()["gain"] == 5.0
 
 
-def test_a_field_an_island_of_function_nodes_feeds_holds_the_value_the_island_evaluates():
+def test_a_value_input_an_island_of_function_nodes_feeds_holds_the_value_the_island_evaluates():
     """An island is a wire with no link: drop the island's arm from `_a_wire_feeds` and the gain
     keeps its set value, as Oscillator's frequency did under a Constant on the rig."""
     from tatolab.runtime._function_node_compilation import (
@@ -251,22 +274,22 @@ def test_a_field_an_island_of_function_nodes_feeds_holds_the_value_the_island_ev
     tinter.fields.take_each_new_value_a_wire_gives(
         tinter.node, fed_by_an_island=islands.input_ports_fed
     )
-    assert tinter.node.gain == 3.0, "`2.0` is three letters long"
+    assert tinter.what_its_inputs_hold()["gain"] == 3.0, "`2.0` is three letters long"
 
     tinter.fields.take_set_values(tinter.node, {"gain": 5.0})
     tinter.fields.hand_back_the_set_value_of(
         tinter.node, "gain", fed_by_an_island=islands.input_ports_fed
     )
-    assert tinter.node.gain == 3.0, "the island still feeds the field"
+    assert tinter.what_its_inputs_hold()["gain"] == 3.0, "the island still feeds the input"
 
     islands.stop_feeding_an_input_port("gain")
     tinter.fields.hand_back_the_set_value_of(
         tinter.node, "gain", fed_by_an_island=islands.input_ports_fed
     )
-    assert tinter.node.gain == 5.0
+    assert tinter.what_its_inputs_hold()["gain"] == 5.0
 
 
-def test_a_field_whose_value_was_taken_off_holds_its_default_again():
+def test_a_value_input_whose_value_was_taken_off_holds_its_default_again():
     """The engine hands every value the node's unlinked inputs read, so a field left out had its
     value taken off: keep the set value instead and an Image File whose asset was cleared keeps
     showing it, as it did on the rig."""
@@ -274,19 +297,19 @@ def test_a_field_whose_value_was_taken_off_holds_its_default_again():
 
     tinter.fields.take_set_values(tinter.node, {})
 
-    assert tinter.node.gain == 1.0, "`gain`'s default"
+    assert tinter.what_its_inputs_hold()["gain"] == 1.0, "`gain`'s default"
     assert tinter.fields.values_to_build_with() == {}
 
 
-def test_a_field_set_live_holds_its_value_in_its_python_form():
+def test_a_value_input_set_live_holds_its_value_in_its_python_form():
     tinter = LevelTinterOnARealDataPlane({})
-    assert tinter.node.tint == Color(1.0, 0.5, 0.25), "a field with no set value holds its default"
+    assert tinter.what_its_inputs_hold()["tint"] == Color(1.0, 0.5, 0.25), "a value input with no set value holds its default"
 
     tinter.fields.take_set_values(
         tinter.node, {"tint": {"red": 0.0, "green": 1.0, "blue": 0.0, "alpha": 0.5}}
     )
 
-    assert tinter.node.tint == Color(0.0, 1.0, 0.0, 0.5)
+    assert tinter.what_its_inputs_hold()["tint"] == Color(0.0, 1.0, 0.0, 0.5)
     with pytest.raises(ValueError, match="`tinter-1`'s field `gain` is 'loud'"):
         tinter.fields.take_set_values(tinter.node, {"gain": "loud"})
 
@@ -302,12 +325,11 @@ def wait_until_the_fields_probe_saw(seen: "tuple[str, float, Any, int]", timeout
     raise AssertionError(f"the probe never saw {seen!r}; it saw: {WHAT_THE_FIELDS_PROBE_SAW[-5:]}")
 
 
-def test_a_running_helpers_class_node_is_built_from_its_setup_values_and_takes_each_one_set_live(
+def test_a_running_helpers_node_function_is_built_from_its_setup_values_and_takes_each_one_set_live(
     stand_in_parent: Any,
 ):
-    """Fail-without-fix: build the node with `node_class()` and its `__init__` sees each
-    field's class default; drop the fields' arm from `_set_input_values` and the gain set live
-    never reaches `process()`."""
+    """Fail-without-fix: drop the fields' arm from `_set_input_values` and the gain set live
+    never reaches a frame."""
     from helper_process_probes import WHAT_THE_FIELDS_PROBE_SAW
 
     WHAT_THE_FIELDS_PROBE_SAW.clear()
@@ -325,7 +347,6 @@ def test_a_running_helpers_class_node_is_built_from_its_setup_values_and_takes_e
         }
     )
     assert stand_in_parent.receive() == {"rpc": "ready"}
-    assert WHAT_THE_FIELDS_PROBE_SAW[0] == ("init", 0.5, Color(1.0, 0.0, 0.0), 8)
 
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
     wait_until_the_fields_probe_saw(("process", 0.5, Color(1.0, 0.0, 0.0), 8))
@@ -334,7 +355,7 @@ def test_a_running_helpers_class_node_is_built_from_its_setup_values_and_takes_e
     stand_in_parent.send(
         {"cmd": "set_input_values", "input_values": {"gain": 2.0, "tint": blue, "width": 16}}
     )
-    wait_until_the_fields_probe_saw(("process", 2.0, Color(0.0, 0.0, 1.0), 8))
+    wait_until_the_fields_probe_saw(("process", 2.0, Color(0.0, 0.0, 1.0), 16))
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"

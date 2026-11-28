@@ -41,17 +41,15 @@ mod tests {
     use streamlib::sdk::node_interpreter::PythonNodeDeclaration;
     use streamlib::sdk::nodes::EmptyConfig;
 
-    fn described_node_type_of(declared_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    fn described_node_type_of(declared_node: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
         let stamp = |name: &str| -> PyResult<serde_json::Value> {
-            python_object_to_json_value(&declared_class.getattr(name)?)
+            python_object_to_json_value(&declared_node.getattr(name)?)
         };
-        let module = declared_class.getattr("__module__")?.extract::<String>()?;
-        let qualname = declared_class
-            .getattr("__qualname__")?
-            .extract::<String>()?;
+        let module = declared_node.getattr("__module__")?.extract::<String>()?;
+        let qualname = declared_node.getattr("__qualname__")?.extract::<String>()?;
         let mut described = serde_json::json!({
             "import_path": format!("{module}:{qualname}"),
-            "short_name": declared_class.getattr("__name__")?.extract::<String>()?,
+            "short_name": declared_node.getattr("__name__")?.extract::<String>()?,
             "description": stamp("__tatolab_node_description__")?,
             "kind": stamp("__tatolab_node_kind__")?,
             "execution": stamp("__tatolab_node_execution__")?,
@@ -63,17 +61,17 @@ mod tests {
             "pin_groups": stamp("__tatolab_node_pin_groups__")?,
         });
         // Only a Rust function node stamps a config schema, as the node interpreter describes it.
-        if declared_class.hasattr("__tatolab_node_config_schema__")? {
+        if declared_node.hasattr("__tatolab_node_config_schema__")? {
             described["config_schema"] = stamp("__tatolab_node_config_schema__")?;
         }
         Ok(described)
     }
 
     fn read_declaration_off(
-        declared_class: &Bound<'_, PyAny>,
+        declared_node: &Bound<'_, PyAny>,
     ) -> Result<PythonNodeDeclaration, String> {
         let described_node_type =
-            described_node_type_of(declared_class).map_err(|refusal| refusal.to_string())?;
+            described_node_type_of(declared_node).map_err(|refusal| refusal.to_string())?;
         let requested_import_path = NodeClassImportPath::new(
             described_node_type["import_path"]
                 .as_str()
@@ -130,18 +128,18 @@ mod tests {
         namespace
     }
 
-    /// Run the real decorator module, run `class_body_source` against it, and
-    /// read the resulting class through the bridge the engine reads a declared
-    /// class by.
+    /// Run the real decorator module, run `node_source` against it, and read
+    /// the node function it declares through the bridge the engine reads a
+    /// declared node by.
     ///
     /// A refusal raised at decoration and one raised at the bridge both land
     /// in the `Err` arm, because to an author they are one refusal.
-    fn read_python_declaration(class_body_source: &str) -> Result<PythonNodeDeclaration, String> {
+    fn read_python_declaration(node_source: &str) -> Result<PythonNodeDeclaration, String> {
         Python::initialize();
         Python::attach(|python| {
             let namespace = declaration_module_namespace(python);
 
-            let source = format!("__name__ = 'my_app.audio'\n\n\n{class_body_source}");
+            let source = format!("__name__ = 'my_app.audio'\n\n\n{node_source}");
             python
                 .run(
                     &std::ffi::CString::new(source).unwrap(),
@@ -150,38 +148,41 @@ mod tests {
                 )
                 .map_err(|refusal| refusal.to_string())?;
 
-            let declared_class = namespace
+            let declared_node = namespace
                 .get_item("AudioConsumer")
                 .map_err(|refusal| refusal.to_string())?
-                .expect("the class bound");
-            read_declaration_off(&declared_class)
+                .expect("the node function bound");
+            read_declaration_off(&declared_node)
         })
     }
 
-    /// The input ports a Python class declares, as the engine reads them.
-    fn python_declared_ports(class_body_source: &str) -> Vec<PortDescriptor> {
-        read_python_declaration(class_body_source)
+    /// The input ports a Python node function declares, as the engine reads them.
+    fn python_declared_ports(node_source: &str) -> Vec<PortDescriptor> {
+        read_python_declaration(node_source)
             .expect("the declaration reads")
             .descriptor
             .inputs
     }
 
-    /// A class under bare `@node` reaches the catalog `describe_node_types` serves: each field
-    /// an input of its type with its default, a `SettingOnly()` one a setting read at setup, one
-    /// stating `InputValueLifetime("reset")` forgotten at Stop, and each pin of its type and flow.
+    /// A node function reaches the catalog `describe_node_types` serves: each value input of its
+    /// type with its default and taking a wire or a value, one stating
+    /// `InputValueLifetime("reset")` forgotten at Stop, and each pin of its type and flow.
     #[test]
-    fn a_class_nodes_fields_and_pins_reach_the_catalog_with_their_modes_and_lifetimes() {
+    fn a_node_functions_value_inputs_and_pins_reach_the_catalog_with_their_modes_and_lifetimes() {
         let declaration = read_python_declaration(
             "\
 from typing import Annotated, Literal
 
 
-@node
-class AudioConsumer:
-    voice: InputPin[Annotated[Audio, StreamDelivery('ordered')]]
-    quality: Annotated[Literal['fast', 'fine'], SettingOnly()] = 'fast'
-    gain: Annotated[float, InputValueLifetime('reset')] = 1.0
-    level: OutputPin[float]
+@node(execution='reactive')
+def AudioConsumer(
+    *,
+    voice: InputPin[Annotated[Audio, StreamDelivery('ordered')]],
+    quality: Input[Literal['fast', 'fine']] = Input('fast'),
+    gain: Input[Annotated[float, InputValueLifetime('reset')]] = Input(1.0),
+    level: OutputPin[float],
+):
+    return lambda ctx: None
 ",
         )
         .expect("the declaration reads");
@@ -201,13 +202,11 @@ class AudioConsumer:
         assert_eq!(
             (
                 &input("quality")["mode"],
-                &input("quality")["read"],
                 &input("quality")["default_value"],
                 &input("quality")["pin_type"],
             ),
             (
-                &serde_json::json!("setting_only"),
-                &serde_json::json!("at_setup"),
+                &serde_json::json!("wire_or_value"),
                 &serde_json::json!("fast"),
                 &serde_json::json!({"kind": "is", "pin_type": {"type": "menu", "option_names": ["fast", "fine"]}}),
             )
@@ -241,11 +240,11 @@ class AudioConsumer:
         );
     }
 
-    /// A class under bare `@node` declaring `PinGroup[Slot]` reaches the catalog as a pin group,
-    /// each field of its slot a pin of one slot, and its slot input that takes a wire making it
-    /// follow its wires.
+    /// A node function declaring `PinGroup[Slot]` reaches the catalog as a pin group, each field
+    /// of its slot a pin of one slot, and its slot input that takes a wire making it follow its
+    /// wires.
     #[test]
-    fn a_class_nodes_pin_group_reaches_the_catalog_with_the_pins_of_one_slot() {
+    fn a_node_functions_pin_group_reaches_the_catalog_with_the_pins_of_one_slot() {
         let declaration = read_python_declaration(
             "\
 from dataclasses import dataclass
@@ -257,10 +256,9 @@ class Layer:
     opacity: float = 1.0
 
 
-@node
-class AudioConsumer:
-    layers: PinGroup[Layer]
-    result: OutputPin[Texture]
+@node(execution='reactive')
+def AudioConsumer(*, layers: PinGroup[Layer], result: OutputPin[Texture]):
+    return lambda ctx: None
 ",
         )
         .expect("the declaration reads");
@@ -293,10 +291,10 @@ class AudioConsumer:
         );
     }
 
-    /// A class under bare `@node` stating `conversion=True` reaches the catalog as a conversion
-    /// from its one input that takes a wire to its one output, its setting left out of it.
+    /// A node function stating `conversion=True` reaches the catalog as a conversion from its one
+    /// pin input to its one output, its value input left out of it.
     #[test]
-    fn a_class_stating_a_conversion_reaches_the_catalog_as_one() {
+    fn a_node_function_stating_a_conversion_reaches_the_catalog_as_one() {
         let declaration = read_python_declaration(
             "\
 from typing import Annotated
@@ -304,10 +302,13 @@ from typing import Annotated
 
 @node.meta(conversion=True)
 @node(execution='manual')
-class AudioConsumer:
-    bitrate_bps: Annotated[int, SettingOnly()] = 4_000_000
-    video: InputPin[Texture]
-    encoded_video: OutputPin[EncodedVideo]
+def AudioConsumer(
+    *,
+    bitrate_bps: Input[int] = Input(4_000_000),
+    video: InputPin[Texture],
+    encoded_video: OutputPin[EncodedVideo],
+) -> None:
+    return None
 ",
         )
         .expect("the declaration reads");
@@ -326,16 +327,15 @@ class AudioConsumer:
         );
     }
 
-    /// A class under bare `@node` takes each value as an input, so it describes no config, and
-    /// the catalog serves it the document Rust publishes for a node that takes none.
+    /// A node function takes each value as an input, so it describes no config, and the catalog
+    /// serves it the document Rust publishes for a node that takes none.
     #[test]
-    fn a_class_declaring_no_config_carries_the_same_document_rust_publishes() {
+    fn a_node_function_declaring_no_config_carries_the_same_document_rust_publishes() {
         let declaration = read_python_declaration(
             "\
 @node(execution='manual')
-class AudioConsumer:
-    def __init__(self) -> None:
-        self.frames = 0
+def AudioConsumer() -> None:
+    return None
 ",
         )
         .expect("the declaration reads");
@@ -351,8 +351,8 @@ class AudioConsumer:
     /// `expect_err` is not available here: the success type is a production
     /// type, and deriving `Debug` on it to satisfy a test would be the test
     /// reshaping library code.
-    fn python_declaration_refusal(class_body_source: &str) -> String {
-        match read_python_declaration(class_body_source) {
+    fn python_declaration_refusal(node_source: &str) -> String {
+        match read_python_declaration(node_source) {
             Ok(_) => panic!("the declaration was accepted; a refusal was expected"),
             Err(refusal) => refusal,
         }
@@ -383,11 +383,13 @@ class AudioConsumer:
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
             "from typing import Annotated\n\
-             @node\n\
-             class AudioConsumer:\n\
+             @node(execution='reactive')\n\
+             def AudioConsumer(*,\n\
              \x20   audio: InputPin[Annotated[Audio, StreamDelivery('ordered'),\n\
              \x20       AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                           dtype='f32', window_size=512, hop=160)]]\n",
+             \x20                           dtype='f32', window_size=512, hop=160)]],\n\
+             ):\n\
+             \x20   return lambda ctx: None\n",
         );
 
         let rust_descriptor =
@@ -416,9 +418,11 @@ class AudioConsumer:
     fn a_python_port_declaring_no_contract_reaches_the_descriptor_with_none() {
         let ports = python_declared_ports(
             "from typing import Annotated\n\
-             @node\n\
-             class AudioConsumer:\n\
-             \x20   audio: InputPin[Annotated[Audio, StreamDelivery('newest')]]\n",
+             @node(execution='reactive')\n\
+             def AudioConsumer(*,\n\
+             \x20   audio: InputPin[Annotated[Audio, StreamDelivery('newest')]],\n\
+             ):\n\
+             \x20   return lambda ctx: None\n",
         );
 
         assert_eq!(ports[0].audio_window, None);
@@ -431,10 +435,12 @@ class AudioConsumer:
     fn a_python_port_reaches_the_descriptor_under_its_cast_name() {
         let declaration = read_python_declaration(
             "from typing import Annotated\n\
-             @node\n\
-             class AudioConsumer:\n\
-             \x20   Video: InputPin[Annotated[Texture, StreamDelivery('newest')]]\n\
-             \x20   Frames_Out: OutputPin[Texture]\n",
+             @node(execution='reactive')\n\
+             def AudioConsumer(*,\n\
+             \x20   Video: InputPin[Annotated[Texture, StreamDelivery('newest')]],\n\
+             \x20   Frames_Out: OutputPin[Texture],\n\
+             ):\n\
+             \x20   return lambda ctx: None\n",
         )
         .expect("the declaration reads");
 
@@ -446,11 +452,13 @@ class AudioConsumer:
     fn a_python_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
         let refusal = python_declaration_refusal(
             "from typing import Annotated\n\
-             @node\n\
-             class AudioConsumer:\n\
+             @node(execution='reactive')\n\
+             def AudioConsumer(*,\n\
              \x20   audio: InputPin[Annotated[Audio, StreamDelivery('newest'),\n\
              \x20       AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                           dtype='f32', window_size=512)]]\n",
+             \x20                           dtype='f32', window_size=512)]],\n\
+             ):\n\
+             \x20   return lambda ctx: None\n",
         );
 
         assert!(

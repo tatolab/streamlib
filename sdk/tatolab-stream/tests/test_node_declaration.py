@@ -16,6 +16,7 @@ import pytest
 import tatolab.stream
 from tatolab.stream import (
     AudioWindowContract,
+    Input,
     InputPin,
     NodeDeclarationRefusal,
     OutputPin,
@@ -34,11 +35,13 @@ from tatolab.stream._retired_declarations import (
 def test_a_filter_declares_its_pins_and_nothing_else():
     """The zero-ceremony bar: a node with an input reacts to it, with no keyword written."""
 
-    @node
-    class BrightnessFilter:
-        frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]]
-
-        frames_to_downstream: OutputPin[Texture]
+    @node(execution="reactive")
+    def BrightnessFilter(
+        *,
+        frames_from_upstream: InputPin[Annotated[Texture, StreamDelivery("newest")]],
+        frames_to_downstream: OutputPin[Texture],
+    ) -> None:
+        return None
 
     assert getattr(BrightnessFilter, "__tatolab_node_declared__") is True
     assert getattr(BrightnessFilter, "__tatolab_node_execution__") == {"mode": "reactive", "interval_ms": 0}
@@ -57,7 +60,7 @@ def test_the_package_exports_node():
 
 
 @pytest.mark.parametrize("written_as", ["bare", "with keyword arguments"])
-def test_node_process_is_refused_naming_a_class_of_typed_pins(written_as: str):
+def test_node_process_is_refused_naming_the_node_written_as_one_function(written_as: str):
     """`@node.process` stays only as a name that answers with its replacement.
 
     Mental-revert: restoring the old reader declares the class and raises nothing.
@@ -78,7 +81,7 @@ def test_node_process_is_refused_naming_a_class_of_typed_pins(written_as: str):
     assert refusal.value.finding_code == RETIRED_DECLARATION_FINDING_CODE
     words = str(refusal.value)
     assert "`@node.process`, which is retired" in words
-    assert "bare `@node` on a class whose fields are its typed pins" in words
+    assert "on a `def` whose keyword-only parameters are its typed pins" in words
     assert "`video: InputPin[Texture]`" in words
     assert "`execution`, `interval_ms`, `scheduling` and `paced_by_real_time` go on" in words
     assert words.startswith("`BrightnessFilter`" if written_as == "bare" else "A node")
@@ -130,23 +133,32 @@ def test_a_source_must_declare_its_execution_mode():
     """
     with pytest.raises(ValueError, match="declares no input ports"):
 
-        @node
-        class TestPatternSource:
-            frames_to_downstream: OutputPin[Texture]
+        @node()
+        def TestPatternSource(
+            *,
+            frames_to_downstream: OutputPin[Texture],
+        ) -> None:
+            return None
 
 
 def test_a_source_that_declares_a_mode_is_accepted():
     @node(execution="continuous", interval_ms=33)
-    class TestPatternSource:
-        frames_to_downstream: OutputPin[Texture]
+    def TestPatternSource(
+        *,
+        frames_to_downstream: OutputPin[Texture],
+    ) -> None:
+        return None
 
     assert getattr(TestPatternSource, "__tatolab_node_execution__") == {"mode": "continuous", "interval_ms": 33}
 
 
 def test_a_scheduling_priority_is_stamped():
     @node(execution="manual", scheduling="realtime")
-    class Camera:
-        frames_to_downstream: OutputPin[Texture]
+    def Camera(
+        *,
+        frames_to_downstream: OutputPin[Texture],
+    ) -> None:
+        return None
 
     assert getattr(Camera, "__tatolab_node_scheduling_priority__") == "realtime"
 
@@ -162,23 +174,32 @@ def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message
     with pytest.raises(ValueError, match=expected_message):
 
         @node(**{keyword: value})
-        class Filter:
-            frames_from_upstream: InputPin[Texture]
+        def Filter(
+            *,
+            frames_from_upstream: InputPin[Texture],
+        ) -> None:
+            return None
 
 
 def test_a_negative_interval_is_refused():
     with pytest.raises(ValueError, match="non-negative int"):
 
         @node(execution="continuous", interval_ms=-1)
-        class TestPatternSource:
-            frames_to_downstream: OutputPin[Texture]
+        def TestPatternSource(
+            *,
+            frames_to_downstream: OutputPin[Texture],
+        ) -> None:
+            return None
 
 
 @pytest.mark.parametrize("paced_by_real_time", [True, False])
 def test_a_node_is_stamped_with_whether_it_is_paced_by_real_time(paced_by_real_time: bool):
     @node(execution="manual", paced_by_real_time=paced_by_real_time)
-    class CameraSource:
-        frames_to_downstream: OutputPin[Texture]
+    def CameraSource(
+        *,
+        frames_to_downstream: OutputPin[Texture],
+    ) -> None:
+        return None
 
     stamp = getattr(CameraSource, _node_declaration.NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP)
     assert stamp is paced_by_real_time
@@ -189,8 +210,11 @@ def test_paced_by_real_time_other_than_a_bool_is_refused(not_a_bool: object):
     with pytest.raises(TypeError, match="invalid paced_by_real_time"):
 
         @node(execution="manual", paced_by_real_time=not_a_bool)  # type: ignore[arg-type]
-        class CameraSource:
-            frames_to_downstream: OutputPin[Texture]
+        def CameraSource(
+            *,
+            frames_to_downstream: OutputPin[Texture],
+        ) -> None:
+            return None
 
 
 def test_an_omitted_hop_defaults_to_the_window_size():
@@ -322,8 +346,9 @@ def test_a_docstring_never_stands_in_for_a_description():
     """A docstring is the code's own reading; only `@node.meta`'s description reaches the catalog."""
 
     @node(execution="manual")
-    class DescribedByItsDocstringAlone:
+    def DescribedByItsDocstringAlone() -> None:
         """Read by whoever reads the code, never by the catalog."""
+        return None
 
     assert getattr(DescribedByItsDocstringAlone, "__tatolab_node_description__") == ""
 
@@ -333,8 +358,9 @@ def test_the_description_keyword_is_served_exactly_as_written():
 
     @node.meta(description=markdown)
     @node(execution="manual")
-    class DescribedInMarkdown:
+    def DescribedInMarkdown() -> None:
         """The docstring, which the catalog never reads."""
+        return None
 
     assert getattr(DescribedInMarkdown, "__tatolab_node_description__") == markdown
 
@@ -344,19 +370,25 @@ def test_a_description_that_is_not_a_string_is_refused():
 
         @node.meta(description=pathlib.Path("README.md"))  # type: ignore[arg-type]
         @node(execution="manual")
-        class DescribedByAPath:
-            pass
+        def DescribedByAPath() -> None:
+            return None
 
 
 def test_a_class_node_has_the_category_it_declares_and_none_when_it_declares_none():
-    @node
-    class Uncategorized:
-        frames_from_upstream: InputPin[Texture]
+    @node(execution="reactive")
+    def Uncategorized(
+        *,
+        frames_from_upstream: InputPin[Texture],
+    ) -> None:
+        return None
 
     @node.meta(category="Image effects")
-    @node
-    class Categorized:
-        frames_from_upstream: InputPin[Texture]
+    @node(execution="reactive")
+    def Categorized(
+        *,
+        frames_from_upstream: InputPin[Texture],
+    ) -> None:
+        return None
 
     assert getattr(Uncategorized, "__tatolab_node_category__") is None
     assert getattr(Categorized, "__tatolab_node_category__") == "Image effects"

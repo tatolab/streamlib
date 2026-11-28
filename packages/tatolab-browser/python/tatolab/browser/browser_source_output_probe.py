@@ -17,18 +17,18 @@ probe reading the event.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Callable
 
 import numpy
 from tatolab.stream import (
     Audio,
     Description,
     Texture,
+    Input,
     InputPin,
     NumberRange,
     OutputPin,
     RuntimeContextLimitedAccess,
-    SettingOnly,
     StreamDelivery,
     log,
     node,
@@ -44,30 +44,32 @@ AUDIO_TIMELINE_BREAK_TOLERANCE_NS = 1_000_000
 
 
 @node.meta(description="Logs a BrowserSource's frame rate, audio continuity and data round trip")
-@node
-class BrowserSourceOutputProbe:
-    """A `BrowserSource`'s outputs in, `data` messages to it out, a report every window."""
-
-    frames_between_reports: Annotated[
-        int,
-        SettingOnly(),
-        NumberRange(minimum=2),
-        Description("How many frames one report summarises; a change starts the count again."),
-    ] = 600
-    frames_between_data_messages: Annotated[
-        int,
-        NumberRange(minimum=1),
-        Description("How many frames pass between two `data` messages sent to the page."),
-    ] = 30
+@node(execution="reactive")
+def BrowserSourceOutputProbe(
+    *,
+    frames_between_reports: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=2),
+            Description("How many frames one report summarises; a change starts the count again."),
+        ]
+    ] = Input(600),
+    frames_between_data_messages: Input[
+        Annotated[
+            int,
+            NumberRange(minimum=1),
+            Description("How many frames pass between two `data` messages sent to the page."),
+        ]
+    ] = Input(30),
     video_from_browser: InputPin[
         Annotated[Texture, StreamDelivery("ordered"), Description("Frames from the browser under test")]
-    ]
+    ],
     audio_from_browser: InputPin[
         Annotated[Audio, StreamDelivery("ordered"), Description("Audio from the browser under test")]
-    ]
+    ],
     events_from_browser: InputPin[
         Annotated[PageMessage, StreamDelivery("ordered"), Description("Messages the page published")]
-    ]
+    ],
     data_to_browser: OutputPin[
         Annotated[
             PageMessage,
@@ -75,12 +77,34 @@ class BrowserSourceOutputProbe:
                 '`{"sent_ns": <monotonic now>}`, every `frames_between_data_messages` frames'
             ),
         ]
-    ]
+    ],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """A `BrowserSource`'s outputs in, `data` messages to it out, a report every window."""
+    measurement = BrowserSourceOutputMeasurement()
+
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        del ctx
+        while (block := audio_from_browser.read()) is not None:
+            measurement.measure_audio_block(block)
+        while (event := events_from_browser.read()) is not None:
+            measurement.measure_published_event(event)
+        while (frame := video_from_browser.read()) is not None:
+            if measurement.measure_frame(
+                frame, frames_between_reports.get(), frames_between_data_messages.get()
+            ):
+                data_to_browser.write(PageMessage({"sent_ns": monotonic_now_ns()}))
+
+    return each_frame
+
+
+class BrowserSourceOutputMeasurement:
+    """What a `BrowserSourceOutputProbe` has measured in its reporting window."""
 
     def __init__(self) -> None:
         self._frame_interval = DurationSamplesInOneReportingWindow()
         self._data_round_trip = DurationSamplesInOneReportingWindow()
         self._frames_read = 0
+        self._frames_between_reports: "int | None" = None
         self._window_first_frame_read_ns: "int | None" = None
         self._previous_frame_timestamp_ns: "int | None" = None
         self._audio_blocks_read = 0
@@ -92,15 +116,7 @@ class BrowserSourceOutputProbe:
             str, DurationSamplesInOneReportingWindow
         ] = {}
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        while (block := self.audio_from_browser.read()) is not None:
-            self._measure_audio_block(block)
-        while (event := self.events_from_browser.read()) is not None:
-            self._measure_published_event(event)
-        while (frame := self.video_from_browser.read()) is not None:
-            self._measure_frame(frame)
-
-    def _measure_audio_block(self, block: Audio) -> None:
+    def measure_audio_block(self, block: Audio) -> None:
         self._audio_blocks_read += 1
         if not numpy.from_dlpack(block).any():
             self._silent_audio_blocks += 1
@@ -114,7 +130,7 @@ class BrowserSourceOutputProbe:
             block.timestamp_ns + block.samples_per_channel * 1_000_000_000 // block.sample_rate
         )
 
-    def _measure_published_event(self, event: PageMessage) -> None:
+    def measure_published_event(self, event: PageMessage) -> None:
         self._events_read += 1
         published = event.members
         data_painted_ns = published.get("data_painted")
@@ -127,7 +143,14 @@ class BrowserSourceOutputProbe:
                 input_port_name, DurationSamplesInOneReportingWindow()
             ).add(monotonic_now_ns() - input_timestamp_ns)
 
-    def _measure_frame(self, frame: Texture) -> None:
+    def measure_frame(
+        self, frame: Texture, frames_between_reports: int, frames_between_data_messages: int
+    ) -> bool:
+        """Measure one frame, reporting at the end of a window; whether a `data` message is due."""
+        if frames_between_reports != self._frames_between_reports:
+            self._frames_between_reports = frames_between_reports
+            self._frames_read = 0
+            self._window_first_frame_read_ns = None
         read_ns = monotonic_now_ns()
         if self._previous_frame_timestamp_ns is not None:
             self._frame_interval.add(frame.timestamp_ns - self._previous_frame_timestamp_ns)
@@ -135,15 +158,14 @@ class BrowserSourceOutputProbe:
         if self._window_first_frame_read_ns is None:
             self._window_first_frame_read_ns = read_ns
         self._frames_read += 1
-        if self._frames_read % self.frames_between_data_messages == 0:
-            self.data_to_browser.write(PageMessage({"sent_ns": monotonic_now_ns()}))
-        if self._frames_read % self.frames_between_reports == 0:
-            self._report(frame, read_ns)
+        if self._frames_read % frames_between_reports == 0:
+            self._report(frame, read_ns, frames_between_reports)
+        return self._frames_read % frames_between_data_messages == 0
 
-    def _report(self, frame: Texture, read_ns: int) -> None:
+    def _report(self, frame: Texture, read_ns: int, frames_between_reports: int) -> None:
         window_first_read_ns = self._window_first_frame_read_ns or read_ns
         window_seconds = max(read_ns - window_first_read_ns, 1) / 1_000_000_000
-        frames_per_second = (self.frames_between_reports - 1) / window_seconds
+        frames_per_second = (frames_between_reports - 1) / window_seconds
         log.info(
             f"BrowserSourceOutputProbe: {frame.width}x{frame.height} "
             f"frames_read={self._frames_read} fps={frames_per_second:.2f} "

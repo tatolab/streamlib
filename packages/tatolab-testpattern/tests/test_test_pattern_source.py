@@ -12,7 +12,6 @@ import struct
 from pathlib import Path
 
 import tatolab.testpattern
-from tatolab.stream._class_node_construction import construct_class_node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -93,14 +92,6 @@ def test_the_frame_size_defaults_to_720p_and_is_an_integer_input_of_1_to_16k_pix
             "maximum": LARGEST_TEST_PATTERN_FRAME_SIDE_PIXELS,
         }, name
         assert port["input_mode"] == {"mode": "wire_or_value"}, name
-
-
-def test_a_source_built_with_a_frame_size_renders_it():
-    source = construct_class_node(
-        TestPatternSource, field_values={"width": 640, "height": 360}, pins={"video": object()}
-    )
-
-    assert (source.width, source.height) == (640, 360)
 
 
 def test_the_baked_overlays_are_the_extents_their_names_say():

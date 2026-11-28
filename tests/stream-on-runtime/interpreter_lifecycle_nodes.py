@@ -14,7 +14,7 @@ import signal
 import subprocess
 import time
 
-from tatolab.stream import OutputPin, RuntimeContextLimitedAccess, Trigger, log, node
+from tatolab.stream import OutputPin, RuntimeContextLimitedAccess, Trigger, computed, log, node
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.
@@ -25,92 +25,116 @@ def report(marker_name: str, payload: "dict[str, object] | None" = None) -> None
     log.info(f"MARKER:{marker_name}" + ("" if payload is None else " " + json.dumps(payload)))
 
 
+class RunsAtTeardown:
+    """A value of a node's scope whose close, at the node's teardown, runs `at_teardown`."""
+
+    def __init__(self, at_teardown: "Callable[[], None]") -> None:
+        self._at_teardown = at_teardown
+
+    def close(self) -> None:
+        self._at_teardown()
+
+
 @node(execution="continuous", interval_ms=10)
-class AsleepInItsCallbackProbe:
-    """Parks in `process()` far past the ladder's one-second callback budget."""
+def AsleepInItsCallbackProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Parks in its frame far past the ladder's one-second callback budget."""
+    computed(lambda: RunsAtTeardown(lambda: report("ASLEEP_PROBE_TORE_DOWN")))
 
-    frames_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
         time.sleep(30)
 
-    def teardown(self, ctx) -> None:
-        report("ASLEEP_PROBE_TORE_DOWN")
+    return each_frame
 
 
 #: Names the directory `AsleepInItsCallbackRecordingItsTeardownProbe` records
-#: its `teardown()` in, one file per helper pid — the one witness left once the
+#: its teardown in, one file per helper pid — the one witness left once the
 #: `tatolabd` it would log to is dead.
 TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD_DIRECTORY"
 
 
+def _record_the_teardown_in_a_file() -> None:
+    record_directory = os.environ[TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE]
+    with open(os.path.join(record_directory, str(os.getpid())), "w"):
+        pass
+
+
 @node(execution="continuous", interval_ms=10)
-class AsleepInItsCallbackRecordingItsTeardownProbe:
-    """Parks in `process()`, and records its `teardown()` in a file."""
+def AsleepInItsCallbackRecordingItsTeardownProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Parks in its frame, and records its teardown in a file."""
+    computed(lambda: RunsAtTeardown(_record_the_teardown_in_a_file))
 
-    frames_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         report("ASLEEP_IN_PROCESS", {"pid": os.getpid()})
         time.sleep(30)
 
-    def teardown(self, ctx) -> None:
-        record_directory = os.environ[TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE]
-        with open(os.path.join(record_directory, str(os.getpid())), "w"):
-            pass
+    return each_frame
+
+
+def _tear_down_slowly() -> None:
+    time.sleep(SLOW_TEARDOWN_SECONDS)
+    report("SLOW_TEARDOWN_FINISHED", {"pid": os.getpid()})
 
 
 @node(execution="continuous", interval_ms=10)
-class AsleepInItsCallbackAndSlowToTearDownProbe:
-    """Parks in `process()`, then takes three seconds over `teardown()`.
+def AsleepInItsCallbackAndSlowToTearDownProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Parks in its frame, then takes three seconds over its teardown.
 
     Three of these stopped one after another cost three ladders of about four
     seconds each; stopped at once, about one.
     """
+    computed(lambda: RunsAtTeardown(_tear_down_slowly))
 
-    frames_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx) -> None:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
         report("SLOW_TO_TEAR_DOWN_ASLEEP", {"pid": os.getpid()})
         time.sleep(30)
 
-    def teardown(self, ctx) -> None:
-        time.sleep(SLOW_TEARDOWN_SECONDS)
-        report("SLOW_TEARDOWN_FINISHED", {"pid": os.getpid()})
+    return each_frame
+
+
+def _tear_down_for_thirty_seconds_deaf_to_termination() -> None:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    report("LONG_TEARDOWN_BEGAN")
+    time.sleep(30)
+    report("LONG_TEARDOWN_FINISHED")
 
 
 @node(execution="continuous", interval_ms=10)
-class WorkerKeepingTeardownGoingProbe:
+def WorkerKeepingTeardownGoingProbe(
+    *,
+    frames_to_downstream: OutputPin[Trigger],
+) -> Callable[[RuntimeContextLimitedAccess], None]:
     """Forks a worker that ignores SIGTERM, then spends thirty seconds in a
-    `teardown()` that ignores it too.
+    teardown that ignores it too.
 
     The teardown is what a second interrupt cuts short. With the helper deaf to
     termination, the forced ladder waits out its whole grace before it sends the
     group `SIGKILL`, so a third interrupt landing inside that grace is the only
     thing that can end the worker in time.
     """
+    computed(lambda: RunsAtTeardown(_tear_down_for_thirty_seconds_deaf_to_termination))
+    worker_pid: "list[int | None]" = [None]
 
-    def __init__(self) -> None:
-        self._worker_pid = None
-
-    frames_to_downstream: OutputPin[Trigger]
-
-    def process(self, ctx) -> None:
-        if self._worker_pid is None:
-            self._worker_pid = os.fork()
-            if self._worker_pid == 0:
+    def each_frame(ctx: RuntimeContextLimitedAccess) -> None:
+        if worker_pid[0] is None:
+            worker_pid[0] = os.fork()
+            if worker_pid[0] == 0:
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 time.sleep(120)
                 os._exit(0)
-            report("TEARDOWN_WORKER_PID", {"pid": self._worker_pid})
+            report("TEARDOWN_WORKER_PID", {"pid": worker_pid[0]})
         time.sleep(30)
 
-    def teardown(self, ctx) -> None:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        report("LONG_TEARDOWN_BEGAN")
-        time.sleep(30)
-        report("LONG_TEARDOWN_FINISHED")
+    return each_frame
 
 
 @node(execution="continuous", interval_ms=10)

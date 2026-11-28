@@ -11,7 +11,8 @@ for a reader linked late. Each is refused, by name, where it cannot apply.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+import inspect
+from typing import Annotated, Any, Callable
 
 import pytest
 
@@ -23,30 +24,35 @@ from tatolab.stream import (
     EncodedCodecs,
     EncodedVideo,
     FlowsAsValue,
+    Input,
     NodeDeclarationRefusal,
     PinTypeChoice,
     Texture,
     TexturePixelFormats,
     node,
 )
-from tatolab.stream._class_node_declaration import read_class_node_ports
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 from tatolab.stream._class_node_pins import InputPin, OutputPin
 
 
-def test_a_class_nodes_pins_and_fields_carry_the_formats_media_and_flow_written_beside_them():
-    @node
-    class Picture:
-        asset: Annotated[Asset, AssetMedia("image", "video")] | None = None
-        video: InputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm", "nv12")]]
+def test_a_node_functions_pins_and_inputs_carry_the_formats_media_and_flow_written_beside_them():
+    @node(execution="reactive")
+    def Picture(
+        *,
+        asset: Input[Annotated[Asset, AssetMedia("image", "video")] | None] = Input(None),
+        video: InputPin[Annotated[Texture, TexturePixelFormats("rgba8_unorm", "nv12")]],
         picture: OutputPin[
             Annotated[Texture, TexturePixelFormats("bgra8_unorm"), FlowsAsValue()]
-        ]
-        streamed: OutputPin[Annotated[Texture, TexturePixelFormats("bgra8_unorm")]]
+        ],
+        streamed: OutputPin[Annotated[Texture, TexturePixelFormats("bgra8_unorm")]],
+    ) -> None:
+        return None
 
-        def process(self, ctx: Any) -> None:
-            pass
-
-    inputs, outputs = read_class_node_ports(Picture)
+    inputs = getattr(Picture, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    outputs = getattr(Picture, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
     declared = {port["name"]: port["pin_declaration"] for port in (*inputs, *outputs)}
     assert declared["asset"]["pin_type"]["pin_type"] == {"type": "asset", "media": ["image", "video"]}
     assert declared["video"] == {
@@ -64,17 +70,18 @@ def test_a_class_nodes_pins_and_fields_carry_the_formats_media_and_flow_written_
 
 
 def test_encoded_media_carries_its_codecs_and_an_output_of_one_codec_sends_it_on_every_packet():
-    @node
-    class Transcode:
-        encoded: InputPin[Annotated[EncodedVideo, EncodedCodecs("h264", "h265")]]
-        reencoded: OutputPin[Annotated[EncodedVideo, EncodedCodecs("h265")]]
-        voice: OutputPin[Annotated[EncodedAudio, EncodedCodecs("opus")]]
-        either: OutputPin[Annotated[EncodedAudio, EncodedCodecs("opus", "aac")]]
+    @node(execution="reactive")
+    def Transcode(
+        *,
+        encoded: InputPin[Annotated[EncodedVideo, EncodedCodecs("h264", "h265")]],
+        reencoded: OutputPin[Annotated[EncodedVideo, EncodedCodecs("h265")]],
+        voice: OutputPin[Annotated[EncodedAudio, EncodedCodecs("opus")]],
+        either: OutputPin[Annotated[EncodedAudio, EncodedCodecs("opus", "aac")]],
+    ) -> None:
+        return None
 
-        def process(self, ctx: Any) -> None:
-            pass
-
-    inputs, outputs = read_class_node_ports(Transcode)
+    inputs = getattr(Transcode, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    outputs = getattr(Transcode, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
     ports = {port["name"]: port for port in (*inputs, *outputs)}
     assert ports["encoded"]["pin_declaration"]["pin_type"]["pin_type"] == {
         "type": "encoded_video",
@@ -116,14 +123,15 @@ def test_a_narrowing_or_a_flow_where_it_cannot_apply_is_refused_by_name(
         "Texture": Texture,
         "TexturePixelFormats": TexturePixelFormats,
     }
+    def Refused(**_: Any) -> None: ...
+
+    pin = eval(annotation, namespace)  # noqa: S307
+    Refused.__signature__ = inspect.Signature(  # pyright: ignore[reportFunctionMemberAccess]
+        [inspect.Parameter("pin", inspect.Parameter.KEYWORD_ONLY, annotation=pin)]
+    )
+    Refused.__annotations__ = {"pin": pin}
     with pytest.raises(NodeDeclarationRefusal, match=refused_because):
-
-        @node
-        class Refused:
-            __annotations__ = {"pin": eval(annotation, namespace)}  # noqa: S307
-
-            def process(self, ctx: Any) -> None:
-                pass
+        node(execution="reactive")(Refused)
 
 
 def test_a_narrowing_names_each_of_its_values_once_from_what_the_runtime_reads():

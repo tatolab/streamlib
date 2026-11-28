@@ -10,7 +10,6 @@ from typing import Callable, Optional
 
 from tatolab.stream import (
     Input,
-    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     computed,
     log,
@@ -49,37 +48,44 @@ class StubExclusiveDevice:
         os.close(self._descriptor)
 
 
-@node(execution="continuous", interval_ms=10)
-class CountsItsBuildsHoldingAStubDevice:
-    """Reports each setup and teardown it runs and each `level` it reads, and holds a
-    `StubExclusiveDevice` from its setup to its teardown."""
-
-    level: float = 0.25
+class StubDeviceHeldUntilTeardown:
+    """A `StubExclusiveDevice` opened when it is built, reporting its open, and closed with a
+    report of the node's teardown when the node's scope closes it."""
 
     def __init__(self) -> None:
-        self._level_last_reported: float | None = None
-        self._device: StubExclusiveDevice | None = None
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        report("PROBE_SETUP", {"pid": os.getpid()})
         try:
-            self._device = StubExclusiveDevice()
+            self._device: StubExclusiveDevice | None = StubExclusiveDevice()
         except BlockingIOError:
             report("STUB_DEVICE_REFUSED", {"pid": os.getpid()})
             raise
         report("STUB_DEVICE_OPENED", {"pid": os.getpid()})
 
-    def process(self, ctx) -> None:
-        if self.level != self._level_last_reported:
-            self._level_last_reported = self.level
-            report("PROBE_READ_LEVEL", {"pid": os.getpid(), "level": float(self.level)})
-
-    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
+    def close(self) -> None:
         report("PROBE_TEARDOWN", {"pid": os.getpid()})
         if self._device is not None:
             self._device.close()
             self._device = None
             report("STUB_DEVICE_CLOSED", {"pid": os.getpid()})
+
+
+@node(execution="continuous", interval_ms=10)
+def CountsItsBuildsHoldingAStubDevice(
+    *, level: Input[float] = Input(0.25)
+) -> Callable[[RuntimeContextLimitedAccess], None]:
+    """Reports each setup it runs and each `level` it reads, and holds a `StubExclusiveDevice`
+    in a computed value, which its scope closes when the node stops."""
+    report("PROBE_SETUP", {"pid": os.getpid()})
+    device = computed(StubDeviceHeldUntilTeardown)
+    level_last_reported: list[Optional[float]] = [None]
+
+    def each_frame(frame_ctx: RuntimeContextLimitedAccess) -> None:
+        device.get()
+        read = level.get()
+        if read != level_last_reported[0]:
+            level_last_reported[0] = read
+            report("PROBE_READ_LEVEL", {"pid": os.getpid(), "level": float(read)})
+
+    return each_frame
 
 
 class ReadingOfALevel:

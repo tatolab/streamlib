@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A class node's type parameter bound to one pin type types its `InputPin` by that type, and an
+"""A node function's type parameter bound to one pin type types its `InputPin` by that type, and an
 `OutputPin` typed by the same parameter carries the type linked into that input."""
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from tatolab.stream import (
     TexturePixelFormats,
     node,
 )
-from tatolab.stream._class_node_declaration import read_class_node_ports_and_members
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -30,12 +29,12 @@ from tatolab.stream._node_declaration import (
 
 
 @node.meta(description="Hands on each picture it reads.")
-@node
-class HandsOnAPicture[Frame: Texture]:
-    picture_out: OutputPin[Annotated[Frame, Description("Each picture read, handed on.")]]
-    picture_in: InputPin[Annotated[Frame, StreamDelivery("newest"), Description("The pictures.")]]
-
-    def process(self) -> None: ...
+@node(execution="reactive")
+def HandsOnAPicture[Frame: Texture](
+    *,
+    picture_out: OutputPin[Annotated[Frame, Description("Each picture read, handed on.")]],
+    picture_in: InputPin[Annotated[Frame, StreamDelivery("newest"), Description("The pictures.")]],
+) -> None: ...
 
 
 def the_one_port(declared: Any, stamp: str) -> dict[str, Any]:
@@ -75,66 +74,51 @@ class Framed:
     picture: Texture
 
 
-class HandsOnAFramedPicture[Picture: Framed]:
-    framed_in: InputPin[Picture]
-    framed_out: OutputPin[Picture]
+@node(execution="reactive")
+def HandsOnAFramedPicture[Picture: Framed](
+    *, framed_in: InputPin[Picture], framed_out: OutputPin[Picture]
+) -> None: ...
 
 
 def test_a_pin_typed_by_a_parameter_bound_to_a_bundle_is_read_and_written_as_that_bundle() -> None:
-    _, _, members = read_class_node_ports_and_members(HandsOnAFramedPicture)
-
-    assert [member.bundle_class for member in members] == [Framed, Framed]
+    assert [member.bundle_class for member in HandsOnAFramedPicture.members] == [Framed, Framed]
 
 
-class ReadsThroughAClassLocalAlias:
-    _Picture = Texture
-    picture_in: InputPin[_Picture]
+def Unbound[Frame](*, picture_in: InputPin[Frame], picture_out: OutputPin[Frame]) -> None: ...
 
 
-def test_a_class_with_no_type_parameter_still_resolves_its_class_local_names() -> None:
-    picture_in = the_one_port(node(ReadsThroughAClassLocalAlias), NODE_DECLARATION_INPUT_PORTS_STAMP)
-
-    assert picture_in["pin_declaration"]["pin_type"] == {"kind": "is", "pin_type": {"type": "texture"}}
-
-
-class Unbound[Frame]:
-    picture_in: InputPin[Frame]
-    picture_out: OutputPin[Frame]
+def Constrained[Frame: (Texture, Audio)](
+    *, picture_in: InputPin[Frame], picture_out: OutputPin[Frame]
+) -> None: ...
 
 
-class Constrained[Frame: (Texture, Audio)]:
-    picture_in: InputPin[Frame]
-    picture_out: OutputPin[Frame]
+def BoundToAUnion[Frame: Texture | Audio](
+    *, picture_in: InputPin[Frame], picture_out: OutputPin[Frame]
+) -> None: ...
 
 
-class BoundToAUnion[Frame: Texture | Audio]:
-    picture_in: InputPin[Frame]
-    picture_out: OutputPin[Frame]
+def MayBeUnset[Frame: Texture](*, picture_in: InputPin[Frame | None]) -> None: ...
 
 
-class MayBeUnset[Frame: Texture]:
-    picture_in: InputPin[Frame | None]
+def TypesNoInput[Frame: Texture](*, picture_out: OutputPin[Frame]) -> None: ...
 
 
-class TypesNoInput[Frame: Texture]:
-    picture_out: OutputPin[Frame]
+def TypesTwoInputs[Frame: Texture](
+    *, left: InputPin[Frame], right: InputPin[Frame], picture_out: OutputPin[Frame]
+) -> None: ...
 
 
-class TypesTwoInputs[Frame: Texture]:
-    left: InputPin[Frame]
-    right: InputPin[Frame]
-    picture_out: OutputPin[Frame]
-
-
-class NarrowsTheFollowingOutput[Frame: Texture]:
-    picture_in: InputPin[Frame]
-    picture_out: OutputPin[Annotated[Frame, TexturePixelFormats("rgba8_unorm")]]
+def NarrowsTheFollowingOutput[Frame: Texture](
+    *,
+    picture_in: InputPin[Frame],
+    picture_out: OutputPin[Annotated[Frame, TexturePixelFormats("rgba8_unorm")]],
+) -> None: ...
 
 
 @pytest.mark.parametrize(
-    ("node_class", "pin", "finding_code", "fix"),
+    ("function", "pin", "finding_code", "fix"),
     [
-        (Unbound, "picture_in", "pin_type_not_read_yet", "`class Unbound[Frame: Texture]`"),
+        (Unbound, "picture_in", "pin_type_not_read_yet", "`def Unbound[Frame: Texture](...)`"),
         (Constrained, "picture_in", "pin_type_not_read_yet", "bind it to one type"),
         (BoundToAUnion, "picture_in", "pin_type_not_read_yet", "bind it to one type"),
         (MayBeUnset, "picture_in", "pin_type_not_read_yet", "type the pin `Frame`"),
@@ -144,10 +128,10 @@ class NarrowsTheFollowingOutput[Frame: Texture]:
     ],
 )
 def test_each_mistake_with_a_type_parameter_is_refused_with_what_to_write(
-    node_class: type, pin: str, finding_code: str, fix: str
+    function: Any, pin: str, finding_code: str, fix: str
 ) -> None:
     with pytest.raises(NodeDeclarationRefusal) as refused:
-        node(node_class)
+        node(execution="reactive")(function)
 
     assert refused.value.finding_code == finding_code
     assert refused.value.pin == pin
